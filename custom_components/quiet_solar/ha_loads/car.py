@@ -1,0 +1,1 @@
+from custom_components.quiet_solar.home_model.load import AbstractLoad
