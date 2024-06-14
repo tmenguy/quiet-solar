@@ -1,5 +1,5 @@
 
-from abc import abstractmethod
+from abc import abstractmethod, ABC
 from datetime import datetime, timedelta
 from collections.abc import Generator
 from bisect import bisect_left
@@ -9,23 +9,53 @@ from home_model.constraints import LoadConstraint
 
 from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
-    pass
+    from home_model.home import Home
 
 FLOATING_PERIOD = 24*3600
 
+class LoadActionsProxy(ABC):
+
+    async def execute_command(self, command: LoadCommand):
+        """ Execute a command on the load."""
+
+    async def probe_if_command_set(self, command: LoadCommand) -> bool:
+        """ prob the applied load command """
+
+class SimpleProxy(LoadActionsProxy):
+
+    async def execute_command(self, command: LoadCommand):
+        print(f"Executing command {command}")
+
+    async def probe_if_command_set(self, command: LoadCommand) -> bool:
+        return True
+
 class AbstractLoad(object):
 
-    def __init__(self, name:str, **kwargs):
+    def __init__(self, name:str, proxy : LoadActionsProxy | None = None, home = None, **kwargs):
         super().__init__()
-        self._name = name
+        self.name = name
+        self.load_id = f"Load_{name}_{self.load_type()}"
+        self.home = home
+        if proxy is None:
+            proxy = SimpleProxy()
+        self._proxy = proxy
         self._constraints: list[LoadConstraint] = []
-        #self._timed_commands: list[tuple[datetime, LoadConstraint, LoadCommand]] = []
-        self._current_command : dict | None = None
+        self.current_command : LoadCommand | None = None
+        self._running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
+        self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.default_cmd : LoadCommand = CMD_OFF
 
+    def load_type(self):
+        return self.__class__.__name__
 
     def __repr__(self):
-        return f"{self._name} load"
+        return f"{self.name} load"
+
+    def reset(self):
+        self.current_command = None
+        self._constraints = []
+
+
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
@@ -66,18 +96,6 @@ class AbstractLoad(object):
                     self._constraints.pop()
             self._constraints.append(constraint)
         self.set_live_constraints(self._constraints)
-
-    def reset_commands_after_time(self, dt:datetime):
-
-        last_slot = bisect_left(self._timed_commands, dt, key=lambda x: x[0])
-        if last_slot >= len(self._timed_commands):
-            return
-
-        self._timed_commands = self._timed_commands[:last_slot]
-
-    def push_timed_command(self, dt:datetime, constraint:LoadConstraint, command: LoadCommand):
-        self._timed_commands.append((dt, constraint, command))
-        self._timed_commands.sort(key=lambda x: x[0])
 
 
     async def update_live_constraints(self, dt:datetime, period: timedelta) -> bool:
@@ -156,48 +174,64 @@ class AbstractLoad(object):
 
         return force_solving
 
-
-
-    def execute_time(self, dt:datetime):
-        self.update_live_constraints(dt)
-        while self._timed_commands[0][0] >= dt:
-            ct, constraint, command = self._timed_commands.pop(0)
-            constraint.update_current_command(dt, command)
-            self.execute_command(command)
-
-
-
     async def update_value_callback_example(self, ct: LoadConstraint, time: datetime) -> float:
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
         pass
 
+    async def launch_command(self, command: LoadCommand):
 
-    async def update_command_callback_example(self, ct: LoadConstraint, time: datetime) -> LoadCommand:
-        """ Example of a command compute callback for a load constraint. like get a switch state, and update the real state of a constraint and load
-        """
-        pass
+        if self._running_command is not None:
+            if self._running_command == command:
+                self._stacked_command = None #no need of it anymore
+                return
+            else:
+                self._stacked_command = command
+                return
 
-    @abstractmethod
+        elif self.current_command == command:
+            # We kill the stacked one and keep the current one like the choice above
+            self._stacked_command = None
+            return
+        else:
+            #no running command ... kill the stacked one and execute this one
+            self._stacked_command = None
+
+        self._running_command = command
+        await self.execute_command(command)
+        is_command_set = await self.probe_if_command_set(command)
+        if is_command_set:
+            self.current_command = command
+            self._running_command = None
+
+    async def check_commands(self):
+
+        if self._running_command is not None:
+            is_command_set = await self.probe_if_command_set(self._running_command)
+            if is_command_set:
+                self.current_command = self._running_command
+                self._running_command = None
+
+
+        if self._running_command is None and self._stacked_command is not None:
+            await self.launch_command(self._stacked_command)
+
+
     async def execute_command(self, command: LoadCommand):
         """ Execute a command on the load."""
+        await self._proxy.execute_command(command)
+
+    async def probe_if_command_set(self, command: LoadCommand) -> bool:
+        """ prob the applied load command """
+        return await self._proxy.probe_if_command_set(command)
 
 
 
 class TestLoad(AbstractLoad):
 
-    def __init__(self, name:str, **kwargs):
-        super().__init__(name, **kwargs)
-
-    async def execute_command(self, command: LoadCommand):
-        print(f"Executing command {command} on {self._name}")
-
-    async def update_value_callback_example(self, ct: LoadConstraint, time: datetime) -> float:
-        return 0.0
-
-    async def update_command_callback_example(self, ct: LoadConstraint, time: datetime) -> LoadCommand:
-        return self.default_cmd
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 

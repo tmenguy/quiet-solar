@@ -1,6 +1,6 @@
 from home_model.load import AbstractLoad
 
-class Battery(AbstractLoad):
+class Pool(AbstractLoad):
 
     def __init__(self, name, power, power_factor, capacity, max_power, efficiency):
 

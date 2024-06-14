@@ -1,5 +1,6 @@
 from unittest import TestCase
 
+from home_model.commands import LoadCommand
 from home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint
 from home_model.load import TestLoad
 from home_model.solver import PeriodSolver
@@ -13,8 +14,7 @@ class TestSolver(TestCase):
         # The solver is a simple function that returns the sum of two numbers
         # The test checks if the sum of 1 and 2 is 3
 
-        dt = datetime.now()
-        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0)
 
         start_time = dt
         end_time = dt + timedelta(days=1)
@@ -33,9 +33,9 @@ class TestSolver(TestCase):
 
         dt + timedelta(hours=1)
 
-        car_steps = {}
+        car_steps = []
         for a in range(7, 33):
-            car_steps[f"A{a}"] =  a*3*230
+            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230, param=a))
 
         car_charge_mandatory = MultiStepsPowerLoadConstraint(
             load = car,

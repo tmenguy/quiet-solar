@@ -1,0 +1,15 @@
+{
+  "domain": "quiet_solar",
+  "name": "Quiest Solar",
+  "version": "2024.06.14",
+  "after_dependencies": [],
+  "codeowners": ["@tmenguy"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/tmenguy/quiet-solar",
+  "homekit": {
+    "models": []
+  },
+  "integration_type": "device",
+  "iot_class": "calculated"
+}

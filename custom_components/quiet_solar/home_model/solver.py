@@ -7,7 +7,7 @@ import numpy as np
 from home_model.battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from home_model.constraints import LoadConstraint
 from home_model.load import AbstractLoad
-from home_model.commands import LoadCommand, CMD_AUTO_ECO
+from home_model.commands import LoadCommand, CMD_AUTO_ECO, copy_command
 
 
 class PeriodSolver(object):
@@ -20,7 +20,7 @@ class PeriodSolver(object):
                  battery: Battery | None = None,
                  pv_forecast: list[tuple[float, datetime]] = None,
                  unavoidable_consumption_forecast: list[tuple[float, datetime]] = None,
-                 step_s: int = 900,
+                 step_s: timedelta = timedelta(seconds=900),
                  ) -> None:
 
         """
@@ -46,7 +46,7 @@ class PeriodSolver(object):
 
         self._start_time = start_time
         self._end_time = end_time
-        self._step_s = step_s
+        self._step_s = step_s.total_seconds()
         self._tariffs: list[tuple[float, timedelta]] | None = tariffs
         self._loads: list[AbstractLoad] = actionable_loads
         self._pv_forecast: list[float, datetime] | None = pv_forecast
@@ -356,7 +356,6 @@ class PeriodSolver(object):
                         break
                 if s_cmd.command == CMD_AUTO_ECO.command:
                     is_auto_used[s] = True
-                    s_cmd = LoadCommand(s_cmd.command, 0.0, s_cmd.param)
 
                 if s_cmd != current_command:
                     lcmd.append((self._time_slots[s], s_cmd))
@@ -369,10 +368,15 @@ class PeriodSolver(object):
             current_command = None
             for s, charge in enumerate(battery_commands):
                 if is_auto_used[s]:
-                    if charge >= 0.0:
-                        cmd = LoadCommand(CMD_FORCE_CHARGE.command, float(charge), CMD_FORCE_CHARGE.param)
-                    else:
-                        cmd = LoadCommand(CMD_FORCE_DISCHARGE.command, 0.0-charge, CMD_FORCE_DISCHARGE.param)
+                    param = float(charge)
+                    base_cmd = CMD_FORCE_CHARGE
+                    if param < 0.0:
+                        param = 0.0 - float(charge)
+                        base_cmd = CMD_FORCE_DISCHARGE
+
+                    cmd = copy_command(base_cmd, power_consign=param)
+                    cmd.param = param
+
                 else:
                     cmd = CMD_AUTO_ECO
 
@@ -381,6 +385,8 @@ class PeriodSolver(object):
                     current_command = cmd
 
             output_cmds.append((self._battery, bcmd))
+
+        # cmds are correctly ordered by time for each load by construction
         return output_cmds
 
 
