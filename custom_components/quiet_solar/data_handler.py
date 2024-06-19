@@ -10,8 +10,8 @@ from .const import (
     PLATFORMS,
     DATA_HANDLER, DEVICE_TYPE
 )
-from .ha_model.home import QSHome
-from .home_model.load import AbstractDevice
+from quiet_solar.ha_model.home import QSHome
+from quiet_solar.home_model.load import AbstractDevice
 
 
 class QSDataHandler:
@@ -19,23 +19,23 @@ class QSDataHandler:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize self."""
         self.hass : HomeAssistant = hass
-        self._home: QSHome | None = None
+        self.home: QSHome | None = None
         self._cached_devices :list[AbstractDevice] = []
         self._scan_interval = 1
 
 
     def add_device(self, device:AbstractDevice) -> None:
         """Add devices to the data handler."""
-        if self._home is None:
+        if self.home is None:
             if isinstance(device, QSHome):
-                self._home = device
+                self.home = device
                 for d in self._cached_devices:
-                    self._home.add_device(d)
+                    self.home.add_device(d)
                 self._cached_devices = []
             else:
                 self._cached_devices.append(device)
         else:
-            self._home.add_device(device)
+            self.home.add_device(device)
 
 
     async def async_add_entry(self, config_entry: ConfigEntry) -> None:
@@ -46,7 +46,7 @@ class QSDataHandler:
 
         if device_type == "home":
 
-            if self._home is None:
+            if self.home is None:
                 config_entry.async_on_unload(
                     async_track_time_interval(
                         self.hass, self.async_update, timedelta(seconds=self._scan_interval)

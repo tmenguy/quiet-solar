@@ -20,7 +20,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_HOME_VOLTAGE, \
     CONF_POOL_TEMPERATURE_SENSOR, CONF_POOL_PUMP_POWER, CONF_POOL_PUMP_SWITCH, CONF_SWITCH_POWER, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
-    CONF_CHARGER_IS_3P
+    CONF_CHARGER_IS_3P, DATA_HANDLER
 from homeassistant.helpers import config_validation as cv, selector
 from typing import TYPE_CHECKING
 import voluptuous as vol
@@ -104,7 +104,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             )
         else:
             if domain:
-                vals_sc = selector.EntitySelector(domain=domain)
+                vals_sc = selector.EntitySelector(selector.EntitySelectorConfig(domain=domain))
             else:
                 vals_sc = selector.EntitySelector()
 
@@ -435,7 +435,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_on_off_duration(self, user_input=None):
 
-        TYPE = "switch"
+        TYPE = "on_off_duration"
         if user_input is not None:
             #do sotme stuff to update
             user_input[DEVICE_TYPE] = TYPE
@@ -488,11 +488,21 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
     async def async_step_user(self, user_input=None):
         """initial step (menu) for user initiated flows"""
 
-        await self.async_set_unique_id(DOMAIN)
+        possible_menus = ["home"]
+        data_handler = self.hass.data.get(DOMAIN, {}). get(DATA_HANDLER)
+        if data_handler is not None:
+            if data_handler.home is not None:
+                possible_menus = [t for t in LOAD_TYPES if t != "home"]
+                if data_handler.home._battery is not None:
+                    possible_menus.remove("battery")
+                if data_handler.home._solar_plant is not None:
+                    possible_menus.remove("solar")
+
+
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=[t for t in LOAD_TYPES],
+            menu_options=possible_menus,
         )
 
     async def async_step_charger(self, user_input=None):
@@ -504,7 +514,9 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
 
     async def async_entry_next(self, data):
         """Handle the next step based on user input."""
-        return self.async_create_entry(title=f"{data.get(CONF_NAME, "load")} QS Load", data=data)
+        u_id = f"Quiet Solar: {data.get(CONF_NAME, "device")} {data.get(DEVICE_TYPE, "unknown")}"
+        await self.async_set_unique_id(u_id)
+        return self.async_create_entry(title=f"{data.get(DEVICE_TYPE, "unknown")}: {data.get(CONF_NAME, "device")}", data=data)
 
 
 

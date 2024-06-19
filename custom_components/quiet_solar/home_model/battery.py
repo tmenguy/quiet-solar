@@ -6,10 +6,10 @@ CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0, param=
 
 class Battery(AbstractLoad):
 
-    def __init__(self, name:str, capacity_kWh :int, **kwargs):
+    def __init__(self, battery_capacity :float, **kwargs):
 
-        super().__init__(name, **kwargs)
-        self._capacity = capacity_kWh #in kWh
+        super().__init__(**kwargs)
+        self._capacity = battery_capacity #in Wh
         self.default_cmd : LoadCommand = CMD_AUTO_ECO
 
 

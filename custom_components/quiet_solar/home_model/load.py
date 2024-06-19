@@ -17,7 +17,7 @@ class AbstractDevice(object):
         super().__init__()
         self.name = name
         self._device_type = device_type
-        self.device_id = f"Load_{name}_{self.device_type}"
+        self.device_id = f"qs_device_{name}_{self.device_type}"
 
     @property
     def device_type(self):
