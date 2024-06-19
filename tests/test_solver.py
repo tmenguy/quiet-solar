@@ -1,11 +1,14 @@
 from unittest import TestCase
 
-from home_model.commands import LoadCommand
-from home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint
-from home_model.load import TestLoad
-from home_model.solver import PeriodSolver
+
+from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint
+from quiet_solar.home_model.load import TestLoad
+from quiet_solar.home_model.solver import PeriodSolver
 from datetime import datetime
 from datetime import timedelta
+
+from quiet_solar.home_model.commands import LoadCommand
+
 
 class TestSolver(TestCase):
 

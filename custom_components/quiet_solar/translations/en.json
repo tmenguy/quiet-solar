@@ -1,5 +1,180 @@
 {
-  "config": {},
-  "options": {},
-  "services": {}
+    "config": {
+        "abort": {
+            "already_configured": "Entry already configured",
+            "no_devices_found": "No devices found on the network",
+            "single_instance_allowed": "Already configured. Only a single configuration possible."
+        },
+        "error": {
+            "already_configured_device": "Device is already configured",
+            "cannot_connect": "Unable to connect",
+            "cloud_profile_mismatch": "Cloud profile does not match configuration"
+        },
+        "flow_title": "{name}",
+        "step": {
+            "battery": {
+                "data": {
+                    "battery_capacity": "Battery capacity (Wh)",
+                    "battery_charge_discharge_sensor": "Battery charge/discharge sensor (W, kW)",
+                    "name": "Name"
+                },
+                "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
+                "title": "Edit your battery device"
+            },
+            "charger": {
+                "description": "OCPP and Wallbox are natively supported now, or a generic one",
+                "menu_options": {
+                    "charger_generic": "Create a Generic based charger, need tto have the proper entities to be up and running",
+                    "charger_ocpp": "Create a OCPP based charger, need the OCPP integration to be setup and running",
+                    "charger_wallbox": "Create a Wallbox based charger, need the Wallbox integration to be setup and running"
+                },
+                "title": "Create your electrical vehicle charger"
+            },
+            "charger_generic": {
+                "data": {
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
+                    "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+                    "name": "Name"
+                },
+                "title": "Edit your electrical vehicle charger"
+            },
+            "charger_ocpp": {
+                "data": {
+                    "charger_device_ocpp": "OCPP device",
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "name": "Name"
+                },
+                "description": "OCPP based integration is up and running ...",
+                "title": "Edit your electrical vehicle OCPP charger"
+            },
+            "charger_wallbox": {
+                "data": {
+                    "charger_device_wallbox": "Wallbox device",
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "name": "Name"
+                },
+                "description": "Wallbox based integration is up and running ...",
+                "title": "Edit your electrical vehicle Wallbox charger"
+            },
+            "home": {
+                "data": {
+                    "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
+                    "grid_active_power_sensor_inverted": "Is your power sensor inverted?, ie does it shows negative values when you consume power from the grid?",
+                    "home_voltage": "voltage of your home (V)",
+                    "name": "Name"
+                },
+                "title": "Edit a Home"
+            },
+            "solar": {
+                "data": {
+                    "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
+                    "name": "Name"
+                },
+                "description": "setup only one of the two inverters sensor if you have only one",
+                "title": "Edit your solar panel plant"
+            },
+            "user": {
+                "menu_options": {
+                    "battery": "Add a Battery",
+                    "car": "Add an electrical vehicle",
+                    "charger": "Add an electrical vehicle charger",
+                    "fp_heater": "Add a \"fil pilote\" based heater",
+                    "home": "Create a Home",
+                    "pool": "Add a pool",
+                    "solar": "Add a Solar Panel Plant",
+                    "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)"
+                },
+                "title": "Choose a load or device to add"
+            }
+        }
+    },
+    "options": {
+        "error": {
+            "already_configured_device": "Device is already configured",
+            "cannot_connect": "Unable to connect",
+            "cloud_profile_mismatch": "Cloud profile does not match configuration"
+        },
+        "step": {
+            "battery": {
+                "data": {
+                    "battery_capacity": "Battery capacity (Wh)",
+                    "battery_charge_discharge_sensor": "Battery charge/discharge sensor (W, kW)",
+                    "name": "Name"
+                },
+                "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
+                "title": "Edit your battery device"
+            },
+            "charger": {
+                "description": "OCPP and Wallbox are natively supported now, or a generic one",
+                "menu_options": {
+                    "charger_generic": "Create a Generic based charger, need tto have the proper entities to be up and running",
+                    "charger_ocpp": "Create a OCPP based charger, need the OCPP integration to be setup and running",
+                    "charger_wallbox": "Create a Wallbox based charger, need the Wallbox integration to be setup and running"
+                },
+                "title": "Create your electrical vehicle charger"
+            },
+            "charger_generic": {
+                "data": {
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
+                    "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+                    "name": "Name"
+                },
+                "title": "Edit your electrical vehicle charger"
+            },
+            "charger_ocpp": {
+                "data": {
+                    "charger_device_ocpp": "OCPP device",
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "name": "Name"
+                },
+                "description": "OCPP based integration is up and running ...",
+                "title": "Edit your electrical vehicle OCPP charger"
+            },
+            "charger_wallbox": {
+                "data": {
+                    "charger_device_wallbox": "Wallbox device",
+                    "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+                    "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "name": "Name"
+                },
+                "description": "Wallbox based integration is up and running ...",
+                "title": "Edit your electrical vehicle Wallbox charger"
+            },
+            "home": {
+                "data": {
+                    "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
+                    "grid_active_power_sensor_inverted": "Is your power sensor inverted?, ie does it shows negative values when you consume power from the grid?",
+                    "home_voltage": "voltage of your home (V)",
+                    "name": "Name"
+                },
+                "title": "Edit a Home"
+            },
+            "solar": {
+                "data": {
+                    "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
+                    "name": "Name"
+                },
+                "description": "setup only one of the two inverters sensor if you have only one",
+                "title": "Edit your solar panel plant"
+            }
+        }
+    },
+    "services": {}
 }

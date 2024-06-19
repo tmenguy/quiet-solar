@@ -1,27 +1,49 @@
-from home_model.battery import Battery
-from home_model.commands import LoadCommand
-from home_model.load import AbstractLoad
+from quiet_solar.ha_model.battery import QSBattery
+from quiet_solar.ha_model.car import QSCar
+from quiet_solar.ha_model.charger import QSCharger
+from quiet_solar.ha_model.device import HADeviceMixin
+from quiet_solar.ha_model.solar import QSSolar
+from quiet_solar.home_model.battery import Battery
+from quiet_solar.home_model.commands import LoadCommand
+from quiet_solar.home_model.load import AbstractLoad, AbstractDevice
 from datetime import datetime, timedelta
-from home_model.solver import PeriodSolver
+from quiet_solar.home_model.solver import PeriodSolver
+from homeassistant.const import Platform
+
+class QSHome(HADeviceMixin, AbstractDevice):
+
+    _battery: QSBattery = None
+
+    _chargers : list[QSCharger] = []
+    _cars: list[QSCar] = []
 
 
-class Home:
-
-    _battery: Battery = None
-    _active_loads : list[AbstractLoad] = []
+    _devices : list[AbstractDevice] = []
+    _solar_plant: QSSolar | None = None
     _all_loads : list[AbstractLoad] = []
+
+    _active_loads: list[AbstractLoad] = []
+
     _period : timedelta = timedelta(days=1)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
     _solver_step_s : timedelta = timedelta(seconds=900)
     _update_step_s : timedelta = timedelta(seconds=5)
-    def __init__(self) -> None:
-        pass
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
 
-    def add_load(self, load: AbstractLoad):
-        self._all_loads.append(load)
 
-    def set_battery(self, battery: Battery):
-        self._battery = battery
+    def add_device(self, device: AbstractDevice):
+        if isinstance(device, QSBattery):
+            self._battery = device
+        elif isinstance(device, QSCar):
+            self._cars.append(device)
+        elif isinstance(device, QSCharger):
+            self._chargers.append(device)
+        elif isinstance(device, QSSolar):
+            self._solar_plant = device
+
+        if isinstance(device, AbstractLoad):
+            self._all_loads.append(device)
 
     async def update_load_status(self, time: datetime):
         pass
@@ -39,9 +61,6 @@ class Home:
 
 
     async def update(self, time: datetime):
-
-
-
 
         for load in self._active_loads:
             await load.check_commands()

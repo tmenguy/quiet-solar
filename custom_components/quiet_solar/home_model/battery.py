@@ -1,5 +1,5 @@
-from home_model.load import AbstractLoad
-from home_model.commands import LoadCommand, CMD_AUTO_ECO
+from .load import AbstractLoad
+from .commands import LoadCommand, CMD_AUTO_ECO
 
 CMD_FORCE_CHARGE = LoadCommand(command="charge", power_consign=0.0, param="only")
 CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0, param="only")

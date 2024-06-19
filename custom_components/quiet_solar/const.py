@@ -16,6 +16,7 @@ PLATFORMS = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.CALENDAR
 ]
 
 DEVICE_TYPE = "device_type"
@@ -34,9 +35,17 @@ CONF_BATTERY_CAPACITY = "battery_capacity"
 
 CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
+CONF_CHARGER_IS_3P = "charger_is_3p"
+
+CONF_CHARGER_DEVICE_OCPP = "charger_device_ocpp"
+CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"
+
+CONF_CHARGER_PLUGGED = "charger_plugged"
 CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER = "charger_max_charging_current_number"
 CONF_CHARGER_PAUSE_RESUME_SWITCH = "charger_pause_resume_switch"
 
+CONF_CAR_TRACKER = "car_tracker"
+CONF_CAR_PLUGGED = "car_plugged"
 CONF_CAR_CHARGE_PERCENT_SENSOR = "car_charge_percent_sensor"
 CONF_CAR_BATTERY_CAPACITY = "car_battery_capacity"
 CONF_CAR_CHARGER_MIN_CHARGE = "car_charger_min_charge"

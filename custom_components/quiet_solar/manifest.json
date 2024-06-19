@@ -1,6 +1,6 @@
 {
   "domain": "quiet_solar",
-  "name": "Quiest Solar",
+  "name": "Quiet Solar",
   "version": "2024.06.14",
   "after_dependencies": [],
   "codeowners": ["@tmenguy"],

@@ -1,5 +1,180 @@
 {
-  "config": {},
-  "options": {},
+  "config": {
+    "flow_title": "{name}",
+    "abort": {
+      "already_configured": "Entry already configured",
+      "no_devices_found": "No devices found on the network",
+      "single_instance_allowed": "Already configured. Only a single configuration possible."
+    },
+    "error": {
+      "already_configured_device": "Device is already configured",
+      "cannot_connect": "Unable to connect",
+      "cloud_profile_mismatch": "Cloud profile does not match configuration"
+    },
+    "step": {
+      "user": {
+        "title": "Choose a load or device to add",
+        "menu_options": {
+          "home": "Create a Home",
+          "battery": "Add a Battery",
+          "solar": "Add a Solar Panel Plant",
+          "charger": "Add an electrical vehicle charger",
+          "car": "Add an electrical vehicle",
+          "pool": "Add a pool",
+          "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
+          "fp_heater": "Add a \"fil pilote\" based heater"
+        }
+      },
+      "home": {
+        "title": "Edit a Home",
+        "data": {
+          "name": "Name",
+          "home_voltage": "voltage of your home (V)",
+          "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
+          "grid_active_power_sensor_inverted": "Is your power sensor inverted?, ie does it shows negative values when you consume power from the grid?"
+        }
+      },
+      "battery": {
+        "title": "Edit your battery device",
+        "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
+        "data": {
+          "name": "Name",
+          "battery_capacity": "Battery capacity (Wh)",
+          "battery_charge_discharge_sensor": "Battery charge/discharge sensor (W, kW)"
+        }
+      },
+      "solar": {
+        "title": "Edit your solar panel plant",
+        "description": "setup only one of the two inverters sensor if you have only one",
+        "data": {
+          "name": "Name",
+          "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+          "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)"
+        }
+      },
+      "charger": {
+        "title": "Create your electrical vehicle charger",
+        "description": "OCPP and Wallbox are natively supported now, or a generic one",
+        "menu_options": {
+          "charger_wallbox": "Create a Wallbox based charger, need the Wallbox integration to be setup and running",
+          "charger_ocpp": "Create a OCPP based charger, need the OCPP integration to be setup and running",
+          "charger_generic": "Create a Generic based charger, need tto have the proper entities to be up and running"
+        }
+      },
+      "charger_ocpp": {
+        "title": "Edit your electrical vehicle OCPP charger",
+        "description": "OCPP based integration is up and running ...",
+        "data": {
+          "name": "Name",
+          "charger_max_charge": "Maximum Current Charge Per Phase (A)",
+          "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+          "charger_is_3p": "Is the charger 3 phases?",
+          "charger_device_ocpp": "OCPP device"
+        }
+      },
+      "charger_wallbox": {
+        "title": "Edit your electrical vehicle Wallbox charger",
+        "description": "Wallbox based integration is up and running ...",
+        "data": {
+          "name": "Name",
+          "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+          "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "charger_device_wallbox": "Wallbox device"
+        }
+      },
+      "charger_generic": {
+        "title": "Edit your electrical vehicle charger",
+        "data": {
+          "name": "Name",
+          "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+          "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+          "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+          "charger_pause_resume_switch": "Switch entity to pause/resume the charging"
+        }
+      }
+    }
+  },
+  "options": {
+          "error": {
+            "already_configured_device": "[%key:component::quiet_solar::config::error::already_configured_device%]",
+            "cannot_connect": "[%key:component::quiet_solar::config::error::cannot_connect%]",
+            "cloud_profile_mismatch": "[%key:component::quiet_solar::config::error::cloud_profile_mismatch%]"
+        },
+        "step": {
+           "home": {
+              "title": "[%key:component::quiet_solar::config::step::home::title%]",
+              "data": {
+                "name": "Name",
+                "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
+                "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
+                "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]"
+              }
+            },
+            "battery": {
+              "title": "[%key:component::quiet_solar::config::step::battery::title%]",
+              "description": "[%key:component::quiet_solar::config::step::battery::description%]",
+              "data": {
+                "name": "Name",
+                "battery_capacity": "[%key:component::quiet_solar::config::step::battery::data::battery_capacity%]",
+                "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]"
+              }
+            },
+            "solar": {
+              "title": "[%key:component::quiet_solar::config::step::solar::title%]",
+              "description": "[%key:component::quiet_solar::config::step::solar::description%]",
+              "data": {
+                "name": "Name",
+                "inverter_active_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor%]",
+                "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]"
+              }
+            },
+            "charger": {
+              "title": "[%key:component::quiet_solar::config::step::charger::title%]",
+              "description": "[%key:component::quiet_solar::config::step::charger::description%]",
+              "menu_options": {
+                "charger_wallbox": "[%key:component::quiet_solar::config::step::charger::menu_options::charger_wallbox%]",
+                "charger_ocpp": "[%key:component::quiet_solar::config::step::charger::menu_options::charger_ocpp%]",
+                "charger_generic": "[%key:component::quiet_solar::config::step::charger::menu_options::charger_generic%]"
+              }
+            },
+            "charger_ocpp": {
+              "title": "[%key:component::quiet_solar::config::step::charger_ocpp::title%]",
+              "description": "[%key:component::quiet_solar::config::step::charger_ocpp::description%]",
+              "data": {
+                "name": "Name",
+                "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+                "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+                "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+                "charger_device_ocpp": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_device_ocpp%]"
+              }
+            },
+            "charger_wallbox": {
+              "title": "[%key:component::quiet_solar::config::step::charger_wallbox::title%]",
+              "description": "[%key:component::quiet_solar::config::step::charger_wallbox::description%]",
+              "data": {
+                "name": "Name",
+                "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+                "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+                "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+                "charger_device_wallbox": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_device_wallbox%]"
+              }
+            },
+            "charger_generic": {
+              "title": "[%key:component::quiet_solar::config::step::charger_generic::title%]",
+              "data": {
+                "name": "Name",
+                "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+                "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+                "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+                "charger_plugged": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_plugged%]",
+                "charger_max_charging_current_number": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number%]",
+                "charger_pause_resume_switch": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_pause_resume_switch%]"
+              }
+            }
+        }
+  },
   "services": {}
 }

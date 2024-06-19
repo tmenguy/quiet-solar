@@ -3,8 +3,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from home_model.commands import LoadCommand
-from entity import HALoad, QSDeviceEntity
+from .home_model.commands import LoadCommand
+from .entity import QSDeviceEntity
 
 from homeassistant.const import (
     SERVICE_TURN_OFF,
@@ -12,7 +12,6 @@ from homeassistant.const import (
     Platform
 )
 
-from home_model.switch import SwitchLoad
 
 
 async def async_setup_entry(
@@ -22,11 +21,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Netatmo switch platform."""
 
+    return
     @callback
     def _create_entity(netatmo_device: NetatmoDevice) -> None:
-        entity = NetatmoSwitch(netatmo_device)
-        _LOGGER.debug("Adding switch %s", entity)
-        async_add_entities([entity])
+        #entity = NetatmoSwitch(netatmo_device)
+        #_LOGGER.debug("Adding switch %s", entity)
+        #async_add_entities([entity])
+        pass
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, NETATMO_CREATE_SWITCH, _create_entity)

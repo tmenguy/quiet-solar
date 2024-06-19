@@ -4,7 +4,7 @@ from datetime import timedelta
 from abc import abstractmethod
 from typing import Callable, Self, Awaitable
 
-from home_model.commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_ECO, copy_command
+from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_ECO, copy_command
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
@@ -312,15 +312,14 @@ class TimeBasedSimplePowerLoadConstraint(SimplePowerLoadConstraint):
         """ Return the best duration to meet the constraint."""
         return timedelta(seconds=self.target_value - self.initial_value)
 
-    def compute_value_on_state_change(self, from_state: str, to_state: str, from_time: datetime, to_time: datetime):
-        """ Compute the value of the constraint whenever it is called changed state or not,
-        hence use the old state and the last value change to add teh consummed energy """
 
-        if from_state == CMD_ON:
-            return (to_time - self.last_value_update).total_seconds() + self.current_value
+    def compute_value(self, time: datetime) -> float:
+        """ Compute the value of the constraint whenever it is called changed state or not,
+        hence use the old state and the last value change to add the consummed energy """
+        if self.load.current_command == CMD_ON:
+            return (time - self.last_value_update).total_seconds() + self.current_value
         else:
             return self.current_value
-
 
     def compute_best_period_repartition(self,
                                         power_available_power : npt.NDArray[np.float64],

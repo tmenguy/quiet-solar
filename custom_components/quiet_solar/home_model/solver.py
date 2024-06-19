@@ -4,10 +4,10 @@ import numpy.typing as npt
 import numpy as np
 
 
-from home_model.battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
-from home_model.constraints import LoadConstraint
-from home_model.load import AbstractLoad
-from home_model.commands import LoadCommand, CMD_AUTO_ECO, copy_command
+from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
+from .constraints import LoadConstraint
+from .load import AbstractLoad
+from .commands import LoadCommand, CMD_AUTO_ECO, copy_command
 
 
 class PeriodSolver(object):
