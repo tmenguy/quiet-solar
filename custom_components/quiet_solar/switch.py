@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -45,7 +47,7 @@ class QSSwitchLoad(QSDeviceEntity, SwitchEntity):
         super().__init__(**kwargs)
         self._switch_entity = switch_entity
 
-    async def execute_command(self, command:LoadCommand):
+    async def execute_command(self, time: datetime, command:LoadCommand):
         if command.command == "on":
             action = SERVICE_TURN_ON
         elif command.command == "off":

@@ -10,7 +10,6 @@
             "cannot_connect": "Unable to connect",
             "cloud_profile_mismatch": "Cloud profile does not match configuration"
         },
-        "flow_title": "{name}",
         "step": {
             "battery": {
                 "data": {
@@ -20,6 +19,53 @@
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
                 "title": "Edit your battery device"
+            },
+            "car": {
+                "data": {
+                    "car_battery_capacity": "Battery capacity (Wh)",
+                    "car_charge_percent_sensor": "% charge of the battery",
+                    "car_charger_max_charge": "Per phase max charge in (A)",
+                    "car_charger_min_charge": "Per phase min charge in (A)",
+                    "car_is_custom_power_charge_values_3p": "Are your dampening values for 3 phases?",
+                    "car_plugged": "Binary sensor to detect if the car is plugged or not",
+                    "car_tracker": "car device tracker to know if the car is at home or not",
+                    "car_use_dampening": "Setup dampening for charge for this car?",
+                    "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
+                    "charge_10": "Charge Power in W for a 10A charge (per phase), -1 for default",
+                    "charge_11": "Charge Power in W for a 11A charge (per phase), -1 for default",
+                    "charge_12": "Charge Power in W for a 12A charge (per phase), -1 for default",
+                    "charge_13": "Charge Power in W for a 13A charge (per phase), -1 for default",
+                    "charge_14": "Charge Power in W for a 14A charge (per phase), -1 for default",
+                    "charge_15": "Charge Power in W for a 15A charge (per phase), -1 for default",
+                    "charge_16": "Charge Power in W for a 16A charge (per phase), -1 for default",
+                    "charge_17": "Charge Power in W for a 17A charge (per phase), -1 for default",
+                    "charge_18": "Charge Power in W for a 18A charge (per phase), -1 for default",
+                    "charge_19": "Charge Power in W for a 19A charge (per phase), -1 for default",
+                    "charge_2": "Charge Power in W for a  2A charge (per phase), -1 for default",
+                    "charge_20": "Charge Power in W for a 20A charge (per phase), -1 for default",
+                    "charge_21": "Charge Power in W for a 21A charge (per phase), -1 for default",
+                    "charge_22": "Charge Power in W for a 22A charge (per phase), -1 for default",
+                    "charge_23": "Charge Power in W for a 23A charge (per phase), -1 for default",
+                    "charge_24": "Charge Power in W for a 24A charge (per phase), -1 for default",
+                    "charge_25": "Charge Power in W for a 25A charge (per phase), -1 for default",
+                    "charge_26": "Charge Power in W for a 26A charge (per phase), -1 for default",
+                    "charge_27": "Charge Power in W for a 27A charge (per phase), -1 for default",
+                    "charge_28": "Charge Power in W for a 28A charge (per phase), -1 for default",
+                    "charge_29": "Charge Power in W for a 29A charge (per phase), -1 for default",
+                    "charge_3": "Charge Power in W for a  3A charge (per phase), -1 for default",
+                    "charge_30": "Charge Power in W for a 30A charge (per phase), -1 for default",
+                    "charge_31": "Charge Power in W for a 31A charge (per phase), -1 for default",
+                    "charge_32": "Charge Power in W for a 32A charge (per phase), -1 for default",
+                    "charge_4": "Charge Power in W for a  4A charge (per phase), -1 for default",
+                    "charge_5": "Charge Power in W for a  5A charge (per phase), -1 for default",
+                    "charge_6": "Charge Power in W for a  6A charge (per phase), -1 for default",
+                    "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
+                    "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
+                    "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
+                    "name": "Name"
+                },
+                "description": "Add some car information to define when and how it is connected to your charger",
+                "title": "Edit an Electric vehicle"
             },
             "charger": {
                 "description": "OCPP and Wallbox are natively supported now, or a generic one",
@@ -38,7 +84,8 @@
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "title": "Edit your electrical vehicle charger"
             },
@@ -48,7 +95,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "description": "OCPP based integration is up and running ...",
                 "title": "Edit your electrical vehicle OCPP charger"
@@ -59,10 +107,22 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
+            },
+            "fp_heater": {
+                "data": {
+                    "name": "Name",
+                    "power": "Power of the eater (W)",
+                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "select": "Fil pilote value",
+                    "switch": "On/Off of the heater"
+                },
+                "description": "Specific heater used in France",
+                "title": "A \"fil pilote\" based heater"
             },
             "home": {
                 "data": {
@@ -72,6 +132,28 @@
                     "name": "Name"
                 },
                 "title": "Edit a Home"
+            },
+            "on_off_duration": {
+                "data": {
+                    "name": "Name",
+                    "power": "Power of the load (W)",
+                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "switch": "On/Off of the load"
+                },
+                "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
+                "title": "A generic duration based load"
+            },
+            "pool": {
+                "data": {
+                    "name": "Name",
+                    "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
+                    "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "power": "Power of the pump (W)",
+                    "power_sensor": "Power sensor of the pump (W, kW)",
+                    "switch": "On/Off of the pump"
+                },
+                "description": "This device will compute automatically the needed pump use time to keep the pool clean",
+                "title": "Edit your pool"
             },
             "solar": {
                 "data": {
@@ -89,9 +171,9 @@
                     "charger": "Add an electrical vehicle charger",
                     "fp_heater": "Add a \"fil pilote\" based heater",
                     "home": "Create a Home",
+                    "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
                     "pool": "Add a pool",
-                    "solar": "Add a Solar Panel Plant",
-                    "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)"
+                    "solar": "Add a Solar Panel Plant"
                 },
                 "title": "Choose a load or device to add"
             }
@@ -113,14 +195,52 @@
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
                 "title": "Edit your battery device"
             },
-            "charger": {
-                "description": "OCPP and Wallbox are natively supported now, or a generic one",
-                "menu_options": {
-                    "charger_generic": "Create a Generic based charger, need tto have the proper entities to be up and running",
-                    "charger_ocpp": "Create a OCPP based charger, need the OCPP integration to be setup and running",
-                    "charger_wallbox": "Create a Wallbox based charger, need the Wallbox integration to be setup and running"
+            "car": {
+                "data": {
+                    "car_battery_capacity": "Battery capacity (Wh)",
+                    "car_charge_percent_sensor": "% charge of the battery",
+                    "car_charger_max_charge": "Per phase max charge in (A)",
+                    "car_charger_min_charge": "Per phase min charge in (A)",
+                    "car_is_custom_power_charge_values_3p": "Are your dampening values for 3 phases?",
+                    "car_plugged": "Binary sensor to detect if the car is plugged or not",
+                    "car_tracker": "car device tracker to know if the car is at home or not",
+                    "car_use_dampening": "Setup dampening for charge for this car?",
+                    "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
+                    "charge_10": "Charge Power in W for a 10A charge (per phase), -1 for default",
+                    "charge_11": "Charge Power in W for a 11A charge (per phase), -1 for default",
+                    "charge_12": "Charge Power in W for a 12A charge (per phase), -1 for default",
+                    "charge_13": "Charge Power in W for a 13A charge (per phase), -1 for default",
+                    "charge_14": "Charge Power in W for a 14A charge (per phase), -1 for default",
+                    "charge_15": "Charge Power in W for a 15A charge (per phase), -1 for default",
+                    "charge_16": "Charge Power in W for a 16A charge (per phase), -1 for default",
+                    "charge_17": "Charge Power in W for a 17A charge (per phase), -1 for default",
+                    "charge_18": "Charge Power in W for a 18A charge (per phase), -1 for default",
+                    "charge_19": "Charge Power in W for a 19A charge (per phase), -1 for default",
+                    "charge_2": "Charge Power in W for a  2A charge (per phase), -1 for default",
+                    "charge_20": "Charge Power in W for a 20A charge (per phase), -1 for default",
+                    "charge_21": "Charge Power in W for a 21A charge (per phase), -1 for default",
+                    "charge_22": "Charge Power in W for a 22A charge (per phase), -1 for default",
+                    "charge_23": "Charge Power in W for a 23A charge (per phase), -1 for default",
+                    "charge_24": "Charge Power in W for a 24A charge (per phase), -1 for default",
+                    "charge_25": "Charge Power in W for a 25A charge (per phase), -1 for default",
+                    "charge_26": "Charge Power in W for a 26A charge (per phase), -1 for default",
+                    "charge_27": "Charge Power in W for a 27A charge (per phase), -1 for default",
+                    "charge_28": "Charge Power in W for a 28A charge (per phase), -1 for default",
+                    "charge_29": "Charge Power in W for a 29A charge (per phase), -1 for default",
+                    "charge_3": "Charge Power in W for a  3A charge (per phase), -1 for default",
+                    "charge_30": "Charge Power in W for a 30A charge (per phase), -1 for default",
+                    "charge_31": "Charge Power in W for a 31A charge (per phase), -1 for default",
+                    "charge_32": "Charge Power in W for a 32A charge (per phase), -1 for default",
+                    "charge_4": "Charge Power in W for a  4A charge (per phase), -1 for default",
+                    "charge_5": "Charge Power in W for a  5A charge (per phase), -1 for default",
+                    "charge_6": "Charge Power in W for a  6A charge (per phase), -1 for default",
+                    "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
+                    "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
+                    "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
+                    "name": "Name"
                 },
-                "title": "Create your electrical vehicle charger"
+                "description": "Add some car information to define when and how it is connected to your charger",
+                "title": "Edit an Electric vehicle"
             },
             "charger_generic": {
                 "data": {
@@ -130,7 +250,8 @@
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "title": "Edit your electrical vehicle charger"
             },
@@ -140,7 +261,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "description": "OCPP based integration is up and running ...",
                 "title": "Edit your electrical vehicle OCPP charger"
@@ -151,10 +273,22 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "name": "Name"
+                    "name": "Name",
+                    "power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
+            },
+            "fp_heater": {
+                "data": {
+                    "name": "Name",
+                    "power": "Power of the eater (W)",
+                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "select": "Fil pilote value",
+                    "switch": "On/Off of the heater"
+                },
+                "description": "Specific heater used in France",
+                "title": "A \"fil pilote\" based heater"
             },
             "home": {
                 "data": {
@@ -164,6 +298,28 @@
                     "name": "Name"
                 },
                 "title": "Edit a Home"
+            },
+            "on_off_duration": {
+                "data": {
+                    "name": "Name",
+                    "power": "Power of the load (W)",
+                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "switch": "On/Off of the load"
+                },
+                "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
+                "title": "A generic duration based load"
+            },
+            "pool": {
+                "data": {
+                    "name": "Name",
+                    "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
+                    "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "power": "Power of the pump (W)",
+                    "power_sensor": "Power sensor of the pump (W, kW)",
+                    "switch": "On/Off of the pump"
+                },
+                "description": "This device will compute automatically the needed pump use time to keep the pool clean",
+                "title": "Edit your pool"
             },
             "solar": {
                 "data": {

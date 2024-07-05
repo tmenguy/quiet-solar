@@ -40,19 +40,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     type = entry.data.get(DEVICE_TYPE)
 
+    d = None
     if type is not None:
-        d = LOAD_TYPES[type](hass=hass, **entry.data)
+        if type in LOAD_TYPES:
+            d = LOAD_TYPES[type](hass=hass, **entry.data)
+        else:
+            for t in LOAD_TYPES.values():
+                # if t is a dict, then we can iterate on it ... only one level :)
+                if isinstance(t, dict) and type in t:
+                    d = t[type](hass=hass, **entry.data)
+                    break
 
-        data_handler.add_device(d)
+        if d:
+            data_handler.add_device(d)
 
-        platforms = d.get_platforms()
+            platforms = d.get_platforms()
 
-        if platforms:
-            await hass.config_entries.async_forward_entry_setups(
-                entry, platforms
-            )
+            if platforms:
+                await hass.config_entries.async_forward_entry_setups(
+                    entry, platforms
+                )
 
-    entry.async_on_unload(entry.add_update_listener(entry_update_listener))
+            entry.async_on_unload(entry.add_update_listener(entry_update_listener))
 
     return True
 

@@ -97,6 +97,8 @@ class LoadConstraint(object):
         if time >= self.last_value_update:
             if self._update_value_callback is not None:
                 value = await self._update_value_callback(self, time)
+                if value is None:
+                    value = self.current_value
             else:
                 value = self.compute_value(time)
             self.current_value = value
@@ -142,8 +144,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         return timedelta(seconds=seconds)
 
     def compute_value(self, time: datetime) -> float:
-        """ Compute the value of the constraint whenever it is called changed state or not,
-        hence use the old state and the last value change to add the consummed energy """
+        """ Compute the value of the constraint whenever it is called changed state or not """
         if self.load.current_command is None:
             return self.current_value
 

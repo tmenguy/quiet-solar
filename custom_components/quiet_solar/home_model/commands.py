@@ -6,14 +6,15 @@ class LoadCommand:
     command: str
     power_consign: float
     param: Any
+    private: Any = None
 
     def __eq__(self, other):
         return other is not None and self.command == other.command and self.param == other.param
 
 def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
     if power_consign is None:
-        return LoadCommand(command=cmd.command, param=cmd.param, power_consign=cmd.power_consign)
-    return LoadCommand(command=cmd.command, param=cmd.param, power_consign=power_consign)
+        return LoadCommand(command=cmd.command, param=cmd.param, power_consign=cmd.power_consign, private=cmd.private)
+    return LoadCommand(command=cmd.command, param=cmd.param, power_consign=power_consign, private=cmd.private)
 
 
 

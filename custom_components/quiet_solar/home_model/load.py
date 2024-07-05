@@ -18,6 +18,7 @@ class AbstractDevice(object):
         self.name = name
         self._device_type = device_type
         self.device_id = f"qs_device_{name}_{self.device_type}"
+        self.home = None
 
     @property
     def device_type(self):
@@ -169,7 +170,7 @@ class AbstractLoad(AbstractDevice):
         """
         pass
 
-    async def launch_command(self, command: LoadCommand):
+    async def launch_command(self, time:datetime, command: LoadCommand):
 
         if self._running_command is not None:
             if self._running_command == command:
@@ -188,29 +189,29 @@ class AbstractLoad(AbstractDevice):
             self._stacked_command = None
 
         self._running_command = command
-        await self.execute_command(command)
-        is_command_set = await self.probe_if_command_set(command)
+        await self.execute_command(time, command)
+        is_command_set = await self.probe_if_command_set(time, command)
         if is_command_set:
             self.current_command = command
             self._running_command = None
 
-    async def check_commands(self):
+    async def check_commands(self, time: datetime):
 
         if self._running_command is not None:
-            is_command_set = await self.probe_if_command_set(self._running_command)
+            is_command_set = await self.probe_if_command_set(time, self._running_command)
             if is_command_set:
                 self.current_command = self._running_command
                 self._running_command = None
 
 
         if self._running_command is None and self._stacked_command is not None:
-            await self.launch_command(self._stacked_command)
+            await self.launch_command(time, self._stacked_command)
 
 
-    async def execute_command(self, command: LoadCommand):
+    async def execute_command(self, time: datetime, command: LoadCommand):
         print(f"Executing command {command}")
 
-    async def probe_if_command_set(self, command: LoadCommand) -> bool:
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
         return True
 
 
