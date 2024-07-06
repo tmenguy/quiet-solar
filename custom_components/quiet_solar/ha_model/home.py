@@ -39,6 +39,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
         super().__init__(**kwargs)
 
+        self._last_active_load_time = None
+
         @callback
         def async_threshold_sensor_state_listener(
                 event: Event[EventStateChangedData],
@@ -108,22 +110,12 @@ class QSHome(HADeviceMixin, AbstractDevice):
         if isinstance(device, AbstractLoad):
             self._all_loads.append(device)
 
-    async def update_load_status(self, time: datetime):
-        pass
-        # c'ets la qu'on va check que les etats d'une voiture il y a bien branche et tout, qu'on va mettre si besoin des contraintes par default
-        # une load est active ici si elle a une contrainte , mais imagine ca vien de l('exterieur comme unde demande de run de la voiture '
-        #                                                                              'sans que ce soit quiet_solar qui l'a lance
-        # ca il faut pouvoir check si la load est en fait controllee par l('exterieur ou pas si oui : il ne faut surtout pas en prendre le control'
-        #                                                                  ''
-        #                                                         et donc la sortir des loads a calculer et de toutes les commandes quie je pourrais lui lancer
-        #
-        # pour check ca le check command peut etre ok, mais surtout comment savoir que la commande vient de quiet soar ou pas ? ... il faut donc se souvenir
-        # si ion a lance une commande ou pas (a running et current commande peuvent aider ... mais il faut persister ca aussi en cas de reboot!!!!
-        # sinon on ne reprendra jamais la main ..... )
-
 
 
     async def update(self, time: datetime):
+
+
+
 
         for load in self._active_loads:
             await load.check_commands(time=time)

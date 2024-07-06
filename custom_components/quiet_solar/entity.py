@@ -1,7 +1,6 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from .data_handler import QSDataHandler
 from quiet_solar.ha_model.home import QSHome
 from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
@@ -20,7 +19,8 @@ from .const import (
     MANUFACTURER,
 )
 
-
+#if TYPE_CHECKING:
+#    from .data_handler import QSDataHandler
 
 
 LOAD_TYPES = {
@@ -34,6 +34,19 @@ LOAD_TYPES = {
     "fp_heater": QSFPHeater
 }
 
+def create_device_from_type(hass, type, data):
+    d = None
+    if type is not None:
+        if type in LOAD_TYPES:
+            d = LOAD_TYPES[type](hass=hass, **data)
+        else:
+            for t in LOAD_TYPES.values():
+                # if t is a dict, then we can iterate on it ... only one level :)
+                if isinstance(t, dict) and type in t:
+                    d = t[type](hass=hass, **data)
+                    break
+    return d
+
 
 class QSBaseEntity(Entity):
     """QS entity base class."""
@@ -41,7 +54,7 @@ class QSBaseEntity(Entity):
     _attr_attribution = DEFAULT_ATTRIBUTION
     _attr_has_entity_name = True
 
-    def __init__(self, data_handler: QSDataHandler) -> None:
+    def __init__(self, data_handler) -> None:
         """Set up Netatmo entity base."""
         self.data_handler = data_handler
         self._publishers: list[dict[str, Any]] = []
@@ -64,7 +77,7 @@ class QSBaseEntity(Entity):
 class QSDeviceEntity(QSBaseEntity):
     """QS entity base class."""
     device : AbstractDevice
-    def __init__(self, data_handler: QSDataHandler, device: AbstractDevice) -> None:
+    def __init__(self, data_handler, device: AbstractDevice) -> None:
         """Set up Netatmo entity base."""
         super().__init__(data_handler)
         self.device = device

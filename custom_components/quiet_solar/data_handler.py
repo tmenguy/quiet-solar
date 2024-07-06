@@ -4,6 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.event import async_track_time_interval
 from datetime import datetime, timedelta
 
+from .entity import create_device_from_type
 from .const import (
     DATA_DEVICE_IDS,
     DOMAIN,
@@ -12,6 +13,11 @@ from .const import (
 )
 from quiet_solar.ha_model.home import QSHome
 from quiet_solar.home_model.load import AbstractDevice
+
+async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update listener.   Reload the data handler when the entry is updated.
+     https://community.home-assistant.io/t/config-flow-how-to-update-an-existing-entity/522442/8 """
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 class QSDataHandler:
@@ -32,6 +38,7 @@ class QSDataHandler:
                 for d in self._cached_devices:
                     self.home.add_device(d)
                 self._cached_devices = []
+
             else:
                 self._cached_devices.append(device)
         else:
@@ -40,27 +47,48 @@ class QSDataHandler:
 
     async def async_add_entry(self, config_entry: ConfigEntry) -> None:
 
-        device_type = config_entry.data[DEVICE_TYPE]
+        type = config_entry.data.get(DEVICE_TYPE)
 
-        await self.async_dispatch()
+        d = create_device_from_type(self.hass, type, config_entry.data)
 
-        if device_type == "home":
+        self.hass.data[DOMAIN][config_entry.entry_id] = d
+        do_home_register = False
 
-            if self.home is None:
-                config_entry.async_on_unload(
-                    async_track_time_interval(
-                        self.hass, self.async_update, timedelta(seconds=self._scan_interval)
-                    )
+
+        if self.home is None:
+            if isinstance(d, QSHome):
+                self.home = d
+                do_home_register = True
+                for d in self._cached_devices:
+                    self.home.add_device(d)
+                self._cached_devices = []
+
+            else:
+                self._cached_devices.append(d)
+        else:
+            self.home.add_device(d)
+
+
+        platforms = d.get_platforms()
+
+        if platforms:
+            await self.hass.config_entries.async_forward_entry_setups(
+                config_entry, platforms
+            )
+
+        # config_entry.async_on_unload(config_entry.add_update_listener(entry_update_listener))
+
+        if do_home_register:
+
+            config_entry.async_on_unload(
+                async_track_time_interval(
+                    self.hass, self.async_update, timedelta(seconds=self._scan_interval)
                 )
-            #self._home = device
-
-
-    async def async_dispatch(self) -> None:
-        """Dispatch the creation of entities from the configuration."""
+            )
 
 
     async def async_update(self, event_time: datetime) -> None:
-        pass
+        await self.home.update(event_time)
 
 
 

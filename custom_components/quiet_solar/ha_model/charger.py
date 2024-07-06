@@ -7,7 +7,7 @@ from homeassistant.helpers import entity_registry
 
 from quiet_solar.ha_model.car import QSCar
 from quiet_solar.ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_power
-from quiet_solar.home_model.commands import LoadCommand
+from quiet_solar.home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF
 from quiet_solar.home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, \
     ATTR_ENTITY_ID
@@ -115,7 +115,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.current_command is None or self.is_plugged() is False:
             self.current_command = None
             self._verified_amperage_command_time = None
-        elif self.current_command.command == "auto":
+        elif self.current_command.command == CMD_AUTO_GREEN_ONLY.command:
 
             if self.current_command.private == 0:
                 #check if we are properly in stop state
@@ -166,7 +166,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     last_p = get_average_power(available_power[-len(available_power)//2:])
                     all_p = get_average_power(available_power)
 
-                    if self.current_command.param == "green_only":
+                    if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
                         target_delta_power = min(last_p, all_p)
                     else:
                         target_delta_power = max(last_p, all_p)
@@ -186,7 +186,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if i == len(power_steps):
                         new_amp = max_charge
                     elif i == 0 and power_steps[0] > target_power:
-                        if self.current_command.param == "green_only":
+                        if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
                             new_amp = 0
                         else:
                             new_amp = min_charge
@@ -205,9 +205,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if new_amp == 0:
                             await self.stop_charge()
                             # we can put back the battery as possibly discharging! as the car wont consume anymore soon
-                            # ... wait an see above for the discharging being ok
+                            # ... wait and see above for the discharging being ok
                         else:
-
                             if self.is_charge_stopped():
                                 await self.set_max_charging_current(new_amp, blocking=True)
                                 await self.start_charge()
@@ -218,15 +217,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             if self.home.is_battery_in_auto_mode():
                                 await self.home.set_max_discharging_power(power=0.0)
 
-
-        elif self.current_command.command == "on":
+        elif self.current_command.command == CMD_ON.command:
             self._verified_amperage_command_time = None
-            pas fait!!!
-        elif self.current_command.command == "off":
+        elif self.current_command.command == CMD_OFF.command:
             self._verified_amperage_command_time = None
-            pas fait !!!!
-
-
 
         return result
 
@@ -243,12 +237,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
 
         result = False
-        if command.command == "on":
-            result = self.is_charge_enabled()
-        elif command.command == "off":
-            result = self.is_charge_stopped()
-        elif command.command == "auto":
-            result =  self.is_plugged()
+        if self.is_plugged():
+            if command.command == CMD_ON.command:
+                result = self.is_charge_enabled()
+            elif command.command == CMD_OFF.command:
+                result = self.is_charge_stopped()
+            elif command.command == CMD_AUTO_GREEN_ONLY.command:
+                result =  True
 
         if result is False:
             await self._do_update_charger_state(time)

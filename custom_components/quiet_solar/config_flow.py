@@ -430,7 +430,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     #    self.config_entry, data=user_input, options=self.config_entry.options
                     #)
                     # or more simply:
-                    self.config_entry.data.update(user_input)
+                    self.config_entry.data = user_input
 
                     return await self.async_step_car({"force_dampening": True})
 
@@ -596,15 +596,15 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
 
     VERSION = 1
     MINOR_VERSION = 1
-    config_entry: FakeConfigEntry = FakeConfigEntry()
+    config_entry: FakeConfigEntry | None | ConfigEntry = FakeConfigEntry()
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(
-        config_entry: ConfigEntry,
-    ) -> OptionsFlow:
-        """Get the options flow for this handler."""
-        return QSOptionsFlowHandler(config_entry)
+    # @staticmethod
+    # @callback
+    # def async_get_options_flow(
+    #     config_entry: ConfigEntry,
+    # ) -> OptionsFlow:
+    #     """Get the options flow for this handler."""
+    #     return QSOptionsFlowHandler(config_entry)
 
     async def async_step_user(self, user_input=None):
         """initial step (menu) for user initiated flows"""
@@ -625,6 +625,23 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
             step_id="user",
             menu_options=possible_menus,
         )
+
+    async def async_step_reconfigure(self, user_input: dict | None = None):
+        """Step when user reconfigures the integration."""
+
+        self.config_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        if self.config_entry is None:
+            return self.async_create_entry(title="", data={})
+        type = self.config_entry.data.get(DEVICE_TYPE)
+        if type is None:
+            return self.async_create_entry(title="", data={})
+
+
+        step_name = f"async_step_{type}"
+
+        return await getattr(self, step_name)( user_input=user_input)
 
     async def async_step_charger(self, user_input=None):
 
