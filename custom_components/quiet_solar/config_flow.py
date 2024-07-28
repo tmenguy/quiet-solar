@@ -117,7 +117,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict[key_sc] = vals_sc
 
-    def get_common_schema(self, add_power_value_selector=None, add_load_power_sensor=False) -> dict:
+    def get_common_schema(self, add_power_value_selector=None, add_load_power_sensor=False, add_load_power_sensor_mandatory=False) -> dict:
 
         default = self.config_entry.data.get(CONF_NAME)
 
@@ -147,7 +147,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
             power_entities = selectable_power_entities(self.hass)
             if len(power_entities) > 0:
-                self.add_entity_selector(sc, CONF_POWER_SENSOR, False, entity_list=power_entities)
+                self.add_entity_selector(sc, CONF_POWER_SENSOR, add_load_power_sensor_mandatory, entity_list=power_entities)
 
         return sc
 
@@ -155,9 +155,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
 
-    def get_all_charger_schema_base(self):
+    def get_all_charger_schema_base(self, add_load_power_sensor_mandatory ):
 
-        sc = self.get_common_schema(add_load_power_sensor=True)
+        sc = self.get_common_schema(add_load_power_sensor_mandatory=add_load_power_sensor_mandatory)
 
         sc.update( {
                     vol.Required(CONF_NAME): cv.string,
@@ -269,10 +269,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input)
             return r
 
-        sc_dict = self.get_all_charger_schema_base()
+        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=True)
         self.add_entity_selector(sc_dict, CONF_CHARGER_PLUGGED, True, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, True, domain=[NUMBER_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_PAUSE_RESUME_SWITCH, True, domain=[SWITCH_DOMAIN])
+
+
 
         schema = vol.Schema(sc_dict)
 
@@ -290,7 +292,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input)
             return r
 
-        sc_dict = self.get_all_charger_schema_base()
+        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_OCPP)
         if default is None:
@@ -320,7 +322,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             user_input[DEVICE_TYPE] = TYPE
             r = await self.async_entry_next(user_input)
             return r
-        sc_dict = self.get_all_charger_schema_base()
+        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_WALLBOX)
         if default is None:
@@ -443,7 +445,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict = self.get_common_schema()
 
-        self.add_entity_selector(sc_dict, CONF_CAR_PLUGGED, True, domain=[BINARY_SENSOR_DOMAIN])
+        self.add_entity_selector(sc_dict, CONF_CAR_PLUGGED, False, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CAR_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
 
         percent_entities = selectable_percent_entities(self.hass)

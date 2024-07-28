@@ -100,7 +100,7 @@
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "name": "Name",
-                    "power_sensor": "Power sensor for the charger (W, kW)"
+                    "power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)"
                 },
                 "description": "OCPP based integration is up and running ...",
                 "title": "Edit your electrical vehicle OCPP charger"
@@ -112,7 +112,7 @@
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "name": "Name",
-                    "power_sensor": "Power sensor for the charger (W, kW)"
+                    "power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"

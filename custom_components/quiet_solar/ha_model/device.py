@@ -3,7 +3,12 @@ from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
 
+from homeassistant.helpers.entity import Entity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from quiet_solar.const import CONF_POWER_SENSOR, DOMAIN, DATA_HANDLER
 
 
 def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
@@ -113,42 +118,19 @@ def align_time_series_and_values(tsv1:list[tuple[datetime, float]], tsv2:list[tu
     return zip(t_only, new_v1), zip(t_only, new_v2)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class HADeviceMixin:
 
-    def __init__(self, hass:HomeAssistant, **kwargs ):
+    def __init__(self, hass:HomeAssistant, config_entry:ConfigEntry, **kwargs):
         super().__init__(**kwargs)
         self.hass = hass
+        self.data_handler = hass.data[DOMAIN].get(DATA_HANDLER)
+        self.config_entry = config_entry
         self.historical_data : dict[str, list[tuple[datetime, float]]] = {}
+        self.HA_entities = {}
+        for p in self.get_platforms():
+            self.HA_entities[p] = []
+
+        self.power_sensor = kwargs.pop(CONF_POWER_SENSOR, None)
 
     def add_to_history(self, entity_id:str, time:datetime, value:float):
         if entity_id not in self.historical_data:
@@ -180,10 +162,17 @@ class HADeviceMixin:
 
         return hist_f[in_s:out_s]
 
+    def do_create_ha_entities(self, platform : str, async_add_entities: AddEntitiesCallback):
+        ha_entities = self.create_ha_entities(platform)
+        self.HA_entities[platform] = ha_entities
+        async_add_entities(ha_entities)
+
+
 
     @abstractmethod
-    def get_platforms(self):
+    def get_platforms(self) -> list[str]:
         """ returns associated platforms for this device """
 
-
-
+    def create_ha_entities(self, platform : str) -> list[Entity]:
+        """ returns associated sensors for this device """
+        return []

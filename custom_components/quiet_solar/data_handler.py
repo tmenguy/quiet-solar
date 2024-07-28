@@ -26,57 +26,56 @@ class QSDataHandler:
         """Initialize self."""
         self.hass : HomeAssistant = hass
         self.home: QSHome | None = None
-        self._cached_devices :list[AbstractDevice] = []
+        self._cached_config_entries :list[ConfigEntry] = []
         self._scan_interval = 1
+        self.update_subscribers = {}
 
+    def _add_device(self, config_entry: ConfigEntry ):
+        type = config_entry.data.get(DEVICE_TYPE)
+        d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
+        self.hass.data[DOMAIN][config_entry.entry_id] = d
+        self.home.add_device(d)
+        return d
 
-    def add_device(self, device:AbstractDevice) -> None:
-        """Add devices to the data handler."""
-        if self.home is None:
-            if isinstance(device, QSHome):
-                self.home = device
-                for d in self._cached_devices:
-                    self.home.add_device(d)
-                self._cached_devices = []
+    def subscribe_to_update(self, subscriber, update_callback):
+        self.update_subscribers[update_callback] = subscriber
 
-            else:
-                self._cached_devices.append(device)
-        else:
-            self.home.add_device(device)
+    def unsubscribe_from_update(self, update_callback):
+        return self.update_subscribers.pop(update_callback, None)
 
 
     async def async_add_entry(self, config_entry: ConfigEntry) -> None:
 
         type = config_entry.data.get(DEVICE_TYPE)
-
-        d = create_device_from_type(self.hass, type, config_entry.data)
-
-        self.hass.data[DOMAIN][config_entry.entry_id] = d
         do_home_register = False
-
+        config_entry_to_forward = []
 
         if self.home is None:
-            if isinstance(d, QSHome):
-                self.home = d
+            if type == "home":
+                self.home = create_device_from_type(hass=self.hass, home=None, type=type, config_entry=config_entry)
+                self.hass.data[DOMAIN][config_entry.entry_id] = self.home
                 do_home_register = True
-                for d in self._cached_devices:
-                    self.home.add_device(d)
-                self._cached_devices = []
-
+                config_entry_to_forward = [self.home]
+                for c_c_entry in self._cached_config_entries:
+                    c_d = self._add_device(c_c_entry)
+                    config_entry_to_forward.append(c_d)
+                self._cached_config_entries = []
             else:
-                self._cached_devices.append(d)
+                self._cached_config_entries.append(config_entry)
         else:
-            self.home.add_device(d)
+            config_entry_to_forward = [self._add_device(config_entry)]
 
 
-        platforms = d.get_platforms()
+        for d in config_entry_to_forward:
 
-        if platforms:
-            await self.hass.config_entries.async_forward_entry_setups(
-                config_entry, platforms
-            )
+            platforms = d.get_platforms()
 
-        # config_entry.async_on_unload(config_entry.add_update_listener(entry_update_listener))
+            if platforms:
+                await self.hass.config_entries.async_forward_entry_setups(
+                    d.config_entry, platforms
+                )
+
+            # config_entry.async_on_unload(d.config_entry.add_update_listener(entry_update_listener))
 
         if do_home_register:
 

@@ -18,7 +18,7 @@ class AbstractDevice(object):
         self.name = name
         self._device_type = device_type
         self.device_id = f"qs_device_{name}_{self.device_type}"
-        self.home = None
+        self.home = kwargs.pop("home", None)
 
     @property
     def device_type(self):
@@ -40,6 +40,7 @@ class AbstractLoad(AbstractDevice):
         self._running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.default_cmd : LoadCommand = CMD_OFF
+
 
 
 

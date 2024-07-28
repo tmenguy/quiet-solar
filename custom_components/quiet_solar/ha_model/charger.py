@@ -2,9 +2,15 @@ import bisect
 from datetime import datetime
 from typing import Any
 
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
+from homeassistant.helpers.entity import Entity
 
+from quiet_solar.const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
+    CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_CHARGER_IS_3P, \
+    CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_POWER_SENSOR
+from quiet_solar.sensor import QSSensorEntityDescription, QSBaseSensor, QSBaseSensorRestore
 from quiet_solar.ha_model.car import QSCar
 from quiet_solar.ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_power
 from quiet_solar.home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF
@@ -22,20 +28,56 @@ CHARGER_ADAPTATION_WINDOW = 15
 class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def __init__(self, **kwargs):
-        self.charger_plugged = kwargs.pop("charger_plugged", None)
-        self.charger_max_charging_current_number = kwargs.pop("charger_max_charging_current_number", None)
-        self.charger_pause_resume_switch = kwargs.pop("charger_pause_resume_switch", None)
-        self.charger_max_charge = kwargs.pop("charger_max_charge", 32)
-        self.charger_min_charge = kwargs.pop("charger_min_charge", 6)
-        self.charger_is_3p = kwargs.pop("charger_is_3p", False)
+        self.charger_plugged = kwargs.pop(CONF_CHARGER_PLUGGED, None)
+        self.charger_max_charging_current_number = kwargs.pop(CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, None)
+        self.charger_pause_resume_switch = kwargs.pop(CONF_CHARGER_PAUSE_RESUME_SWITCH, None)
+        self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
+        self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
+        self.charger_is_3p = kwargs.pop(CONF_CHARGER_IS_3P, False)
         self.car : QSCar | None = None
+
+        self.charge_state = STATE_UNKNOWN
 
         self._last_command_prob_time = datetime.min
         self._verified_amperage_command_time = None
         super().__init__(**kwargs)
 
+        self._default_generic_car = QSCar(hass=self.hass, home=self.home, config_entry=None, name=f"{self.name}_generic_car")
+
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SELECT ]
+
+    def create_ha_entities(self, platform: str) -> list[Entity]:
+
+        entities = []
+
+        if platform == Platform.SENSOR:
+            charge_sensor = QSSensorEntityDescription(
+                key="charge_state",
+                device_class=SensorDeviceClass.ENUM,
+                options=[
+                    "not_in_charge",
+                    "waiting_for_a_planned_charge",
+                    "charge_ended",
+                    "waiting_for_current_charge",
+                    "energy_flap_opened",
+                    "charge_in_progress",
+                    "charge_error",
+                    STATE_UNAVAILABLE,
+                    STATE_UNKNOWN,
+                ],
+            )
+
+            entities.append(QSBaseSensor(data_handler=self.data_handler, qs_device=self, description=charge_sensor))
+
+        entities.extend(self._default_generic_car.create_ha_entities(platform))
+
+        return entities
+
+
+
+
+
 
     def attach_car(self, car):
         self.car = car
@@ -85,6 +127,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 result = state.state == "off"
         return result
 
+    async def get_charging_power(self):
+        if self.is_plugged() is False:
+            return 0.0
+        state = self.hass.states.get(self.power_sensor)
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            return 0.0
+        return float(state.state)
+
     async def set_max_charging_current(self, current, blocking=False):
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
@@ -103,7 +153,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
-        result = None
+
+
+        je dois en plus verifier si le get_charging_power est a 0 ou pas car ca veut dire que la voiture ne demande plus de power non plus!!!
+
+
         state = self.hass.states.get(self.car.car_charge_percent_sensor)
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
@@ -121,7 +175,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 #check if we are properly in stop state
                 if self.is_charge_stopped():
                     if self._verified_amperage_command_time is None:
-                        # we can put back the battery as possibly discharging! as eeh car wont consume anymore soon ...
+                        # we can put back the battery as possibly discharging! as the car won't consume anymore soon ...
                         if self.home.is_battery_in_auto_mode():
                             await self.home.set_max_discharging_power()
 
@@ -264,7 +318,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 class QSChargerOCPP(QSChargerGeneric):
 
     def __init__(self, **kwargs):
-        self.charger_device_ocpp = kwargs.pop("charger_device_ocpp", None)
+        self.charger_device_ocpp = kwargs.pop(CONF_CHARGER_DEVICE_OCPP, None)
 
         hass : HomeAssistant | None = kwargs.get("hass", None)
 
@@ -274,13 +328,18 @@ class QSChargerOCPP(QSChargerGeneric):
 
             for entry in entries:
                 if entry.entity_id.startswith("number.") and entry.entity_id.endswith("_maximum_current"):
-                    kwargs["charger_max_charging_current_number"] = entry.entity_id
+                    kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = entry.entity_id
 
                 if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_charge_control"):
-                    kwargs["charger_pause_resume_switch"] = entry.entity_id
+                    kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = entry.entity_id
 
                 if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_availability"):
-                    kwargs["charger_plugged"] = entry.entity_id
+                    kwargs[CONF_CHARGER_PLUGGED] = entry.entity_id
+
+                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_power_active_export"):
+                    kwargs[CONF_POWER_SENSOR] = entry.entity_id
+
+
 
 
         super().__init__(**kwargs)
@@ -295,7 +354,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
 class QSChargerWallbox(QSChargerGeneric):
     def __init__(self, **kwargs):
-        self.charger_device_wallbox = kwargs.pop("charger_device_wallbox", None)
+        self.charger_device_wallbox = kwargs.pop(CONF_CHARGER_DEVICE_WALLBOX, None)
         hass : HomeAssistant | None = kwargs.get("hass", None)
 
         if self.charger_device_wallbox is not None and hass is not None:
@@ -304,10 +363,13 @@ class QSChargerWallbox(QSChargerGeneric):
 
             for entry in entries:
                 if entry.entity_id.startswith("number.") and entry.entity_id.endswith("_maximum_charging_current"):
-                    kwargs["charger_max_charging_current_number"] = entry.entity_id
+                    kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = entry.entity_id
 
                 if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_pause_resume"):
-                    kwargs["charger_pause_resume_switch"] = entry.entity_id
+                    kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = entry.entity_id
+
+                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_charging_power"):
+                    kwargs[CONF_POWER_SENSOR] = entry.entity_id
 
         super().__init__(**kwargs)
 

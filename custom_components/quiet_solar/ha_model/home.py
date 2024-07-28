@@ -37,7 +37,10 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
+        kwargs["home"] = self
+        self.home = self
         super().__init__(**kwargs)
+        self.home = self
 
         self._last_active_load_time = None
 
@@ -106,7 +109,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
             self._chargers.append(device)
         elif isinstance(device, QSSolar):
             self._solar_plant = device
-
         if isinstance(device, AbstractLoad):
             self._all_loads.append(device)
 
