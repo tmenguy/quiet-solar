@@ -13,8 +13,6 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 
-if TYPE_CHECKING:
-    from . import QSDataHandler
 
 from .const import (
     DATA_DEVICE_IDS,
@@ -73,8 +71,7 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
     return entities
 
 
-def create_ha_sensor(self, device: AbstractDevice):
-    device.home = self
+def create_ha_sensor(device: AbstractDevice):
 
     if isinstance(device, QSCar):
         return create_ha_sensor_for_QSCar(device)
@@ -118,7 +115,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
 
     def __init__(
         self,
-        data_handler : QSDataHandler,
+        data_handler,
         qs_device: AbstractDevice,
         description: QSSensorEntityDescription,
     ) -> None:
@@ -132,6 +129,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
     @callback
     def async_update_callback(self) -> None:
         """Update the entity's state."""
+        return
 
         #if self.entity_description.value_fn is None:
         if (state := getattr(self.device, self.entity_description.key)) is None:

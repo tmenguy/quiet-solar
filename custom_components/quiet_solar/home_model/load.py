@@ -7,6 +7,9 @@ from .commands import LoadCommand, CMD_OFF, copy_command
 from .constraints import LoadConstraint
 
 from typing import TYPE_CHECKING, Any
+
+from ..const import DATETIME_MAX_UTC, DATETIME_MIN_UTC
+
 if TYPE_CHECKING:
     pass
 
@@ -50,7 +53,7 @@ class AbstractLoad(AbstractDevice):
     async def check_load_activity_and_constraints(self, time: datetime):
         return
 
-    async def is_load_active(self, time: datetime):
+    def is_load_active(self, time: datetime):
         if not self._constraints:
             return False
         return True
@@ -71,10 +74,12 @@ class AbstractLoad(AbstractDevice):
             return
 
         self._constraints.sort(key=lambda x: x.end_of_constraint)
-        if self._constraints[-1].end_of_constraint == datetime.max:
+        if self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
             removed_infinits = []
-            while self._constraints[-1].end_of_constraint == datetime.max:
+            while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
                 removed_infinits.append(self._constraints.pop())
+                if len(self._constraints) == 0:
+                    break
 
             #only one infinite is allowed!
             keep = removed_infinits[0]
@@ -88,7 +93,7 @@ class AbstractLoad(AbstractDevice):
             self._constraints.append(keep)
 
         #recompute the contraint start:
-        current_start = datetime.min
+        current_start = DATETIME_MIN_UTC
         for c in self._constraints:
             c.start_of_constraint = max(current_start, c.user_start_of_constraint)
             current_start = c.end_of_constraint
@@ -96,10 +101,12 @@ class AbstractLoad(AbstractDevice):
 
     def push_live_constraint(self, constraint: LoadConstraint| None = None):
         if constraint is not None:
-            if constraint.end_of_constraint == datetime.max:
+            if constraint.end_of_constraint == DATETIME_MAX_UTC and len(self._constraints) > 0:
                 #only one infinite is allowed!
-                while self._constraints[-1].end_of_constraint == datetime.max:
+                while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
                     self._constraints.pop()
+                    if len(self._constraints) == 0:
+                        break
             self._constraints.append(constraint)
         self.set_live_constraints(self._constraints)
 

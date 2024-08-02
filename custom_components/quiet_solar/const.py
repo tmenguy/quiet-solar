@@ -1,5 +1,10 @@
-from homeassistant.const import Platform
 import logging
+from datetime import datetime
+
+import pytz
+
+DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.utc)
+DATETIME_MIN_UTC = datetime.min.replace(tzinfo=pytz.utc)
 
 DOMAIN = "quiet_solar"
 MANUFACTURER = "QuietSolarAbstraction"
@@ -9,18 +14,7 @@ DATA_DEVICE_IDS = "quiet_solar_device_ids"
 
 LOGGER = logging.getLogger(__package__)
 
-PLATFORMS = [
-    Platform.BINARY_SENSOR,
-    #Platform.CLIMATE, may be usefull for defining constraint on climate? especially homekit?
-    #Platform.COVER, may be usefull for defining constraint on climate? especially homekit?
-    Platform.SELECT,
-    Platform.SENSOR,
-    Platform.SWITCH,
-    Platform.CALENDAR
-]
-
 DEVICE_TYPE = "device_type"
-
 CONF_POWER = "power"
 CONF_POWER_SENSOR = "power_sensor"
 CONF_SWITCH = "switch"

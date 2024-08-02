@@ -1,14 +1,15 @@
-import copy
 from datetime import datetime
 from datetime import timedelta
 from abc import abstractmethod
 from typing import Callable, Self, Awaitable
+import pytz
 
 from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_ECO, copy_command
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
 
+from ..const import DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 
 class LoadConstraint(object):
@@ -37,10 +38,10 @@ class LoadConstraint(object):
         self.is_mandatory = mandatory
 
         if end_of_constraint is None:
-            end_of_constraint = datetime.max
+            end_of_constraint = DATETIME_MAX_UTC
 
         if start_of_constraint is None:
-            start_of_constraint = datetime.min
+            start_of_constraint = DATETIME_MIN_UTC
 
         self.end_of_constraint: datetime = end_of_constraint
 
@@ -54,13 +55,13 @@ class LoadConstraint(object):
         self._update_value_callback = update_value_callback
 
 
-        nt = datetime.now()
+        nt = datetime.now(pytz.UTC)
         self.last_value_update = nt
         self.last_state_update = nt
 
         self.skip = False
         self.pushed_count = 0
-        self.start_of_constraint: datetime = datetime.min
+        self.start_of_constraint: datetime = DATETIME_MIN_UTC
 
 
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime) -> bool:
@@ -68,7 +69,7 @@ class LoadConstraint(object):
         if self.is_constraint_met():
             return False
 
-        if self.end_of_constraint == datetime.max:
+        if self.end_of_constraint == DATETIME_MAX_UTC:
             if self.start_of_constraint > end_time:
                 return False
             else:
@@ -179,12 +180,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         last_slot = len(power_available_power) - 1
 
         #find the constraint last slot
-        if self.end_of_constraint != datetime.max:
+        if self.end_of_constraint is not None:
             #by construction the end of the constraints IS ending on a slot
             last_slot = bisect_left(time_slots, self.end_of_constraint)
             last_slot = max(0, last_slot - 1) # -1 as the last_slot index is the index of the slot not the time anchor
 
-        if self.start_of_constraint != datetime.min:
+        if self.start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self.start_of_constraint)
 
         for i in range(first_slot, last_slot + 1):

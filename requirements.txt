@@ -1,2 +1,2 @@
-homeassistant==2024.5.5
+homeassistant==2024.7.4
 numpy==1.26.4

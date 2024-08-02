@@ -3,20 +3,21 @@ from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from enum import Enum
 from operator import itemgetter
-from typing import Mapping, Any
+from typing import Mapping, Any, Callable
 
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util.unit_conversion import PowerConverter
 
 from quiet_solar.const import CONF_POWER_SENSOR, DOMAIN, DATA_HANDLER
 
 import numpy as np
 import numpy.typing as npt
 
-def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
+def compute_energy_Wh_rieman_sum(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], conservative: bool = False):
     """Compute energy from power with a rieman sum."""
 
     energy = 0
@@ -29,7 +30,7 @@ def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
 
         for i in range(len(power_data) - 1):
 
-            dt_h = float(power_data[i + 1][0] - power_data[i][0]) / 3600.0
+            dt_h = float((power_data[i + 1][0] - power_data[i][0]).total_seconds()) / 3600.0
             duration_h += dt_h
 
             if conservative:
@@ -46,15 +47,25 @@ def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
     return energy, duration_h
 
 
+def convert_power_to_w(value: float, attributes: dict | None = None, default_unit: str = UnitOfPower.KILO_WATT) -> float:
+    if attributes is None:
+        sensor_unit = default_unit
+    else:
+        sensor_unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT,default_unit)
+    value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=UnitOfPower.WATT)
+    return value
+
 def get_average_power(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]):
 
     if len(power_data) == 0:
         return 0
     elif len(power_data) == 1:
-        return power_data[0][0]
+        val =  power_data[0][1]
+    else:
+        nrj, dh = compute_energy_Wh_rieman_sum(power_data)
+        val =  nrj / dh
 
-    nrj, dh = compute_energy_Wh_rieman_sum(power_data)
-    return nrj / dh
+    return convert_power_to_w(val, power_data[-1][2])
 
 
 def get_median_power(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]):
@@ -62,19 +73,32 @@ def get_median_power(power_data: list[tuple[datetime | None, str|float|None, Map
     if len(power_data) == 0:
         return 0
     elif len(power_data) == 1:
-        return power_data[0][0]
+        val =  power_data[0][1]
+    else:
+        val =  np.median([float(v) for _, v, _ in power_data])
 
-    return np.median([float(v) for _, v, _ in power_data])
+    return convert_power_to_w(val, power_data[-1][2])
+
+def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], tsv2:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] | None, operation:Callable[[Any,Any], Any] | None = None):
 
 
-def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], tsv2:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] | None, do_sum:bool = False):
+    if not tsv1:
+        if not tsv2:
+            if operation is not None:
+                return []
+            else:
+                return [], []
+        else:
+            if operation is not None:
+                return [(operation(0,v),t) for t, v in tsv2]
+            else:
+                return [(0,t) for t, _ in tsv2], tsv2
 
-
-    if tsv2 is None or len(tsv2) == 0:
-        if do_sum:
-            return tsv1
-        return tsv1, [(0,t) for t, _ in tsv1]
-
+    if not tsv2:
+        if operation is not None:
+            return [(operation(v,0),t) for t, v in tsv1]
+        else:
+            return tsv1, [(0,t) for t, _ in tsv1]
 
     timings= {}
 
@@ -98,35 +122,39 @@ def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None
 
         new_v = new_v1
         tsv = tsv1
-        if vi > 0:
-            if do_sum is False:
+        if vi == 1:
+            if operation is None:
                 new_v = new_v2
             tsv = tsv2
 
         last_real_idx = None
         for i, t, idxs in enumerate(timings):
-
+            val_to_put = None
             if idxs[vi] is not None:
                 #ok an exact value
                 last_real_idx = idxs[vi]
-                new_v[i] += (tsv[last_real_idx][1])
+                val_to_put = (tsv[last_real_idx][1])
             else:
                 if last_real_idx is None:
                     #we have new values "before" the first real value"
-                    new_v[i] += (tsv[0][1])
+                    val_to_put = (tsv[0][1])
                 elif last_real_idx  == len(tsv) - 1:
                     #we have new values "after" the last real value"
-                    new_v[i] += (tsv[-1][1])
+                    val_to_put = (tsv[-1][1])
                 else:
                     # we have new values "between" two real values"
                     # interpolate
                     d1 = float((t - tsv[last_real_idx][0]).total_seconds())
                     d2 = float((tsv[last_real_idx + 1][0] - tsv[last_real_idx][0]).total_seconds())
                     nv = (d1 / d2) * (tsv[last_real_idx + 1][1] - tsv[last_real_idx][1]) + tsv[last_real_idx][1]
-                    new_v[i] += (nv)
+                    val_to_put = (nv)
+            if vi == 0 or operation is None:
+                new_v[i] = val_to_put
+            else:
+                new_v[i] = operation(new_v[i], val_to_put)
 
     #ok so we do have values and timings for 1 and 2
-    if do_sum:
+    if operation is not None:
         return zip(t_only, new_v1)
 
     return zip(t_only, new_v1), zip(t_only, new_v2)
@@ -294,6 +322,8 @@ class HADeviceMixin:
         from_ts = to_ts - timedelta(seconds=num_seconds_before)
 
         in_s = bisect_left(hist_f, from_ts, key=itemgetter(0))
+        if from_ts > hist_f[-1][0]:
+            return []
 
         if to_ts is None or to_ts > hist_f[-1][0]:
             out_s = len(hist_f)

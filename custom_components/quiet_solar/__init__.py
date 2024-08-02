@@ -12,7 +12,6 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     DATA_DEVICE_IDS,
     DOMAIN,
-    PLATFORMS,
     DATA_HANDLER, DEVICE_TYPE
 )
 

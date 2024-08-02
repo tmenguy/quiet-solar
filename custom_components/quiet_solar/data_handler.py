@@ -6,10 +6,8 @@ from datetime import datetime, timedelta
 
 from .entity import create_device_from_type
 from .const import (
-    DATA_DEVICE_IDS,
     DOMAIN,
-    PLATFORMS,
-    DATA_HANDLER, DEVICE_TYPE
+    DEVICE_TYPE
 )
 from quiet_solar.ha_model.home import QSHome
 from quiet_solar.home_model.load import AbstractDevice
@@ -28,6 +26,7 @@ class QSDataHandler:
         self.home: QSHome | None = None
         self._cached_config_entries :list[ConfigEntry] = []
         self._scan_interval = 1
+        self._refresh_constraints_interval = 10
         self.update_subscribers = {}
 
     def _add_device(self, config_entry: ConfigEntry ):
@@ -87,7 +86,7 @@ class QSDataHandler:
 
             config_entry.async_on_unload(
                 async_track_time_interval(
-                    self.hass, self.async_update, timedelta(seconds=self._scan_interval)
+                    self.hass, self.async_update_loads_contraints, timedelta(seconds=self._refresh_constraints_interval)
                 )
             )
 

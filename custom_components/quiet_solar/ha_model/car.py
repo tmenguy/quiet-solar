@@ -14,10 +14,10 @@ MIN_CHARGE_POWER_W = 150
 class QSCar(HADeviceMixin, AbstractDevice):
 
     def __init__(self, **kwargs):
-        self.car_plugged = kwargs.pop(CONF_CAR_PLUGGED)
-        self.car_tracker = kwargs.pop(CONF_CAR_TRACKER)
-        self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR)
-        self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY)
+        self.car_plugged = kwargs.pop(CONF_CAR_PLUGGED, None)
+        self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
+        self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
+        self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
         self.car_charger_max_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE,32)))

@@ -8,6 +8,7 @@ from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_ECO, copy_command
+from ..const import DATETIME_MAX_UTC
 
 
 class PeriodSolver(object):
@@ -39,7 +40,7 @@ class PeriodSolver(object):
         """
 
         if start_time is None:
-            start_time = datetime.now()
+            start_time = dt_util.utcnow()
 
         if end_time is None:
             end_time = start_time + timedelta(days=1)
@@ -107,7 +108,7 @@ class PeriodSolver(object):
         active_constraints = []
         for load in self._loads:
             for constraint in load.get_active_constraint_generator(start_time, end_time):
-                if constraint.end_of_constraint != datetime.max:
+                if constraint.end_of_constraint != DATETIME_MAX_UTC:
                     anchors.add(constraint.end_of_constraint)
                 active_constraints.append(constraint)
 

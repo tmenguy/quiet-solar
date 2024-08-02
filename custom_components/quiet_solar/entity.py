@@ -47,7 +47,7 @@ def create_device_from_type(hass, home, type, config_entry: ConfigEntry):
             for t in LOAD_TYPES.values():
                 # if t is a dict, then we can iterate on it ... only one level :)
                 if isinstance(t, dict) and type in t:
-                    d = t[type](hass=hass, config_entry=config_entry, **data)
+                    d = t[type](hass=hass, home=home, config_entry=config_entry, **data)
                     break
     return d
 
