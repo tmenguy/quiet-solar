@@ -378,7 +378,7 @@ class PeriodSolver(object):
                     cmd.param = param
 
                 else:
-                    cmd = CMD_AUTO_ECO
+                    cmd = copy_command(CMD_AUTO_ECO)
 
                 if cmd != current_command:
                     bcmd.append((self._time_slots[s], cmd))

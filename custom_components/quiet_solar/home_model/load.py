@@ -3,7 +3,7 @@ from abc import ABC
 from datetime import datetime, timedelta
 from collections.abc import Generator
 
-from .commands import LoadCommand, CMD_OFF
+from .commands import LoadCommand, CMD_OFF, copy_command
 from .constraints import LoadConstraint
 
 from typing import TYPE_CHECKING, Any
@@ -37,11 +37,23 @@ class AbstractLoad(AbstractDevice):
 
         self._constraints: list[LoadConstraint] = []
         self.current_command : LoadCommand | None = None
-        self._running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
+        self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.default_cmd : LoadCommand = CMD_OFF
+        self.running_command_first_launch: datetime | None = None
+        self.running_command_num_relaunch : int = 0
 
 
+
+
+
+    async def check_load_activity_and_constraints(self, time: datetime):
+        return
+
+    async def is_load_active(self, time: datetime):
+        if not self._constraints:
+            return False
+        return True
 
 
     def reset(self):
@@ -55,6 +67,9 @@ class AbstractLoad(AbstractDevice):
 
     def set_live_constraints(self, constraints: list[LoadConstraint]):
         self._constraints = constraints
+        if not constraints:
+            return
+
         self._constraints.sort(key=lambda x: x.end_of_constraint)
         if self._constraints[-1].end_of_constraint == datetime.max:
             removed_infinits = []
@@ -94,6 +109,14 @@ class AbstractLoad(AbstractDevice):
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
         # if it is the last and the one before are for the next days)
+
+        # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
+        if self.running_command is not None:
+            return False
+
+        if not self._constraints:
+            return False
+
 
         force_solving = False
         for i, c in enumerate(self._constraints):
@@ -173,8 +196,10 @@ class AbstractLoad(AbstractDevice):
 
     async def launch_command(self, time:datetime, command: LoadCommand):
 
-        if self._running_command is not None:
-            if self._running_command == command:
+        command = copy_command(command)
+
+        if self.running_command is not None:
+            if self.running_command == command:
                 self._stacked_command = None #no need of it anymore
                 return
             else:
@@ -189,24 +214,48 @@ class AbstractLoad(AbstractDevice):
             #no running command ... kill the stacked one and execute this one
             self._stacked_command = None
 
-        self._running_command = command
+        self.running_command = command
+        self.running_command_first_launch = time
         await self.execute_command(time, command)
         is_command_set = await self.probe_if_command_set(time, command)
         if is_command_set:
             self.current_command = command
-            self._running_command = None
+            self.running_command = None
+            self.running_command_num_relaunch = 0
+            self.running_command_first_launch = None
+
 
     async def check_commands(self, time: datetime):
 
-        if self._running_command is not None:
-            is_command_set = await self.probe_if_command_set(time, self._running_command)
+        res = timedelta(seconds=0)
+
+        if self.running_command is not None:
+            is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set:
-                self.current_command = self._running_command
-                self._running_command = None
+                self.current_command = self.running_command
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_first_launch = None
+            else:
+                res = time - self.running_command_first_launch
 
 
-        if self._running_command is None and self._stacked_command is not None:
+        if self.running_command is None and self._stacked_command is not None:
             await self.launch_command(time, self._stacked_command)
+
+        return res
+
+    async def force_relaunch_command(self, time: datetime):
+        if self.running_command is not None:
+            self.running_command_num_relaunch += 1
+            await self.execute_command(time, self.running_command)
+            is_command_set = await self.probe_if_command_set(time, self.running_command)
+            if is_command_set:
+                self.current_command = self.running_command
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_first_launch = None
+
 
 
     async def execute_command(self, time: datetime, command: LoadCommand):

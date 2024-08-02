@@ -1,9 +1,8 @@
-from typing import Any
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 
 from quiet_solar.ha_model.home import QSHome
-from . import QSDataHandler
 from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
@@ -21,8 +20,6 @@ from .const import (
     MANUFACTURER,
 )
 
-#if TYPE_CHECKING:
-#    from .data_handler import QSDataHandler
 
 
 LOAD_TYPES = {
@@ -86,7 +83,7 @@ class QSBaseEntity(Entity):
 class QSDeviceEntity(QSBaseEntity):
     """QS entity base class."""
     device : AbstractDevice
-    def __init__(self, data_handler:QSDataHandler, device: AbstractDevice) -> None:
+    def __init__(self, data_handler, device: AbstractDevice) -> None:
         """Set up Netatmo entity base."""
         super().__init__(data_handler)
         self.device = device

@@ -85,9 +85,18 @@ class QSDataHandler:
                 )
             )
 
+            config_entry.async_on_unload(
+                async_track_time_interval(
+                    self.hass, self.async_update, timedelta(seconds=self._scan_interval)
+                )
+            )
+
 
     async def async_update(self, event_time: datetime) -> None:
         await self.home.update(event_time)
+
+    async def async_update_loads_contraints(self, event_time: datetime) -> None:
+        await self.home.update_loads_constraints(event_time)
 
 
 

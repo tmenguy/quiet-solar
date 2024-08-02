@@ -1,15 +1,20 @@
 from abc import abstractmethod
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
+from enum import Enum
 from operator import itemgetter
+from typing import Mapping, Any
 
-from homeassistant.helpers.entity import Entity
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
+from homeassistant.helpers.event import async_track_state_change_event
 
 from quiet_solar.const import CONF_POWER_SENSOR, DOMAIN, DATA_HANDLER
 
+import numpy as np
+import numpy.typing as npt
 
 def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
     """Compute energy from power with a rieman sum."""
@@ -41,7 +46,7 @@ def compute_energy_Wh_rieman_sum(power_data, conservative: bool = False):
     return energy, duration_h
 
 
-def get_average_power(power_data:list[tuple[datetime, float]]):
+def get_average_power(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]):
 
     if len(power_data) == 0:
         return 0
@@ -52,8 +57,17 @@ def get_average_power(power_data:list[tuple[datetime, float]]):
     return nrj / dh
 
 
+def get_median_power(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]):
 
-def align_time_series_and_values(tsv1:list[tuple[datetime, float]], tsv2:list[tuple[datetime, float]] | None, do_sum:bool = False):
+    if len(power_data) == 0:
+        return 0
+    elif len(power_data) == 1:
+        return power_data[0][0]
+
+    return np.median([float(v) for _, v, _ in power_data])
+
+
+def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], tsv2:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] | None, do_sum:bool = False):
 
 
     if tsv2 is None or len(tsv2) == 0:
@@ -118,6 +132,13 @@ def align_time_series_and_values(tsv1:list[tuple[datetime, float]], tsv2:list[tu
     return zip(t_only, new_v1), zip(t_only, new_v2)
 
 
+MAX_STATE_HISTORY_S = 3600
+
+class StoredStateStatus(Enum):
+    
+    VALID = "valid"
+    ALL = "all"
+
 class HADeviceMixin:
 
     def __init__(self, hass:HomeAssistant, config_entry:ConfigEntry, **kwargs):
@@ -125,28 +146,147 @@ class HADeviceMixin:
         self.hass = hass
         self.data_handler = hass.data[DOMAIN].get(DATA_HANDLER)
         self.config_entry = config_entry
-        self.historical_data : dict[str, list[tuple[datetime, float]]] = {}
-        self.HA_entities = {}
-        for p in self.get_platforms():
-            self.HA_entities[p] = []
 
         self.power_sensor = kwargs.pop(CONF_POWER_SENSOR, None)
 
-    def add_to_history(self, entity_id:str, time:datetime, value:float):
-        if entity_id not in self.historical_data:
-            self.historical_data[entity_id] = []
+        self._entity_probed_state_is_numerical : dict[str, bool] = {}
+        self._entity_probed_state_transform_fn: dict[str, Any | None] = {}
+        self._entity_probed_state : dict[str, dict[StoredStateStatus, list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] ]] = {}
+        self._entity_probed_auto = set()
+        self._entity_on_change = set()
+        self.attach_ha_state_to_probe(self.power_sensor, is_numerical=True, update_on_change_only=True)
+        self._unsub = None
 
-        if len(self.historical_data[entity_id]) == 0 or self.historical_data[entity_id][-1][0] < time:
-            self.historical_data[entity_id].append((time, value))
+    def get_last_state_value_duration(self, entity_id: str, states_vals:list[str], num_seconds_before, time:datetime) -> float:
+
+        states_vals = set(states_vals)
+        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time)
+
+        values.sort(key=itemgetter(0), reverse=True)
+
+        state_status_duration = 0
+
+        # check the last states
+        for i, (ts, state, attr) in enumerate(values):
+            if i > 0:
+                next_ts = values[i - 1][0]
+            else:
+                next_ts = time
+
+            if state in states_vals:
+                values += (next_ts - ts).total_seconds()
+            else:
+                break
+
+        return state_status_duration
+
+
+    def register_all_on_change_states(self):
+
+        if len(self._entity_on_change) > 0:
+
+            @callback
+            def async_threshold_sensor_state_listener(
+                    event: Event[EventStateChangedData],
+            ) -> None:
+                """Handle sensor state changes."""
+                new_state = event.data["new_state"]
+                time = new_state.last_updated
+                self.add_to_history(new_state.entity_id, time, state=new_state)
+
+
+
+            self._unsub = async_track_state_change_event(
+                self.hass,
+                list(self._entity_on_change),
+                async_threshold_sensor_state_listener,
+            )
+
+    def update_states(self, time:datetime):
+
+        for entity_id in self._entity_probed_auto:
+            self.add_to_history(entity_id, time)
+
+
+    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn=None, update_on_change_only:bool=False):
+        if entity_id is None:
+            return
+
+        self._entity_probed_state[entity_id] = {StoredStateStatus.ALL: [], StoredStateStatus.VALID: []}
+        self._entity_probed_state_is_numerical[entity_id] = is_numerical
+        self._entity_probed_state_transform_fn[entity_id] = transform_fn
+
+        if update_on_change_only:
+            self._entity_on_change.add(entity_id)
         else:
-            self.historical_data[entity_id].append((time, value))
-            self.historical_data[entity_id].sort(key=lambda x: x[0])
+            self._entity_probed_auto.add(entity_id)
 
-        if len(self.historical_data[entity_id]) > 200:
-            self.historical_data[entity_id].pop(0)
 
-    def get_history_data(self, entity_id:str, num_seconds_before:float, to_ts:datetime):
-        hist_f = self.historical_data.get(entity_id, [])
+    def _clean_times_arrays(self, current_time:datetime, time_array : list[datetime], value_arrays : list[list]) -> list[datetime]:
+        if len(time_array) == 0:
+            return time_array
+
+        while len(time_array) > 0 and (current_time - time_array[0]).total_seconds() > MAX_STATE_HISTORY_S:
+            time_array.pop(0)
+            for v in value_arrays:
+                v.pop(0)
+
+        return time_array
+
+    def add_to_history(self, entity_id:str, time:datetime, state:State = None):
+
+        if state is None:
+            state = self.hass.states.get(entity_id)
+
+
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            value = None
+        else:
+            value = state.state
+
+        if self._entity_probed_state_is_numerical[entity_id]:
+            try:
+                value = float(value)
+            except ValueError:
+                value = None
+            except TypeError:
+                value = None
+
+        if value is None:
+            to_update = [StoredStateStatus.ALL]
+        else:
+            transform_fn = self._entity_probed_state_transform_fn[entity_id]
+            if transform_fn is not None:
+                value = transform_fn(value)
+
+            to_update = [StoredStateStatus.ALL, StoredStateStatus.VALID]
+
+
+        for to_change in to_update:
+            val_array = self._entity_probed_state[entity_id][to_change]
+            val_array.append((time, value, state.attributes))
+            val_array.sort(key=itemgetter(0))
+            while len(val_array) > 0 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
+                val_array.pop(0)
+
+
+    def _get_last_state_value(self, entity_id:str, valid_type:StoredStateStatus) -> tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]:
+
+        if len(self._entity_probed_state[entity_id][valid_type]) == 0:
+            return None, None, None
+
+        return self._entity_probed_state[entity_id][valid_type][-1]
+
+
+
+    def get_current_state_value(self, entity_id:str) -> tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]:
+        return self._get_last_state_value(entity_id, StoredStateStatus.ALL)
+
+    def get_last_valid_state_value(self, entity_id: str) -> tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]:
+        return self._get_last_state_value(entity_id, StoredStateStatus.VALID)
+
+    def get_state_history_data(self, entity_id:str, num_seconds_before:float, to_ts:datetime, valid_type:StoredStateStatus=StoredStateStatus.VALID) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+        hist_f = self._entity_probed_state.get(entity_id, {}).get(valid_type, [])
 
         if not hist_f:
             return []
@@ -162,10 +302,6 @@ class HADeviceMixin:
 
         return hist_f[in_s:out_s]
 
-    def do_create_ha_entities(self, platform : str, async_add_entities: AddEntitiesCallback):
-        ha_entities = self.create_ha_entities(platform)
-        self.HA_entities[platform] = ha_entities
-        async_add_entities(ha_entities)
 
 
 
@@ -173,6 +309,3 @@ class HADeviceMixin:
     def get_platforms(self) -> list[str]:
         """ returns associated platforms for this device """
 
-    def create_ha_entities(self, platform : str) -> list[Entity]:
-        """ returns associated sensors for this device """
-        return []

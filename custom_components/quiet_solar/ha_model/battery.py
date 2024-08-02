@@ -20,6 +20,8 @@ class QSBattery(HADeviceMixin, Battery):
 
         super().__init__(**kwargs)
 
+        self.attach_ha_state_to_probe(self.charge_discharge_sensor, is_numerical=True)
+
         self.max_discharging_power_current = self.max_discharging_power
         self.max_charging_power_current = self.max_charging_power
 

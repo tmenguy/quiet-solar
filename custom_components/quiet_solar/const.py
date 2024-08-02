@@ -47,6 +47,8 @@ CONF_BATTERY_MAX_CHARGE_POWER_NUMBER = "battery_max_charge_power_number"
 CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
 CONF_CHARGER_IS_3P = "charger_is_3p"
+CONF_CHARGER_CONSUMPTION = "charger_consumption"
+
 
 CONF_CHARGER_DEVICE_OCPP = "charger_device_ocpp"
 CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"

@@ -1,16 +1,21 @@
-from abc import abstractmethod
-from dataclasses import dataclass, asdict
-from typing import Callable, Any
 
-from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, RestoreSensor, SensorExtraStoredData
+from dataclasses import dataclass, asdict
+from typing import Any, TYPE_CHECKING
+
+from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, RestoreSensor, SensorExtraStoredData, \
+    SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, Platform
+from homeassistant.const import STATE_UNAVAILABLE, Platform, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
-from homeassistant.helpers.typing import StateType
 
-from . import QSDataHandler
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerGeneric
+
+if TYPE_CHECKING:
+    from . import QSDataHandler
+
 from .const import (
     DATA_DEVICE_IDS,
     DOMAIN,
@@ -18,6 +23,68 @@ from .const import (
 )
 from .entity import QSDeviceEntity
 from .home_model.load import AbstractDevice
+
+
+def create_ha_sensor_for_QSCar(device: QSCar):
+    entities = []
+
+    store_sensor = QSSensorEntityDescription(
+        key="charge_state",
+        device_class=SensorDeviceClass.ENUM,
+        options=[
+            "not_in_charge",
+            "waiting_for_a_planned_charge",
+            "charge_ended",
+            "waiting_for_current_charge",
+            "energy_flap_opened",
+            "charge_in_progress",
+            "charge_error"
+        ],
+    )
+
+    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, qs_device=device, description=store_sensor))
+
+    return entities
+
+def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
+    entities = []
+
+
+    charge_sensor = QSSensorEntityDescription(
+        key="charge_state",
+        device_class=SensorDeviceClass.ENUM,
+        options=[
+            "not_in_charge",
+            "waiting_for_a_planned_charge",
+            "charge_ended",
+            "waiting_for_current_charge",
+            "energy_flap_opened",
+            "charge_in_progress",
+            "charge_error",
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        ],
+    )
+
+    entities.append(QSBaseSensor(data_handler=device.data_handler, qs_device=device, description=charge_sensor))
+
+    entities.extend(create_ha_sensor_for_QSCar(device._default_generic_car))
+
+    return entities
+
+
+def create_ha_sensor(self, device: AbstractDevice):
+    device.home = self
+
+    if isinstance(device, QSCar):
+        return create_ha_sensor_for_QSCar(device)
+    elif isinstance(device, QSChargerGeneric):
+        return create_ha_sensor_for_QSCharger(device)
+
+    return []
+
+
+
 
 
 async def async_setup_entry(
@@ -30,7 +97,7 @@ async def async_setup_entry(
 
     if device:
 
-        entities = device.create_ha_entities(Platform.SENSOR)
+        entities = create_ha_sensor(device)
 
         if entities:
             async_add_entities(entities)
