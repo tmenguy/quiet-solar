@@ -3,14 +3,14 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 
 from quiet_solar.ha_model.home import QSHome
-from .ha_model.battery import QSBattery
-from .ha_model.car import QSCar
-from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
-from .ha_model.fp_heater import QSFPHeater
-from .ha_model.on_off_duration import QSOnOffDuration
-from .ha_model.pool import QSPool
-from .ha_model.solar import QSSolar
-from .home_model.load import AbstractDevice
+from quiet_solar.ha_model.battery import QSBattery
+from quiet_solar.ha_model.car import QSCar
+from quiet_solar.ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
+from quiet_solar.ha_model.fp_heater import QSFPHeater
+from quiet_solar.ha_model.on_off_duration import QSOnOffDuration
+from quiet_solar.ha_model.pool import QSPool
+from quiet_solar.ha_model.solar import QSSolar
+from quiet_solar.home_model.load import AbstractDevice
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity

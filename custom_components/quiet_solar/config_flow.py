@@ -157,7 +157,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     def get_all_charger_schema_base(self, add_load_power_sensor_mandatory ):
 
-        sc = self.get_common_schema(add_load_power_sensor_mandatory=add_load_power_sensor_mandatory)
+        sc = self.get_common_schema(add_load_power_sensor=True, add_load_power_sensor_mandatory=add_load_power_sensor_mandatory)
 
         sc.update( {
                     vol.Required(CONF_NAME): cv.string,

@@ -6,6 +6,7 @@ logger:
   default: info
   logs:
     custom_components.quiet_solar: debug
+    custom_components.quiet-solar: debug
 # If you need to debug uncommment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
 #debugpy:
   #start: true

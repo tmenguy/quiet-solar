@@ -4,12 +4,13 @@ from datetime import datetime
 
 from quiet_solar.const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P
+    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE
 from quiet_solar.ha_model.device import HADeviceMixin
 from quiet_solar.home_model.load import AbstractDevice
-from homeassistant.const import Platform
+from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 MIN_CHARGE_POWER_W = 150
+
 
 class QSCar(HADeviceMixin, AbstractDevice):
 
@@ -20,24 +21,26 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
-        self.car_charger_max_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE,32)))
+        self.car_charger_max_charge : int = min(MAX_POSSIBLE_APERAGE, int(max(0,kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE,32))))
         self.car_use_custom_power_charge_values = kwargs.pop(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
         self.car_is_custom_power_charge_values_3p = kwargs.pop(CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, False)
-        self.amp_to_power_1p = [-1] * (self.car_charger_max_charge + 1 - self.car_charger_min_charge)
-        self.amp_to_power_3p = [-1] * (self.car_charger_max_charge + 1 - self.car_charger_min_charge)
+        self.amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
         self._last_dampening_update = None
 
         super().__init__(**kwargs)
 
+        self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
 
-        for a in range(self.car_charger_min_charge, self.car_charger_max_charge + 1):
+
+        for a in range(len(self.theoretical_amp_to_power_1p)):
 
             val_1p = float(self.home.voltage * a)
             val_3p = 3*val_1p
 
-            self.amp_to_power_1p[a - self.car_charger_min_charge] = val_1p
-            self.amp_to_power_3p[a - self.car_charger_min_charge] = val_3p
-
+            self.amp_to_power_1p[a] = self.theoretical_amp_to_power_1p[a] = val_1p
+            self.amp_to_power_3p[a] = self.theoretical_amp_to_power_3p[a] = val_3p
 
         if self.car_use_custom_power_charge_values:
 
@@ -48,50 +51,80 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         val_1p = val_3p / 3.0
                     else:
                         val_3p = val_1p * 3.0
-                    self.amp_to_power_1p[a - self.car_charger_min_charge] = val_1p
-                    self.amp_to_power_3p[a - self.car_charger_min_charge] = val_3p
+                    self.amp_to_power_1p[a] = val_1p
+                    self.amp_to_power_3p[a] = val_3p
+
+        self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
+                                      is_numerical=True)
+
+        self.attach_ha_state_to_probe(self.car_plugged,
+                                      is_numerical=False,
+                                      update_on_change_only=True)
+
+        self.attach_ha_state_to_probe(self.car_tracker,
+                                      is_numerical=False,
+                                      update_on_change_only=True)
+
+        self._salvable_dampening = {}
 
 
-        self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True)
+    def is_car_plugged(self, time:datetime, for_duration:float|None) -> bool | None:
+
+        if self.car_plugged is None:
+            return None
+
+        contiguous_status = self.get_last_state_value_duration(self.car_plugged,
+                                                               states_vals=["on"],
+                                                               num_seconds_before=2 * for_duration,
+                                                               time=time)
+
+        return contiguous_status >= for_duration and contiguous_status > 0
+
+    def is_car_home(self, time:datetime, for_duration:float|None) -> bool | None:
+
+        if self.car_tracker is None:
+            return None
+
+        contiguous_status = self.get_last_state_value_duration(self.car_tracker,
+                                                               states_vals=["home"],
+                                                               num_seconds_before=2 * for_duration,
+                                                               time=time)
+
+        return contiguous_status >= for_duration and contiguous_status > 0
+
+    def get_car_charge_percent(self) -> float | None:
+
+        if self.car_charge_percent_sensor is None:
+            return None
+        else:
+            state = self.hass.states.get(self.car_charge_percent_sensor)
+
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                return None
+            else:
+                return float(state.state)
 
     async def _save_dampening_values(self):
-
         data = dict(self.config_entry.data)
-
-        data[CONF_CAR_CHARGER_MIN_CHARGE] = self.car_charger_min_charge
-        data[CONF_CAR_CHARGER_MAX_CHARGE] = self.car_charger_max_charge
-        data[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
-        data[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
-
-        for a in range(0, 33):
-            data[f"charge_{a}"] = -1
-
-        for a in range(self.car_charger_min_charge, self.car_charger_max_charge + 1):
-            if self.car_is_custom_power_charge_values_3p:
-                val = self.amp_to_power_3p[a - self.car_charger_min_charge]
-            else:
-                val = self.amp_to_power_1p[a - self.car_charger_min_charge]
-
-            data[f"charge_{a}"] = val
-
+        data.update(self._salvable_dampening)
         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
-
     def update_dampening_value(self, amperage:int|float, power_value:int|float, for_3p:bool, time:datetime):
+
 
         if amperage < self.car_charger_min_charge or amperage > self.car_charger_max_charge:
             return
 
-
+        amperage = int(amperage)
 
         if power_value < MIN_CHARGE_POWER_W:
             # we may have a 0 value for a given amperage actually it could change the min and max amperage
             power_value = 0
 
         if for_3p:
-            old_val = self.amp_to_power_3p[amperage - self.car_charger_min_charge]
+            old_val = self.amp_to_power_3p[amperage]
         else:
-            old_val = self.amp_to_power_1p[amperage - self.car_charger_min_charge]
+            old_val = self.amp_to_power_1p[amperage]
 
         do_update = False
         if (power_value == 0 or old_val == 0):
@@ -109,30 +142,46 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if do_update:
 
             self.car_is_custom_power_charge_values_3p = for_3p
+            self.car_use_custom_power_charge_values = True
 
             if for_3p:
-                self.amp_to_power_3p[amperage - self.car_charger_min_charge] = power_value
-                self.amp_to_power_1p[amperage - self.car_charger_min_charge] = power_value / 3.0
+                val_3p = float(power_value)
+                val_1p = float(power_value / 3.0)
             else:
-                self.amp_to_power_1p[amperage - self.car_charger_min_charge] = power_value
-                self.amp_to_power_3p[amperage - self.car_charger_min_charge] = power_value * 3.0
+                val_1p = float(power_value)
+                val_3p = float(power_value * 3.0)
+
+            self.amp_to_power_3p[amperage] = val_3p
+            self.amp_to_power_1p[amperage] = val_1p
 
             if power_value == 0:
                 d = 0
                 for i, val in enumerate(self.amp_to_power_3p):
+                    if i < self.car_charger_min_charge:
+                        continue
                     if val == 0:
                         d += 1
                     else:
                         break
 
                 self.car_charger_min_charge += d
-                self.amp_to_power_1p = self.amp_to_power_1p[d:]
-                self.amp_to_power_3p = self.amp_to_power_3p[d:]
 
+            car_percent = self.get_car_charge_percent()
 
-            if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
-                self._last_dampening_update = time
-                self.hass.add_job(self._save_dampening_values)
+            if self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 85:
+                #ok this value can be saved
+                self._salvable_dampening[CONF_CAR_CHARGER_MIN_CHARGE] = self.car_charger_min_charge
+                self._salvable_dampening[CONF_CAR_CHARGER_MAX_CHARGE] = self.car_charger_max_charge
+                self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
+                self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
+                self._salvable_dampening[f"charge_{amperage}"] = power_value
+
+                if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
+                    self._last_dampening_update = time
+                    data = dict(self.config_entry.data)
+                    data.update(self._salvable_dampening)
+                    self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                    #self.hass.add_job(self._save_dampening_values())
 
     def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:
         if for_3p:

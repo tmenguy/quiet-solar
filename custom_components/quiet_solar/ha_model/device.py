@@ -5,6 +5,7 @@ from enum import Enum
 from operator import itemgetter
 from typing import Mapping, Any, Callable
 
+import pytz
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT
 
 from homeassistant.config_entries import ConfigEntry
@@ -179,32 +180,61 @@ class HADeviceMixin:
 
         self._entity_probed_state_is_numerical : dict[str, bool] = {}
         self._entity_probed_state_transform_fn: dict[str, Any | None] = {}
+        self._entity_probed_state_non_ha_entity_get_state: dict[str, Any | None] = {}
         self._entity_probed_state : dict[str, dict[StoredStateStatus, list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] ]] = {}
         self._entity_probed_auto = set()
         self._entity_on_change = set()
-        self.attach_ha_state_to_probe(self.power_sensor, is_numerical=True, update_on_change_only=True)
+        self.attach_ha_state_to_probe(self.power_sensor,
+                                      is_numerical=True)
         self._unsub = None
 
-    def get_last_state_value_duration(self, entity_id: str, states_vals:list[str], num_seconds_before, time:datetime) -> float:
+    def get_last_state_value_duration(self, entity_id: str, states_vals:list[str], num_seconds_before, time:datetime, invert_val_probe=False, allowed_max_holes_s:float=3) -> float:
 
         states_vals = set(states_vals)
-        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time)
+        if entity_id in self._entity_probed_state:
+            # get latest values
+            self.add_to_history(entity_id, time)
+
+        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time, valid_type=StoredStateStatus.ALL)
+
+        if not values:
+            return 0.0
 
         values.sort(key=itemgetter(0), reverse=True)
 
         state_status_duration = 0
 
         # check the last states
+        current_hole = 0.0
+        first_is_met = False
+
         for i, (ts, state, attr) in enumerate(values):
             if i > 0:
                 next_ts = values[i - 1][0]
             else:
                 next_ts = time
 
-            if state in states_vals:
-                values += (next_ts - ts).total_seconds()
+            delta_t = (next_ts - ts).total_seconds()
+
+            val_prob_ok = False
+            if state is not None:
+                if invert_val_probe:
+                    val_prob_ok = state not in states_vals
+                else:
+                    val_prob_ok = state in states_vals
+
+            if val_prob_ok:
+                state_status_duration += delta_t
+                current_hole = 0.0
+                first_is_met = True
             else:
-                break
+                if state is not None and first_is_met is False:
+                    # if we have an incompatible state first we do not count anything
+                    # but we could start with a small unavailable hole
+                    break
+                current_hole += delta_t
+                if current_hole > allowed_max_holes_s:
+                    break
 
         return state_status_duration
 
@@ -236,18 +266,23 @@ class HADeviceMixin:
             self.add_to_history(entity_id, time)
 
 
-    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn=None, update_on_change_only:bool=False):
+    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn=None, update_on_change_only:bool=False, non_ha_entity_get_state=None):
         if entity_id is None:
             return
 
         self._entity_probed_state[entity_id] = {StoredStateStatus.ALL: [], StoredStateStatus.VALID: []}
         self._entity_probed_state_is_numerical[entity_id] = is_numerical
         self._entity_probed_state_transform_fn[entity_id] = transform_fn
+        self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
 
         if update_on_change_only:
             self._entity_on_change.add(entity_id)
         else:
+            self._entity_on_change.add(entity_id)
             self._entity_probed_auto.add(entity_id)
+
+        # store a first version
+        self.add_to_history(entity_id)
 
 
     def _clean_times_arrays(self, current_time:datetime, time_array : list[datetime], value_arrays : list[list]) -> list[datetime]:
@@ -261,16 +296,28 @@ class HADeviceMixin:
 
         return time_array
 
-    def add_to_history(self, entity_id:str, time:datetime, state:State = None):
+    def add_to_history(self, entity_id:str, time:datetime=None , state:State = None):
 
         if state is None:
-            state = self.hass.states.get(entity_id)
+            state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
+            if state_getter:
+                state = state_getter(entity_id, time)
+            else:
+                state = self.hass.states.get(entity_id)
 
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             value = None
+            if state is None:
+                if time is None:
+                    state_time = datetime.now(tz=pytz.UTC)
+                else:
+                    state_time = time
+            else:
+                state_time = state.last_updated
         else:
             value = state.state
+            state_time = state.last_updated
 
         if self._entity_probed_state_is_numerical[entity_id]:
             try:
@@ -292,8 +339,24 @@ class HADeviceMixin:
 
         for to_change in to_update:
             val_array = self._entity_probed_state[entity_id][to_change]
-            val_array.append((time, value, state.attributes))
-            val_array.sort(key=itemgetter(0))
+
+            if state is None:
+                to_add = (state_time, value, None)
+            else:
+                to_add = (state_time, value, state.attributes)
+
+            if not val_array:
+                val_array.append(to_add)
+            else:
+                insert_idx = bisect_left(val_array, state_time, key=itemgetter(0))
+                if insert_idx == len(val_array):
+                    val_array.append(to_add)
+                else:
+                    if val_array[insert_idx][0] == state_time:
+                        val_array[insert_idx] = to_add
+                    else:
+                        val_array.insert(insert_idx, to_add)
+
             while len(val_array) > 0 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
                 val_array.pop(0)
 
@@ -313,26 +376,48 @@ class HADeviceMixin:
     def get_last_valid_state_value(self, entity_id: str) -> tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]:
         return self._get_last_state_value(entity_id, StoredStateStatus.VALID)
 
-    def get_state_history_data(self, entity_id:str, num_seconds_before:float, to_ts:datetime, valid_type:StoredStateStatus=StoredStateStatus.VALID) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_state_history_data(self, entity_id:str, num_seconds_before:float | None, to_ts:datetime, valid_type:StoredStateStatus=StoredStateStatus.VALID) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         hist_f = self._entity_probed_state.get(entity_id, {}).get(valid_type, [])
 
         if not hist_f:
             return []
 
+        if to_ts is None:
+            to_ts = datetime.now(tz=pytz.UTC)
+
+        # the last value is in fact still valid now (by construction : either it was through polling or through a state change)
+        if num_seconds_before is None or num_seconds_before == 0:
+            num_seconds_before = 0
+
         from_ts = to_ts - timedelta(seconds=num_seconds_before)
 
-        in_s = bisect_left(hist_f, from_ts, key=itemgetter(0))
-        if from_ts > hist_f[-1][0]:
-            return []
+        if from_ts >= hist_f[-1][0]:
+            return hist_f[-1:]
 
-        if to_ts is None or to_ts > hist_f[-1][0]:
+        if to_ts < hist_f[0][0]:
+            return []
+        elif to_ts == hist_f[0][0]:
+            return hist_f[:1]
+
+
+        in_s = bisect_left(hist_f, from_ts, key=itemgetter(0))
+
+        # the state is "valid" for its whole duration so pick the one before
+        if in_s > 0:
+            if hist_f[in_s][0] > from_ts:
+                in_s -= 1
+
+        if to_ts >= hist_f[-1][0]:
             out_s = len(hist_f)
         else:
             out_s = bisect_right(hist_f, to_ts, key=itemgetter(0))
 
+        if in_s == out_s:
+            if out_s == len(hist_f):
+                return hist_f[-1:]
+
+
         return hist_f[in_s:out_s]
-
-
 
 
     @abstractmethod

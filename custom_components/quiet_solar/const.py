@@ -6,6 +6,8 @@ import pytz
 DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.utc)
 DATETIME_MIN_UTC = datetime.min.replace(tzinfo=pytz.utc)
 
+MAX_POSSIBLE_APERAGE = 64
+
 DOMAIN = "quiet_solar"
 MANUFACTURER = "QuietSolarAbstraction"
 DEFAULT_ATTRIBUTION = f"Data provided by {MANUFACTURER}"
@@ -50,6 +52,8 @@ CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"
 CONF_CHARGER_PLUGGED = "charger_plugged"
 CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER = "charger_max_charging_current_number"
 CONF_CHARGER_PAUSE_RESUME_SWITCH = "charger_pause_resume_switch"
+
+CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"

@@ -1,3 +1,4 @@
+import logging
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -9,13 +10,19 @@ from .const import (
     DOMAIN,
     DEVICE_TYPE
 )
+
+_LOGGER = logging.getLogger(__name__)
+
 from quiet_solar.ha_model.home import QSHome
-from quiet_solar.home_model.load import AbstractDevice
+
+from quiet_solar.ha_model.car import QSCar
+from quiet_solar.ha_model.charger import QSChargerGeneric
 
 async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener.   Reload the data handler when the entry is updated.
      https://community.home-assistant.io/t/config-flow-how-to-update-an-existing-entity/522442/8 """
     await hass.config_entries.async_reload(entry.entry_id)
+
 
 
 class QSDataHandler:
@@ -34,6 +41,7 @@ class QSDataHandler:
         d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
         self.hass.data[DOMAIN][config_entry.entry_id] = d
         self.home.add_device(d)
+
         return d
 
     def subscribe_to_update(self, subscriber, update_callback):

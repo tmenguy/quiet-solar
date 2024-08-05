@@ -5,6 +5,7 @@ from quiet_solar.const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GR
 from quiet_solar.ha_model.battery import QSBattery
 from quiet_solar.ha_model.car import QSCar
 from quiet_solar.ha_model.charger import QSChargerGeneric
+
 from quiet_solar.ha_model.device import HADeviceMixin
 from quiet_solar.ha_model.solar import QSSolar
 from quiet_solar.home_model.commands import LoadCommand
@@ -12,6 +13,9 @@ from quiet_solar.home_model.load import AbstractLoad, AbstractDevice
 from datetime import datetime, timedelta
 from quiet_solar.home_model.solver import PeriodSolver
 
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 class QSHome(HADeviceMixin, AbstractDevice):
 
@@ -45,9 +49,12 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         self._last_active_load_time = None
         if self.grid_active_power_sensor_inverted:
-            self.attach_ha_state_to_probe(self.grid_active_power_sensor, is_numerical=True, update_on_change_only=True, transform_fn=lambda x: -x)
+            self.attach_ha_state_to_probe(self.grid_active_power_sensor,
+                                          is_numerical=True,
+                                          transform_fn=lambda x: -x)
         else:
-            self.attach_ha_state_to_probe(self.grid_active_power_sensor, is_numerical=True, update_on_change_only=True)
+            self.attach_ha_state_to_probe(self.grid_active_power_sensor,
+                                          is_numerical=True)
 
         self.register_all_on_change_states()
 
@@ -77,7 +84,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
             await self._battery.set_max_charging_power(power, blocking)
 
 
-    def add_device(self, device: AbstractDevice):
+    def add_device(self, device):
 
         device.home = self
 
@@ -126,6 +133,9 @@ class QSHome(HADeviceMixin, AbstractDevice):
         for load in self._all_loads:
 
             if load.is_load_active(time) is False:
+                continue
+
+            if load.is_load_command_set(time) is False:
                 continue
 
             if (await load.update_live_constraints(time, self._period)) :

@@ -231,7 +231,8 @@ class AbstractLoad(AbstractDevice):
             self.running_command_num_relaunch = 0
             self.running_command_first_launch = None
 
-
+    def is_load_command_set(self, time:datetime):
+        return self.running_command is None and self.current_command is not None
     async def check_commands(self, time: datetime):
 
         res = timedelta(seconds=0)
