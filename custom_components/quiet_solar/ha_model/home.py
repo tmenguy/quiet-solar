@@ -1,3 +1,4 @@
+from enum import StrEnum
 from typing import Mapping, Any
 
 from homeassistant.const import Platform
@@ -15,6 +16,13 @@ from quiet_solar.home_model.commands import LoadCommand
 from quiet_solar.home_model.load import AbstractLoad, AbstractDevice
 from datetime import datetime, timedelta
 from quiet_solar.home_model.solver import PeriodSolver
+
+
+class QSHomeMode(StrEnum):
+    HOME_MODE_OFF = "home_mode_off"
+    HOME_MODE_SENSORS_ONLY = "home_mode_sensors_only"
+    HOME_MODE_CHARGER_ONLY = "home_mode_charger_only"
+    HOME_MODE_ON = "home_mode_on"
 
 import logging
 
@@ -66,7 +74,9 @@ class QSHome(HADeviceMixin, AbstractDevice):
                                       non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter)
 
         self.home_non_controlled_consumption = None
+        self.home_consumption = None
 
+        self.home_mode = QSHomeMode.HOME_MODE_OFF.value
         self.register_all_on_change_states()
 
     def get_platforms(self):
@@ -83,15 +93,15 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         battery_charge = None
         if self._battery is not None:
-            battery_charge = self.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+            battery_charge = self._battery.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
 
         if self._solar_plant is not None:
             solar_production = None
             if self._solar_plant.solar_inverter_active_power:
                 # this one has the battery inside!
-                solar_production_minus_battery = self.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+                solar_production_minus_battery = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
             if solar_production_minus_battery is None and self._solar_plant.solar_inverter_input_active_power:
-                solar_production = self.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+                solar_production = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
                 if solar_production is not None and battery_charge is not None:
                     solar_production_minus_battery = solar_production - battery_charge
         elif battery_charge is not None:
@@ -123,6 +133,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         val = home_consumption - controlled_consumption
 
         self.home_non_controlled_consumption = val
+        self.home_consumption = home_consumption
 
         res = State(
             entity_id=f"toto.{entity_id}.tata",
@@ -176,17 +187,41 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
     async def update_loads_constraints(self, time: datetime):
 
+        if self.home_mode in [
+            QSHomeMode.HOME_MODE_OFF.value,
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+            ]:
+            return
+
         # check for active loads
 
         # for now we just check if a charger is plugged in
         for load in self._all_loads:
             await load.check_load_activity_and_constraints(time)
 
+    async def update_all_states(self, time: datetime):
+
+            if self.home_mode in [
+                QSHomeMode.HOME_MODE_OFF.value,
+                ]:
+                return
+
+            for device in self._all_devices:
+                await device.update_states(time)
 
     async def update(self, time: datetime):
 
+        if self.home_mode in [
+            QSHomeMode.HOME_MODE_OFF.value,
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+            ]:
+            return
 
-        for load in self._all_loads:
+        all_loads = self._all_loads
+        if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
+            all_loads = self._chargers
+
+        for load in all_loads:
 
             if load.is_load_active(time) is False:
                 continue
@@ -200,7 +235,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                     pass
 
         do_force_solve = False
-        for load in self._all_loads:
+        for load in all_loads:
 
             if load.is_load_active(time) is False:
                 continue

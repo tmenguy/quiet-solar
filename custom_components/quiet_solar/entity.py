@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.typing import UNDEFINED
 
 from quiet_solar.ha_model.home import QSHome
 from quiet_solar.ha_model.battery import QSBattery
@@ -19,8 +20,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
 )
-
-
+from quiet_solar.ha_model.device import HADeviceMixin
 
 LOAD_TYPES = {
     "home": QSHome,
@@ -56,37 +56,35 @@ class QSBaseEntity(Entity):
     """QS entity base class."""
 
     _attr_attribution = DEFAULT_ATTRIBUTION
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
 
-    def __init__(self, data_handler) -> None:
+    def __init__(self, data_handler, description) -> None:
         """Set up QS entity base."""
         self.data_handler = data_handler
         self._attr_extra_state_attributes = {}
+        self.entity_description = description
 
-    async def async_added_to_hass(self) -> None:
-        """Entity created."""
-        self.data_handler.subscribe_to_update(self, self.async_update_callback)
-        self.async_update_callback()
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Run when entity will be removed from hass."""
-        await super().async_will_remove_from_hass()
-        self.data_handler.unsubscribe_from_update(self.async_update_callback)
-
+        if self.entity_description.name is UNDEFINED:
+            _attr_has_entity_name = True
 
     @callback
     def async_update_callback(self) -> None:
         """Update the entity's state."""
-        raise NotImplementedError
+        return
+
+
+
+
 
 # this one is to be used for 'exported" HA entities that are describing a load, and so passthrough control of it
 class QSDeviceEntity(QSBaseEntity):
     """QS entity base class."""
     device : AbstractDevice
-    def __init__(self, data_handler, device: AbstractDevice) -> None:
+    def __init__(self, data_handler, device: AbstractDevice, description) -> None:
         """Set up Netatmo entity base."""
-        super().__init__(data_handler)
+        super().__init__(data_handler=data_handler, description=description)
         self.device = device
+
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
@@ -98,6 +96,14 @@ class QSDeviceEntity(QSBaseEntity):
     @property
     def device_type(self) -> str:
         return self.device.device_type
+
+    async def async_added_to_hass(self) -> None:
+        """Entity created."""
+        await super().async_added_to_hass()
+
+        if isinstance(self.device, HADeviceMixin):
+            self.device.attach_exposed_has_entity(self)
+
    # @property
    # def home(self) -> Home:
    #     """Return the home this room belongs to."""

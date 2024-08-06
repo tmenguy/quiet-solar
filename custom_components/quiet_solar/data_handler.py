@@ -32,9 +32,11 @@ class QSDataHandler:
         self.hass : HomeAssistant = hass
         self.home: QSHome | None = None
         self._cached_config_entries :list[ConfigEntry] = []
-        self._scan_interval = 1
-        self._refresh_constraints_interval = 10
-        self.update_subscribers = {}
+
+        self._scan_interval = 2
+        self._refresh_constraints_interval = 15
+        self._refresh_states_interval = 5
+
 
     def _add_device(self, config_entry: ConfigEntry ):
         type = config_entry.data.get(DEVICE_TYPE)
@@ -43,13 +45,6 @@ class QSDataHandler:
         self.home.add_device(d)
 
         return d
-
-    def subscribe_to_update(self, subscriber, update_callback):
-        self.update_subscribers[update_callback] = subscriber
-
-    def unsubscribe_from_update(self, update_callback):
-        return self.update_subscribers.pop(update_callback, None)
-
 
     async def async_add_entry(self, config_entry: ConfigEntry) -> None:
 
@@ -98,9 +93,20 @@ class QSDataHandler:
                 )
             )
 
+            config_entry.async_on_unload(
+                async_track_time_interval(
+                    self.hass, self.async_update_all_states, timedelta(seconds=self._refresh_states_interval)
+                )
+            )
+
+
+
 
     async def async_update(self, event_time: datetime) -> None:
         await self.home.update(event_time)
+
+    async def async_update_all_states(self, event_time: datetime) -> None:
+        await self.home.update_all_states(event_time)
 
     async def async_update_loads_contraints(self, event_time: datetime) -> None:
         await self.home.update_loads_constraints(event_time)

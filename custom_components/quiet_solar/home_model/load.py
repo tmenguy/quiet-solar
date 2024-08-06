@@ -47,9 +47,6 @@ class AbstractLoad(AbstractDevice):
         self.running_command_num_relaunch : int = 0
 
 
-
-
-
     async def check_load_activity_and_constraints(self, time: datetime):
         return
 

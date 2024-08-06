@@ -134,8 +134,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.reset()
 
         self.attach_ha_state_to_probe(self.charger_status_sensor,
-                                      is_numerical=False,
-                                      update_on_change_only=True)
+                                      is_numerical=False)
 
         self.attach_ha_state_to_probe(self._internal_fake_is_plugged_id,
                                       is_numerical=False,
@@ -210,7 +209,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 best_car = car
                 best_score = score
 
-        _LOGGER.debug(f"Best Car: {best_car.name} with score {best_score}")
+        _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
 
         return best_car
 
@@ -268,7 +267,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def stop_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=False, time=time)
         if self.is_charge_enabled(time):
-            _LOGGER.debug(f"STOP CHARGE LAUNCHED")
+            _LOGGER.info(f"STOP CHARGE LAUNCHED")
             await self.hass.services.async_call(
                 domain=Platform.SWITCH,
                 service=SERVICE_TURN_OFF,
@@ -279,7 +278,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def start_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=True, time=time)
         if self.is_charge_disabled(time):
-            _LOGGER.debug(f"START CHARGE LAUNCHED")
+            _LOGGER.info(f"START CHARGE LAUNCHED")
             await self.hass.services.async_call(
                 domain=Platform.SWITCH,
                 service=SERVICE_TURN_ON,
@@ -440,7 +439,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.get_max_charging_power() != self._expected_amperage.value:
             # check first if amperage setting is ok
             if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                _LOGGER.debug(f"Ensure State: set_max_charging_current: {self._expected_amperage.value}A")
+                _LOGGER.info(f"Ensure State: set_max_charging_current: {self._expected_amperage.value}A")
                 await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
 
             self._verified_correct_state_time = None
@@ -452,10 +451,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # if amperage is ok check if charge state is ok
             if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
                 if self._expected_charge_state.value:
-                    _LOGGER.debug(f"Ensure State: start_charge")
+                    _LOGGER.info(f"Ensure State: start_charge")
                     await self.start_charge(time=time)
                 else:
-                    _LOGGER.debug(f"Ensure State: stop_charge")
+                    _LOGGER.info(f"Ensure State: stop_charge")
                     await self.stop_charge(time=time)
 
             self._verified_correct_state_time = None
@@ -475,7 +474,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.current_command is None or self.car is None or self.is_not_plugged(time=time,
                                                                                    for_duration=CHARGER_ADAPTATION_WINDOW):
             self.reset()
-            _LOGGER.debug(f"update_value_callback: reset because no car or not plugged")
+            _LOGGER.info(f"update_value_callback: reset because no car or not plugged")
             return None
 
         if self.is_not_plugged(time=time):
@@ -530,7 +529,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # so the battery will adapt itself, let it do its job .. no need to touch its state at all!
 
 
-                        _LOGGER.debug(f"update_value_callback:car stopped asking current")
+                        _LOGGER.info(f"update_value_callback:car stopped asking current")
                         pass
 
 
@@ -546,7 +545,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                             # time to update some dampening car values:
                             if current_real_car_power is not None:
-                                _LOGGER.debug(f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
+                                _LOGGER.info(f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                                 self.car.update_dampening_value(amperage=current_real_max_charging_power,
                                                                 power_value=current_real_car_power,
                                                                 for_3p=self.charger_is_3p,
@@ -622,7 +621,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         self._expected_amperage.set(int(new_amp))
 
                         if init_amp != self._expected_amperage.value or init_state != self._expected_charge_state.value:
-                            _LOGGER.debug(f"update_value_callback: change state to {int(new_amp)}A - charge:{self._expected_charge_state.value}")
+                            _LOGGER.info(f"update_value_callback: change state to {int(new_amp)}A - charge:{self._expected_charge_state.value}")
 
                         await self._ensure_correct_state(time)
 
@@ -634,7 +633,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_plugged(time=time):
             self._reset_state_machine()
 
-            _LOGGER.debug(f"Execute command {command.command} on charger {self.name}")
+            _LOGGER.info(f"Execute command {command.command} on charger {self.name}")
 
             # set expected charge state
             if command.command == CMD_ON.command:
@@ -653,7 +652,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 self._expected_amperage.set(self.min_charge)
                 if self.is_car_stopped_asking_current(time, for_duration=0):
-                    _LOGGER.debug(f"Execute command {command.command} on charger {self.name} - CAR STOPPED ASKING CURRENT")
+                    _LOGGER.info(f"Execute command {command.command} on charger {self.name} - CAR STOPPED ASKING CURRENT")
                     # in what state should we be? ...do set a good expected state...nothing to be done on charge
                     if self.is_charge_disabled(time):
                         self._expected_charge_state.set(False)
@@ -662,7 +661,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # as we don't set the charge state we can launch a command
                     await self.set_max_charging_current(current=self.min_charge, time=time)
                 else:
-                    _LOGGER.debug(f"Execute command {command.command} on charger {self.name} - DO STOP CHARGE")
+                    _LOGGER.info(f"Execute command {command.command} on charger {self.name} - DO STOP CHARGE")
                     await self.stop_charge(time)
 
             self._last_charger_state_prob_time = time

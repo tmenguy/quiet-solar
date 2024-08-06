@@ -261,6 +261,8 @@ class HADeviceMixin:
         self._entity_probed_auto = set()
         self._entity_on_change = set()
 
+        self._exposed_entities = set()
+
 
         self.attach_power_to_probe(self.accurate_power_sensor,
                                       transform_fn=self.accurate_power_sensor_transform_fn)
@@ -270,6 +272,8 @@ class HADeviceMixin:
 
         self._unsub = None
 
+    def attach_exposed_has_entity(self, ha_object):
+        self._exposed_entities.add(ha_object)
 
     def command_power_state_getter(self, entity_id: str, time: datetime) -> State | None:
 
@@ -425,16 +429,19 @@ class HADeviceMixin:
                 async_threshold_sensor_state_listener,
             )
 
-    def update_states(self, time:datetime):
+    async def update_states(self, time:datetime):
 
         for entity_id in self._entity_probed_auto:
             self.add_to_history(entity_id, time)
 
+        for ha_object in self._exposed_entities:
+            ha_object.async_update_callback()
+
 
     def attach_power_to_probe(self, entity_id:str|None, transform_fn: Callable[[float, dict], float]|None=None, non_ha_entity_get_state=None):
-        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn, conversion_fn=convert_power_to_w, update_on_change_only=False, non_ha_entity_get_state=non_ha_entity_get_state)
+        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn, conversion_fn=convert_power_to_w, update_on_change_only=True, non_ha_entity_get_state=non_ha_entity_get_state)
 
-    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn: Callable[[float, dict], float]|None=None, conversion_fn: Callable[[float, dict], float]|None=None, update_on_change_only:bool=False, non_ha_entity_get_state=None):
+    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn: Callable[[float, dict], float]|None=None, conversion_fn: Callable[[float, dict], float]|None=None, update_on_change_only:bool=True, non_ha_entity_get_state=None):
         if entity_id is None:
             return
 
@@ -444,7 +451,7 @@ class HADeviceMixin:
         self._entity_probed_state_conversion_fn[entity_id] = conversion_fn
         self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
 
-        if non_ha_entity_get_state is None:
+        if non_ha_entity_get_state is not None:
             self._entity_probed_auto.add(entity_id)
         else:
             if update_on_change_only:
@@ -579,11 +586,14 @@ class HADeviceMixin:
             if in_s == out_s:
                 if out_s == len(hist_f):
                     ret = hist_f[-1:]
-            if ret is not None:
+
+            if ret is None:
                 ret = hist_f[in_s:out_s]
 
+        if ret is None:
+            ret = []
 
-        if keep_invalid_states is False:
+        if keep_invalid_states is False and ret:
             return [ v for v in ret if v[1] is not None]
         else:
             return ret

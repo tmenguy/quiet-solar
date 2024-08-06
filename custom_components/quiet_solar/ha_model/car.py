@@ -58,12 +58,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       is_numerical=True)
 
         self.attach_ha_state_to_probe(self.car_plugged,
-                                      is_numerical=False,
-                                      update_on_change_only=True)
+                                      is_numerical=False)
 
         self.attach_ha_state_to_probe(self.car_tracker,
-                                      is_numerical=False,
-                                      update_on_change_only=True)
+                                      is_numerical=False)
 
         self._salvable_dampening = {}
 

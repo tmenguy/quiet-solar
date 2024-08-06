@@ -44,7 +44,6 @@
           "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
           "battery_max_charge_power_value": "Maximum charge power (W)",
           "battery_max_charge_power_number": "Maximum charge power (W) Number entity"
-
         }
       },
       "solar": {
@@ -109,21 +108,21 @@
           "name": "Name",
           "car_plugged": "Binary sensor to detect if the car is plugged or not",
           "car_tracker": "car device tracker to know if the car is at home or not",
-          "car_charge_percent_sensor" : "% charge of the battery",
+          "car_charge_percent_sensor": "% charge of the battery",
           "car_battery_capacity": "Battery capacity (Wh)",
           "car_charger_min_charge": "Per phase min charge in (A)",
           "car_charger_max_charge": "Per phase max charge in (A)",
           "car_use_custom_power_charge_values": "Use custom power charge values?",
           "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
-          "charge_1":  "Charge Power in W for a  1A charge (per phase), -1 for default",
-          "charge_2":  "Charge Power in W for a  2A charge (per phase), -1 for default",
-          "charge_3":  "Charge Power in W for a  3A charge (per phase), -1 for default",
-          "charge_4":  "Charge Power in W for a  4A charge (per phase), -1 for default",
-          "charge_5":  "Charge Power in W for a  5A charge (per phase), -1 for default",
-          "charge_6":  "Charge Power in W for a  6A charge (per phase), -1 for default",
-          "charge_7":  "Charge Power in W for a  7A charge (per phase), -1 for default",
-          "charge_8":  "Charge Power in W for a  8A charge (per phase), -1 for default",
-          "charge_9":  "Charge Power in W for a  9A charge (per phase), -1 for default",
+          "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
+          "charge_2": "Charge Power in W for a  2A charge (per phase), -1 for default",
+          "charge_3": "Charge Power in W for a  3A charge (per phase), -1 for default",
+          "charge_4": "Charge Power in W for a  4A charge (per phase), -1 for default",
+          "charge_5": "Charge Power in W for a  5A charge (per phase), -1 for default",
+          "charge_6": "Charge Power in W for a  6A charge (per phase), -1 for default",
+          "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
+          "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
+          "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
           "charge_10": "Charge Power in W for a 10A charge (per phase), -1 for default",
           "charge_11": "Charge Power in W for a 11A charge (per phase), -1 for default",
           "charge_12": "Charge Power in W for a 12A charge (per phase), -1 for default",
@@ -156,10 +155,9 @@
           "name": "Name",
           "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
           "switch": "On/Off of the pump",
-          "power" : "Power of the pump (W)",
+          "power": "Power of the pump (W)",
           "accurate_power_sensor": "Power sensor of the pump (W, kW)",
           "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?"
-
         }
       },
       "on_off_duration": {
@@ -168,7 +166,7 @@
         "data": {
           "name": "Name",
           "switch": "On/Off of the load",
-          "power" : "Power of the load (W)",
+          "power": "Power of the load (W)",
           "accurate_power_sensor": "Power sensor of the load (W, kW)"
         }
       },
@@ -178,12 +176,25 @@
         "data": {
           "name": "Name",
           "switch": "On/Off of the heater",
-          "select" : "Fil pilote value",
-          "power" : "Power of the eater (W)",
+          "select": "Fil pilote value",
+          "power": "Power of the eater (W)",
           "accurate_power_sensor": "Power sensor of the load (W, kW)"
         }
+      }
     }
-  }
+  },
+  "entity": {
+    "select": {
+      "home_mode": {
+        "name": "Home Quiet Solar Running Mode",
+        "state": {
+          "home_mode_off": "Nothing runs",
+          "home_mode_sensors_only": "Only run sensors",
+          "home_mode_charger_only": "EV Charger only",
+          "home_mode_on": "Full Quiet Solar"
+        }
+      }
+    }
   },
   "services": {}
 }

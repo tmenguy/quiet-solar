@@ -15,9 +15,7 @@ from quiet_solar.ha_model.charger import QSChargerGeneric
 
 
 from .const import (
-    DATA_DEVICE_IDS,
     DOMAIN,
-    DATA_HANDLER, DEVICE_TYPE
 )
 from .entity import QSDeviceEntity
 from quiet_solar.ha_model.home import QSHome
@@ -42,7 +40,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         ],
     )
 
-    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, qs_device=device, description=store_sensor))
+    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=store_sensor))
 
     return entities
 
@@ -67,7 +65,7 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
         ],
     )
 
-    entities.append(QSBaseSensor(data_handler=device.data_handler, qs_device=device, description=charge_sensor))
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=charge_sensor))
 
     entities.extend(create_ha_sensor_for_QSCar(device._default_generic_car))
 
@@ -80,12 +78,24 @@ def create_ha_sensor_for_QSHome(device: QSHome):
 
     home_non_controlled_consumption_sensor = QSSensorEntityDescription(
         key="home_non_controlled_consumption",
+        name="Home non controlled consumption power",
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
 
-    entities.append(QSBaseSensor(data_handler=device.data_handler, qs_device=device, description=home_non_controlled_consumption_sensor))
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_non_controlled_consumption_sensor))
+
+    home_consumption_sensor = QSSensorEntityDescription(
+        key="home_consumption",
+        name="Home consumption power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.POWER,
+    )
+
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
+
 
     return entities
 
@@ -132,11 +142,11 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
     def __init__(
         self,
         data_handler,
-        qs_device: AbstractDevice,
+        device: AbstractDevice,
         description: QSSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(data_handler=data_handler, device=qs_device)
+        super().__init__(data_handler=data_handler, device=device, description=description)
         self.entity_description = description
 
         self._attr_unique_id = (
@@ -152,10 +162,6 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
 
         self._attr_available = True
         self._attr_native_value = state
-
-        if (attrs := getattr(self.device, "_qs_attributes")) is not None:
-            self._attr_extra_state_attributes = attrs
-
         self.async_write_ha_state()
 
 

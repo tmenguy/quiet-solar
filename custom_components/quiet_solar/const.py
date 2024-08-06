@@ -72,3 +72,4 @@ CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
 
 
+

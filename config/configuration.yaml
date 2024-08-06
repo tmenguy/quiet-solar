@@ -3,10 +3,14 @@ default_config:
 
 # https://www.home-assistant.io/integrations/logger/
 logger:
-  default: debug
+  default: info
   logs:
     custom_components.quiet_solar: debug
+    custom_components.quiet_solar.ha_model: debug
+    custom_components.quiet_solar.home_model: debug
     custom_components.quiet-solar: debug
+    custom_components.quiet-solar.ha_model: debug
+    custom_components.quiet-solar.home_model: debug
 # If you need to debug uncommment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
 #debugpy:
   #start: true
