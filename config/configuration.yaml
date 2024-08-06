@@ -3,7 +3,7 @@ default_config:
 
 # https://www.home-assistant.io/integrations/logger/
 logger:
-  default: info
+  default: debug
   logs:
     custom_components.quiet_solar: debug
     custom_components.quiet-solar: debug

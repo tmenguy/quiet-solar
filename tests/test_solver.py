@@ -1,5 +1,6 @@
 from unittest import TestCase
 
+import pytz
 
 from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint
 from quiet_solar.home_model.load import TestLoad
@@ -17,7 +18,7 @@ class TestSolver(TestCase):
         # The solver is a simple function that returns the sum of two numbers
         # The test checks if the sum of 1 and 2 is 3
 
-        dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0)
+        dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
 
         start_time = dt
         end_time = dt + timedelta(days=1)

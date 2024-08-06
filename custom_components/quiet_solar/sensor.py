@@ -3,15 +3,15 @@ from dataclasses import dataclass, asdict
 from typing import Any, TYPE_CHECKING
 
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, RestoreSensor, SensorExtraStoredData, \
-    SensorDeviceClass
+    SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, Platform, STATE_UNKNOWN
+from homeassistant.const import STATE_UNAVAILABLE, Platform, STATE_UNKNOWN, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
-from .ha_model.car import QSCar
-from .ha_model.charger import QSChargerGeneric
+from quiet_solar.ha_model.car import QSCar
+from quiet_solar.ha_model.charger import QSChargerGeneric
 
 
 from .const import (
@@ -20,11 +20,13 @@ from .const import (
     DATA_HANDLER, DEVICE_TYPE
 )
 from .entity import QSDeviceEntity
-from .home_model.load import AbstractDevice
+from quiet_solar.ha_model.home import QSHome
+from quiet_solar.home_model.load import AbstractDevice
 
 
 def create_ha_sensor_for_QSCar(device: QSCar):
     entities = []
+    return entities
 
     store_sensor = QSSensorEntityDescription(
         key="charge_state",
@@ -46,6 +48,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
 
 def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
     entities = []
+    return entities
 
 
     charge_sensor = QSSensorEntityDescription(
@@ -71,18 +74,31 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
     return entities
 
 
+def create_ha_sensor_for_QSHome(device: QSHome):
+    entities = []
+
+
+    home_non_controlled_consumption_sensor = QSSensorEntityDescription(
+        key="home_non_controlled_consumption",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.POWER,
+    )
+
+    entities.append(QSBaseSensor(data_handler=device.data_handler, qs_device=device, description=home_non_controlled_consumption_sensor))
+
+    return entities
+
 def create_ha_sensor(device: AbstractDevice):
 
     if isinstance(device, QSCar):
         return create_ha_sensor_for_QSCar(device)
     elif isinstance(device, QSChargerGeneric):
         return create_ha_sensor_for_QSCharger(device)
+    elif isinstance(device, QSHome):
+        return create_ha_sensor_for_QSHome(device)
 
     return []
-
-
-
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -129,7 +145,6 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
     @callback
     def async_update_callback(self) -> None:
         """Update the entity's state."""
-        return
 
         #if self.entity_description.value_fn is None:
         if (state := getattr(self.device, self.entity_description.key)) is None:

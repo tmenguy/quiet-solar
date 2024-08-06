@@ -1,11 +1,11 @@
-from .load import AbstractLoad
+from quiet_solar.home_model.load import AbstractDevice
 from .commands import LoadCommand, CMD_AUTO_ECO
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
 
 CMD_FORCE_CHARGE = LoadCommand(command="charge", power_consign=0.0, param="only")
 CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0, param="only")
 
-class Battery(AbstractLoad):
+class Battery(AbstractDevice):
 
     def __init__(self, battery_capacity :float, **kwargs):
 
@@ -28,10 +28,6 @@ class Battery(AbstractLoad):
         self.min_soc = 0.0
         self.min_charging_power = 0.0
         self.min_discharging_power = 0.0
-
-
-    def is_battery_in_auto_mode(self):
-        return self.current_command is None or self.current_command.command == CMD_AUTO_ECO.command
 
     def get_best_charge_power(self, power_in: float, duration_s: float, current_charge: float | None = None):
 

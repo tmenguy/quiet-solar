@@ -17,8 +17,12 @@ DATA_DEVICE_IDS = "quiet_solar_device_ids"
 LOGGER = logging.getLogger(__package__)
 
 DEVICE_TYPE = "device_type"
+COMMAND_BASED_POWER_SENSOR = "command_based_power_sensor"
+HOME_CONSUMPTION_SENSOR = "home_consumption_sensor"
+HOME_NON_CONTROLLED_CONSUMPTION_SENSOR = "home_non_controlled_consumption_sensor"
+
 CONF_POWER = "power"
-CONF_POWER_SENSOR = "power_sensor"
+CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
 CONF_SWITCH = "switch"
 CONF_SELECT = "select"
 

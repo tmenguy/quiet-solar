@@ -89,7 +89,7 @@
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
                     "name": "Name",
-                    "power_sensor": "Power sensor for the charger (W, kW)"
+                    "accurate_power_sensor": "Power sensor for the charger (W, kW)"
                 },
                 "title": "Edit your electrical vehicle charger"
             },
@@ -100,7 +100,7 @@
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "name": "Name",
-                    "power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)"
+                    "accurate_power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)"
                 },
                 "description": "OCPP based integration is up and running ...",
                 "title": "Edit your electrical vehicle OCPP charger"
@@ -112,7 +112,7 @@
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "name": "Name",
-                    "power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)"
+                    "accurate_power_sensor": "Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
@@ -121,7 +121,7 @@
                 "data": {
                     "name": "Name",
                     "power": "Power of the eater (W)",
-                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor": "Power sensor of the load (W, kW)",
                     "select": "Fil pilote value",
                     "switch": "On/Off of the heater"
                 },
@@ -141,7 +141,7 @@
                 "data": {
                     "name": "Name",
                     "power": "Power of the load (W)",
-                    "power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor": "Power sensor of the load (W, kW)",
                     "switch": "On/Off of the load"
                 },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
@@ -153,7 +153,7 @@
                     "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
                     "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "power": "Power of the pump (W)",
-                    "power_sensor": "Power sensor of the pump (W, kW)",
+                    "accurate_power_sensor": "Power sensor of the pump (W, kW)",
                     "switch": "On/Off of the pump"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",

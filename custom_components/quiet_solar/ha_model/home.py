@@ -1,7 +1,10 @@
 from typing import Mapping, Any
 
+from homeassistant.const import Platform
+from homeassistant.core import State
 
-from quiet_solar.const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED
+from quiet_solar.const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
+    HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
 from quiet_solar.ha_model.battery import QSBattery
 from quiet_solar.ha_model.car import QSCar
 from quiet_solar.ha_model.charger import QSChargerGeneric
@@ -17,6 +20,8 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
+
+POWER_ALIGNEMENT_TOLERANCE_S = 60
 class QSHome(HADeviceMixin, AbstractDevice):
 
     _battery: QSBattery = None
@@ -41,6 +46,9 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
+
+        self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
+
         kwargs["home"] = self
         self.home = self
         super().__init__(**kwargs)
@@ -49,14 +57,82 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         self._last_active_load_time = None
         if self.grid_active_power_sensor_inverted:
-            self.attach_ha_state_to_probe(self.grid_active_power_sensor,
-                                          is_numerical=True,
-                                          transform_fn=lambda x: -x)
+            self.attach_power_to_probe(self.grid_active_power_sensor,
+                                          transform_fn=lambda x, a: -x)
         else:
-            self.attach_ha_state_to_probe(self.grid_active_power_sensor,
-                                          is_numerical=True)
+            self.attach_power_to_probe(self.grid_active_power_sensor)
+
+        self.attach_power_to_probe(self.home_non_controlled_consumption_sensor,
+                                      non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter)
+
+        self.home_non_controlled_consumption = None
 
         self.register_all_on_change_states()
+
+    def get_platforms(self):
+        return [ Platform.SENSOR, Platform.SELECT ]
+
+    def home_non_controlled_consumption_sensor_state_getter(self, entity_id: str, time: datetime) -> State | None:
+
+        # Home real consumption : Solar Production - grid_active_power_sensor - battery_charge_discharge_sensor
+        # Non controlled consumption : Home real consumption - controlled consumption
+        # controlled consumption: sum of all controlled loads
+
+        # get solar production
+        solar_production_minus_battery = None
+
+        battery_charge = None
+        if self._battery is not None:
+            battery_charge = self.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+
+        if self._solar_plant is not None:
+            solar_production = None
+            if self._solar_plant.solar_inverter_active_power:
+                # this one has the battery inside!
+                solar_production_minus_battery = self.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+            if solar_production_minus_battery is None and self._solar_plant.solar_inverter_input_active_power:
+                solar_production = self.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+                if solar_production is not None and battery_charge is not None:
+                    solar_production_minus_battery = solar_production - battery_charge
+        elif battery_charge is not None:
+            solar_production_minus_battery = 0 - battery_charge
+
+
+        if solar_production_minus_battery is None:
+            solar_production_minus_battery = 0
+
+        # get grid consumption
+        grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+
+        if grid_consumption is None:
+            return None
+
+        home_consumption = solar_production_minus_battery - grid_consumption
+        controlled_consumption = 0
+
+        for load in self._all_loads:
+
+            if not isinstance(load, HADeviceMixin):
+                continue
+
+            v = load.get_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+
+            if v is not None:
+                controlled_consumption += v
+
+        val = home_consumption - controlled_consumption
+
+        self.home_non_controlled_consumption = val
+
+        res = State(
+            entity_id=f"toto.{entity_id}.tata",
+            state=str(val),
+            last_updated=time,
+            validate_entity_id=False,
+        )
+
+        return res
+
 
 
     def get_grid_active_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
@@ -67,12 +143,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
         if self._battery is None:
             return []
         return self._battery.get_state_history_data(self._battery.charge_discharge_sensor, duration_before_s, time)
-
-    def is_battery_in_auto_mode(self):
-        if self._battery is None:
-            return False
-        else:
-            return self._battery.is_battery_in_auto_mode()
 
 
     async def set_max_discharging_power(self, power: float | None = None, blocking: bool = False):
@@ -137,6 +207,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             if load.is_load_command_set(time) is False:
                 continue
+
 
             if (await load.update_live_constraints(time, self._period)) :
                 do_force_solve = True

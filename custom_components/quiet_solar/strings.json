@@ -75,7 +75,7 @@
           "charger_plugged": "binary sensor to know if a car is plugged to the charger",
           "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
           "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
-          "power_sensor": "Power sensor for the charger (W, kW)"
+          "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)"
         }
       },
       "charger_ocpp": {
@@ -87,7 +87,7 @@
           "charger_min_charge": "Minimum Current Charge Per Phase (A)",
           "charger_is_3p": "Is the charger 3 phases?",
           "charger_device_ocpp": "OCPP device",
-          "power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the OCPP one)"
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the OCPP one)"
         }
       },
       "charger_wallbox": {
@@ -99,7 +99,7 @@
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
           "charger_device_wallbox": "Wallbox device",
-          "power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the Wallbox one)"
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the Wallbox one)"
         }
       },
       "car": {
@@ -157,7 +157,7 @@
           "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
           "switch": "On/Off of the pump",
           "power" : "Power of the pump (W)",
-          "power_sensor": "Power sensor of the pump (W, kW)",
+          "accurate_power_sensor": "Power sensor of the pump (W, kW)",
           "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?"
 
         }
@@ -169,7 +169,7 @@
           "name": "Name",
           "switch": "On/Off of the load",
           "power" : "Power of the load (W)",
-          "power_sensor": "Power sensor of the load (W, kW)"
+          "accurate_power_sensor": "Power sensor of the load (W, kW)"
         }
       },
       "fp_heater": {
@@ -180,7 +180,7 @@
           "switch": "On/Off of the heater",
           "select" : "Fil pilote value",
           "power" : "Power of the eater (W)",
-          "power_sensor": "Power sensor of the load (W, kW)"
+          "accurate_power_sensor": "Power sensor of the load (W, kW)"
         }
     }
   }

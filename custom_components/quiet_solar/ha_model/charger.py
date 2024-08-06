@@ -14,8 +14,8 @@ from quiet_solar.const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHA
 from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
 
 from quiet_solar.ha_model.car import QSCar
-from quiet_solar.ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_power, \
-    get_median_power, convert_power_to_w
+from quiet_solar.ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_sensor, \
+    get_median_sensor, convert_power_to_w
 from quiet_solar.home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command
 from quiet_solar.home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, \
@@ -96,6 +96,8 @@ class QSStateCmd():
         self._last_time_set = time
 
 
+
+
 class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def __init__(self, **kwargs):
@@ -105,7 +107,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
         self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
         self.charger_is_3p = kwargs.pop(CONF_CHARGER_IS_3P, False)
-        self.charger_consumption = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
+        self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
 
         self.charger_status_sensor = kwargs.pop(CONF_CHARGER_STATUS_SENSOR, None)
 
@@ -138,6 +140,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.attach_ha_state_to_probe(self._internal_fake_is_plugged_id,
                                       is_numerical=False,
                                       non_ha_entity_get_state=self.is_plugged_state_getter)
+
+        _LOGGER.info(f"Creating Charger: {self.name}")
+
+    def dampening_power_value_for_car_consumption(self, value: float) -> float | None:
+        if value is None:
+            return None
+
+        if value < self.charger_consumption_W:
+            return 0.0
+        else:
+            return value
 
     def is_plugged_state_getter(self, entity_id: str, time: datetime) -> State | None:
 
@@ -375,29 +388,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result
 
     def is_charging_power_zero(self, time: datetime, for_duration: float) -> bool:
-        val = self.get_median_charging_power(for_duration, time)
+        val = self.get_median_power(for_duration, time)
         if val is None:
             return False
 
-        return val < self.charger_consumption  # 50 W of consumption for the charger for ex
+        return self.dampening_power_value_for_car_consumption(val) == 0.0  # 50 W of consumption for the charger for ex
 
-    def _internal_get_median_charging_power(self, num_seconds: float | None, time) -> float | None:
-        if self.power_sensor:
-            charge_power_values = self.get_state_history_data(self.power_sensor, num_seconds, time)
-            if not charge_power_values:
-                return None
-            all_p = get_median_power(charge_power_values)
-            if all_p < self.charger_consumption:  # 50 W of consumption for the charger for ex
-                all_p = 0.0
-            return all_p
-        return None
-
-    def get_median_charging_power(self, num_seconds, time) -> float | None:
-        return self._internal_get_median_charging_power(num_seconds, time)
-
-    async def set_battery_discharge_max_power_if_needed(self, power: float | None = None):
-        if self.current_command.command == CMD_AUTO_GREEN_ONLY.command and self.home.is_battery_in_auto_mode():
-            await self.home.set_max_discharging_power(power=power)
 
     async def set_max_charging_current(self, current, time: datetime):
 
@@ -520,11 +516,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # we are all set after a change of state, handle battery
                     # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
                     # so the battery will adapt itself, let it do its job
-                    # if self._expected_charge_state.value:
-                    # no battery discharge in case of car is charging in auto mode
-                    #    await  self.set_battery_discharge_max_power_if_needed(power=0.0)
-                    # else:
-                    #    await  self.set_battery_discharge_max_power_if_needed()
+
 
                 # we will compare now if the current need to be adapted compared to solar production
                 if (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
@@ -537,8 +529,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
                         # so the battery will adapt itself, let it do its job .. no need to touch its state at all!
 
-                        # if self.home.is_battery_in_auto_mode():
-                        #     await self.set_battery_discharge_max_power_if_needed()
 
                         _LOGGER.debug(f"update_value_callback:car stopped asking current")
                         pass
@@ -551,8 +541,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         current_power = 0.0
 
                         if self._expected_charge_state.value:
-                            current_real_car_power = self._internal_get_median_charging_power(CHARGER_ADAPTATION_WINDOW,
-                                                                                              time)
+                            current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW, time)
+                            current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                             # time to update some dampening car values:
                             if current_real_car_power is not None:
@@ -561,6 +551,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                 power_value=current_real_car_power,
                                                                 for_3p=self.charger_is_3p,
                                                                 time=time)
+                            else:
+                                current_real_car_power = self.get_median_sensor(self.secondary_power_sensor, CHARGER_ADAPTATION_WINDOW, time)
+                                current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                             # we will compare now if the current need to be adapted compared to solar production
                             if current_real_max_charging_power >= min_charge:
@@ -572,10 +565,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         grid_active_power_values = self.home.get_grid_active_power_values(CHARGER_ADAPTATION_WINDOW,
                                                                                           time)
-                        charging_values = []
-
-                        if self.home.is_battery_in_auto_mode():
-                            charging_values = self.home.get_battery_charge_values(CHARGER_ADAPTATION_WINDOW, time)
+                        charging_values = self.home.get_battery_charge_values(CHARGER_ADAPTATION_WINDOW, time)
 
                         available_power = align_time_series_and_values(grid_active_power_values, charging_values,
                                                                        operation=lambda v1, v2: v1 + v2)
@@ -585,8 +575,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # very rough estimation for now:
 
                         if available_power:
-                            last_p = get_average_power(available_power[-len(available_power) // 2:])
-                            all_p = get_average_power(available_power)
+                            last_p = get_average_sensor(available_power[-len(available_power) // 2:])
+                            all_p = get_average_sensor(available_power)
 
                             if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
                                 target_delta_power = min(last_p, all_p)
@@ -747,10 +737,17 @@ class QSChargerOCPP(QSChargerGeneric):
 
         super().__init__(**kwargs)
 
-        self.attach_ha_state_to_probe(self.charger_ocpp_current_import,
-                                      is_numerical=True)
-        # self.attach_ha_state_to_probe(self.charger_ocpp_power_active_import,
-        #                              is_numerical=True)
+        self.secondary_power_sensor = self.charger_ocpp_current_import
+        self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_amps_to_W)
+        # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
+
+
+    def convert_amps_to_W(self, amps: float, attr:dict) -> float:
+        # mult = 1.0
+        # if self.charger_is_3p:
+        #    mult = 3.0
+        val = amps * self.home.voltage
+        return val
 
     def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
 
@@ -764,24 +761,6 @@ class QSChargerOCPP(QSChargerGeneric):
             return False, state_time
         return state.state == "off", state_time
 
-    def get_median_charging_power(self, num_seconds, time) -> float | None:
-        val = super().get_median_charging_power(num_seconds, time)
-        if val is not None:
-            return val
-
-        val = None
-
-        if self.charger_ocpp_current_import:
-            charge_power_values = self.get_state_history_data(self.charger_ocpp_current_import, num_seconds, time)
-            if not charge_power_values:
-                return None
-            all_p = get_median_power(charge_power_values)
-            # mult = 1.0
-            # if self.charger_is_3p:
-            #    mult = 3.0
-            val = all_p * self.home.voltage
-
-        return val
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
@@ -819,8 +798,8 @@ class QSChargerWallbox(QSChargerGeneric):
 
         super().__init__(**kwargs)
 
-        self.attach_ha_state_to_probe(self.charger_wallbox_charging_power,
-                                      is_numerical=True)
+        self.secondary_power_sensor = self.charger_wallbox_charging_power
+        self.attach_power_to_probe(self.charger_wallbox_charging_power)
 
     def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
 
@@ -834,25 +813,7 @@ class QSChargerWallbox(QSChargerGeneric):
             return False, state_time
         return True, state_time
 
-    def get_median_charging_power(self, num_seconds, time) -> float | None:
-        val = super().get_median_charging_power(num_seconds, time)
-        if val is not None:
-            return val
 
-        val = None
-
-        if self.charger_wallbox_charging_power:
-            charge_power_values = self.get_state_history_data(self.charger_wallbox_charging_power, num_seconds, time)
-            if not charge_power_values:
-                return None
-            all_p = get_median_power(charge_power_values)
-
-            # mult = 1.0
-            # if self.charger_is_3p:
-            #    mult = 3.0
-            val = all_p
-
-        return val
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
