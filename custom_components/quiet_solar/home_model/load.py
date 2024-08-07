@@ -4,11 +4,9 @@ from datetime import datetime, timedelta
 from collections.abc import Generator
 
 from .commands import LoadCommand, CMD_OFF, copy_command
-from .constraints import LoadConstraint
+from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any
-
-from ..const import DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 if TYPE_CHECKING:
     pass

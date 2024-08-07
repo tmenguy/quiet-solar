@@ -9,8 +9,6 @@ import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
 
-from ..const import DATETIME_MAX_UTC, DATETIME_MIN_UTC
-
 
 class LoadConstraint(object):
 
@@ -334,8 +332,5 @@ class TimeBasedSimplePowerLoadConstraint(SimplePowerLoadConstraint):
         return self._compute_best_period_repartition(power_available_power, power_slots_duration_s, prices, prices_ordered_values, time_slots, nrj_to_be_added)
 
 
-
-
-
-
-
+DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.UTC)
+DATETIME_MIN_UTC = datetime.min.replace(tzinfo=pytz.UTC)

@@ -1,11 +1,3 @@
-import logging
-from datetime import datetime
-
-import pytz
-
-DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.utc)
-DATETIME_MIN_UTC = datetime.min.replace(tzinfo=pytz.utc)
-
 MAX_POSSIBLE_APERAGE = 64
 
 DOMAIN = "quiet_solar"
@@ -13,8 +5,6 @@ MANUFACTURER = "QuietSolarAbstraction"
 DEFAULT_ATTRIBUTION = f"Data provided by {MANUFACTURER}"
 DATA_HANDLER = "quiet_solar_data_handler"
 DATA_DEVICE_IDS = "quiet_solar_device_ids"
-
-LOGGER = logging.getLogger(__package__)
 
 DEVICE_TYPE = "device_type"
 COMMAND_BASED_POWER_SENSOR = "command_based_power_sensor"

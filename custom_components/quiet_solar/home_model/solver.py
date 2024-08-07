@@ -5,10 +5,9 @@ import numpy as np
 
 
 from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
-from .constraints import LoadConstraint
+from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_ECO, copy_command
-from ..const import DATETIME_MAX_UTC
 
 
 class PeriodSolver(object):
