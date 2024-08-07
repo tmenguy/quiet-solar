@@ -1,4 +1,4 @@
-from quiet_solar.home_model.load import AbstractDevice
+from ..home_model.load import AbstractDevice
 from .commands import LoadCommand, CMD_AUTO_ECO
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
 

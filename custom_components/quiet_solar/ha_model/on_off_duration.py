@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from quiet_solar.ha_model.device import HADeviceMixin
-from quiet_solar.home_model.commands import LoadCommand, CMD_ON
-from quiet_solar.home_model.load import AbstractLoad
+from ..ha_model.device import HADeviceMixin
+from ..home_model.commands import LoadCommand, CMD_ON
+from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 

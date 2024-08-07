@@ -1,24 +1,23 @@
 from abc import abstractmethod
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
-from enum import Enum
 from operator import itemgetter
 from typing import Mapping, Any, Callable
 
 import pytz
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
-from quiet_solar.const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR
+from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR
+from ..home_model.load import AbstractLoad
 
 import numpy as np
-import numpy.typing as npt
 
-from quiet_solar.home_model.load import AbstractLoad
+
+
 
 
 def compute_energy_Wh_rieman_sum(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], conservative: bool = False):

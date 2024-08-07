@@ -1,7 +1,7 @@
-from quiet_solar.const import CONF_INVERTER_ACTIVE_POWER_SENSOR, CONF_INVERTER_INPUT_POWER_SENSOR
-from quiet_solar.ha_model.device import HADeviceMixin
-from quiet_solar.home_model.load import AbstractDevice
-from homeassistant.const import Platform
+from ..const import CONF_INVERTER_ACTIVE_POWER_SENSOR, CONF_INVERTER_INPUT_POWER_SENSOR
+from ..ha_model.device import HADeviceMixin
+from ..home_model.load import AbstractDevice
+
 
 
 

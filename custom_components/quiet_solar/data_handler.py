@@ -13,10 +13,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-from quiet_solar.ha_model.home import QSHome
+from .ha_model.home import QSHome
 
-from quiet_solar.ha_model.car import QSCar
-from quiet_solar.ha_model.charger import QSChargerGeneric
+
 
 async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener.   Reload the data handler when the entry is updated.

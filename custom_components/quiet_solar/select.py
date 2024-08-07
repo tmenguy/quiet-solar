@@ -4,12 +4,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from quiet_solar.entity import QSDeviceEntity
-from quiet_solar.ha_model.car import QSCar
-from quiet_solar.ha_model.charger import QSChargerGeneric
-from quiet_solar.ha_model.home import QSHome, QSHomeMode
-from quiet_solar.home_model.load import AbstractDevice
-
+from .entity import QSDeviceEntity
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerGeneric
+from .ha_model.home import QSHome, QSHomeMode
+from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
 )

@@ -1,18 +1,36 @@
+import logging
 
+_LOGGER = logging.getLogger(__name__)
+
+_LOGGER.error("CF 1")
 from abc import abstractmethod
 from dataclasses import dataclass
 
 from homeassistant import config_entries
 from homeassistant.config_entries import (
-    SOURCE_REAUTH,
     ConfigEntry,
     ConfigFlowResult,
     OptionsFlow,
 )
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential,  PERCENTAGE
 
-from quiet_solar.entity import LOAD_TYPES
-from quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
+from homeassistant.helpers import config_validation as cv, selector
+from typing import TYPE_CHECKING
+import voluptuous as vol
+from homeassistant.core import HomeAssistant
+
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
+from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
+
+
+_LOGGER.error("CF 2")
+
+from .entity import LOAD_TYPES
+from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_INVERTER_ACTIVE_POWER_SENSOR, CONF_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, \
@@ -23,20 +41,11 @@ from quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
-from homeassistant.helpers import config_validation as cv, selector
-from typing import TYPE_CHECKING
-import voluptuous as vol
-from homeassistant.core import HomeAssistant
+
+_LOGGER.error("CF 2")
 
 
 
-from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN, SensorDeviceClass
-from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
-from homeassistant.components.input_number import DOMAIN as INPUT_NUMBER_DOMAIN
-from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 
 
 

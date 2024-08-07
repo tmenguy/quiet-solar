@@ -1,6 +1,8 @@
-from quiet_solar.ha_model.device import HADeviceMixin
-from quiet_solar.home_model.load import AbstractLoad
 from homeassistant.const import Platform
+
+from ..ha_model.device import HADeviceMixin
+from ..home_model.load import AbstractLoad
+
 
 class QSFPHeater(HADeviceMixin, AbstractLoad):
 

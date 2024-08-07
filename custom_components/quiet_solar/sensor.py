@@ -1,6 +1,6 @@
 
 from dataclasses import dataclass, asdict
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, RestoreSensor, SensorExtraStoredData, \
     SensorDeviceClass, SensorStateClass
@@ -10,16 +10,16 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
-from quiet_solar.ha_model.car import QSCar
-from quiet_solar.ha_model.charger import QSChargerGeneric
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerGeneric
 
 
 from .const import (
     DOMAIN,
 )
 from .entity import QSDeviceEntity
-from quiet_solar.ha_model.home import QSHome
-from quiet_solar.home_model.load import AbstractDevice
+from .ha_model.home import QSHome
+from .home_model.load import AbstractDevice
 
 
 def create_ha_sensor_for_QSCar(device: QSCar):
