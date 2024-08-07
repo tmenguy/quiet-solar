@@ -75,7 +75,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.home_non_controlled_consumption = None
         self.home_consumption = None
 
-        self.home_mode = QSHomeMode.HOME_MODE_OFF.value
+        self.home_mode = QSHomeMode.HOME_MODE_SENSORS_ONLY.value
         self.register_all_on_change_states()
 
     def get_platforms(self):
