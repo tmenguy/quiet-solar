@@ -237,6 +237,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             data_schema=schema
         )
 
+
     async def async_step_solar(self, user_input=None):
 
         TYPE = "solar"
