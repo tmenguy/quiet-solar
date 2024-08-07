@@ -18,7 +18,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
 )
-from quiet_solar.ha_model.device import HADeviceMixin
+from .ha_model.device import HADeviceMixin
 
 LOAD_TYPES = {
     "home": QSHome,
