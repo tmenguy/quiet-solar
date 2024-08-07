@@ -13,7 +13,8 @@ from .const import (
     DOMAIN,
 )
 
-# SelectEntityDescription
+class QSSelectEntityDescription(SelectEntityDescription):
+    qs_default_option:str = None
 
 def create_ha_select_for_QSCar(device: QSCar):
     entities = []
@@ -26,10 +27,11 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
 def create_ha_select_for_QSHome(device: QSHome):
     entities = []
 
-    home_mode_description = SelectEntityDescription(
+    home_mode_description = QSSelectEntityDescription(
         key="home_mode",
         translation_key="home_mode",
-        options= list(map(str, QSHomeMode))
+        options= list(map(str, QSHomeMode)),
+        qs_default_option=QSHomeMode.HOME_MODE_SENSORS_ONLY.value
     )
     entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
 
@@ -72,7 +74,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         self,
         data_handler,
         device: AbstractDevice,
-        description: SelectEntityDescription,
+        description: QSSelectEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
@@ -82,6 +84,9 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
             f"{self.device.device_id}-{description.key}"
         )
         self._attr_available = True
+
+        if description.qs_default_option:
+            self._attr_current_option = description.qs_default_option
 
     async def async_select_option(self, option: str) -> None:
         """Select an option."""
@@ -107,14 +112,17 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         self,
         data_handler,
         device: AbstractDevice,
-        description: SelectEntityDescription,
+        description: QSSelectEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
+        self._attr_available = True
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
+
+        self._attr_available = True
 
         state = await self.async_get_last_state()
         if state is not None and state.state in self.options:
