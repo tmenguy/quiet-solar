@@ -4,12 +4,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
-from .data_handler import QSDataHandler
+from quiet_solar.data_handler import QSDataHandler
 
 from homeassistant.helpers import config_validation as cv
 
 
-from .const import (
+from quiet_solar.const import (
     DATA_DEVICE_IDS,
     DOMAIN,
     DATA_HANDLER, DEVICE_TYPE

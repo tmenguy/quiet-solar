@@ -10,10 +10,9 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential,  PERCENTAGE
-from homeassistant.core import callback
 
-from .entity import LOAD_TYPES
-from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
+from quiet_solar.entity import LOAD_TYPES
+from quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_INVERTER_ACTIVE_POWER_SENSOR, CONF_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, \
