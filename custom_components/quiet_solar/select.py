@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from homeassistant.components.select import SelectEntityDescription, SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -12,9 +14,10 @@ from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
 )
-
+@dataclass(frozen=True, kw_only=True)
 class QSSelectEntityDescription(SelectEntityDescription):
-    qs_default_option:str = None
+    qs_default_option:str | None  = None
+
 
 def create_ha_select_for_QSCar(device: QSCar):
     entities = []
@@ -97,6 +100,8 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
     @callback
     def async_update_callback(self) -> None:
         """Update the entity's state."""
+        if self.hass is None:
+            return
 
         #if self.entity_description.value_fn is None:
         if (option := getattr(self.device, self.entity_description.key)) is None:
