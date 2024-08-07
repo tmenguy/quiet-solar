@@ -2,7 +2,6 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-_LOGGER.error("CF 1")
 from abc import abstractmethod
 from dataclasses import dataclass
 
@@ -27,7 +26,6 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 
 
-_LOGGER.error("CF 2")
 
 from .entity import LOAD_TYPES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
@@ -42,7 +40,6 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
 
-_LOGGER.error("CF 2")
 
 
 
