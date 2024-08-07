@@ -102,6 +102,16 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
 class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
     """Entity to represent VAD sensitivity."""
+
+    def __init__(
+        self,
+        data_handler,
+        device: AbstractDevice,
+        description: SelectEntityDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(data_handler=data_handler, device=device, description=description)
+
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
