@@ -63,29 +63,20 @@ class QSCTest(HADeviceMixin, AbstractLoad):
                 return v
         return None
 
-    def fake_id_1_state_getter(self, entity_id: str, time: datetime) -> State | None:
+    def fake_id_1_state_getter(self, entity_id: str, time: datetime | None) -> (
+            tuple[float | str | None, datetime | None, dict | None] | None):
         res = None
         for t, v in self.fake_1:
             if t == time:
-                res = State(
-                    entity_id=f"toto.{entity_id}.tata",
-                    state=v,
-                    last_updated=time,
-                    validate_entity_id=False,
-                )
-
+                res = (v,time, {})
         return res
 
-    def fake_id_2_state_getter(self, entity_id: str, time: datetime) -> State | None:
+    def fake_id_2_state_getter(self, entity_id: str, time: datetime | None) -> (
+            tuple[float | str | None, datetime | None, dict | None] | None):
         res = None
         for t, v in self.fake_2:
             if t == time:
-                res = State(
-                    entity_id=f"toto.{entity_id}.tata",
-                    state=v,
-                    last_updated=time,
-                    validate_entity_id=False,
-                )
+                res = (v,time, {})
 
         return res
 

@@ -17,10 +17,9 @@ from ..home_model.load import AbstractLoad
 import numpy as np
 
 
-
-
-
-def compute_energy_Wh_rieman_sum(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], conservative: bool = False):
+def compute_energy_Wh_rieman_sum(
+        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]],
+        conservative: bool = False):
     """Compute energy from power with a rieman sum."""
 
     energy = 0
@@ -62,62 +61,65 @@ def convert_power_to_w(value: float, attributes: dict | None = None) -> float:
 
     return value
 
-def get_average_power_energy_based(power_data: list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]):
 
+def get_average_power_energy_based(
+        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
     if len(power_data) == 0:
         return 0
     elif len(power_data) == 1:
-        val =  power_data[0][1]
+        val = power_data[0][1]
         if val is None:
             return 0.0
     else:
-        power_data = [(t, float(v), a) for t , v, a in power_data if v is not None]
+        power_data = [(t, float(v), a) for t, v, a in power_data if v is not None]
         if power_data:
             nrj, dh = compute_energy_Wh_rieman_sum(power_data)
-            val =  nrj / dh
+            val = nrj / dh
         else:
             return 0.0
 
     # do not change units
     return val
 
-def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
 
+def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
-        val =  sensor_data[0][1]
+        val = sensor_data[0][1]
         if val is None:
             val = 0.0
     else:
         vals = [float(v) for _, v, _ in sensor_data if v is not None]
         if vals:
-            val =  np.mean([float(v) for _, v, _ in sensor_data if v is not None])
+            val = np.mean([float(v) for _, v, _ in sensor_data if v is not None])
         else:
             val = 0.0
     # do not change units
     return val
+
 
 def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
-
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
-        val =  sensor_data[0][1]
+        val = sensor_data[0][1]
         if val is None:
             val = 0.0
     else:
         vals = [float(v) for _, v, _ in sensor_data if v is not None]
         if vals:
-            val =  np.median([float(v) for _, v, _ in sensor_data if v is not None])
+            val = np.median([float(v) for _, v, _ in sensor_data if v is not None])
         else:
             val = 0.0
     # do not change units
     return val
 
-def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]], tsv2:list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]] | None, operation:Callable[[Any,Any], Any] | None = None):
 
-
+def align_time_series_and_values(
+        tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]],
+        tsv2: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | None,
+        operation: Callable[[Any, Any], Any] | None = None):
     if not tsv1:
         if not tsv2:
             if operation is not None:
@@ -126,17 +128,17 @@ def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None
                 return [], []
         else:
             if operation is not None:
-                return [(t, operation(0,v), a) for t, v, a in tsv2]
+                return [(t, operation(0, v), a) for t, v, a in tsv2]
             else:
-                return [(t , 0, None) for t, _, a in tsv2], tsv2
+                return [(t, 0, None) for t, _, a in tsv2], tsv2
 
     if not tsv2:
         if operation is not None:
-            return [(t, operation(v,0),a) for t, v, a in tsv1]
+            return [(t, operation(v, 0), a) for t, v, a in tsv1]
         else:
             return tsv1, [(t, 0, None) for t, _ in tsv1]
 
-    timings= {}
+    timings = {}
 
     for i, tv in enumerate(tsv1):
         timings[tv[0]] = [i, None]
@@ -151,11 +153,11 @@ def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None
     t_only = [t for t, _ in timings]
 
     #compute all values for each time
-    new_v1  = [0]*len(t_only)
-    new_v2 = [0]*len(t_only)
+    new_v1: list[float | str | None] = [0] * len(t_only)
+    new_v2: list[float | str | None] = [0] * len(t_only)
 
-    new_attr_1 = [None]*len(t_only)
-    new_attr_2 = [None]*len(t_only)
+    new_attr_1: list[dict | None] = [None] * len(t_only)
+    new_attr_2: list[dict | None] = [None] * len(t_only)
 
     for vi in range(2):
 
@@ -180,7 +182,7 @@ def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None
                     #we have new values "before" the first real value"
                     val_to_put = (tsv[0][1])
                     attr_to_put = (tsv[0][2])
-                elif last_real_idx  == len(tsv) - 1:
+                elif last_real_idx == len(tsv) - 1:
                     #we have new values "after" the last real value"
                     val_to_put = (tsv[-1][1])
                     attr_to_put = (tsv[-1][2])
@@ -228,12 +230,9 @@ def align_time_series_and_values(tsv1:list[tuple[datetime | None, str|float|None
 MAX_STATE_HISTORY_S = 3600
 
 
-
-
-
 class HADeviceMixin:
 
-    def __init__(self, hass:HomeAssistant, config_entry:ConfigEntry, **kwargs):
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
 
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
         self.accurate_power_sensor_transform_fn = None
@@ -250,31 +249,33 @@ class HADeviceMixin:
 
         self.config_entry = config_entry
 
-
-
-        self._entity_probed_state_is_numerical : dict[str, bool] = {}
+        self._entity_probed_state_is_numerical: dict[str, bool] = {}
         self._entity_probed_state_conversion_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_transform_fn: dict[str, Callable[[float, dict], float] | None] = {}
-        self._entity_probed_state_non_ha_entity_get_state: dict[str, Any | None] = {}
-        self._entity_probed_state : dict[str, list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict] ]] = {}
+        self._entity_probed_state_non_ha_entity_get_state: dict[str, Callable[[str, datetime | None], tuple[
+                                                                                                          datetime | None, float | str | None, dict | None] | None] | None] = {}
+        self._entity_probed_state: dict[
+            str, list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]] = {}
+        self._entity_probed_last_valid_state: dict[
+            str, tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict] | None] = {}
         self._entity_probed_auto = set()
         self._entity_on_change = set()
 
         self._exposed_entities = set()
 
-
         self.attach_power_to_probe(self.accurate_power_sensor,
-                                      transform_fn=self.accurate_power_sensor_transform_fn)
+                                   transform_fn=self.accurate_power_sensor_transform_fn)
 
         self.attach_power_to_probe(self.command_based_power_sensor,
-                                      non_ha_entity_get_state=self.command_power_state_getter)
+                                   non_ha_entity_get_state=self.command_power_state_getter)
 
         self._unsub = None
 
     def attach_exposed_has_entity(self, ha_object):
         self._exposed_entities.add(ha_object)
 
-    def command_power_state_getter(self, entity_id: str, time: datetime) -> State | None:
+    def command_power_state_getter(self, entity_id: str, time: datetime | None) -> (
+            tuple[datetime | None, float | str | None, dict | None] | None):
 
         if not isinstance(self, AbstractLoad):
             return None
@@ -285,23 +286,30 @@ class HADeviceMixin:
         if self.current_command.power_consign is None:
             return None
 
-        res = State(
-            entity_id=f"toto.{entity_id}.tata",
-            state=str(self.current_command.power_consign),
-            last_updated=time,
-            validate_entity_id=False,
-        )
+        return (time, str(self.current_command.power_consign), {})
 
-        return res
-
-
-    def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None, time) -> float | None:
-        vals = self.get_state_history_data(entity_id, tolerance_seconds, time)
-        if not vals:
+    def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None,
+                                               time) -> str | float | None:
+        last_valid = self._entity_probed_last_valid_state[entity_id]
+        if last_valid is None:
             return None
-        return vals[-1][1]
 
-    def get_power_latest_possible_valid_value(self, tolerance_seconds: float | None, time) -> float | None:
+        if time >= last_valid[0]:
+
+            if tolerance_seconds is None or tolerance_seconds == 0:
+                return last_valid[1]
+
+            if (time - last_valid[0]).total_seconds() > tolerance_seconds:
+                return None
+
+            return last_valid[1]
+        else:
+            vals = self.get_state_history_data(entity_id, tolerance_seconds, time)
+            if not vals:
+                return None
+            return vals[-1][1]
+
+    def get_device_power_latest_possible_valid_value(self, tolerance_seconds: float | None, time) -> float | None:
         val = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
         if not val:
             val = self.get_sensor_latest_possible_valid_value(self.secondary_power_sensor, tolerance_seconds, time)
@@ -309,9 +317,7 @@ class HADeviceMixin:
             val = self.get_sensor_latest_possible_valid_value(self.command_based_power_sensor, tolerance_seconds, time)
         return val
 
-
-
-    def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time:datetime) -> float | None:
+    def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
@@ -319,7 +325,7 @@ class HADeviceMixin:
             return None
         return get_median_sensor(entity_id_values)
 
-    def get_average_sensor(self, entity_id: str | None, num_seconds: float | None, time:datetime) -> float | None:
+    def get_average_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
@@ -343,7 +349,8 @@ class HADeviceMixin:
             val = self.get_average_sensor(self.command_based_power_sensor, num_seconds, time)
         return val
 
-    def get_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_device_power_values(self, duration_before_s: float, time: datetime) -> list[
+        tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         val = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, time)
         if not val:
             val = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, time)
@@ -351,19 +358,16 @@ class HADeviceMixin:
             val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
         return val
 
-
-    def get_last_state_value_duration(self, entity_id: str, states_vals:list[str], num_seconds_before, time:datetime, invert_val_probe=False, allowed_max_holes_s:float=3) -> float:
-
-
-        if num_seconds_before is None or num_seconds_before < 0:
-            num_seconds_before = 0
+    def get_last_state_value_duration(self, entity_id: str, states_vals: list[str], num_seconds_before: float | None,
+                                      time: datetime, invert_val_probe=False, allowed_max_holes_s: float = 3) -> float:
 
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
             # get latest values
             self.add_to_history(entity_id, time)
 
-        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time, keep_invalid_states=True)
+        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time,
+                                             keep_invalid_states=True)
 
         if not values:
             return 0.0
@@ -406,11 +410,9 @@ class HADeviceMixin:
 
         return state_status_duration
 
-
     def register_all_on_change_states(self):
 
         if len(self._entity_on_change) > 0:
-
             @callback
             def async_threshold_sensor_state_listener(
                     event: Event[EventStateChangedData],
@@ -420,15 +422,13 @@ class HADeviceMixin:
                 time = new_state.last_updated
                 self.add_to_history(new_state.entity_id, time, state=new_state)
 
-
-
             self._unsub = async_track_state_change_event(
                 self.hass,
                 list(self._entity_on_change),
                 async_threshold_sensor_state_listener,
             )
 
-    async def update_states(self, time:datetime):
+    async def update_states(self, time: datetime):
 
         for entity_id in self._entity_probed_auto:
             self.add_to_history(entity_id, time)
@@ -436,15 +436,24 @@ class HADeviceMixin:
         for ha_object in self._exposed_entities:
             ha_object.async_update_callback()
 
+    def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], float] | None = None,
+                              non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
+                                                                                            float | str | None, datetime | None, dict | None] | None] = None):
+        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
+                                      conversion_fn=convert_power_to_w, update_on_change_only=True,
+                                      non_ha_entity_get_state=non_ha_entity_get_state)
 
-    def attach_power_to_probe(self, entity_id:str|None, transform_fn: Callable[[float, dict], float]|None=None, non_ha_entity_get_state=None):
-        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn, conversion_fn=convert_power_to_w, update_on_change_only=True, non_ha_entity_get_state=non_ha_entity_get_state)
-
-    def attach_ha_state_to_probe(self, entity_id:str|None, is_numerical:bool=False, transform_fn: Callable[[float, dict], float]|None=None, conversion_fn: Callable[[float, dict], float]|None=None, update_on_change_only:bool=True, non_ha_entity_get_state=None):
+    def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
+                                 transform_fn: Callable[[float, dict], float] | None = None,
+                                 conversion_fn: Callable[[float, dict], float] | None = None,
+                                 update_on_change_only: bool = True,
+                                 non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
+                                                                                               float | str | None, datetime | None, dict | None] | None] = None):
         if entity_id is None:
             return
 
         self._entity_probed_state[entity_id] = []
+        self._entity_probed_last_valid_state[entity_id] = None
         self._entity_probed_state_is_numerical[entity_id] = is_numerical
         self._entity_probed_state_transform_fn[entity_id] = transform_fn
         self._entity_probed_state_conversion_fn[entity_id] = conversion_fn
@@ -463,8 +472,8 @@ class HADeviceMixin:
         if self.hass:
             self.add_to_history(entity_id)
 
-
-    def _clean_times_arrays(self, current_time:datetime, time_array : list[datetime], value_arrays : list[list]) -> list[datetime]:
+    def _clean_times_arrays(self, current_time: datetime, time_array: list[datetime], value_arrays: list[list]) -> list[
+        datetime]:
         if len(time_array) == 0:
             return time_array
 
@@ -475,34 +484,43 @@ class HADeviceMixin:
 
         return time_array
 
-    def add_to_history(self, entity_id:str, time:datetime=None , state:State = None):
+    def add_to_history(self, entity_id: str, time: datetime = None, state: State = None):
 
-        if state is None:
-            state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
-            if state_getter:
-                state = state_getter(entity_id, time)
-            else:
-                state = self.hass.states.get(entity_id)
+        state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
+        state_time: datetime | None = None
+        value: str | float | None = None
+        state_attr: dict | None = None
 
-        state_attr = {}
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            value = None
+        if state is not None or state_getter is None:
             if state is None:
-                if time is None:
-                    state_time = datetime.now(tz=pytz.UTC)
-                else:
-                    state_time = time
+                state = self.hass.states.get(entity_id)
+            state_attr = {}
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                value = None
+                if state is not None:
+                    state_time = state.last_updated
             else:
+                value = state.state
                 state_time = state.last_updated
-        else:
-            value = state.state
-            state_time = state.last_updated
 
-        if state is not None:
-            state_attr = state.attributes
+            if state is not None:
+                state_attr = state.attributes
+        else:
+            fake_state = state_getter(entity_id, time)
+            if fake_state is not None:
+                state_time, value, state_attr = fake_state
+            else:
+                value = None
+                state_attr = {}
+
         if state_attr is None:
             state_attr = {}
 
+        if state_time is None:
+            if time is None:
+                state_time = datetime.now(tz=pytz.UTC)
+            else:
+                state_time = time
 
         if self._entity_probed_state_is_numerical[entity_id]:
             try:
@@ -520,7 +538,6 @@ class HADeviceMixin:
             if transform_fn is not None:
                 value = transform_fn(value, state_attr)
 
-
         val_array = self._entity_probed_state[entity_id]
 
         if state is None:
@@ -528,23 +545,35 @@ class HADeviceMixin:
         else:
             to_add = (state_time, value, state.attributes)
 
+        if value is not None:
+            prev_valid = self._entity_probed_last_valid_state[entity_id]
+            if prev_valid is None or prev_valid[0] <= state_time:
+                self._entity_probed_last_valid_state[entity_id] = to_add
+
         if not val_array:
             val_array.append(to_add)
         else:
-            insert_idx = bisect_left(val_array, state_time, key=itemgetter(0))
-            if insert_idx == len(val_array):
+            # small optim to add additional values at the end
+            if state_time > val_array[-1][0]:
                 val_array.append(to_add)
+            elif state_time == val_array[-1][0]:
+                val_array[-1] = to_add
             else:
-                if val_array[insert_idx][0] == state_time:
-                    val_array[insert_idx] = to_add
+                insert_idx = bisect_left(val_array, state_time, key=itemgetter(0))
+                if insert_idx == len(val_array):
+                    val_array.append(to_add)
                 else:
-                    val_array.insert(insert_idx, to_add)
+                    if val_array[insert_idx][0] == state_time:
+                        val_array[insert_idx] = to_add
+                    else:
+                        val_array.insert(insert_idx, to_add)
 
-        while len(val_array) > 0 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
+        while len(val_array) > 1 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
             val_array.pop(0)
 
-
-    def get_state_history_data(self, entity_id:str, num_seconds_before:float | None, to_ts:datetime, keep_invalid_states=False) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_state_history_data(self, entity_id: str, num_seconds_before: float | None, to_ts: datetime,
+                               keep_invalid_states=False) -> list[
+        tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         hist_f = self._entity_probed_state.get(entity_id, [])
 
         if not hist_f:
@@ -554,16 +583,16 @@ class HADeviceMixin:
             to_ts = datetime.now(tz=pytz.UTC)
 
         # the last value is in fact still valid now (by construction : either it was through polling or through a state change)
-        if num_seconds_before is None or num_seconds_before == 0:
-            num_seconds_before = 0
 
-        from_ts = to_ts - timedelta(seconds=num_seconds_before)
+        if num_seconds_before is None:
+            from_ts = hist_f[0][0] - timedelta(seconds=10)
+        else:
+            from_ts = to_ts - timedelta(seconds=num_seconds_before)
 
         ret = None
 
         if from_ts >= hist_f[-1][0]:
             ret = hist_f[-1:]
-
         elif to_ts < hist_f[0][0]:
             ret = []
         elif to_ts == hist_f[0][0]:
@@ -593,12 +622,10 @@ class HADeviceMixin:
             ret = []
 
         if keep_invalid_states is False and ret:
-            return [ v for v in ret if v[1] is not None]
+            return [v for v in ret if v[1] is not None]
         else:
             return ret
-
 
     @abstractmethod
     def get_platforms(self) -> list[str]:
         """ returns associated platforms for this device """
-

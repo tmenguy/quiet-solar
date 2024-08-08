@@ -149,7 +149,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             return value
 
-    def is_plugged_state_getter(self, entity_id: str, time: datetime) -> State | None:
+    def is_plugged_state_getter(self, entity_id: str, time: datetime | None) -> (
+            tuple[datetime | None, float | str | None, dict | None] | None):
 
         is_plugged, state_time = self.is_charger_plugged_now(time)
 
@@ -158,14 +159,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             state = QSChargerStates.UN_PLUGGED
 
-        res = State(
-            entity_id=f"toto.{entity_id}.tata",
-            state=state,
-            last_updated=state_time,
-            validate_entity_id=False,
-        )
-
-        return res
+        return (state_time, state, {})
 
     @property
     def _expected_charge_state(self):
@@ -519,8 +513,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
 
 
-                    if self._expected_charge_state.value and self.is_car_stopped_asking_current(time,
-                                                                                                for_duration=CHARGER_ADAPTATION_WINDOW):
+                    if self._expected_charge_state.value and self.is_car_stopped_asking_current(time):
                         # we can put back the battery as possibly discharging! as the car won't consume anymore soon ...
 
                         # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
@@ -560,12 +553,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             else:
                                 current_power = 0.0
 
-                        grid_active_power_values = self.home.get_grid_active_power_values(CHARGER_ADAPTATION_WINDOW,
-                                                                                          time)
-                        charging_values = self.home.get_battery_charge_values(CHARGER_ADAPTATION_WINDOW, time)
-
-                        available_power = align_time_series_and_values(grid_active_power_values, charging_values,
-                                                                       operation=lambda v1, v2: v1 + v2)
+                        available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
                         # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this powe is available to the car
 
                         # do we need a bit of a PID ? (proportional integral derivative? or keep it simple for now) or a convex hul with min / max?

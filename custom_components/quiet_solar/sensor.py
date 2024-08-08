@@ -97,6 +97,16 @@ def create_ha_sensor_for_QSHome(device: QSHome):
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
 
 
+    home_consumption_sensor = QSSensorEntityDescription(
+        key="home_available_power",
+        name="Home extra available power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.POWER,
+    )
+
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
+
     return entities
 
 def create_ha_sensor(device: AbstractDevice):
