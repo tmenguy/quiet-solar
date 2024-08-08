@@ -241,11 +241,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def min_charge(self):
-        return max(self.charger_min_charge, self.car.car_charger_min_charge)
+        return int(max(self.charger_min_charge, self.car.car_charger_min_charge))
 
     @property
     def max_charge(self):
-        return min(self.charger_max_charge, self.car.car_charger_max_charge)
+        return int(min(self.charger_max_charge, self.car.car_charger_max_charge))
 
     def get_platforms(self):
         return [Platform.SENSOR, Platform.SELECT]
