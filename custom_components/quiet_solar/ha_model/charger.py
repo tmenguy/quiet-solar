@@ -516,7 +516,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_amperage.set(int(self.min_charge))
         elif self.current_command.command == CMD_OFF.command:
             self._expected_charge_state.set(False)
-            self._expected_amperage.set(int(self.min_charge))
+            self._expected_amperage.set(int(self.charger_min_charge))
         elif self.current_command.command == CMD_ON.command:
             self._expected_amperage.set(self.max_charge)
             self._expected_charge_state.set(True)
