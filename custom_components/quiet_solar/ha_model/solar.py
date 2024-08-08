@@ -16,3 +16,5 @@ class QSSolar(HADeviceMixin, AbstractDevice):
 
         self.attach_power_to_probe(self.solar_inverter_active_power)
         self.attach_power_to_probe(self.solar_inverter_input_active_power)
+
+

@@ -513,10 +513,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
-            self._expected_amperage.set(int(self.charger_min_charge))  # not the car min but the charger one
+            self._expected_amperage.set(int(self.min_charge))
         elif self.current_command.command == CMD_OFF.command:
             self._expected_charge_state.set(False)
-            self._expected_amperage.set(int(self.charger_min_charge))
+            self._expected_amperage.set(int(self.min_charge))
         elif self.current_command.command == CMD_ON.command:
             self._expected_amperage.set(self.max_charge)
             self._expected_charge_state.set(True)
