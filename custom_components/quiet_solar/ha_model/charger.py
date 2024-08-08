@@ -499,7 +499,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
 
-        probe_duration = CHARGER_ADAPTATION_WINDOW
         if for_auto_command_init:
             probe_duration = 0
             res_ensure_state = True
@@ -522,7 +521,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_amperage.set(self.max_charge)
             self._expected_charge_state.set(True)
         elif self.current_command.command == CMD_AUTO_GREEN_ONLY.command:
-
+            # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
                 power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
