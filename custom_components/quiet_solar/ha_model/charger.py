@@ -491,11 +491,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 result = float(state.state)
 
 
-        await self._compute_and_launch_new_charge_state(time)
+        await self._compute_and_launch_new_charge_state(time, command=self.current_command)
 
         return result
 
-    async def _compute_and_launch_new_charge_state(self, time, for_auto_command_init=False):
+    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False):
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
 
@@ -514,13 +514,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.min_charge))
-        elif self.current_command.command == CMD_OFF.command:
+        elif command.command == CMD_OFF.command:
             self._expected_charge_state.set(False)
             self._expected_amperage.set(int(self.charger_min_charge))
-        elif self.current_command.command == CMD_ON.command:
+        elif command.command == CMD_ON.command:
             self._expected_amperage.set(self.max_charge)
             self._expected_charge_state.set(True)
-        elif self.current_command.command == CMD_AUTO_GREEN_ONLY.command:
+        elif command.command == CMD_AUTO_GREEN_ONLY.command:
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
@@ -566,7 +566,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     last_p = get_average_sensor(available_power[-len(available_power) // 2:])
                     all_p = get_average_sensor(available_power)
 
-                    if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
+                    if command.param == CMD_AUTO_GREEN_ONLY.param:
                         target_delta_power = min(last_p, all_p)
                     else:
                         target_delta_power = max(last_p, all_p)
@@ -580,7 +580,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if i == len(safe_powers_steps):
                         new_amp = self.max_charge
                     elif i == 0 and safe_powers_steps[0] > target_power:
-                        if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
+                        if command.param == CMD_AUTO_GREEN_ONLY.param:
                             new_amp = 0
                         else:
                             # for ecomode
@@ -588,7 +588,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     elif safe_powers_steps[i] == target_power:
                         new_amp = i + self.min_charge
                     else:
-                        if self.current_command.param == CMD_AUTO_GREEN_ONLY.param:
+                        if command.param == CMD_AUTO_GREEN_ONLY.param:
                             new_amp = i + self.min_charge
                         else:
                             new_amp = min(self.max_charge, i + self.min_charge + 1)
@@ -632,7 +632,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # set us in a correct current state
             self.set_state_machine_to_current_state(time)
 
-            await self._compute_and_launch_new_charge_state(time, for_auto_command_init=True)
+            await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
 
             self._last_charger_state_prob_time = time
 
