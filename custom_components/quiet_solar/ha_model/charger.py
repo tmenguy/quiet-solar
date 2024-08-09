@@ -621,7 +621,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
                     _LOGGER.info(f"target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
 
-                    if current_real_max_charging_power <= new_amp and current_power > 0 and available_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
+                    if current_real_max_charging_power <= new_amp and current_power > 0 and target_delta_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
                         new_amp = min(current_real_max_charging_power -1, new_amp -1)
                         _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
 
