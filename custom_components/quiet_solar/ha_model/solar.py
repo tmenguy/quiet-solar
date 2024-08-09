@@ -34,6 +34,9 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             elif self.solar_forecast_provider == OPEN_METEO_SOLAR_DOMAIN:
                 self.solar_forecast_provider_handler = QSSolarProviderOpenWeather(self)
 
+    async def update_forecast(self, time: datetime) -> None:
+        if self.solar_forecast_provider_handler is not None:
+            await self.solar_forecast_provider_handler.update(time)
 
 
 class QSSolarProvider:
@@ -42,19 +45,25 @@ class QSSolarProvider:
         self.solar = solar
         self.orchestrators = []
         self.domain = domain
-        self._unsub = None
+        self._latest_update_time : datetime | None = None
 
-        for _, orchestrator in self.solar.hass.data.get(SOLCAST_SOLAR_DOMAIN, {}).items():
-            _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
-            self.orchestrators.append(orchestrator)
+    async def update(self, time: datetime) -> None:
 
-        self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
+        if self._latest_update_time is None or (time - self._latest_update_time).total_seconds() > 15*60:
 
-        self.solar_forecast = self.extract_solar_forecast_from_data(datetime.now(tz=pytz.UTC), period=FLOATING_PERIOD)
+            self.orchestrators = []
+            for _, orchestrator in self.solar.hass.data.get(SOLCAST_SOLAR_DOMAIN, {}).items():
+                _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
+                self.orchestrators.append(orchestrator)
 
-        self.auto_update()
+            if len(self.orchestrators) > 0:
+                self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
+                self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD)
 
-    def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
+            self._latest_update_time = time
+
+
+    async def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
         tuple[datetime | None, str | float | None, dict | None]]:
 
         # the period may be : FLOATING_PERIOD of course
@@ -64,7 +73,7 @@ class QSSolarProvider:
         vals = []
 
         for orchestrator in self.orchestrators:
-            s = self.get_power_series_from_orchestrator(orchestrator, start_time, end_time)
+            s = await self.get_power_series_from_orchestrator(orchestrator, start_time, end_time)
             if s:
                 vals.append(s)
 
@@ -77,24 +86,12 @@ class QSSolarProvider:
         for v in vals[1:]:
             v_aggregated = align_time_series_and_values(v_aggregated, v, operation=lambda x, y: x + y)
 
+        _LOGGER.info(f"extract_solar_forecast_from_data for {self.domain} from {start_time} to {end_time} : {v_aggregated}")
+
         return v_aggregated
 
-
-    async def  _update_callback(self, time: datetime) -> None:
-            self.solar_forecast = self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD)
-            _LOGGER.info(f"Update solar forecast for {self.domain} num items {len(self.solar_forecast)} at {time}")
-
-    def auto_update(self):
-
-
-        async_track_utc_time_change(
-            self.solar.hass,
-            self._update_callback,
-            minute=15,
-        )
-
     @abstractmethod
-    def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None, dict | None]]:
          """ Returns the power series from the orchestrator"""
 
@@ -106,7 +103,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
     def __init__(self, solar: QSSolar, **kwargs) -> None:
         super().__init__(solar=solar, domain=SOLCAST_SOLAR_DOMAIN, **kwargs)
 
-    def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None, dict | None]]:
         data = orchestrator.solcast._data_forecasts
         if data is not None:
@@ -130,7 +127,7 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
     def __init__(self, solar: QSSolar, **kwargs) -> None:
         super().__init__(solar=solar, domain=OPEN_METEO_SOLAR_DOMAIN, **kwargs)
 
-    def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None, dict | None]]:
         data = orchestrator.forecast.data.watts
 

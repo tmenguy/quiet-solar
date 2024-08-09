@@ -248,6 +248,9 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 ]:
                 return
 
+            if self._solar_plant:
+                await self._solar_plant.update_forecast(time)
+
             for device in self._all_devices:
                 await device.update_states(time)
 
