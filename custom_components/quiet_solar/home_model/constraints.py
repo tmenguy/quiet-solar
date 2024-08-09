@@ -82,7 +82,7 @@ class LoadConstraint(object):
 
     def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """
-        if current_value is not None:
+        if current_value is None:
             current_value = self.current_value
 
         if self.target_value is None:
