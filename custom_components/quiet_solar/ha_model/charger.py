@@ -26,7 +26,7 @@ from ..home_model.load import AbstractLoad
 _LOGGER = logging.getLogger(__name__)
 
 CHARGER_STATE_REFRESH_INTERVAL = 4
-CHARGER_ADAPTATION_WINDOW = 15
+CHARGER_ADAPTATION_WINDOW = 20
 
 
 class QSOCPPChargePointStatus(StrEnum):
