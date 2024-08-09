@@ -11,7 +11,7 @@ from homeassistant.helpers.event import async_track_state_change_event, async_tr
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice, align_time_series_and_values
+from ..home_model.load import AbstractDevice, align_time_series_and_values, FLOATING_PERIOD
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class QSSolarProvider:
 
         self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
 
-        self.solar_forecast = self.extract_solar_forecast_from_data(datetime.now(tz=pytz.UTC))
+        self.solar_forecast = self.extract_solar_forecast_from_data(datetime.now(tz=pytz.UTC), period=FLOATING_PERIOD)
 
         self.auto_update()
 
@@ -79,15 +79,17 @@ class QSSolarProvider:
 
         return v_aggregated
 
-    def auto_update(self):
-        @callback
-        def _update_callback(self, time: datetime) -> None:
-            self.solar_forecast = self.extract_solar_forecast_from_data(time)
+
+    async def  _update_callback(self, time: datetime) -> None:
+            self.solar_forecast = self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD)
             _LOGGER.info(f"Update solar forecast for {self.domain} num items {len(self.solar_forecast)} at {time}")
+
+    def auto_update(self):
+
 
         async_track_utc_time_change(
             self.solar.hass,
-            _update_callback,
+            self._update_callback,
             minute=15,
         )
 
