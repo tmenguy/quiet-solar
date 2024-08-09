@@ -14,7 +14,7 @@ from homeassistant.components.wallbox.const import ChargerStatus
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
     CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_CHARGER_IS_3P, \
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR
-from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC
+from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command
@@ -483,7 +483,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return False
 
-    async def constraint_update_value_callback_percent_soc(self, ct: AbstractLoad, time: datetime) -> float | None:
+    async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> float | None:
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
@@ -498,13 +498,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
+            _LOGGER.info(f"update_value_callback:short unplug")
             return None
 
         if self.car.car_charge_percent_sensor is None:
             result = 0.0
             if self.is_car_stopped_asking_current(time):
                 # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
-                result = 100.0
+                result = ct.target_value
 
         else:
             state = self.hass.states.get(self.car.car_charge_percent_sensor)
@@ -513,6 +514,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 result = None
             else:
                 result = float(state.state)
+
+        if result > 99.8:
+            result = ct.target_value
 
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command)
@@ -560,8 +564,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # time to update some dampening car values:
                     if current_real_car_power is not None:
                         if False and not for_auto_command_init:
-                            _LOGGER.info(
-                                f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
+                            _LOGGER.info( f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                             # this following function can change the power steps of the car
                             self.car.update_dampening_value(amperage=current_real_max_charging_power,
                                                             power_value=current_real_car_power,

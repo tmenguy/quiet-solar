@@ -1,4 +1,4 @@
-
+import logging
 from abc import ABC
 from datetime import datetime, timedelta
 from collections.abc import Generator
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 FLOATING_PERIOD = 24*3600
 
+_LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
@@ -129,6 +130,7 @@ class AbstractLoad(AbstractDevice):
             if c.end_of_constraint < dt:
 
                 if c.is_constraint_met() or c.is_mandatory is False:
+                    _LOGGER.info(f"{c.name} skipped because met or not mandatory")
                     c.skip = True
                 else:
                     # a not met mandatory one! we should expand it or force it
@@ -167,17 +169,21 @@ class AbstractLoad(AbstractDevice):
                         if c.pushed_count > 1:
                             #TODO: we should send a push notification to the one attached to the constraint!
                             c.skip = True
+                            _LOGGER.info(f"{c.name} not met and pushed too many times")
                         else:
                             c.end_of_constraint = new_constraint_end
                             force_solving = True
                             c.skip = False
                             c.pushed_count += 1
+                            _LOGGER.info(f"{c.name} pushed because not mandatory and not met")
 
             elif c.is_constraint_met():
                 c.skip = True
+                _LOGGER.info(f"{c.name} skipped because met")
             elif c.is_constraint_active_for_time_period(dt, dt + period):
                 await c.update(dt)
                 if c.is_constraint_met():
+                    _LOGGER.info(f"{c.name} skipped because met (just after update)")
                     c.skip = True
                 break
 

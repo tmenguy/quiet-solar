@@ -19,7 +19,7 @@ class LoadConstraint(object):
                  end_of_constraint: datetime | None = None,
                  initial_value: float = 0.0,
                  target_value: float = 0.0,
-                 update_value_callback: Callable[[Self, datetime], Awaitable[float]]| None = None
+                 update_value_callback: Callable[[Self, datetime], Awaitable[float]]| None = None,
                  ):
 
         """
@@ -34,6 +34,9 @@ class LoadConstraint(object):
 
         self.load = load
         self.is_mandatory = mandatory
+
+
+        self.name = f"Constraint for {load.name} ({initial_value}/{target_value}/{mandatory})"
 
         if end_of_constraint is None:
             end_of_constraint = DATETIME_MAX_UTC
@@ -77,16 +80,18 @@ class LoadConstraint(object):
         return  self.end_of_constraint >= start_time and self.end_of_constraint <= end_time
 
 
-    def is_constraint_met(self) -> bool:
+    def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """
+        if current_value is not None:
+            current_value = self.current_value
 
         if self.target_value is None:
             return False
 
-        if self.target_value > self.initial_value and self.current_value >= self.target_value:
+        if self.target_value > self.initial_value and current_value >= self.target_value:
             return True
 
-        if self.target_value < self.initial_value and self.current_value <= self.target_value:
+        if self.target_value < self.initial_value and current_value <= self.target_value:
             return True
 
         return False
