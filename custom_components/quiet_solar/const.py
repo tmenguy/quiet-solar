@@ -24,8 +24,9 @@ CONF_HOME_VOLTAGE = "home_voltage"
 CONF_GRID_POWER_SENSOR = "grid_active_power_sensor"
 CONF_GRID_POWER_SENSOR_INVERTED = "grid_active_power_sensor_inverted"
 
-CONF_INVERTER_ACTIVE_POWER_SENSOR = "inverter_active_power_sensor"
-CONF_INVERTER_INPUT_POWER_SENSOR = "inverter_input_power_sensor"
+CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR = "inverter_active_power_sensor"
+CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR = "inverter_input_power_sensor"
+CONF_SOLAR_FORECAST_PROVIDER = "solar_forecast_provider"
 
 CONF_BATTERY_CHARGE_DISCHARGE_SENSOR = "battery_charge_discharge_sensor"
 CONF_BATTERY_CAPACITY = "battery_capacity"
@@ -39,7 +40,6 @@ CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
 CONF_CHARGER_IS_3P = "charger_is_3p"
 CONF_CHARGER_CONSUMPTION = "charger_consumption"
-
 
 CONF_CHARGER_DEVICE_OCPP = "charger_device_ocpp"
 CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"
@@ -61,6 +61,10 @@ CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P = "car_is_custom_power_charge_values_3
 
 CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
+
+
+SOLCAST_SOLAR_DOMAIN = "solcast_solar"
+OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
 
 
 

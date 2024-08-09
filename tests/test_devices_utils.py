@@ -4,8 +4,8 @@ import numpy as np
 import pytz
 from homeassistant.core import State
 
-from quiet_solar.ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_sensor, get_median_sensor
-from quiet_solar.home_model.load import AbstractLoad
+from quiet_solar.ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
+from quiet_solar.home_model.load import AbstractLoad, align_time_series_and_values
 
 
 class QSCTest(HADeviceMixin, AbstractLoad):

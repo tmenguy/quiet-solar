@@ -1,11 +1,10 @@
-import bisect
 import logging
 from datetime import datetime
 from enum import StrEnum
-import random
+
 from typing import Any
 
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
@@ -16,7 +15,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR
 from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint
 from ..ha_model.car import QSCar
-from ..ha_model.device import HADeviceMixin, align_time_series_and_values, get_average_sensor
+from ..ha_model.device import HADeviceMixin, get_average_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command
 from ..home_model.load import AbstractLoad
 

@@ -1,5 +1,7 @@
 import logging
 
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectOptionDict, SelectSelectorMode
+
 _LOGGER = logging.getLogger(__name__)
 
 from abc import abstractmethod
@@ -29,21 +31,18 @@ from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOM
 
 from .entity import LOAD_TYPES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
-    CONF_INVERTER_ACTIVE_POWER_SENSOR, CONF_INVERTER_INPUT_POWER_SENSOR, \
+    CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_HOME_VOLTAGE, \
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
-    CONF_CHARGER_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, CONF_ACCURATE_POWER_SENSOR, \
+    CONF_CHARGER_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, \
+    CONF_ACCURATE_POWER_SENSOR, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
-    CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
-
-
-
-
-
+    CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
+    OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER
 
 
 def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
@@ -225,6 +224,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 }
         )
 
+
+
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_GRID_POWER_SENSOR, False, entity_list=power_entities)
@@ -256,8 +257,35 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
-            self.add_entity_selector(sc_dict, CONF_INVERTER_ACTIVE_POWER_SENSOR, False, entity_list=power_entities)
-            self.add_entity_selector(sc_dict, CONF_INVERTER_INPUT_POWER_SENSOR, False, entity_list=power_entities)
+            self.add_entity_selector(sc_dict, CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, False, entity_list=power_entities)
+            self.add_entity_selector(sc_dict, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, False, entity_list=power_entities)
+
+
+        solcast_entries = self.hass.get(SOLCAST_SOLAR_DOMAIN, {})
+        options = []
+        if solcast_entries:
+            options.append(SelectOptionDict(value=SOLCAST_SOLAR_DOMAIN, label="Solcast"))
+
+        open_solar_entries = self.hass.get(OPEN_METEO_SOLAR_DOMAIN, {})
+        if open_solar_entries:
+            options.append(SelectOptionDict(value=OPEN_METEO_SOLAR_DOMAIN, label="Open Meteo Forecast"))
+
+        if options:
+            default = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
+
+            if default:
+                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER, default=default)
+            else:
+                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER)
+
+            sc_dict.update({
+                keysc: SelectSelector(
+                    SelectSelectorConfig(
+                        options=options,
+                        mode=SelectSelectorMode.LIST,
+
+                    )
+                )})
 
         schema = vol.Schema(sc_dict)
 

@@ -6,12 +6,12 @@ from collections.abc import Generator
 from .commands import LoadCommand, CMD_OFF, copy_command
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping, Callable
 
 if TYPE_CHECKING:
     pass
 
-FLOATING_PERIOD = 24*3600
+FLOATING_PERIOD = 48*3600
 
 _LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
@@ -281,8 +281,112 @@ class TestLoad(AbstractLoad):
         super().__init__(**kwargs)
 
 
+def align_time_series_and_values(
+        tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]],
+        tsv2: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | None,
+        operation: Callable[[Any, Any], Any] | None = None):
+    if not tsv1:
+        if not tsv2:
+            if operation is not None:
+                return []
+            else:
+                return [], []
+        else:
+            if operation is not None:
+                return [(t, operation(0, v), a) for t, v, a in tsv2]
+            else:
+                return [(t, 0, None) for t, _, a in tsv2], tsv2
 
+    if not tsv2:
+        if operation is not None:
+            return [(t, operation(v, 0), a) for t, v, a in tsv1]
+        else:
+            return tsv1, [(t, 0, None) for t, _ in tsv1]
 
+    timings = {}
 
+    for i, tv in enumerate(tsv1):
+        timings[tv[0]] = [i, None]
+    for i, tv in enumerate(tsv2):
+        if tv[0] in timings:
+            timings[tv[0]][1] = i
+        else:
+            timings[tv[0]] = [None, i]
 
+    timings = [(k, v) for k, v in timings.items()]
+    timings.sort(key=lambda x: x[0])
+    t_only = [t for t, _ in timings]
 
+    #compute all values for each time
+    new_v1: list[float | str | None] = [0] * len(t_only)
+    new_v2: list[float | str | None] = [0] * len(t_only)
+
+    new_attr_1: list[dict | None] = [None] * len(t_only)
+    new_attr_2: list[dict | None] = [None] * len(t_only)
+
+    for vi in range(2):
+
+        new_v = new_v1
+        new_attr = new_attr_1
+        tsv = tsv1
+        if vi == 1:
+            if operation is None:
+                new_v = new_v2
+                new_attr = new_attr_2
+            tsv = tsv2
+
+        last_real_idx = None
+        for i, (t, idxs) in enumerate(timings):
+            if idxs[vi] is not None:
+                #ok an exact value
+                last_real_idx = idxs[vi]
+                val_to_put = (tsv[last_real_idx][1])
+                attr_to_put = (tsv[last_real_idx][2])
+            else:
+                if last_real_idx is None:
+                    #we have new values "before" the first real value"
+                    val_to_put = (tsv[0][1])
+                    attr_to_put = (tsv[0][2])
+                elif last_real_idx == len(tsv) - 1:
+                    #we have new values "after" the last real value"
+                    val_to_put = (tsv[-1][1])
+                    attr_to_put = (tsv[-1][2])
+                else:
+                    # we have new values "between" two real values"
+                    # interpolate
+                    vcur = tsv[last_real_idx][1]
+                    vnxt = tsv[last_real_idx + 1][1]
+
+                    if vnxt is None:
+                        val_to_put = vcur
+                    elif vcur is None:
+                        val_to_put = None
+                    else:
+                        d1 = float((t - tsv[last_real_idx][0]).total_seconds())
+                        d2 = float((tsv[last_real_idx + 1][0] - tsv[last_real_idx][0]).total_seconds())
+                        nv = (d1 / d2) * (vnxt - vcur) + vcur
+                        val_to_put = float(nv)
+
+                    attr_to_put = (tsv[last_real_idx][2])
+
+            if attr_to_put is not None:
+                attr_to_put = dict(attr_to_put)
+            if vi == 0 or operation is None:
+                new_v[i] = val_to_put
+                new_attr[i] = attr_to_put
+            else:
+                if new_v[i] is None or val_to_put is None:
+                    new_v[i] = None
+                else:
+                    new_v[i] = operation(new_v[i], val_to_put)
+
+                if new_attr[i] is None:
+                    new_attr[i] = attr_to_put
+                elif attr_to_put is not None:
+                    new_attr[i].update(attr_to_put)
+
+    #ok so we do have values and timings for 1 and 2
+    if operation is not None:
+        return list(zip(t_only, new_v1, new_attr_1))
+
+    return list(zip(t_only, new_v1, new_attr_1)), list(zip(t_only, new_v2, new_attr_2))

@@ -2,7 +2,7 @@ from datetime import datetime
 from datetime import timedelta
 import numpy.typing as npt
 import numpy as np
-
+import pytz
 
 from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
@@ -39,7 +39,7 @@ class PeriodSolver(object):
         """
 
         if start_time is None:
-            start_time = dt_util.utcnow()
+            start_time = datetime.now(tz=pytz.UTC)
 
         if end_time is None:
             end_time = start_time + timedelta(days=1)
