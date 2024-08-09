@@ -505,6 +505,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             result = 0.0
             if self.is_car_stopped_asking_current(time):
                 # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
+                _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
                 result = ct.target_value
 
         else:
@@ -515,8 +516,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 result = float(state.state)
 
-        if result > 99.8:
-            result = ct.target_value
+        if result is not None:
+            if result > 99.8:
+                result = ct.target_value
+                _LOGGER.info(f"update_value_callback: a 100% reached")
+            elif result >= ct.target_value:
+                _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
 
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command)
@@ -563,7 +568,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     # time to update some dampening car values:
                     if current_real_car_power is not None:
-                        if False and not for_auto_command_init:
+                        if not for_auto_command_init:
                             _LOGGER.info( f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                             # this following function can change the power steps of the car
                             self.car.update_dampening_value(amperage=current_real_max_charging_power,
