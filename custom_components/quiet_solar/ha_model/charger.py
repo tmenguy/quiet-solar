@@ -439,6 +439,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
                 _LOGGER.info(f"Ensure State: current {max_charging_power}A expected {self._expected_amperage.value}A")
                 await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
+            else:
+                _LOGGER.debug(f"Ensure State: NOT OK TO LAUNCH current {max_charging_power}A expected {self._expected_amperage.value}A")
 
             self._verified_correct_state_time = None
         else:
@@ -454,7 +456,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._expected_charge_state.value is False and is_charge_disabled)):
                 # acknowledge the chariging power success above
                 self._expected_amperage.success()
-                _LOGGER.info(f"Ensure State: charge state expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
+                _LOGGER.info(f"Ensure State: expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
                 # if amperage is ok check if charge state is ok
                 if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
                     if self._expected_charge_state.value:
@@ -463,12 +465,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     else:
                         _LOGGER.info(f"Ensure State: stop_charge")
                         await self.stop_charge(time=time)
+                else:
+                    _LOGGER.debug(f"Ensure State: NOT OK TO LAUNCH expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
 
                 self._verified_correct_state_time = None
             else:
                 do_success = True
 
         if do_success:
+            _LOGGER.info(f"Ensure State: success amp {self._expected_amperage.value}")
             self._expected_charge_state.success()
             self._expected_amperage.success()
             if self._verified_correct_state_time is None:
@@ -613,7 +618,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         else:
                             new_amp = min(self.max_charge, i + self.min_charge + 1)
 
-                    _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power}  target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
+                    _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
+                    _LOGGER.info(f"target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
 
                     if current_real_max_charging_power <= new_amp and current_power > 0 and available_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
                         new_amp = min(current_real_max_charging_power -1, new_amp -1)
