@@ -174,6 +174,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self._inner_amperage
 
     def reset(self):
+        _LOGGER.info(f"charger reset")
         super().reset()
         self.detach_car()
         self._reset_state_machine()
@@ -211,8 +212,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         #  if there is no more car ... just reset
         if self.is_not_plugged(time, for_duration=CHARGER_ADAPTATION_WINDOW) and self.car:
             self.reset()
+            _LOGGER.info(f"unplugged connected car: reset because no car or not plugged")
         elif self.is_plugged(time, for_duration=CHARGER_ADAPTATION_WINDOW) and not self.car:
             self.reset()
+            _LOGGER.info(f"plugged and no connected car: reset and attach car")
             # find the best car .... for now
             c = self.get_best_car(time)
             self.attach_car(c)
@@ -426,37 +429,53 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def _ensure_correct_state(self, time):
 
         if self._expected_amperage.value is None or self._expected_charge_state.value is None:
+            _LOGGER.info(f"Ensure State: no correct expected state")
             return False
 
-        if self.get_max_charging_power() != self._expected_amperage.value:
+        do_success = False
+        max_charging_power = self.get_max_charging_power()
+        if max_charging_power != self._expected_amperage.value:
             # check first if amperage setting is ok
             if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                _LOGGER.info(f"Ensure State: set_max_charging_current: {self._expected_amperage.value}A")
+                _LOGGER.info(f"Ensure State: current {max_charging_power}A expected {self._expected_amperage.value}A")
                 await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
 
             self._verified_correct_state_time = None
-        elif not ((self._expected_charge_state.value is True and self.is_charge_enabled(time=time)) or (
-                self._expected_charge_state.value is False and self.is_charge_disabled(time=time))):
-            # acknowledge the chariging power success above
-            self._expected_amperage.success()
-
-            # if amperage is ok check if charge state is ok
-            if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
-                if self._expected_charge_state.value:
-                    _LOGGER.info(f"Ensure State: start_charge")
-                    await self.start_charge(time=time)
-                else:
-                    _LOGGER.info(f"Ensure State: stop_charge")
-                    await self.stop_charge(time=time)
-
-            self._verified_correct_state_time = None
         else:
+            is_charge_enabled = self.is_charge_enabled(time)
+            is_charge_disabled = self.is_charge_disabled(time)
+
+            if is_charge_enabled is None:
+                _LOGGER.info(f"Ensure State: is_charge_enabled state unknown")
+            if is_charge_disabled is None:
+                _LOGGER.info(f"Ensure State: is_charge_disabled state unknown")
+
+            if not ((self._expected_charge_state.value is True and is_charge_enabled) or (
+                self._expected_charge_state.value is False and is_charge_disabled)):
+                # acknowledge the chariging power success above
+                self._expected_amperage.success()
+                _LOGGER.info(f"Ensure State: charge state expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
+                # if amperage is ok check if charge state is ok
+                if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
+                    if self._expected_charge_state.value:
+                        _LOGGER.info(f"Ensure State: start_charge")
+                        await self.start_charge(time=time)
+                    else:
+                        _LOGGER.info(f"Ensure State: stop_charge")
+                        await self.stop_charge(time=time)
+
+                self._verified_correct_state_time = None
+            else:
+                do_success = True
+
+        if do_success:
             self._expected_charge_state.success()
             self._expected_amperage.success()
             if self._verified_correct_state_time is None:
                 # ok we enter the state knowing where we are
                 self._verified_correct_state_time = time
             return True
+
         return False
 
     async def constraint_update_value_callback_percent_soc(self, ct: AbstractLoad, time: datetime) -> float | None:
@@ -592,20 +611,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             new_amp = i + self.min_charge
                         else:
                             new_amp = min(self.max_charge, i + self.min_charge + 1)
-                else:
-                    new_amp = random.randint(int(self.min_charge) - 2, int(self.max_charge))
 
-                if new_amp < self.min_charge:
-                    new_amp = self.min_charge
-                    self._expected_charge_state.set(False)
-                elif new_amp > self.max_charge:
-                    new_amp = self.max_charge
-                    self._expected_charge_state.set(True)
-                else:
-                    self._expected_charge_state.set(True)
+                    if new_amp < self.min_charge:
+                        new_amp = self.min_charge
+                        self._expected_charge_state.set(False)
+                    elif new_amp > self.max_charge:
+                        new_amp = self.max_charge
+                        self._expected_charge_state.set(True)
+                    else:
+                        self._expected_charge_state.set(True)
 
-                if new_amp is not None:
-                    self._expected_amperage.set(int(new_amp))
+                    if new_amp is not None:
+                        self._expected_amperage.set(int(new_amp))
+
+                else:
+                    _LOGGER.info(f"Available power invalid")
+                    # new_amp = random.randint(int(self.min_charge) - 2, int(self.max_charge))
+
+
 
         if init_amp != self._expected_amperage.value or init_state != self._expected_charge_state.value:
             _LOGGER.info(
@@ -626,10 +649,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         # force a homeassistant.update_entity service on the charger entity?
         if self.is_plugged(time=time):
+            # set us in a correct current state
             self._reset_state_machine()
             _LOGGER.info(f"Execute command {command.command} on charger {self.name}")
-
-            # set us in a correct current state
             self.set_state_machine_to_current_state(time)
 
             await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
