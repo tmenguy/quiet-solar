@@ -548,7 +548,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
-                power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
 
                 current_power = 0.0
 
@@ -563,10 +562,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if False and not for_auto_command_init:
                             _LOGGER.info(
                                 f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
+                            # this following function can change the power steps of the car
                             self.car.update_dampening_value(amperage=current_real_max_charging_power,
                                                             power_value=current_real_car_power,
                                                             for_3p=self.charger_is_3p,
-                                                            time=time)
+                                                            time=time,
+                                                            can_be_saved = (time - self._verified_correct_state_time).total_seconds() > 3*CHARGER_ADAPTATION_WINDOW)
+
+
                     else:
                         current_real_car_power = self.get_median_sensor(self.secondary_power_sensor,
                                                                         probe_duration, time)
@@ -576,9 +579,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if current_real_max_charging_power >= self.min_charge:
                         current_power = current_real_car_power
                         if current_power is None:
+                            power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
                             current_power = power_steps[int(current_real_max_charging_power)]
                     else:
                         current_power = 0.0
+
+                power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
 
                 available_power = self.home.get_available_power_values(probe_duration, time)
                 # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this powe is available to the car
@@ -597,30 +603,60 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
                     target_power = current_power + target_delta_power
-
                     safe_powers_steps = power_steps[self.min_charge:self.max_charge + 1]
 
-                    i = bisect.bisect_left(safe_powers_steps, target_power)
-
-                    if i == len(safe_powers_steps):
-                        new_amp = self.max_charge
-                    elif i == 0 and safe_powers_steps[0] > target_power:
-                        if command.param == CMD_AUTO_GREEN_ONLY.param:
-                            new_amp = 0
-                        else:
-                            # for ecomode
-                            new_amp = self.min_charge
-                    elif safe_powers_steps[i] == target_power:
-                        new_amp = i + self.min_charge
+                    if target_power <= 0:
+                        new_amp = 0
                     else:
-                        if command.param == CMD_AUTO_GREEN_ONLY.param:
-                            new_amp = i + self.min_charge
+                        #they are not necessarily ordered depends on the measures, etc
+                        best_dist = 1000000000 # (1 GW :) )
+                        best_i = -1
+                        p_min_non_0 = 1000000000
+                        p_max = -1
+                        found_equal = False
+                        for i,p in enumerate(safe_powers_steps):
+
+                            if p > 0:
+                                if p < p_min_non_0:
+                                    p_min_non_0 = p
+                            if p > p_max:
+                                p_max = p
+
+                            if p == target_power:
+                                best_i = i
+                                found_equal = True
+                                break
+                            elif target_power > p and abs(p - target_power) < best_dist:
+                                best_dist = abs(p - target_power)
+                                best_i = i
+
+
+                        if best_i < 0:
+                            if  target_power > p_max:
+                                new_amp = self.max_charge
+                            elif target_power < p_min_non_0:
+                                if command.param == CMD_AUTO_GREEN_ONLY.param:
+                                    new_amp = 0
+                                else:
+                                    # for ecomode
+                                    new_amp = self.min_charge
+                            else:
+                                new_amp = self.min_charge
+
+                        elif found_equal:
+                            new_amp = best_i + self.min_charge
                         else:
-                            new_amp = min(self.max_charge, i + self.min_charge + 1)
+                            if command.param == CMD_AUTO_GREEN_ONLY.param:
+                                new_amp = best_i + self.min_charge
+                            else:
+                                new_amp = min(self.max_charge, best_i + self.min_charge + 1)
+
+
+
 
                     _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
                     _LOGGER.info(f"target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
-                    _LOGGER.info(f"min charge {self.min_charge} max charge {self.min_charge}")
+                    _LOGGER.info(f"min charge {self.min_charge} max charge {self.max_charge}")
                     _LOGGER.info(f"power steps {safe_powers_steps}")
 
                     if current_real_max_charging_power <= new_amp and current_power > 0 and target_delta_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
