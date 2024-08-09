@@ -562,8 +562,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 current_real_max_charging_power = self._expected_amperage.value
                 if self._expected_charge_state.value:
-                    current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, probe_duration,
-                                                                    time)
+                    current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, probe_duration / 2.0, time)
                     current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                     # time to update some dampening car values:
@@ -575,7 +574,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                             power_value=current_real_car_power,
                                                             for_3p=self.charger_is_3p,
                                                             time=time,
-                                                            can_be_saved = (time - self._verified_correct_state_time).total_seconds() > 3*CHARGER_ADAPTATION_WINDOW)
+                                                            can_be_saved = (time - self._verified_correct_state_time).total_seconds() > 2*CHARGER_ADAPTATION_WINDOW)
 
 
                     else:
