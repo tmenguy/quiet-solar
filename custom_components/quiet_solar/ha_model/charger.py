@@ -547,8 +547,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 current_power = 0.0
 
+                current_real_max_charging_power = self._expected_amperage.value
                 if self._expected_charge_state.value:
-                    current_real_max_charging_power = self._expected_amperage.value
                     current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, probe_duration,
                                                                     time)
                     current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
@@ -568,7 +568,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                     # we will compare now if the current need to be adapted compared to solar production
-                    if current_real_max_charging_power >= min_charge:
+                    if current_real_max_charging_power >= self.min_charge:
                         current_power = current_real_car_power
                         if current_power is None:
                             current_power = power_steps[int(current_real_max_charging_power)]
@@ -589,6 +589,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         target_delta_power = min(last_p, all_p)
                     else:
                         target_delta_power = max(last_p, all_p)
+
 
                     target_power = current_power + target_delta_power
 
@@ -611,6 +612,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             new_amp = i + self.min_charge
                         else:
                             new_amp = min(self.max_charge, i + self.min_charge + 1)
+
+                    _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power}  target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
+
+                    if current_real_max_charging_power <= new_amp and current_power > 0 and available_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
+                        new_amp = min(current_real_max_charging_power -1, new_amp -1)
+                        _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
 
                     if new_amp < self.min_charge:
                         new_amp = self.min_charge
