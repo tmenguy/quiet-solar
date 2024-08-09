@@ -261,12 +261,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             self.add_entity_selector(sc_dict, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, False, entity_list=power_entities)
 
 
-        solcast_entries = self.hass.get(SOLCAST_SOLAR_DOMAIN, {})
+        solcast_entries = self.hass.data.get(SOLCAST_SOLAR_DOMAIN, {})
         options = []
         if solcast_entries:
             options.append(SelectOptionDict(value=SOLCAST_SOLAR_DOMAIN, label="Solcast"))
 
-        open_solar_entries = self.hass.get(OPEN_METEO_SOLAR_DOMAIN, {})
+        open_solar_entries = self.hass.data.get(OPEN_METEO_SOLAR_DOMAIN, {})
         if open_solar_entries:
             options.append(SelectOptionDict(value=OPEN_METEO_SOLAR_DOMAIN, label="Open Meteo Forecast"))
 
