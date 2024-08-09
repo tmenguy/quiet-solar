@@ -4,6 +4,7 @@ from bisect import bisect_left
 from datetime import datetime, timedelta
 from operator import itemgetter
 
+import pytz
 from homeassistant.core import callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event, async_track_utc_time_change
 
@@ -49,7 +50,7 @@ class QSSolarProvider:
 
         self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
 
-        self.solar_forecast = self.extract_solar_forecast_from_data(time)
+        self.solar_forecast = self.extract_solar_forecast_from_data(datetime.now(tz=pytz.UTC))
 
         self.auto_update()
 
