@@ -49,6 +49,8 @@ class QSSolarProvider:
 
         self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
 
+        self.solar_forecast = self.extract_solar_forecast_from_data(time)
+
         self.auto_update()
 
     def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
