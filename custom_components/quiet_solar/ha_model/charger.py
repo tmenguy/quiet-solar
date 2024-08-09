@@ -560,7 +560,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     # time to update some dampening car values:
                     if current_real_car_power is not None:
-                        if not for_auto_command_init:
+                        if False and not for_auto_command_init:
                             _LOGGER.info(
                                 f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                             self.car.update_dampening_value(amperage=current_real_max_charging_power,
