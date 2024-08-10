@@ -49,9 +49,10 @@ class QSSolarProvider:
 
     async def update(self, time: datetime) -> None:
 
-        if self._latest_update_time is None or (time - self._latest_update_time).total_seconds() > 15*60:
+        if len(self.orchestrators) == 0 or self._latest_update_time is None or (time - self._latest_update_time).total_seconds() > 15*60:
 
             self.orchestrators = []
+
             for _, orchestrator in self.solar.hass.data.get(SOLCAST_SOLAR_DOMAIN, {}).items():
                 _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
                 self.orchestrators.append(orchestrator)
