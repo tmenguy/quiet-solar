@@ -130,7 +130,7 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
 
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None, dict | None]]:
-        data = orchestrator.forecast.data.watts
+        data = orchestrator.data.watts
 
         if data is not None:
 
