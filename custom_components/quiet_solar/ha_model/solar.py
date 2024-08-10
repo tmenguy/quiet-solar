@@ -53,7 +53,7 @@ class QSSolarProvider:
 
             self.orchestrators = []
 
-            for _, orchestrator in self.solar.hass.data.get(SOLCAST_SOLAR_DOMAIN, {}).items():
+            for _, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
                 _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
                 self.orchestrators.append(orchestrator)
 
