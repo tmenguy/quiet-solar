@@ -118,7 +118,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
             if end_idx >= len(data):
                 end_idx = len(data) - 1
 
-            return [ (d['period_start'], d["pv_estimate"], {}) for d in data[start_idx:end_idx+1]]
+            return [ (d['period_start'], 1000.0*d["pv_estimate"], {}) for d in data[start_idx:end_idx+1]]
         return []
 
 
