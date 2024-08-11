@@ -2,10 +2,9 @@
 from dataclasses import dataclass, asdict
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, RestoreSensor, SensorExtraStoredData, \
-    SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, Platform, STATE_UNKNOWN, UnitOfPower
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -15,11 +14,13 @@ from .ha_model.charger import QSChargerGeneric
 
 
 from .const import (
-    DOMAIN,
+    DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
+    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
 )
 from .entity import QSDeviceEntity
+from .ha_model.device import HADeviceMixin
 from .ha_model.home import QSHome
-from .home_model.load import AbstractDevice
+from .home_model.load import AbstractDevice, AbstractLoad
 
 
 def create_ha_sensor_for_QSCar(device: QSCar):
@@ -71,6 +72,23 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
 
     return entities
 
+def create_ha_sensor_for_Load(device: AbstractLoad):
+    entities = []
+
+    if isinstance(device, HADeviceMixin) and isinstance(device, AbstractLoad):
+
+        load_power_sensor = QSSensorEntityDescription(
+            key="best_power_value",
+            name=device.get_virtual_load_HA_power_entity_name(),
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.POWER,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_power_sensor))
+
+
+    return entities
+
 
 def create_ha_sensor_for_QSHome(device: QSHome):
     entities = []
@@ -78,7 +96,7 @@ def create_ha_sensor_for_QSHome(device: QSHome):
 
     home_non_controlled_consumption_sensor = QSSensorEntityDescription(
         key="home_non_controlled_consumption",
-        name="Home non controlled consumption power",
+        name=SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
@@ -88,7 +106,7 @@ def create_ha_sensor_for_QSHome(device: QSHome):
 
     home_consumption_sensor = QSSensorEntityDescription(
         key="home_consumption",
-        name="Home consumption power",
+        name=SENSOR_HOME_CONSUMPTION_POWER,
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
@@ -96,29 +114,32 @@ def create_ha_sensor_for_QSHome(device: QSHome):
 
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
 
-
-    home_consumption_sensor = QSSensorEntityDescription(
+    home_available_power = QSSensorEntityDescription(
         key="home_available_power",
-        name="Home extra available power",
+        name=SENSOR_HOME_AVAILABLE_EXTRA_POWER,
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
 
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_available_power))
 
     return entities
 
 def create_ha_sensor(device: AbstractDevice):
 
+    ret = []
     if isinstance(device, QSCar):
-        return create_ha_sensor_for_QSCar(device)
+        ret.extend(create_ha_sensor_for_QSCar(device))
     elif isinstance(device, QSChargerGeneric):
-        return create_ha_sensor_for_QSCharger(device)
+        ret.extend(create_ha_sensor_for_QSCharger(device))
     elif isinstance(device, QSHome):
-        return create_ha_sensor_for_QSHome(device)
+        ret.extend(create_ha_sensor_for_QSHome(device))
 
-    return []
+    if isinstance(device, AbstractLoad):
+        ret.extend(create_ha_sensor_for_Load(device))
+
+    return ret
 
 async def async_setup_entry(
     hass: HomeAssistant,

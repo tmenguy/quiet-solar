@@ -5,8 +5,6 @@ from datetime import datetime, timedelta
 from operator import itemgetter
 
 import pytz
-from homeassistant.core import callback, Event, EventStateChangedData
-from homeassistant.helpers.event import async_track_state_change_event, async_track_utc_time_change
 
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN
@@ -46,6 +44,7 @@ class QSSolarProvider:
         self.orchestrators = []
         self.domain = domain
         self._latest_update_time : datetime | None = None
+        self.solar_forecast : list[tuple[datetime | None, str | float | None]] = []
 
     async def update(self, time: datetime) -> None:
 
@@ -65,7 +64,7 @@ class QSSolarProvider:
 
 
     async def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
-        tuple[datetime | None, str | float | None, dict | None]]:
+        tuple[datetime | None, str | float | None]]:
 
         # the period may be : FLOATING_PERIOD of course
 
@@ -87,13 +86,13 @@ class QSSolarProvider:
         for v in vals[1:]:
             v_aggregated = align_time_series_and_values(v_aggregated, v, operation=lambda x, y: x + y)
 
-        _LOGGER.info(f"extract_solar_forecast_from_data for {self.domain} from {start_time} to {end_time} : {v_aggregated}")
+        _LOGGER.info(f"extract_solar_forecast_from_data for {self.domain} from {start_time} to {end_time} : {len(v_aggregated)}")
 
         return v_aggregated
 
     @abstractmethod
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
-        tuple[datetime | None, str | float | None, dict | None]]:
+        tuple[datetime | None, str | float | None]]:
          """ Returns the power series from the orchestrator"""
 
 
@@ -105,7 +104,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
         super().__init__(solar=solar, domain=SOLCAST_SOLAR_DOMAIN, **kwargs)
 
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
-        tuple[datetime | None, str | float | None, dict | None]]:
+        tuple[datetime | None, str | float | None]]:
         data = orchestrator.solcast._data_forecasts
         if data is not None:
 
@@ -118,8 +117,9 @@ class QSSolarProviderSolcast(QSSolarProvider):
             if end_idx >= len(data):
                 end_idx = len(data) - 1
 
-            return [ (d['period_start'], 1000.0*d["pv_estimate"], {}) for d in data[start_idx:end_idx+1]]
+            return [ (d['period_start'].astimezone(tz=pytz.UTC), 1000.0*d["pv_estimate"]) for d in data[start_idx:end_idx+1]]
         return []
+
 
 
 
@@ -129,7 +129,7 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
         super().__init__(solar=solar, domain=OPEN_METEO_SOLAR_DOMAIN, **kwargs)
 
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
-        tuple[datetime | None, str | float | None, dict | None]]:
+        tuple[datetime | None, str | float | None]]:
         data = orchestrator.data.watts
 
         if data is not None:
@@ -146,7 +146,7 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
             if end_idx >= len(data):
                 end_idx = len(data) - 1
 
-            return [ (d[0], float(d[1]), {}) for d in data[start_idx:end_idx+1]]
+            return [ (d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx:end_idx+1]]
         return []
 
 

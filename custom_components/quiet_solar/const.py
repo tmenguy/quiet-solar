@@ -66,5 +66,6 @@ CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
 SOLCAST_SOLAR_DOMAIN = "solcast_solar"
 OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
 
-
-
+SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
+SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
+SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"

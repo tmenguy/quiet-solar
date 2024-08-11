@@ -2,8 +2,6 @@ import logging
 
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectOptionDict, SelectSelectorMode
 
-_LOGGER = logging.getLogger(__name__)
-
 from abc import abstractmethod
 from dataclasses import dataclass
 
@@ -44,6 +42,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER
 
+_LOGGER = logging.getLogger(__name__)
 
 def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
     """Return an entity selector which compatible entities."""

@@ -15,7 +15,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR
 from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint
 from ..ha_model.car import QSCar
-from ..ha_model.device import HADeviceMixin, get_average_sensor
+from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command
 from ..home_model.load import AbstractLoad
 
@@ -24,9 +24,13 @@ from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
-CHARGER_STATE_REFRESH_INTERVAL = 4
-CHARGER_ADAPTATION_WINDOW = 20
+CHARGER_STATE_REFRESH_INTERVAL = 3
+CHARGER_ADAPTATION_WINDOW = 30
 
+STATE_CMD_RETRY_NUMBER = 3
+STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
+
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE = 60*10
 
 class QSOCPPChargePointStatus(StrEnum):
     """ OCPP Charger Status Description."""
@@ -44,8 +48,6 @@ class QSChargerStates(StrEnum):
     UN_PLUGGED = "unplugged"
 
 
-STATE_CMD_RETRY_NUMBER = 3
-STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
 
 
 class QSStateCmd():
@@ -56,21 +58,23 @@ class QSStateCmd():
     def reset(self):
         self.value = None
         self._num_launched = 0
-        self._last_time_set = None
+        self.last_time_set = None
+        self.last_change_asked = None
 
-    def set(self, value):
+    def set(self, value, time: datetime):
         if self.value != value:
             self.reset()
             self.value = value
+            self.last_change_asked = time
             return True
 
     def success(self):
         self._num_launched = 0
-        self._last_time_set = None
+        self.last_time_set = None
 
     def is_ok_to_launch(self, value, time: datetime):
 
-        self.set(value)
+        self.set(value, time)
 
         if self._num_launched == 0:
             return True
@@ -78,19 +82,19 @@ class QSStateCmd():
         if self._num_launched > STATE_CMD_RETRY_NUMBER:
             return False
 
-        if self._last_time_set is None:
+        if self.last_time_set is None:
             return True
 
-        if self._last_time_set is not None and (
-                time - self._last_time_set).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY:
+        if self.last_time_set is not None and (
+                time - self.last_time_set).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY:
             return True
 
         return False
 
     def register_launch(self, value, time: datetime):
-        self.set(value)
+        self.set(value, time)
         self._num_launched += 1
-        self._last_time_set = time
+        self.last_time_set = time
 
 
 
@@ -545,13 +549,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
-            self._expected_amperage.set(int(self.min_charge))
+            self._expected_amperage.set(int(self.min_charge), time)
         elif command.command == CMD_OFF.command:
-            self._expected_charge_state.set(False)
-            self._expected_amperage.set(int(self.charger_min_charge))
+            self._expected_charge_state.set(False, time)
+            self._expected_amperage.set(int(self.charger_min_charge), time)
         elif command.command == CMD_ON.command:
-            self._expected_amperage.set(self.max_charge)
-            self._expected_charge_state.set(True)
+            self._expected_amperage.set(self.max_charge, time)
+            self._expected_charge_state.set(True, time)
         elif command.command == CMD_AUTO_GREEN_ONLY.command:
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
@@ -599,13 +603,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # very rough estimation for now:
 
                 if available_power:
-                    last_p = get_average_sensor(available_power[-len(available_power) // 2:])
-                    all_p = get_average_sensor(available_power)
+                    last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
+                    all_p_mean = get_average_sensor(available_power, last_timing=time)
+                    last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
+                    all_p_median = get_median_sensor(available_power, last_timing=time)
 
                     if command.param == CMD_AUTO_GREEN_ONLY.param:
-                        target_delta_power = min(last_p, all_p)
+                        target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
                     else:
-                        target_delta_power = max(last_p, all_p)
+                        target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
 
 
                     target_power = current_power + target_delta_power
@@ -657,7 +663,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             else:
                                 new_amp = min(self.max_charge, best_i + self.min_charge + 1)
 
-
+                        delta_amp = new_amp - current_real_max_charging_power
+                        if delta_amp > 1:
+                            new_amp -= 1
 
 
                     _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
@@ -669,21 +677,28 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         new_amp = min(current_real_max_charging_power -1, new_amp -1)
                         _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
 
+                    new_state = init_state
                     if new_amp < self.min_charge:
                         new_amp = self.min_charge
-                        self._expected_charge_state.set(False)
+                        new_state = False
                     elif new_amp > self.max_charge:
                         new_amp = self.max_charge
-                        self._expected_charge_state.set(True)
+                        new_state = True
                     else:
-                        self._expected_charge_state.set(True)
+                        new_state = True
+
+                    if init_state != new_state:
+                           if (self._expected_charge_state.last_change_asked is None or
+                             (time - self._expected_charge_state.last_change_asked).total_seconds() >= TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
+                                self._expected_charge_state.set(new_state, time)
+                           else:
+                               _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
 
                     if new_amp is not None:
-                        self._expected_amperage.set(int(new_amp))
+                        self._expected_amperage.set(int(new_amp), time)
 
                 else:
                     _LOGGER.info(f"Available power invalid")
-                    # new_amp = random.randint(int(self.min_charge) - 2, int(self.max_charge))
 
 
 
@@ -697,10 +712,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def set_state_machine_to_current_state(self, time: datetime):
         if self.is_charge_disabled(time):
-            self._expected_charge_state.set(False)
+            self._expected_charge_state.set(False, time)
         else:
-            self._expected_charge_state.set(True)
-        self._expected_amperage.set(self.get_max_charging_power())
+            self._expected_charge_state.set(True, time)
+        self._expected_amperage.set(self.get_max_charging_power(), time)
 
     async def execute_command(self, time: datetime, command: LoadCommand):
 
@@ -786,7 +801,7 @@ class QSChargerOCPP(QSChargerGeneric):
         super().__init__(**kwargs)
 
         self.secondary_power_sensor = self.charger_ocpp_current_import
-        self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_amps_to_W)
+        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self.convert_amps_to_W)
         # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
 
 
@@ -847,7 +862,7 @@ class QSChargerWallbox(QSChargerGeneric):
         super().__init__(**kwargs)
 
         self.secondary_power_sensor = self.charger_wallbox_charging_power
-        self.attach_power_to_probe(self.charger_wallbox_charging_power)
+        self.attach_power_to_probe(self.secondary_power_sensor)
 
     def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
 

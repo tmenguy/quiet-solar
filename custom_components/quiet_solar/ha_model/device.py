@@ -12,13 +12,14 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR
+from ..home_model.commands import CMD_OFF
 from ..home_model.load import AbstractLoad
 
 import numpy as np
 
 
 def compute_energy_Wh_rieman_sum(
-        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]],
+        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
         conservative: bool = False):
     """Compute energy from power with a rieman sum."""
 
@@ -63,7 +64,7 @@ def convert_power_to_w(value: float, attributes: dict | None = None) -> float:
 
 
 def get_average_power_energy_based(
-        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
+        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]]):
     if len(power_data) == 0:
         return 0
     elif len(power_data) == 1:
@@ -71,7 +72,7 @@ def get_average_power_energy_based(
         if val is None:
             return 0.0
     else:
-        power_data = [(t, float(v), a) for t, v, a in power_data if v is not None]
+        power_data = [(entry[0], entry[1]) for entry in power_data if entry[1] is not None]
         if power_data:
             nrj, dh = compute_energy_Wh_rieman_sum(power_data)
             val = nrj / dh
@@ -82,7 +83,8 @@ def get_average_power_energy_based(
     return val
 
 
-def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
+def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
+                       last_timing: datetime | None = None):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
@@ -90,16 +92,36 @@ def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | No
         if val is None:
             val = 0.0
     else:
-        vals = [float(v) for _, v, _ in sensor_data if v is not None]
-        if vals:
-            val = np.mean([float(v) for _, v, _ in sensor_data if v is not None])
+        sum_time = 0
+        sum_vals = 0
+        add_last = 0
+        if last_timing is not None:
+            add_last = 1
+        for i in range(1, len(sensor_data) + add_last):
+            value = sensor_data[i - 1][1]
+            if value is None:
+                continue
+            if i == len(sensor_data):
+                dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
+            else:
+                dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
+
+            if dt == 0:
+                dt = 1
+
+            sum_time += dt
+            sum_vals += dt*float(value)
+
+        if sum_time > 0:
+            return sum_vals / sum_time
         else:
-            val = 0.0
+            return 0.0
     # do not change units
     return val
 
 
-def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]):
+def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
+                      last_timing: datetime | None = None):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
@@ -107,9 +129,27 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
         if val is None:
             val = 0.0
     else:
-        vals = [float(v) for _, v, _ in sensor_data if v is not None]
+        vals : list[float] = []
+        add_last = 0
+        if last_timing is not None:
+            add_last = 1
+        for i in range(1, len(sensor_data) + add_last):
+            value = sensor_data[i - 1][1]
+            if value is None:
+                continue
+            if i == len(sensor_data):
+                dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
+            else:
+                dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
+
+            if dt == 0:
+                dt = 1
+
+            num_add = int(dt) + 1
+            vals.extend([float(value)]*num_add)
+
         if vals:
-            val = np.median([float(v) for _, v, _ in sensor_data if v is not None])
+            val = np.median(vals)
         else:
             val = 0.0
     # do not change units
@@ -122,8 +162,8 @@ class HADeviceMixin:
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
 
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
-        self.accurate_power_sensor_transform_fn = None
         self.secondary_power_sensor = None
+        self.best_power_value = None
 
         self.command_based_power_sensor = COMMAND_BASED_POWER_SENSOR
 
@@ -150,11 +190,11 @@ class HADeviceMixin:
 
         self._exposed_entities = set()
 
-        self.attach_power_to_probe(self.accurate_power_sensor,
-                                   transform_fn=self.accurate_power_sensor_transform_fn)
+        self.attach_power_to_probe(self.accurate_power_sensor)
 
         self.attach_power_to_probe(self.command_based_power_sensor,
                                    non_ha_entity_get_state=self.command_power_state_getter)
+
 
         self._unsub = None
 
@@ -167,13 +207,50 @@ class HADeviceMixin:
         if not isinstance(self, AbstractLoad):
             return None
 
+        command_value = None
+
+        do_return_None = False
         if self.is_load_command_set(time) is False:
-            return None
+            do_return_None = True
+        else:
+            if self.current_command.command == CMD_OFF.command:
+                command_value = 0.0
+            else:
+                command_value = self.current_command.power_consign
+                if command_value is None:
+                    command_value = self.power_use
+        value = None
+        if self.accurate_power_sensor is not None:
+            hist_f = self._entity_probed_state.get(self.accurate_power_sensor, [])
+            if hist_f:
+                value = hist_f[-1][1]
+        elif self.secondary_power_sensor is not None:
+            hist_f = self._entity_probed_state.get(self.secondary_power_sensor, [])
+            if hist_f:
+                value = hist_f[-1][1]
+        else:
+            value = command_value
 
-        if self.current_command.power_consign is None:
-            return None
+        self.best_power_value = value
 
-        return (time, str(self.current_command.power_consign), {})
+        if do_return_None:
+            return None
+        return (time, str(command_value), {})
+
+
+    def get_virtual_load_HA_power_entity_name(self) -> str | None:
+        if not isinstance(self, AbstractLoad):
+            return None
+        return f"{self.device_id}_power"
+
+    def get_best_power_HA_entity(self):
+        if self.accurate_power_sensor is not None:
+            return self.accurate_power_sensor
+        elif self.secondary_power_sensor is not None:
+            return self.secondary_power_sensor
+        else:
+            return f"sensor.{self.get_virtual_load_HA_power_entity_name()}"
+
 
     def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None,
                                                time) -> str | float | None:
@@ -210,7 +287,7 @@ class HADeviceMixin:
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_median_sensor(entity_id_values)
+        return get_median_sensor(entity_id_values, time)
 
     def get_average_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
@@ -218,7 +295,7 @@ class HADeviceMixin:
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_average_sensor(entity_id_values)
+        return get_average_sensor(entity_id_values, time)
 
     def get_median_power(self, num_seconds: float | None, time) -> float | None:
         val = self.get_median_sensor(self.accurate_power_sensor, num_seconds, time)
