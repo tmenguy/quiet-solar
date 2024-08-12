@@ -1,6 +1,7 @@
 import logging
 
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectOptionDict, SelectSelectorMode
+from homeassistant.core import callback
 
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -633,13 +634,13 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
     MINOR_VERSION = 1
     config_entry: FakeConfigEntry | None | ConfigEntry = FakeConfigEntry()
 
-    # @staticmethod
-    # @callback
-    # def async_get_options_flow(
-    #     config_entry: ConfigEntry,
-    # ) -> OptionsFlow:
-    #     """Get the options flow for this handler."""
-    #     return QSOptionsFlowHandler(config_entry)
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+         config_entry: ConfigEntry,
+     ) -> OptionsFlow:
+         """Get the options flow for this handler."""
+         return QSOptionsFlowHandler(config_entry)
 
     async def async_step_user(self, user_input=None):
         """initial step (menu) for user initiated flows"""
@@ -661,22 +662,22 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
             menu_options=possible_menus,
         )
 
-    async def async_step_reconfigure(self, user_input: dict | None = None):
-        """Step when user reconfigures the integration."""
-
-        self.config_entry = self.hass.config_entries.async_get_entry(
-            self.context["entry_id"]
-        )
-        if self.config_entry is None:
-            return self.async_create_entry(title="", data={})
-        type = self.config_entry.data.get(DEVICE_TYPE)
-        if type is None:
-            return self.async_create_entry(title="", data={})
-
-
-        step_name = f"async_step_{type}"
-
-        return await getattr(self, step_name)( user_input=user_input)
+    # async def async_step_reconfigure(self, user_input: dict | None = None):
+    #    """Step when user reconfigures the integration."""
+    #
+    #    self.config_entry = self.hass.config_entries.async_get_entry(
+    #        self.context["entry_id"]
+    #    )
+    #    if self.config_entry is None:
+    #        return self.async_create_entry(title="", data={})
+    #    type = self.config_entry.data.get(DEVICE_TYPE)
+    #    if type is None:
+    #        return self.async_create_entry(title="", data={})
+    #
+    #
+    #    step_name = f"async_step_{type}"
+    #
+    #    return await getattr(self, step_name)( user_input=user_input)
 
     async def async_step_charger(self, user_input=None):
 
