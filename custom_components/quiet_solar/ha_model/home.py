@@ -6,9 +6,11 @@ from typing import Mapping, Any
 from datetime import datetime, timedelta
 
 import aiofiles.os
+import homeassistant
 import pytz
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.models import LazyState
+from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.const import Platform
 
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
@@ -505,7 +507,8 @@ class QSSolarHistoryVals:
                 no_attributes=True,
             ).get(self.entity_id, [])
 
-        states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
+        states : list[LazyState] = await recorder_get_instance(self.hass).async_add_executor_job(load_history_from_db, start_time, end_time)
+        #states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
 
         # states : ordered LazySates
         # we will fill INTERVALS_IN_MN slots with the mean of the values in the state
