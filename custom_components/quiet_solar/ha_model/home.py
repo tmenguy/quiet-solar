@@ -673,8 +673,8 @@ class QSSolarHistoryVals:
         return (idx*NUM_INTERVALS_PER_DAY) + num_intervals, days
 
     def get_utc_time_from_index(self, idx:int, days:int) -> datetime:
-        num_intervals = idx % NUM_INTERVALS_PER_DAY
-        return BEGINING_OF_TIME + timedelta(days=days) + timedelta(minutes=num_intervals*INTERVALS_IN_MN)
+        num_intervals = int(idx) % NUM_INTERVALS_PER_DAY
+        return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals*INTERVALS_IN_MN))
 
 
     async def init(self, time:datetime, for_reset:bool = False) -> tuple[datetime | None, datetime | None]:
