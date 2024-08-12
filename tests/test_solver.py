@@ -155,6 +155,5 @@ class TestSolver(TestCase):
             pv_forecast = pv_forecast,
             unavoidable_consumption_forecast = unavoidable_consumption_forecast
         )
-
         s.solve()
 
