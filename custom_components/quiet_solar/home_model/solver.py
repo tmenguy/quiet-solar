@@ -15,11 +15,11 @@ class PeriodSolver(object):
     def __init__(self,
                  start_time: datetime | None = None,
                  end_time: datetime | None = None,
-                 tariffs: list[tuple[float, timedelta]] = None,
+                 tariffs: list[tuple[timedelta, float]] = None,
                  actionable_loads: list[AbstractLoad] = None,
                  battery: Battery | None = None,
-                 pv_forecast: list[tuple[float, datetime]] = None,
-                 unavoidable_consumption_forecast: list[tuple[float, datetime]] = None,
+                 pv_forecast: list[tuple[datetime, float]] = None,
+                 unavoidable_consumption_forecast: list[tuple[datetime, float]] = None,
                  step_s: timedelta = timedelta(seconds=900),
                  ) -> None:
 
@@ -47,23 +47,23 @@ class PeriodSolver(object):
         self._start_time = start_time
         self._end_time = end_time
         self._step_s = step_s.total_seconds()
-        self._tariffs: list[tuple[float, timedelta]] | None = tariffs
+        self._tariffs: list[tuple[datetime, float]] | None = None
         self._loads: list[AbstractLoad] = actionable_loads
-        self._pv_forecast: list[float, datetime] | None = pv_forecast
-        self._ua_forecast: list[float, datetime] | None = unavoidable_consumption_forecast
+        self._pv_forecast: list[datetime, float] | None = pv_forecast
+        self._ua_forecast: list[datetime, float] | None = unavoidable_consumption_forecast
         self._battery = battery
 
         if len(tariffs) == 0:
-            self._tariffs = [(0.2,start_time)]
+            self._tariffs = [(start_time, 0.2)]
         elif len(tariffs) == 1:
-            self._tariffs = [(tariffs[0][0],start_time)]
+            self._tariffs = [(start_time, tariffs[0][1])]
         else:
             span = end_time - start_time
             num_day = span.days + 1
             start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
             self._tariffs = []
             for d in range(num_day):
-                for price, offset in tariffs:
+                for offset, price in tariffs:
 
                     strt = start_day + timedelta(days=d) + offset
 
@@ -73,10 +73,10 @@ class PeriodSolver(object):
                     if strt > end_time:
                         break
 
-                    self._tariffs.append((price, strt))
+                    self._tariffs.append((strt, price))
 
 
-        self._prices_ordered_values = sorted(list(set([ p[0] for p in self._tariffs])))
+        self._prices_ordered_values : list[float] = sorted(list(set([ p[1] for p in self._tariffs])))
 
 
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
@@ -101,8 +101,8 @@ class PeriodSolver(object):
         anchors.add(start_time)
         anchors.add(end_time)
         for tariff in self._tariffs:
-            if tariff[1] >= start_time and tariff[1] <= end_time:
-                anchors.add(tariff[1])
+            if tariff[0] >= start_time and tariff[0] <= end_time:
+                anchors.add(tariff[0])
 
         active_constraints = []
         for load in self._loads:
@@ -164,10 +164,10 @@ class PeriodSolver(object):
 
             # by construction slots have been computed to be inside core anchors ie always inside the same tariff
             # < end_slot and not <= end_slot because we don't want to get the next tarif as the slot is inside
-            while i_tariff < len(self._tariffs)-1 and self._tariffs[i_tariff+1][1] < end_slot:
+            while i_tariff < len(self._tariffs)-1 and self._tariffs[i_tariff+1][0] < end_slot:
                 i_tariff += 1
 
-            prices[i] = self._tariffs[i_tariff][0]
+            prices[i] = self._tariffs[i_tariff][1]
 
             #now compute the best power for the slots
             i_ua, ua_power = self._power_slot_from_forecast(self._ua_forecast, begin_slot, end_slot, i_ua)
@@ -183,32 +183,32 @@ class PeriodSolver(object):
         prev_end = last_end
         # <= end_slot and not < end_slot because an exact value on the end of teh slot has to be counted "in"
         while (last_end < len(forecast) - 1 and
-               forecast[last_end + 1][1] <= end_slot):
+               forecast[last_end + 1][0] <= end_slot):
             last_end += 1
         # get all the power data in the slot:
         power = []
         if prev_end >= 0:
-            if forecast[prev_end][1] == begin_slot:
-                power.append(forecast[prev_end][0])
-            elif forecast[prev_end][1] < begin_slot and prev_end < len(forecast) - 1:
-                adapted_power = forecast[prev_end][0]
-                adapted_power += ((forecast[prev_end + 1][0] - forecast[prev_end][0]) *
-                                  (begin_slot - forecast[prev_end][1]).total_seconds() /
-                                  (forecast[prev_end + 1][1] - forecast[prev_end][1]).total_seconds())
+            if forecast[prev_end][0] == begin_slot:
+                power.append(forecast[prev_end][1])
+            elif forecast[prev_end][0] < begin_slot and prev_end < len(forecast) - 1:
+                adapted_power = forecast[prev_end][1]
+                adapted_power += ((forecast[prev_end + 1][1] - forecast[prev_end][1]) *
+                                  (begin_slot - forecast[prev_end][0]).total_seconds() /
+                                  (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds())
                 power.append(adapted_power)
         for j in range(prev_end + 1, last_end + 1):
-            power.append(forecast[j][0])
+            power.append(forecast[j][1])
         # if i_ua is not the exact end, we need to adapt the power by computing an aditional value
         # (else by construcion if self._ua_forecast[i_ua][1] == end_slot it is insidealready and in teh power values)
-        if last_end < len(forecast) - 1 and forecast[last_end][1] < end_slot:
-            adapted_power = forecast[last_end][0]
-            adapted_power += ((forecast[last_end + 1][0] - forecast[last_end][0]) *
-                              (end_slot - forecast[last_end][1]).total_seconds() /
-                              (forecast[last_end + 1][1] - forecast[last_end][1]).total_seconds())
+        if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
+            adapted_power = forecast[last_end][1]
+            adapted_power += ((forecast[last_end + 1][1] - forecast[last_end][1]) *
+                              (end_slot - forecast[last_end][0]).total_seconds() /
+                              (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds())
             power.append(adapted_power)
 
         if len(power) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
-            power.append(forecast[prev_end][0])
+            power.append(forecast[prev_end][1])
 
         return last_end, sum(power) / len(power)
 
@@ -274,10 +274,10 @@ class PeriodSolver(object):
             for i in range(len(self._available_power)):
 
                 charged_energy = 0.0
-                charging_power = self._battery.get_best_charge_power(-self._available_power[i], self._durations_s[i], current_charge=prev_battery_charge)
+                charging_power = self._battery.get_best_charge_power(-self._available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
                 if charging_power > 0:
                     battery_commands[i] = charging_power
-                    charged_energy = (charging_power * self._durations_s[i]) / 3600.0
+                    charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
                     total_chargeable_energy += charged_energy
 
                 battery_charge[i] = prev_battery_charge + charged_energy
@@ -295,7 +295,7 @@ class PeriodSolver(object):
                     if self._prices[i] == price:
 
                         current_battery_charge = battery_charge[i] - discharged_energy_for_price
-                        charging_power = self._battery.get_best_discharge_power(self._available_power[i], self._durations_s[i], current_charge=current_battery_charge)
+                        charging_power = self._battery.get_best_discharge_power(self._available_power[i], float(self._durations_s[i]), current_charge=float(current_battery_charge))
 
                         if charging_power > 0:
                             discharged_energy_for_price += (charging_power*self._durations_s[i]/3600.0)

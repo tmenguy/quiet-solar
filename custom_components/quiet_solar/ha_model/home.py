@@ -369,6 +369,9 @@ class QSHomeConsumptionHistoryAndForecast:
         self._is_reset_operated = False
         self._in_reset = False
 
+
+    # async def get_forecats
+
     async def load_from_history(self, entity_id:str, start_time: datetime, end_time: datetime) -> list[LazyState]:
 
         def load_history_from_db(start_time: datetime, end_time: datetime) -> list:
