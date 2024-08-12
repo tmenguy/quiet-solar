@@ -550,7 +550,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
 
         if is_one_bad is False and home_consumption is not None:
-            # ok we do have now a pretty good idea of the non controllable house consumption:
+            # ok we do have now a pretty good idea of the non-controllable house consumption:
             # let's first clean it with the proper start and end
             strt_idx, strt_days = home_consumption.get_index_from_time(strt)
             end_idx, end_days = home_consumption.get_index_from_time(end)
