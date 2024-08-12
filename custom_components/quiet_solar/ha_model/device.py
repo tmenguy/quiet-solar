@@ -249,7 +249,7 @@ class HADeviceMixin:
         elif self.secondary_power_sensor is not None:
             return self.secondary_power_sensor
         else:
-            return f"sensor.{self.get_virtual_load_HA_power_entity_name()}"
+            return None
 
 
     def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None,

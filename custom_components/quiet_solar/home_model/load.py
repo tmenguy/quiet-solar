@@ -7,7 +7,7 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable
 
-from ..const import CONF_POWER
+from ..const import CONF_POWER, CONF_SWITCH
 
 import slugify
 
@@ -38,6 +38,7 @@ class AbstractDevice(object):
 class AbstractLoad(AbstractDevice):
 
     def __init__(self, **kwargs):
+        self.switch_entity = kwargs.pop(CONF_SWITCH, None)
         self.power_use = kwargs.pop(CONF_POWER, None)
         super().__init__(**kwargs)
 
@@ -49,6 +50,13 @@ class AbstractLoad(AbstractDevice):
         self.running_command_first_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
 
+    def get_power_from_switch_state(self, state : str | None) -> float | None:
+        if state is None:
+            return None
+        if state == "on":
+            return self.power_use
+        else:
+            return 0
 
     async def check_load_activity_and_constraints(self, time: datetime):
         return
