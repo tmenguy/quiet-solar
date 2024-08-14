@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from collections.abc import Generator
 
-from .commands import LoadCommand, CMD_OFF, copy_command, CMD_IDLE
+from .commands import LoadCommand, copy_command
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable

@@ -5,7 +5,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .home_model.commands import LoadCommand
+from .home_model.commands import LoadCommand, CMD_ON, CMD_IDLE, CMD_OFF
 from .entity import QSDeviceEntity
 
 from homeassistant.const import (
@@ -48,9 +48,9 @@ class QSSwitchLoad(QSDeviceEntity, SwitchEntity):
         self._switch_entity = switch_entity
 
     async def execute_command(self, time: datetime, command:LoadCommand):
-        if command.command == "on":
+        if command == CMD_ON:
             action = SERVICE_TURN_ON
-        elif command.command == "off":
+        elif command == CMD_OFF or command == CMD_IDLE:
             action = SERVICE_TURN_OFF
         else:
             raise ValueError("Invalid command")

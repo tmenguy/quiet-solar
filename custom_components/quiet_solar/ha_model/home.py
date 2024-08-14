@@ -23,7 +23,7 @@ from ..ha_model.charger import QSChargerGeneric
 
 from ..ha_model.device import HADeviceMixin, get_average_sensor
 from ..ha_model.solar import QSSolar
-from ..home_model.commands import LoadCommand
+from ..home_model.commands import LoadCommand, CMD_IDLE
 from ..home_model.load import AbstractLoad, AbstractDevice
 from ..home_model.solver import PeriodSolver
 
@@ -330,7 +330,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         for load in loads_to_reset:
             # set them back to a kind of "idle" state, many times will be "OFF" CMD
-            load.launch_command(CMD_IDLE, time)
+            await load.launch_command(time=time, command = CMD_IDLE)
 
         if self.home_mode == QSHomeMode.HOME_MODE_ON.value:
 

@@ -12,7 +12,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR
-from ..home_model.commands import CMD_OFF
+from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
 import numpy as np
@@ -213,7 +213,7 @@ class HADeviceMixin:
         if self.is_load_command_set(time) is False:
             do_return_None = True
         else:
-            if self.current_command.command == CMD_OFF.command:
+            if self.current_command == CMD_OFF or self.current_command == CMD_IDLE:
                 command_value = 0.0
             else:
                 command_value = self.current_command.power_consign

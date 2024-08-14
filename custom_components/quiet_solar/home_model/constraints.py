@@ -4,7 +4,7 @@ from abc import abstractmethod
 from typing import Callable, Self, Awaitable
 import pytz
 
-from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_ECO, copy_command
+from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
@@ -233,7 +233,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     energy_to_add : float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
                     cost: float  = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i]))/3600.0
                     if self._support_auto:
-                        new_cmd = copy_command(CMD_AUTO_ECO, power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
+                        new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
                     else:
                         new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
 
@@ -253,7 +253,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     break
 
             if self._support_auto:
-                price_cmd = copy_command(CMD_AUTO_ECO, power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+                price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
             else:
                 price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
 

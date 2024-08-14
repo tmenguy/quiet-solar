@@ -7,7 +7,7 @@ import pytz
 from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
-from .commands import LoadCommand, CMD_AUTO_ECO, copy_command, CMD_IDLE
+from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE
 
 
 class PeriodSolver(object):
@@ -377,10 +377,9 @@ class PeriodSolver(object):
                         base_cmd = CMD_FORCE_DISCHARGE
 
                     cmd = copy_command(base_cmd, power_consign=param)
-                    cmd.param = param
 
                 else:
-                    cmd = copy_command(CMD_AUTO_ECO)
+                    cmd = copy_command(CMD_AUTO_FROM_CONSIGN)
 
                 if cmd != current_command:
                     bcmd.append((self._time_slots[s], cmd))

@@ -1,9 +1,9 @@
 from ..home_model.load import AbstractDevice
-from .commands import LoadCommand, CMD_AUTO_ECO
+from .commands import LoadCommand
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE
 
-CMD_FORCE_CHARGE = LoadCommand(command="charge", power_consign=0.0, param="only")
-CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0, param="only")
+CMD_FORCE_CHARGE = LoadCommand(command="charge", power_consign=0.0)
+CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0)
 
 class Battery(AbstractDevice):
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF
+from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE
 
@@ -15,9 +15,9 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         return [ Platform.SENSOR, Platform.SWITCH ]
 
     async def execute_command(self, time: datetime, command:LoadCommand):
-        if command.command == CMD_ON.command:
+        if command == CMD_ON:
             action = SERVICE_TURN_ON
-        elif command.command == CMD_OFF.command:
+        elif command == CMD_OFF or command == CMD_IDLE:
             action = SERVICE_TURN_OFF
         else:
             raise ValueError("Invalid command")
@@ -35,5 +35,8 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             return False
 
-        return state.state == "on" if command == CMD_ON else state.state == "off"
+        if command == CMD_ON:
+            return state.state == "on"
+        else:
+            return state.state == "off"
 

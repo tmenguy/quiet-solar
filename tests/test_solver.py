@@ -39,7 +39,7 @@ class TestSolver(TestCase):
 
         car_steps = []
         for a in range(7, 33):
-            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230, param=a))
+            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230))
 
         car_charge_mandatory = MultiStepsPowerLoadConstraint(
             load = car,
