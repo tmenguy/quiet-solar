@@ -64,19 +64,19 @@ class QSCTest(HADeviceMixin, AbstractLoad):
         return None
 
     def fake_id_1_state_getter(self, entity_id: str, time: datetime | None) -> (
-            tuple[float | str | None, datetime | None, dict | None] | None):
+            tuple[ datetime | None, float | str | None, dict | None] | None):
         res = None
         for t, v in self.fake_1:
             if t == time:
-                res = (v,time, {})
+                res = (time, v, {})
         return res
 
     def fake_id_2_state_getter(self, entity_id: str, time: datetime | None) -> (
-            tuple[float | str | None, datetime | None, dict | None] | None):
+            tuple[ datetime | None, float | str | None, dict | None] | None):
         res = None
         for t, v in self.fake_2:
             if t == time:
-                res = (v,time, {})
+                res = (time, v, {})
 
         return res
 
@@ -195,7 +195,7 @@ class TestDeviceUtils(TestCase):
         m_no = get_median_sensor(sum_no_invalid)
         m_all = get_median_sensor(sum_all)
 
-        assert a_no == np.mean([v for _, v, _ in sum_no_invalid_res])
-        assert m_no == np.median([v for _, v, _ in sum_no_invalid_res])
-        assert a_all == np.mean([v for _, v, _ in sum_all_res if v is not None])
-        assert m_all == np.median([v for _, v, _ in sum_all_res if v is not None])
+        assert int(a_no) ==  3574 # before was ... but changed with time based calculus np.mean([v for _, v, _ in sum_no_invalid_res])
+        assert int(m_no) == 3440 # np.median([v for _, v, _ in sum_no_invalid_res])
+        assert int(a_all) == 3473 # np.mean([v for _, v, _ in sum_all_res if v is not None])
+        assert int(m_all) == 2030 # np.median([v for _, v, _ in sum_all_res if v is not None])

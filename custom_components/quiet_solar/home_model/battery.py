@@ -7,27 +7,29 @@ CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0, param=
 
 class Battery(AbstractDevice):
 
-    def __init__(self, battery_capacity :float, **kwargs):
+    def __init__(self, **kwargs):
 
         self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 230)
-
         self.max_discharging_power  = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)
         self.max_charging_power =  kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)
 
         super().__init__(**kwargs)
 
-        self.default_cmd : LoadCommand = CMD_AUTO_ECO
 
 
         self._state = 0.0
         self._constraints = []
-        self.current_charge = 0.0
         self._discharge = 0.0
 
         self.max_soc = 1.0 # %percentage of battery capacity between 0 and 1
         self.min_soc = 0.0
         self.min_charging_power = 0.0
         self.min_discharging_power = 0.0
+
+    @property
+    def current_charge(self) -> float | None:
+        raise NotImplementedError
+
 
     def get_best_charge_power(self, power_in: float, duration_s: float, current_charge: float | None = None):
 
@@ -36,6 +38,9 @@ class Battery(AbstractDevice):
 
         if current_charge is None:
             current_charge = self.current_charge
+
+        if current_charge is None:
+            current_charge = 0.0
 
         charging_power = min(power_in, self.max_charging_power)
 
@@ -52,6 +57,9 @@ class Battery(AbstractDevice):
 
         if current_charge is None:
             current_charge = self.current_charge
+
+        if current_charge is None:
+            current_charge = 0.0
 
         charging_power = min(power_in, self.max_discharging_power)
 

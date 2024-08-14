@@ -41,7 +41,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
-    OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER
+    OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -396,6 +396,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             self.add_entity_selector(sc_dict, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, False,
                                      entity_list=number_entites)
 
+        percent_entities = selectable_percent_entities(self.hass)
+        if len(percent_entities) > 0 :
+            self.add_entity_selector(sc_dict, CONF_BATTERY_CHARGE_PERCENT_SENSOR, False, entity_list=percent_entities)
+
+
         sc_dict.update(
             {
 
@@ -485,7 +490,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         percent_entities = selectable_percent_entities(self.hass)
         if len(percent_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_CAR_CHARGE_PERCENT_SENSOR, False, entity_list=percent_entities)
-
 
 
         sc_dict.update(

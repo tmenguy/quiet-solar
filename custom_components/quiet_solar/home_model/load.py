@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from collections.abc import Generator
 
-from .commands import LoadCommand, CMD_OFF, copy_command
+from .commands import LoadCommand, CMD_OFF, copy_command, CMD_IDLE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable
@@ -46,7 +46,6 @@ class AbstractLoad(AbstractDevice):
         self.current_command : LoadCommand | None = None
         self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
-        self.default_cmd : LoadCommand = CMD_OFF
         self.running_command_first_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
 
@@ -71,9 +70,17 @@ class AbstractLoad(AbstractDevice):
         self.current_command = None
         self._constraints = []
 
+
+    # To be implemented in different ways by different loads
+    # ex for an automatic boiler : boost or not boost
+    # for a HVAC (clim), may be something else
+    def set_to_idle(self, time:datetime):
+       self.launch_command(time, CMD_OFF)
+
+
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
-            if c.is_constraint_active_for_time_period(start_time, end_time):
+            if c.is_constraint_active_for_time_period(start_time, end_time) and c.is_constraint_met() is False:
                 yield c
 
     def set_live_constraints(self, constraints: list[LoadConstraint]):
@@ -141,6 +148,7 @@ class AbstractLoad(AbstractDevice):
 
             if c.end_of_constraint < dt:
 
+                # it means this constraint should be finished by now
                 if c.is_constraint_met() or c.is_mandatory is False:
                     _LOGGER.info(f"{c.name} skipped because met or not mandatory")
                     c.skip = True
@@ -150,6 +158,7 @@ class AbstractLoad(AbstractDevice):
                     new_constraint_end = dt + duration_s
                     handled_constraint_force = False
                     c.skip = True
+                    nc = None
                     if i < len(self._constraints) - 1:
 
                         for j in range(i+1, len(self._constraints)):
@@ -174,20 +183,34 @@ class AbstractLoad(AbstractDevice):
                                     nc.target_value = c.target_value
                                     force_solving = True
                                     handled_constraint_force = True
+                                    # make the current constraint the next important one
+                                    # to break below after if handled_constraint_force:
+                                    c = nc
                                     break
 
                     if handled_constraint_force is False:
 
-                        if c.pushed_count > 1:
-                            #TODO: we should send a push notification to the one attached to the constraint!
+                        if c.pushed_count > 3:
+                            # TODO: we should send a push notification to the one attached to the constraint!
+                            # As it is not met and pushed too many times
                             c.skip = True
                             _LOGGER.info(f"{c.name} not met and pushed too many times")
                         else:
                             c.end_of_constraint = new_constraint_end
                             force_solving = True
+                            # unskip the current one
                             c.skip = False
                             c.pushed_count += 1
                             _LOGGER.info(f"{c.name} pushed because not mandatory and not met")
+                            handled_constraint_force = True
+
+                    if handled_constraint_force:
+                        # ok we have pushed or made a target the next important constraint
+                        await c.update(dt)
+                        if c.is_constraint_met():
+                            _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                            c.skip = True
+                        break
 
             elif c.is_constraint_met():
                 c.skip = True
@@ -208,11 +231,7 @@ class AbstractLoad(AbstractDevice):
 
         return force_solving
 
-    async def update_value_callback_example(self, ct: LoadConstraint, time: datetime) -> float:
-        """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
-        it could also update the current command of the load if needed
-        """
-        pass
+
 
     async def launch_command(self, time:datetime, command: LoadCommand):
 
@@ -229,23 +248,29 @@ class AbstractLoad(AbstractDevice):
         elif self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self._stacked_command = None
+            self.current_command = command # needed as command == has been overcharged to not test everything
             return
         else:
             #no running command ... kill the stacked one and execute this one
             self._stacked_command = None
 
-        self.running_command = command
-        self.running_command_first_launch = time
-        await self.execute_command(time, command)
-        is_command_set = await self.probe_if_command_set(time, command)
-        if is_command_set:
-            self.current_command = command
-            self.running_command = None
-            self.running_command_num_relaunch = 0
-            self.running_command_first_launch = None
+        if command == CMD_IDLE:
+            #no need to change current command or whatever
+            self.set_to_idle(time)
+        else:
+            self.running_command = command
+            self.running_command_first_launch = time
+            await self.execute_command(time, command)
+            is_command_set = await self.probe_if_command_set(time, command)
+            if is_command_set:
+                self.current_command = command
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_first_launch = None
 
     def is_load_command_set(self, time:datetime):
         return self.running_command is None and self.current_command is not None
+
     async def check_commands(self, time: datetime):
 
         res = timedelta(seconds=0)

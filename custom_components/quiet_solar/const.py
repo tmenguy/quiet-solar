@@ -29,6 +29,7 @@ CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR = "inverter_input_power_sensor"
 CONF_SOLAR_FORECAST_PROVIDER = "solar_forecast_provider"
 
 CONF_BATTERY_CHARGE_DISCHARGE_SENSOR = "battery_charge_discharge_sensor"
+CONF_BATTERY_CHARGE_PERCENT_SENSOR = "battery_charge_percent_sensor"
 CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE = "battery_max_discharge_power_value"
 CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER = "battery_max_discharge_power_number"

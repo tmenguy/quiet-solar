@@ -7,7 +7,7 @@ from homeassistant.components import number
 
 
 from ..const import CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, \
-    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, CONF_BATTERY_CHARGE_PERCENT_SENSOR
 from ..ha_model.device import HADeviceMixin
 from ..home_model.battery import Battery
 
@@ -19,36 +19,24 @@ class QSBattery(HADeviceMixin, Battery):
         self.charge_discharge_sensor = kwargs.pop(CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, None)
         self.max_discharge_number = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, None)
         self.max_charge_number = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, None)
+        self.charge_percent_sensor = kwargs.pop(CONF_BATTERY_CHARGE_PERCENT_SENSOR, None)
 
         super().__init__(**kwargs)
 
         self.attach_power_to_probe(self.charge_discharge_sensor)
 
+        self.attach_ha_state_to_probe(self.charge_percent_sensor,
+                                      is_numerical=True)
+
         self.max_discharging_power_current = self.max_discharging_power
         self.max_charging_power_current = self.max_charging_power
 
-        @callback
-        def async_threshold_sensor_state_listener(
-                event: Event[EventStateChangedData],
-        ) -> None:
-            """Handle sensor state changes."""
-            new_state = event.data["new_state"]
-            if new_state is None or new_state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                return
-
-            value = float(new_state.state)
-
-            time = new_state.last_updated
-            self.add_to_history(new_state.entity_id, time, value)
-
-
-        if self.charge_discharge_sensor is not None:
-
-                self._unsub = async_track_state_change_event(
-                    self.hass,
-                    list(self.charge_discharge_sensor,),
-                    async_threshold_sensor_state_listener,
-            )
+    @property
+    def current_charge(self) -> float | None:
+        percent = self.get_sensor_latest_possible_valid_value(entity_id=self.charge_percent_sensor)
+        if percent is None:
+            return None
+        return float(percent * self.capacity)/100.0
 
     async def set_max_discharging_power(self, power: float | None, blocking: bool = False):
 

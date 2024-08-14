@@ -228,9 +228,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     power_to_add_idx = out_power_idxs[i] + 1
 
                 if power_to_add_idx >= 0:
+                    # all command in ECO mode now....
                     power_to_add : float = self._power_sorted_cmds[power_to_add_idx].power_consign
-                    energy_to_add : float = (power_to_add * power_slots_duration_s[i]) / 3600.0
-                    cost: float  = ((power_to_add + power_available_power[i]) * power_slots_duration_s[i] * prices[i])/3600.0
+                    energy_to_add : float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
+                    cost: float  = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i]))/3600.0
                     if self._support_auto:
                         new_cmd = copy_command(CMD_AUTO_ECO, power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
                     else:
@@ -251,14 +252,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if (nrj_to_be_added / self._power_sorted_cmds[fill_power_idx].power_consign) < price_span_h:
                     break
 
-            price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
+            if self._support_auto:
+                price_cmd = copy_command(CMD_AUTO_ECO, power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+            else:
+                price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
+
             price_power = price_cmd.power_consign
 
             for i in range(first_slot, last_slot + 1):
 
                 if prices[i] == price and out_commands[i] is None:
 
-                    current_energy : float = (price_power * power_slots_duration_s[i])/3600.0
+                    current_energy : float = (price_power * float(power_slots_duration_s[i]))/3600.0
                     current_cost = current_energy * price
 
                     c_cmd = price_cmd
@@ -267,6 +272,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     found_opti_idx = -1
                     for j in range(len(costs_optimizers)):
+                        # they are sorted by growing costs
                         if costs_optimizers[j][0] >= current_cost:
                             break
                         if costs_optimizers[j][1] >= current_energy:
@@ -276,10 +282,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if found_opti_idx >= 0:
                         _, _, slot_idx, c_power, c_cmd = costs_optimizers.pop(found_opti_idx)
 
+                    prev_energy = 0
+                    if out_commands[slot_idx] is not None:
+                        prev_energy = (out_commands[slot_idx].power_consign * power_slots_duration_s[slot_idx]) / 3600.0
 
                     out_commands[slot_idx] = c_cmd
                     out_power[slot_idx] = c_power
-                    delta_energy = (c_power * power_slots_duration_s[slot_idx]) / 3600.0
+                    delta_energy = (c_power * power_slots_duration_s[slot_idx]) / 3600.0 - prev_energy
 
                     nrj_to_be_added -= delta_energy
 

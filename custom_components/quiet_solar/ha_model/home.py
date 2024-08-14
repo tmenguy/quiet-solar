@@ -1,6 +1,7 @@
 import logging
 from enum import StrEnum
 import os
+from operator import itemgetter
 from os.path import join
 from typing import Mapping, Any
 from datetime import datetime, timedelta
@@ -57,7 +58,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
     _solar_plant: QSSolar | None = None
     _all_loads : list[AbstractLoad] = []
 
-    _period : timedelta = timedelta(days=1)
+    _period : timedelta = timedelta(hours=36)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
     _solver_step_s : timedelta = timedelta(seconds=900)
     _update_step_s : timedelta = timedelta(seconds=5)
@@ -262,7 +263,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
             return
 
         # check for active loads
-
         # for now we just check if a charger is plugged in
         for load in self._all_loads:
             await load.check_load_activity_and_constraints(time)
@@ -283,11 +283,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
             for device in self._all_devices:
                 await device.update_states(time)
 
-            await self._consumption_forecast.init_forecasts(time)
             if self.home_non_controlled_consumption is not None:
-                await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
-                                                                                     self.home_non_controlled_consumption,
-                                                                                     do_save=True)
+                if await self._consumption_forecast.init_forecasts(time):
+                    await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
+                                                                                         self.home_non_controlled_consumption,
+                                                                                         do_save=True)
 
     async def update(self, time: datetime):
 
@@ -303,9 +303,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         for load in all_loads:
 
-            if load.is_load_active(time) is False:
-                continue
-
             wait_time = await load.check_commands(time=time)
             if wait_time > timedelta(seconds=60):
                 if load.running_command_num_relaunch < 3:
@@ -315,6 +312,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                     pass
 
         do_force_solve = False
+        loads_to_reset = []
         for load in all_loads:
 
             if load.is_load_active(time) is False:
@@ -327,20 +325,53 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if (await load.update_live_constraints(time, self._period)) :
                 do_force_solve = True
 
+            if load.is_load_active(time) is False:
+                loads_to_reset.append(load)
 
-        if False:
+        for load in loads_to_reset:
+            # set them back to a kind of "idle" state, many times will be "OFF" CMD
+            load.set_to_idle(time)
+
+        if self.home_mode == QSHomeMode.HOME_MODE_ON.value:
+
+            # we may also want to force solve ... if we have less energy than what was expected too ....
 
             if do_force_solve:
+
+                active_loads = []
+                for load in all_loads:
+
+                    if load.is_load_active(time) is False:
+                        continue
+
+                    active_loads.append(load)
+
+                unavoidable_consumption_forecast = None
+                if await self._consumption_forecast.init_forecasts(time):
+                    unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
+                                                                                                  history_in_hours=24,
+                                                                                                  futur_needed_in_hours=int(self._period.total_seconds()//3600))
+                pv_forecast = None
+
+                if self._solar_plant:
+                    pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
+
+
+
                 solver = PeriodSolver(
                     start_time = time,
                     end_time = time + self._period,
                     tariffs = None,
-                    actionable_loads = None,
+                    actionable_loads = active_loads,
                     battery = self._battery,
-                    pv_forecast  = None,
-                    unavoidable_consumption_forecast = None,
+                    pv_forecast  = pv_forecast,
+                    unavoidable_consumption_forecast = unavoidable_consumption_forecast,
                     step_s = self._solver_step_s
                 )
+
+                # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
+                # use teh available power virtual sensor to modify the begining of the PeriodSolver available power
+                # computation based on forecasts
 
                 self._commands = solver.solve()
 
@@ -348,16 +379,19 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                     cmd_time, command = commands.pop(0)
                     await load.launch_command(time, command)
+                    # only launch one at a time for a given load
+                    break
 
 
 
 
 
-# to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 53 to go more that a year
-BUFFER_SIZE_DAYS = 53*7
+# to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
+BUFFER_SIZE_DAYS = 80*7
 # interval in minutes between 2 measures
-INTERVALS_IN_MN = 15
-NUM_INTERVALS_PER_DAY = (24*60)//INTERVALS_IN_MN + 1
+NUM_INTERVAL_PER_HOUR = 4
+INTERVALS_MN = 60//NUM_INTERVAL_PER_HOUR # has to be a multiple of 60
+NUM_INTERVALS_PER_DAY = (24*NUM_INTERVAL_PER_HOUR)
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 
 class QSHomeConsumptionHistoryAndForecast:
@@ -365,12 +399,11 @@ class QSHomeConsumptionHistoryAndForecast:
     def __init__(self, home: QSHome) -> None:
         self.home = home
         self.hass = home.hass
-        self.home_non_controlled_consumption = None
+        self.home_non_controlled_consumption : QSSolarHistoryVals | None = None
         self._is_reset_operated = False
         self._in_reset = False
 
-
-    # async def get_forecats
+        # ok now go through the various spots
 
     async def load_from_history(self, entity_id:str, start_time: datetime, end_time: datetime) -> list[LazyState]:
 
@@ -394,6 +427,8 @@ class QSHomeConsumptionHistoryAndForecast:
         if self._in_reset is False and self.home_non_controlled_consumption is None:
             self.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             await self.home_non_controlled_consumption.init(time)
+
+        return not self._in_reset
 
     async def reset_forecasts(self, time: datetime):
 
@@ -602,6 +637,109 @@ class QSSolarHistoryVals:
 
         self._init_done = False
 
+
+
+    async def get_forecast(self, time_now: datetime, history_in_hours: int, futur_needed_in_hours: int) -> list[tuple[datetime, float]]:
+
+        now_idx, now_days = self.get_index_from_time(time_now)
+
+        now_idx -= 1
+        end_idx = self._sanitize_idx(now_idx)
+        start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
+
+        current_values, current_days = self._get_values(start_idx, end_idx)
+        current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
+
+        best_past_probes_in_days = [
+            1,
+            7,
+            6,
+            7*4,
+            7*8,
+            7*12,
+            7*51,
+            7*52,
+            7*53,
+        ]
+
+        scores = []
+
+        for probe_days in best_past_probes_in_days:
+
+            if probe_days*24 < futur_needed_in_hours:
+                continue
+
+
+            past_start_idx = self._sanitize_idx(start_idx - probe_days*NUM_INTERVALS_PER_DAY)
+            past_end_idx = self._sanitize_idx(end_idx - probe_days*NUM_INTERVALS_PER_DAY)
+
+            past_values, past_days = self._get_values(past_start_idx, past_end_idx)
+            past_ok_values = np.asarray(past_days!=0, dtype=np.int32)
+
+            check_vals = past_ok_values*current_ok_vales
+            num_ok_vals = np.sum(check_vals)
+
+            if num_ok_vals < 0.6*past_days.shape[0]:
+                # bad history
+                continue
+
+            score = float(np.sqrt(np.sum(np.square(current_values - past_values))*check_vals))/float(num_ok_vals)
+
+            scores.append((score, probe_days))
+
+
+        if not scores:
+            return []
+
+
+        scores = sorted(scores, key=itemgetter(0))
+
+        for score, probe_days in scores:
+
+            # now we have the best past, let's forecast the future
+            past_start_idx = self._sanitize_idx(now_idx - probe_days * NUM_INTERVALS_PER_DAY)
+            past_end_idx = self._sanitize_idx(past_start_idx + (futur_needed_in_hours * NUM_INTERVAL_PER_HOUR))
+
+            forecast_values, past_days = self._get_values(past_start_idx, past_end_idx)
+            past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
+            num_ok_vals = np.sum(past_ok_values)
+
+            if num_ok_vals < 0.6*past_days.shape[0]:
+                # bad forecast
+                continue
+
+            forecast = []
+
+            for i in range(past_days.shape[0]):
+                if past_ok_values[i] == 0:
+                    continue
+                forecast.append((time_now+timedelta(minutes=i*INTERVALS_MN), forecast_values[i]))
+
+            return forecast
+
+
+        return []
+
+
+    def _sanitize_idx(self, idx):
+        if idx < 0:
+            idx = BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY - idx
+
+        idx = idx % (BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY)
+
+        return idx
+
+
+    def _get_values(self, start_idx, end_idx):
+        start_idx = self._sanitize_idx(start_idx)
+        end_idx = self._sanitize_idx(end_idx)
+
+        if end_idx > start_idx:
+            return self.values[0][start_idx:end_idx+1], self.values[1][start_idx:end_idx+1]
+        else:
+            return np.concatenate((self.values[0][start_idx:], self.values[0][:end_idx+1])), np.concatenate((self.values[1][start_idx:], self.values[1][:end_idx+1]))
+
+
     async def save_values(self):
             def _save_values_to_file(path: str, values) -> None:
                 """Write numpy."""
@@ -672,12 +810,12 @@ class QSSolarHistoryVals:
     def get_index_from_time(self, time: datetime):
         days = (time-BEGINING_OF_TIME).days
         idx = (days % BUFFER_SIZE_DAYS)
-        num_intervals = int((int(time.hour*60) + int(time.minute))//INTERVALS_IN_MN)
+        num_intervals = int((int(time.hour*60) + int(time.minute))//INTERVALS_MN)
         return (idx*NUM_INTERVALS_PER_DAY) + num_intervals, days
 
     def get_utc_time_from_index(self, idx:int, days:int) -> datetime:
         num_intervals = int(idx) % NUM_INTERVALS_PER_DAY
-        return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals*INTERVALS_IN_MN))
+        return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals*INTERVALS_MN))
 
 
     async def init(self, time:datetime, for_reset:bool = False) -> tuple[datetime | None, datetime | None]:
@@ -704,6 +842,12 @@ class QSSolarHistoryVals:
         last_bad_days = None
         do_save = False
         if self.values is not None:
+
+            if self.values.shape[0] != 2 or self.values.shape[1] != BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY:
+                self.values = None
+
+        if self.values is not None:
+
             last_bad_idx = now_idx
             last_bad_days = now_days
             # find a value before that may be good and filled already
@@ -724,7 +868,7 @@ class QSSolarHistoryVals:
                 else:
                     break
 
-            if num_slots_before_now_idx*60*INTERVALS_IN_MN > MAX_SENSOR_HISTORY_S:
+            if num_slots_before_now_idx*60*INTERVALS_MN > MAX_SENSOR_HISTORY_S:
                 last_bad_idx = None
         else:
             do_save = True

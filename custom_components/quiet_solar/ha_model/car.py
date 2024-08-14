@@ -98,17 +98,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return contiguous_status >= for_duration and contiguous_status > 0
 
-    def get_car_charge_percent(self) -> float | None:
+    def get_car_charge_percent(self, time: datetime) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=60)
 
-        if self.car_charge_percent_sensor is None:
-            return None
-        else:
-            state = self.hass.states.get(self.car_charge_percent_sensor)
-
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                return None
-            else:
-                return float(state.state)
 
     async def _save_dampening_values(self):
         data = dict(self.config_entry.data)
@@ -162,7 +154,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             self.interpolate_power_steps(do_recompute_min_charge = can_be_saved and power_value == 0)
 
-            car_percent = self.get_car_charge_percent()
+            car_percent = self.get_car_charge_percent(time)
 
             if self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 85 and  can_be_saved:
                 #ok this value can be saved

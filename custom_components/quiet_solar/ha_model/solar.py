@@ -36,6 +36,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         if self.solar_forecast_provider_handler is not None:
             await self.solar_forecast_provider_handler.update(time)
 
+    def get_forecast(self, start_time: datetime, end_time: datetime) -> list[tuple[datetime | None, str | float | None]]:
+        if self.solar_forecast_provider_handler is not None:
+            return self.solar_forecast_provider_handler.get_forecast(start_time, end_time)
+        return []
+
 
 class QSSolarProvider:
 
@@ -45,6 +50,18 @@ class QSSolarProvider:
         self.domain = domain
         self._latest_update_time : datetime | None = None
         self.solar_forecast : list[tuple[datetime | None, str | float | None]] = []
+
+    def get_forecast(self, start_time: datetime, end_time: datetime) -> list[tuple[datetime | None, str | float | None]]:
+        start_idx = bisect_left(self.solar_forecast, start_time, key=itemgetter(0))
+        if start_idx > 0:
+            if self.solar_forecast[start_idx][0] != start_time:
+                start_idx -= 1
+
+        end_idx = bisect_left(self.solar_forecast, end_time, key=itemgetter(0))
+        if end_idx >= len(self.solar_forecast):
+            end_idx = len(self.solar_forecast) - 1
+
+        return self.solar_forecast[start_idx:end_idx + 1]
 
     async def update(self, time: datetime) -> None:
 

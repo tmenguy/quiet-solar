@@ -7,7 +7,7 @@ import pytz
 from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
-from .commands import LoadCommand, CMD_AUTO_ECO, copy_command
+from .commands import LoadCommand, CMD_AUTO_ECO, copy_command, CMD_IDLE
 
 
 class PeriodSolver(object):
@@ -181,7 +181,7 @@ class PeriodSolver(object):
 
     def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end):
         prev_end = last_end
-        # <= end_slot and not < end_slot because an exact value on the end of teh slot has to be counted "in"
+        # <= end_slot and not < end_slot because an exact value on the end of the slot has to be counted "in"
         while (last_end < len(forecast) - 1 and
                forecast[last_end + 1][0] <= end_slot):
             last_end += 1
@@ -198,8 +198,8 @@ class PeriodSolver(object):
                 power.append(adapted_power)
         for j in range(prev_end + 1, last_end + 1):
             power.append(forecast[j][1])
-        # if i_ua is not the exact end, we need to adapt the power by computing an aditional value
-        # (else by construcion if self._ua_forecast[i_ua][1] == end_slot it is insidealready and in teh power values)
+        # if i_ua is not the exact end, we need to adapt the power by computing an additional value
+        # (else by construction if self._ua_forecast[i_ua][1] == end_slot it is inside already and in the power values)
         if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
             adapted_power = forecast[last_end][1]
             adapted_power += ((forecast[last_end + 1][1] - forecast[last_end][1]) *
@@ -267,6 +267,8 @@ class PeriodSolver(object):
         if self._battery is not None:
             battery_charge = np.zeros(len(self._available_power), dtype=np.float64)
             prev_battery_charge = self._battery.current_charge
+            if prev_battery_charge is None:
+                prev_battery_charge = 0.0
 
 
             # first try to fill the battery to the max of what is left
@@ -295,7 +297,7 @@ class PeriodSolver(object):
                     if self._prices[i] == price:
 
                         current_battery_charge = battery_charge[i] - discharged_energy_for_price
-                        charging_power = self._battery.get_best_discharge_power(self._available_power[i], float(self._durations_s[i]), current_charge=float(current_battery_charge))
+                        charging_power = self._battery.get_best_discharge_power(float(self._available_power[i]), float(self._durations_s[i]), current_charge=float(current_battery_charge))
 
                         if charging_power > 0:
                             discharged_energy_for_price += (charging_power*self._durations_s[i]/3600.0)
@@ -342,34 +344,34 @@ class PeriodSolver(object):
         # commands are to be sent as change of state for the load attached to the constraints
         output_cmds = []
         num_slots = len(self._durations_s)
-        is_auto_used = [False] * len(self._available_power)
+
         for load, commands_lists in actions.items():
             lcmd = []
             current_command = None
             for s in range(num_slots):
-                s_cmd = load.default_cmd
+                s_cmd = CMD_IDLE
                 for cmds in commands_lists:
                     cmd = cmds[s]
                     #only one should be not NULL
                     if cmd is not None:
                         s_cmd = cmd
                         break
-                if s_cmd.command == CMD_AUTO_ECO.command:
-                    is_auto_used[s] = True
 
-                if s_cmd != current_command:
+                if s_cmd != current_command or (s_cmd.power_consign != current_command.power_consign):
                     lcmd.append((self._time_slots[s], s_cmd))
                     current_command = s_cmd
+
             output_cmds.append((load, lcmd))
 
 
-        if self._battery is not None:
+        if False and self._battery is not None:
+            # this would be for battery grid charging commands ... not supported for now
             bcmd = []
             current_command = None
             for s, charge in enumerate(battery_commands):
-                if is_auto_used[s]:
+                if False:
                     param = float(charge)
-                    base_cmd = CMD_FORCE_CHARGE
+                    base_cmd = CMD_FORCE_CHARGE #from grid for ex
                     if param < 0.0:
                         param = 0.0 - float(charge)
                         base_cmd = CMD_FORCE_DISCHARGE

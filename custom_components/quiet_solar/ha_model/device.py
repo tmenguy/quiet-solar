@@ -252,13 +252,16 @@ class HADeviceMixin:
             return None
 
 
-    def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None,
-                                               time) -> str | float | None:
+    def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None = None,
+                                               time = None) -> str | float | None:
+        if entity_id is None:
+            return None
+
         last_valid = self._entity_probed_last_valid_state[entity_id]
         if last_valid is None:
             return None
 
-        if time >= last_valid[0]:
+        if time is None or time >= last_valid[0]:
 
             if tolerance_seconds is None or tolerance_seconds == 0:
                 return last_valid[1]
@@ -452,8 +455,6 @@ class HADeviceMixin:
 
         state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
         state_time: datetime | None = None
-        value: str | float | None = None
-        state_attr: dict | None = None
 
         if state is not None or state_getter is None:
             if state is None:

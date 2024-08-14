@@ -16,7 +16,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
 from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
-from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command
+from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, CMD_AUTO_ECO
 from ..home_model.load import AbstractLoad
 
 
@@ -216,32 +216,46 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_not_plugged(time, for_duration=CHARGER_ADAPTATION_WINDOW) and self.car:
             self.reset()
             _LOGGER.info(f"unplugged connected car: reset because no car or not plugged")
-        elif self.is_plugged(time, for_duration=CHARGER_ADAPTATION_WINDOW) and not self.car:
-            self.reset()
-            _LOGGER.info(f"plugged and no connected car: reset and attach car")
-            # find the best car .... for now
-            c = self.get_best_car(time)
-            self.attach_car(c)
+        elif self.is_plugged(time, for_duration=CHARGER_ADAPTATION_WINDOW):
+            car_initial_percent = 0
+            if not self.car:
+                self.reset()
+                _LOGGER.info(f"plugged and no connected car: reset and attach car")
+                # find the best car .... for now
+                c = self.get_best_car(time)
+                self.attach_car(c)
 
-            # add a constraint ... for now just fill the car as much as possible
-            power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
+                # add a constraint ... for now just fill the car as much as possible
+                power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
 
-            steps = []
-            for a in range(min_charge, max_charge + 1):
-                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
+                steps = []
+                for a in range(min_charge, max_charge + 1):
+                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
 
-            car_charge_mandatory = MultiStepsPowerLoadConstraint(
-                load=self,
-                mandatory=True,
-                end_of_constraint=None,
-                initial_value=0,
-                target_value=100,
-                power_steps=steps,
-                support_auto=True,
-                update_value_callback=self.constraint_update_value_callback_percent_soc
-            )
-            self.push_live_constraint(car_charge_mandatory)
-            await self.launch_command(time=time, command=CMD_AUTO_GREEN_ONLY)
+                car_initial_percent = self.car.get_car_charge_percent(time)
+                if car_initial_percent is None:
+                    car_initial_percent = 0.0
+                if car_initial_percent < 99.5:
+                    car_charge_mandatory = MultiStepsPowerLoadConstraint(
+                        load=self,
+                        mandatory=False,
+                        end_of_constraint=None,
+                        initial_value=car_initial_percent,
+                        target_value=100,
+                        power_steps=steps,
+                        support_auto=True,
+                        update_value_callback=self.constraint_update_value_callback_percent_soc
+                    )
+                    self.push_live_constraint(car_charge_mandatory)
+                    await self.launch_command(time=time, command=CMD_AUTO_GREEN_ONLY)
+
+            car_initial_percent = self.car.get_car_charge_percent(time)
+            if car_initial_percent is None:
+                car_initial_percent = 0.0
+            if car_initial_percent < 99.5:
+                # check now that we haven't set a constraint for the car : like being ready for tomorrow , or charge max now
+                # if so add a live constraint mandatory with an end
+                pass
 
         return
 
@@ -506,18 +520,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.car.car_charge_percent_sensor is None:
             result = 0.0
-            if self.is_car_stopped_asking_current(time):
-                # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
-                _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
-                result = ct.target_value
-
         else:
-            state = self.hass.states.get(self.car.car_charge_percent_sensor)
+            result = self.car.get_car_charge_percent(time)
 
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                result = None
-            else:
-                result = float(state.state)
+        if self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW):
+            # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
+            _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
+            result = ct.target_value
 
         if result is not None:
             if result > 99.8:
@@ -611,13 +620,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if command.param == CMD_AUTO_GREEN_ONLY.param:
                         target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
                     else:
+                        # mode CMD_AUTO_ECO
                         target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
 
 
                     target_power = current_power + target_delta_power
+
+                    if command.param == CMD_AUTO_ECO.param:
+                        if command.power_consign is not None and command.power_consign >= 0:
+                            # in CMD_AUTO_ECO mode take always max possible power if available vs teh computed consign
+                            target_power = max(power_steps[self.min_charge], max(command.power_consign, target_power))
+
+
                     safe_powers_steps = power_steps[self.min_charge:self.max_charge + 1]
 
                     if target_power <= 0:
+                        #only relevant in case of CMD_AUTO_GREEN_ONLY
                         new_amp = 0
                     else:
                         #they are not necessarily ordered depends on the measures, etc
@@ -663,19 +681,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             else:
                                 new_amp = min(self.max_charge, best_i + self.min_charge + 1)
 
-                        delta_amp = new_amp - current_real_max_charging_power
-                        if delta_amp > 1:
-                            new_amp -= 1
+                        # to smooth a bit going up for nothing
+                        if command.param == CMD_AUTO_GREEN_ONLY.param:
+                            if target_delta_power < 0:
+                                # it means no available power ... force to go down if not done
+                                if current_real_max_charging_power <= new_amp and current_power > 0 and self._expected_charge_state.value:
+                                    new_amp = min(current_real_max_charging_power-1, new_amp-1)
+                                    _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
+                            else:
+                                delta_amp = new_amp - current_real_max_charging_power
+                                if delta_amp > 1:
+                                    new_amp -= 1
+                                    _LOGGER.info(f"Lower charge up speed: {new_amp}")
 
 
                     _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
                     _LOGGER.info(f"target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
                     _LOGGER.info(f"min charge {self.min_charge} max charge {self.max_charge}")
                     _LOGGER.info(f"power steps {safe_powers_steps}")
-
-                    if current_real_max_charging_power <= new_amp and current_power > 0 and target_delta_power < 0 and command.param == CMD_AUTO_GREEN_ONLY.param:
-                        new_amp = min(current_real_max_charging_power -1, new_amp -1)
-                        _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
 
                     new_state = init_state
                     if new_amp < self.min_charge:
