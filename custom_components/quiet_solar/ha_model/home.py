@@ -330,7 +330,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         for load in loads_to_reset:
             # set them back to a kind of "idle" state, many times will be "OFF" CMD
-            load.set_to_idle(time)
+            load.launch_command(CMD_IDLE, time)
 
         if self.home_mode == QSHomeMode.HOME_MODE_ON.value:
 
