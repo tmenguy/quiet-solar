@@ -128,12 +128,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if (power_value == 0 or old_val == 0):
             if power_value == old_val:
                 do_update = False
-            elif max(power_value, old_val) < MIN_CHARGE_POWER_W:
-                if power_value == 0:
-                    do_update = True
             else:
                 do_update = True
-
         elif abs(old_val - power_value) > 0.1*max(old_val,power_value):
             do_update = True
 
@@ -152,7 +148,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.customized_amp_to_power_3p[amperage] = val_3p
             self.customized_amp_to_power_1p[amperage] = val_1p
 
-            self.interpolate_power_steps(do_recompute_min_charge = can_be_saved and power_value == 0)
+
+            do_recompute_min_charge = False
+            if can_be_saved and power_value == 0:
+                do_recompute_min_charge = True
+
+            self.interpolate_power_steps(do_recompute_min_charge = do_recompute_min_charge)
 
             car_percent = self.get_car_charge_percent(time)
 
@@ -212,8 +213,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for i, val in enumerate(self.amp_to_power_3p):
                 if i < self._conf_car_charger_min_charge:
                     continue
-                if val == 0:
-                    self.car_charger_min_charge += 1
+                if val < MIN_CHARGE_POWER_W:
+                    self.car_charger_min_charge = i + 1
                 else:
                     break
 

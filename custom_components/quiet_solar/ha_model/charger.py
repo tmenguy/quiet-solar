@@ -695,11 +695,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     _LOGGER.info(f"Lower charge up speed: {new_amp}")
 
 
-                    _LOGGER.info(f"Compute: target_delta_power {target_delta_power} current_power {current_power} ")
-                    _LOGGER.info(f"target_power {target_power} new_amp {new_amp} current amp {current_real_max_charging_power}")
-                    _LOGGER.info(f"min charge {self.min_charge} max charge {self.max_charge}")
-                    _LOGGER.info(f"power steps {safe_powers_steps}")
-
                     new_state = init_state
                     if new_amp < self.min_charge:
                         new_amp = self.min_charge
@@ -709,6 +704,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         new_state = True
                     else:
                         new_state = True
+
+
+                    _LOGGER.info(f"target_delta_power {target_delta_power} target_power {target_power}, current_power {current_power} ")
+                    _LOGGER.info(f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
+                    _LOGGER.info(f"car: {self.car.name} min charge {self.min_charge} max charge {self.max_charge}")
+                    _LOGGER.info(f"power steps {safe_powers_steps}")
 
                     if init_state != new_state:
                            if (self._expected_charge_state.last_change_asked is None or
