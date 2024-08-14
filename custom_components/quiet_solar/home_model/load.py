@@ -70,14 +70,6 @@ class AbstractLoad(AbstractDevice):
         self.current_command = None
         self._constraints = []
 
-
-    # To be implemented in different ways by different loads
-    # ex for an automatic boiler : boost or not boost
-    # for a HVAC (clim), may be something else
-    def set_to_idle(self, time:datetime):
-       self.launch_command(time, CMD_OFF)
-
-
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
             if c.is_constraint_active_for_time_period(start_time, end_time) and c.is_constraint_met() is False:
@@ -254,19 +246,16 @@ class AbstractLoad(AbstractDevice):
             #no running command ... kill the stacked one and execute this one
             self._stacked_command = None
 
-        if command == CMD_IDLE:
-            #no need to change current command or whatever
-            self.set_to_idle(time)
-        else:
-            self.running_command = command
-            self.running_command_first_launch = time
-            await self.execute_command(time, command)
-            is_command_set = await self.probe_if_command_set(time, command)
-            if is_command_set:
-                self.current_command = command
-                self.running_command = None
-                self.running_command_num_relaunch = 0
-                self.running_command_first_launch = None
+        
+        self.running_command = command
+        self.running_command_first_launch = time
+        await self.execute_command(time, command)
+        is_command_set = await self.probe_if_command_set(time, command)
+        if is_command_set:
+            self.current_command = command
+            self.running_command = None
+            self.running_command_num_relaunch = 0
+            self.running_command_first_launch = None
 
     def is_load_command_set(self, time:datetime):
         return self.running_command is None and self.current_command is not None
