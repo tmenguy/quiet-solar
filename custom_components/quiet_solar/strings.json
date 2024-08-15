@@ -87,7 +87,7 @@
           "charger_min_charge": "Minimum Current Charge Per Phase (A)",
           "charger_is_3p": "Is the charger 3 phases?",
           "charger_device_ocpp": "OCPP device",
-          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the OCPP one)"
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the OCPP one)"
         }
       },
       "charger_wallbox": {
@@ -99,7 +99,7 @@
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
           "charger_device_wallbox": "Wallbox device",
-          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::power_sensor%] (optional, to overcharge the Wallbox one)"
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the Wallbox one)"
         }
       },
       "car": {
@@ -180,6 +180,169 @@
           "select": "Fil pilote value",
           "power": "Power of the eater (W)",
           "accurate_power_sensor": "Power sensor of the load (W, kW)"
+        }
+      }
+    }
+  },
+  "options": {
+    "abort": {
+      "already_configured": "[%key:component::quiet_solar::config::abort::already_configured%]",
+      "no_devices_found": "[%key:component::quiet_solar::config::abort::no_devices_found%]",
+      "single_instance_allowed": "[%key:component::quiet_solar::config::abort::single_instance_allowed%]"
+    },
+    "error": {
+      "already_configured_device": "[%key:component::quiet_solar::config::error::already_configured_device%]",
+      "cannot_connect": "[%key:component::quiet_solar::config::error::cannot_connect%]",
+      "cloud_profile_mismatch": "[%key:component::quiet_solar::config::error::cloud_profile_mismatch%]"
+    },
+    "step": {
+      "home": {
+        "title": "[%key:component::quiet_solar::config::step::home::title%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::home::data::name%]",
+          "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
+          "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
+          "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]"
+        }
+      },
+      "battery": {
+        "title": "[%key:component::quiet_solar::config::step::battery::title%]",
+        "description": "[%key:component::quiet_solar::config::step::battery::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::battery::data::name%]",
+          "battery_capacity": "[%key:component::quiet_solar::config::step::battery::data::battery_capacity%]",
+          "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
+          "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]",
+          "battery_max_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_value%]",
+          "battery_max_discharge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number%]",
+          "battery_max_charge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_value%]",
+          "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]"
+        }
+      },
+      "solar": {
+        "title": "[%key:component::quiet_solar::config::step::solar::title%]",
+        "description": "[%key:component::quiet_solar::config::step::solar::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::solar::data::name%]",
+          "inverter_active_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor%]",
+          "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]"
+        }
+      },
+      "charger_generic": {
+        "title": "[%key:component::quiet_solar::config::step::charger_generic::title%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::charger_ocpp::data::name%]",
+          "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+          "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "charger_plugged": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_plugged%]",
+          "charger_max_charging_current_number": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number%]",
+          "charger_pause_resume_switch": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_pause_resume_switch%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor%]"
+        }
+      },
+      "charger_ocpp": {
+        "title": "[%key:component::quiet_solar::config::step::charger_ocpp::title%]",
+        "description": "[%key:component::quiet_solar::config::step::charger_ocpp::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::charger_ocpp::data::name%]",
+          "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+          "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "charger_device_ocpp": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_device_ocpp%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor%]"
+        }
+      },
+      "charger_wallbox": {
+        "title": "[%key:component::quiet_solar::config::step::charger_wallbox::title%]",
+        "description": "[%key:component::quiet_solar::config::step::charger_wallbox::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::charger_ocpp::data::name%]",
+          "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
+          "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
+          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "charger_device_wallbox": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_device_wallbox%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor%]"
+        }
+      },
+      "car": {
+        "title": "[%key:component::quiet_solar::config::step::car::title%]",
+        "description": "[%key:component::quiet_solar::config::step::car::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::car::data::name%]",
+          "car_plugged": "[%key:component::quiet_solar::config::step::car::data::car_plugged%]",
+          "car_tracker": "[%key:component::quiet_solar::config::step::car::data::car_tracker%]",
+          "car_charge_percent_sensor": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor%]",
+          "car_battery_capacity": "[%key:component::quiet_solar::config::step::car::data::car_battery_capacity%]",
+          "car_charger_min_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_min_charge%]",
+          "car_charger_max_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_max_charge%]",
+          "car_use_custom_power_charge_values": "[%key:component::quiet_solar::config::step::car::data::car_use_custom_power_charge_values%]",
+          "car_is_custom_power_charge_values_3p": "[%key:component::quiet_solar::config::step::car::data::car_is_custom_power_charge_values_3p%]",
+          "charge_1": "[%key:component::quiet_solar::config::step::car::data::charge_1%]",
+          "charge_2": "[%key:component::quiet_solar::config::step::car::data::charge_2%]",
+          "charge_3": "[%key:component::quiet_solar::config::step::car::data::charge_3%]",
+          "charge_4": "[%key:component::quiet_solar::config::step::car::data::charge_4%]",
+          "charge_5": "[%key:component::quiet_solar::config::step::car::data::charge_5%]",
+          "charge_6": "[%key:component::quiet_solar::config::step::car::data::charge_6%]",
+          "charge_7": "[%key:component::quiet_solar::config::step::car::data::charge_7%]",
+          "charge_8": "[%key:component::quiet_solar::config::step::car::data::charge_8%]",
+          "charge_9": "[%key:component::quiet_solar::config::step::car::data::charge_9%]",
+          "charge_10": "[%key:component::quiet_solar::config::step::car::data::charge_10%]",
+          "charge_11": "[%key:component::quiet_solar::config::step::car::data::charge_11%]",
+          "charge_12": "[%key:component::quiet_solar::config::step::car::data::charge_12%]",
+          "charge_13": "[%key:component::quiet_solar::config::step::car::data::charge_13%]",
+          "charge_14": "[%key:component::quiet_solar::config::step::car::data::charge_14%]",
+          "charge_15": "[%key:component::quiet_solar::config::step::car::data::charge_15%]",
+          "charge_16": "[%key:component::quiet_solar::config::step::car::data::charge_16%]",
+          "charge_17": "[%key:component::quiet_solar::config::step::car::data::charge_17%]",
+          "charge_18": "[%key:component::quiet_solar::config::step::car::data::charge_18%]",
+          "charge_19": "[%key:component::quiet_solar::config::step::car::data::charge_19%]",
+          "charge_20": "[%key:component::quiet_solar::config::step::car::data::charge_20%]",
+          "charge_21": "[%key:component::quiet_solar::config::step::car::data::charge_21%]",
+          "charge_22": "[%key:component::quiet_solar::config::step::car::data::charge_22%]",
+          "charge_23": "[%key:component::quiet_solar::config::step::car::data::charge_23%]",
+          "charge_24": "[%key:component::quiet_solar::config::step::car::data::charge_24%]",
+          "charge_25": "[%key:component::quiet_solar::config::step::car::data::charge_25%]",
+          "charge_26": "[%key:component::quiet_solar::config::step::car::data::charge_26%]",
+          "charge_27": "[%key:component::quiet_solar::config::step::car::data::charge_27%]",
+          "charge_28": "[%key:component::quiet_solar::config::step::car::data::charge_28%]",
+          "charge_29": "[%key:component::quiet_solar::config::step::car::data::charge_29%]",
+          "charge_30": "[%key:component::quiet_solar::config::step::car::data::charge_30%]",
+          "charge_31": "[%key:component::quiet_solar::config::step::car::data::charge_31%]",
+          "charge_32": "[%key:component::quiet_solar::config::step::car::data::charge_32%]"
+        }
+      },
+      "pool": {
+        "title": "[%key:component::quiet_solar::config::step::pool::title%]",
+        "description": "[%key:component::quiet_solar::config::step::pool::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::pool::data::name%]",
+          "pool_temperature_sensor": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor%]",
+          "switch": "[%key:component::quiet_solar::config::step::pool::data::switch%]",
+          "power": "[%key:component::quiet_solar::config::step::pool::data::power%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::pool::data::accurate_power_sensor%]",
+          "pool_is_pump_variable_speed": "[%key:component::quiet_solar::config::step::pool::data::pool_is_pump_variable_speed%]"
+        }
+      },
+      "on_off_duration": {
+        "title": "[%key:component::quiet_solar::config::step::on_off_duration::title%]",
+        "description": "[%key:component::quiet_solar::config::step::on_off_duration::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::on_off_duration::data::name%]",
+          "switch": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch%]",
+          "power": "[%key:component::quiet_solar::config::step::on_off_duration::data::power%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::on_off_duration::data::accurate_power_sensor%]"
+        }
+      },
+      "fp_heater": {
+        "title": "[%key:component::quiet_solar::config::step::fp_heater::title%]",
+        "description": "[%key:component::quiet_solar::config::step::fp_heater::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::fp_heater::data::name%]",
+          "switch": "[%key:component::quiet_solar::config::step::fp_heater::data::switch%]",
+          "select": "[%key:component::quiet_solar::config::step::fp_heater::data::select%]",
+          "power": "[%key:component::quiet_solar::config::step::fp_heater::data::power%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::fp_heater::data::accurate_power_sensor%]"
         }
       }
     }
