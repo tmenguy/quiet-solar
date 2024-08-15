@@ -72,7 +72,7 @@ async def async_setup_entry(
 
 class QSBaseSelect(QSDeviceEntity, SelectEntity):
     """Implementation of a Netatmo sensor."""
-
+    _attr_has_entity_name = True
     def __init__(
         self,
         data_handler,
@@ -80,6 +80,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         description: QSSelectEntityDescription,
     ) -> None:
         """Initialize the sensor."""
+        self._attr_has_entity_name = True
         super().__init__(data_handler=data_handler, device=device, description=description)
         self.entity_description = description
 
