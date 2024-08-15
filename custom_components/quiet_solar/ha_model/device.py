@@ -266,7 +266,7 @@ class HADeviceMixin:
             if tolerance_seconds is None or tolerance_seconds == 0:
                 return last_valid[1]
 
-            if (time - last_valid[0]).total_seconds() > tolerance_seconds:
+            if time is not None and (time - last_valid[0]).total_seconds() > tolerance_seconds:
                 return None
 
             return last_valid[1]

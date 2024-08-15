@@ -22,7 +22,7 @@ from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
 
-from ..ha_model.device import HADeviceMixin, get_average_sensor
+from ..ha_model.device import HADeviceMixin, get_average_sensor, convert_power_to_w
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
 from ..home_model.load import AbstractLoad, AbstractDevice
@@ -413,13 +413,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
         await self.hass.async_add_executor_job(
             _pickle_save, file_path, debugs
         )
-
-
-
-
-
-
-
 
 
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
@@ -937,6 +930,14 @@ class QSSolarHistoryVals:
         history_end = None
 
         if states:
+
+            # in states we have "LazyState" objects ... with no attribute
+            real_state = self.hass.states.get(self.entity_id)
+            if real_state is None:
+                state_attr = {}
+            else:
+                state_attr = real_state.attributes
+
             history_start = states[0].last_changed
             history_end = states[-1].last_changed
             for s in states:
@@ -946,7 +947,10 @@ class QSSolarHistoryVals:
                     continue
                 if s.last_changed > end_time:
                     continue
-                await self.add_value(s.last_changed, float(s.state), do_save=False)
+
+                power_value = convert_power_to_w(float(s.state), state_attr)
+
+                await self.add_value(s.last_changed, power_value, do_save=False)
 
             if self._current_idx is not None and self._current_idx != now_idx:
                 await self._store_current_vals(time=None, do_save=False)
