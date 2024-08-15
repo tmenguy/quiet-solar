@@ -444,7 +444,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result
 
-    async def _ensure_correct_state(self, time):
+    async def _ensure_correct_state(self, time) -> bool:
 
         if self._expected_amperage.value is None or self._expected_charge_state.value is None:
             _LOGGER.info(f"Ensure State: no correct expected state")
@@ -491,7 +491,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 do_success = True
 
         if do_success:
-            _LOGGER.info(f"Ensure State: success amp {self._expected_amperage.value}")
+            _LOGGER.debug(f"Ensure State: success amp {self._expected_amperage.value}")
             self._expected_charge_state.success()
             self._expected_amperage.success()
             if self._verified_correct_state_time is None:
@@ -541,7 +541,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result
 
-    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False):
+    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False) -> bool:
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
 
@@ -732,7 +732,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 f"Change inner states values: change state to {int(self._expected_amperage.value)}A - charge:{self._expected_charge_state.value}")
 
         # do it all the time
-        await self._ensure_correct_state(time)
+        return await self._ensure_correct_state(time)
 
 
     def set_state_machine_to_current_state(self, time: datetime):
@@ -750,30 +750,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._reset_state_machine()
             _LOGGER.info(f"Execute command {command.command} on charger {self.name}")
             self.set_state_machine_to_current_state(time)
-
             await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
-
             self._last_charger_state_prob_time = time
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
-
         await self._do_update_charger_state(time)
-        result = False
-        if self.is_plugged(time=time):
-            if command == CMD_ON:
-                if self.is_charge_enabled(time):
-                    result = True
-            elif command == CMD_OFF or command == CMD_IDLE:
-                if self.is_car_stopped_asking_current(time):
-                    # we don't go off if it happens
-                    return True
-                elif self.is_charge_disabled(time):
-                    result = True
-            elif command == CMD_AUTO_GREEN_ONLY:
-                result = True
-        elif self.is_not_plugged(time=time):
-            result = True
-
+        result = await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=False)
         return result
 
     async def _do_update_charger_state(self, time):

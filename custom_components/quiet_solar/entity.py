@@ -64,6 +64,8 @@ class QSBaseEntity(Entity):
 
         if self.entity_description.name is UNDEFINED:
             _attr_has_entity_name = True
+        if not (self.entity_description.translation_key is UNDEFINED):
+            _attr_has_entity_name = True
 
     @callback
     def async_update_callback(self) -> None:

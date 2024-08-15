@@ -1,4 +1,5 @@
 import logging
+import pickle
 from enum import StrEnum
 import os
 from operator import itemgetter
@@ -35,7 +36,6 @@ class QSHomeMode(StrEnum):
     HOME_MODE_SENSORS_ONLY = "home_mode_sensors_only"
     HOME_MODE_CHARGER_ONLY = "home_mode_charger_only"
     HOME_MODE_ON = "home_mode_on"
-    HOME_MODE_RESET_SENSORS = "home_mode_reset_sensors"
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.register_all_on_change_states()
 
     def get_platforms(self):
-        return [ Platform.SENSOR, Platform.SELECT ]
+        return [ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ]
 
 
     def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
@@ -274,20 +274,18 @@ class QSHome(HADeviceMixin, AbstractDevice):
             ]:
             return
 
-        if QSHomeMode.HOME_MODE_RESET_SENSORS.value == self.home_mode:
-            await self._consumption_forecast.reset_forecasts(time)
-        else:
-            if self._solar_plant:
-                await self._solar_plant.update_forecast(time)
 
-            for device in self._all_devices:
-                await device.update_states(time)
+        if self._solar_plant:
+            await self._solar_plant.update_forecast(time)
 
+        for device in self._all_devices:
+            await device.update_states(time)
+
+        if await self._consumption_forecast.init_forecasts(time):
             if self.home_non_controlled_consumption is not None:
-                if await self._consumption_forecast.init_forecasts(time):
-                    await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
-                                                                                         self.home_non_controlled_consumption,
-                                                                                         do_save=True)
+                await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
+                                                                                     self.home_non_controlled_consumption,
+                                                                                     do_save=True)
 
     async def update(self, time: datetime):
 
@@ -349,31 +347,32 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 unavoidable_consumption_forecast = None
                 if await self._consumption_forecast.init_forecasts(time):
                     unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
-                                                                                                  history_in_hours=24,
-                                                                                                  futur_needed_in_hours=int(self._period.total_seconds()//3600))
-                pv_forecast = None
+                                                                                                  history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600))
 
-                if self._solar_plant:
-                    pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
+                if unavoidable_consumption_forecast:
+                    pv_forecast = None
+
+                    if self._solar_plant:
+                        pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
 
 
 
-                solver = PeriodSolver(
-                    start_time = time,
-                    end_time = time + self._period,
-                    tariffs = None,
-                    actionable_loads = active_loads,
-                    battery = self._battery,
-                    pv_forecast  = pv_forecast,
-                    unavoidable_consumption_forecast = unavoidable_consumption_forecast,
-                    step_s = self._solver_step_s
-                )
+                    solver = PeriodSolver(
+                        start_time = time,
+                        end_time = time + self._period,
+                        tariffs = None,
+                        actionable_loads = active_loads,
+                        battery = self._battery,
+                        pv_forecast  = pv_forecast,
+                        unavoidable_consumption_forecast = unavoidable_consumption_forecast,
+                        step_s = self._solver_step_s
+                    )
 
-                # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
-                # use teh available power virtual sensor to modify the begining of the PeriodSolver available power
-                # computation based on forecasts
+                    # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
+                    # use the available power virtual sensor to modify the begining of the PeriodSolver available power
+                    # computation based on forecasts
 
-                self._commands = solver.solve()
+                    self._commands = solver.solve()
 
             for load, commands in self._commands:
                 while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
@@ -381,6 +380,43 @@ class QSHome(HADeviceMixin, AbstractDevice):
                     await load.launch_command(time, command)
                     # only launch one at a time for a given load
                     break
+
+
+    async def reset_forecasts(self, time: datetime = None):
+        if time is None:
+            time = datetime.now(pytz.UTC)
+        if self._consumption_forecast:
+            await self._consumption_forecast.reset_forecasts(time)
+
+
+    async def dump_for_debug(self):
+        storage_path: str = join(self.hass.config.path(), DOMAIN, "debug")
+        await aiofiles.os.makedirs(storage_path, exist_ok=True)
+
+        if self._solar_plant:
+            await self._solar_plant.dump_for_debug(storage_path)
+
+        time = datetime.now(pytz.UTC)
+
+        if self._consumption_forecast:
+            await self._consumption_forecast.dump_for_debug(storage_path)
+
+        debugs = {"now":time}
+
+
+        file_path = join(storage_path, "debug_conf.pickle")
+
+        def _pickle_save(file_path, obj):
+            with open(file_path, 'wb') as file:
+                pickle.dump(obj, file)
+
+        await self.hass.async_add_executor_job(
+            _pickle_save, file_path, debugs
+        )
+
+
+
+
 
 
 
@@ -396,16 +432,31 @@ BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 
 class QSHomeConsumptionHistoryAndForecast:
 
-    def __init__(self, home: QSHome) -> None:
+    def __init__(self, home: QSHome, storage_path:str=None) -> None:
         self.home = home
-        self.hass = home.hass
+        if home is False:
+            self.hass = None
+        else:
+            self.hass = home.hass
+
         self.home_non_controlled_consumption : QSSolarHistoryVals | None = None
-        self._is_reset_operated = False
         self._in_reset = False
+        if storage_path is None:
+            self.storage_path = join(self.hass.config.path(), DOMAIN)
+        else:
+            self.storage_path = storage_path
 
         # ok now go through the various spots
 
+    async def dump_for_debug(self, path:str):
+        if self.home_non_controlled_consumption is not None:
+            file_path = join(path, self.home_non_controlled_consumption.file_name)
+            await self.home_non_controlled_consumption.save_values(file_path)
+
     async def load_from_history(self, entity_id:str, start_time: datetime, end_time: datetime) -> list[LazyState]:
+
+        if self.hass is None:
+            return []
 
         def load_history_from_db(start_time: datetime, end_time: datetime) -> list:
             """Load history from the database."""
@@ -431,12 +482,6 @@ class QSHomeConsumptionHistoryAndForecast:
         return not self._in_reset
 
     async def reset_forecasts(self, time: datetime):
-
-        # only do it once when asked in the UI
-        if self._is_reset_operated is False:
-            self._is_reset_operated = True
-        else:
-            return False
 
         self._in_reset = True
 
@@ -628,13 +673,13 @@ class QSSolarHistoryVals:
         self.hass =  self.home.hass
         self.entity_id:str = entity_id
         self.values : npt.NDArray | None = None
-        self.storage_path : str = join(self.hass.config.path(), DOMAIN)
-        self.file_path = join(self.storage_path, f"{self.entity_id}.npy")
+        self.storage_path : str = forecast.storage_path
+        self.file_name = f"{self.entity_id}.npy"
+        self.file_path = join(self.storage_path, self.file_name)
 
         self._current_values : list[tuple[datetime, float|None]] = []
         self._current_idx = None
         self._current_days = None
-
         self._init_done = False
 
 
@@ -740,7 +785,7 @@ class QSSolarHistoryVals:
             return np.concatenate((self.values[0][start_idx:], self.values[0][:end_idx+1])), np.concatenate((self.values[1][start_idx:], self.values[1][:end_idx+1]))
 
 
-    async def save_values(self):
+    async def save_values(self, file_path: str = None) -> None:
             def _save_values_to_file(path: str, values) -> None:
                 """Write numpy."""
                 try:
@@ -748,8 +793,10 @@ class QSSolarHistoryVals:
                 except:
                     pass
 
+            if file_path is None:
+                file_path = self.file_path
             await self.hass.async_add_executor_job(
-                _save_values_to_file, self.file_path, self.values
+                _save_values_to_file, file_path, self.values
             )
     async def read_values(self):
 
@@ -825,10 +872,8 @@ class QSSolarHistoryVals:
 
         self._init_done = True
 
-        if for_reset is False and self.values is not None :
+        if for_reset is False and self.values is not None:
             return None, None
-
-
 
         now_idx, now_days = self.get_index_from_time(time)
 
@@ -896,6 +941,10 @@ class QSSolarHistoryVals:
             history_end = states[-1].last_changed
             for s in states:
                 if s is  None or s.state is  None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                    continue
+                if s.last_changed < start_time:
+                    continue
+                if s.last_changed > end_time:
                     continue
                 await self.add_value(s.last_changed, float(s.state), do_save=False)
 

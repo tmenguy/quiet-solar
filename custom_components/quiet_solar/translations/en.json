@@ -185,6 +185,14 @@
     }
   },
   "entity": {
+    "button": {
+      "qs_home_reset_history": {
+        "name": "Reset Quiet Solar History"
+      },
+      "qs_home_serialize_for_debug": {
+        "name": "Quiet Solar Dump for Debug"
+      }
+    },
     "select": {
       "home_mode": {
         "name": "Home Quiet Solar Running Mode",

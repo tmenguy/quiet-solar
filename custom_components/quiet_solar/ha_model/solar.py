@@ -1,13 +1,16 @@
 import logging
+import pickle
 from abc import abstractmethod
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from operator import itemgetter
+from os.path import join
 
+import aiofiles.os
 import pytz
 
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
-    SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN
+    SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice, align_time_series_and_values, FLOATING_PERIOD
 
@@ -40,6 +43,23 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         if self.solar_forecast_provider_handler is not None:
             return self.solar_forecast_provider_handler.get_forecast(start_time, end_time)
         return []
+
+    async def dump_for_debug(self, debug_path: str) -> None:
+
+        if self.solar_forecast_provider_handler is not None:
+
+            storage_path =  debug_path
+            await aiofiles.os.makedirs(storage_path, exist_ok=True)
+            file_path = join(storage_path, "solar_forecast.pickle")
+
+            def _pickle_save(file_path, obj):
+                with open(file_path, 'wb') as file:
+                    pickle.dump(obj, file)
+
+            await self.hass.async_add_executor_job(
+                _pickle_save, file_path, self.solar_forecast_provider_handler.solar_forecast
+            )
+
 
 
 class QSSolarProvider:
