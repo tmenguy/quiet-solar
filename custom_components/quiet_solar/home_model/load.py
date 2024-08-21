@@ -14,8 +14,6 @@ import slugify
 if TYPE_CHECKING:
     pass
 
-FLOATING_PERIOD = 48*3600
-
 _LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
@@ -99,11 +97,19 @@ class AbstractLoad(AbstractDevice):
 
             self._constraints.append(keep)
 
-        #recompute the contraint start:
+        #recompute the constraint start:
         current_start = DATETIME_MIN_UTC
         for c in self._constraints:
             c.start_of_constraint = max(current_start, c.user_start_of_constraint)
             current_start = c.end_of_constraint
+
+        #and now we may have to recompute the start values of the constraints!
+        prev_end_energy = None
+        for c in self._constraints:
+            if prev_end_energy is not None:
+                c.initial_value = c.convert_energy_to_target_value(prev_end_energy)
+                c.current_value = c.initial_value
+            prev_end_energy = c.convert_target_value_to_energy(c.target_value)
 
 
     def push_live_constraint(self, constraint: LoadConstraint| None = None):

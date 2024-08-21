@@ -9,18 +9,13 @@ class Battery(AbstractDevice):
 
     def __init__(self, **kwargs):
 
-        self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 230)
-        self.max_discharging_power  = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)
-        self.max_charging_power =  kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)
+        self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 7000)
+        self.max_discharging_power  = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500)
+        self.max_charging_power =  kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500)
 
         super().__init__(**kwargs)
 
-
-
-        self._state = 0.0
-        self._constraints = []
-        self._discharge = 0.0
-
+        self._current_charge_value = None
         self.max_soc = 1.0 # %percentage of battery capacity between 0 and 1
         self.min_soc = 0.0
         self.min_charging_power = 0.0
@@ -28,7 +23,7 @@ class Battery(AbstractDevice):
 
     @property
     def current_charge(self) -> float | None:
-        raise NotImplementedError
+        return self._current_charge_value
 
 
     def get_best_charge_power(self, power_in: float, duration_s: float, current_charge: float | None = None):

@@ -12,8 +12,10 @@ from homeassistant.components.wallbox.const import ChargerStatus
 
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
     CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_CHARGER_IS_3P, \
-    CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR
-from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint
+    CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
+    CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY
+from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint, \
+    MultiStepsPowerLoadConstraintChargePercent
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
@@ -126,6 +128,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         data = {
             CONF_CAR_CHARGER_MIN_CHARGE: self.charger_min_charge,
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
+            CONF_CAR_BATTERY_CAPACITY: 22000
         }
 
         self._default_generic_car = QSCar(hass=self.hass, home=self.home, config_entry=None,
@@ -237,7 +240,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if car_initial_percent is None:
                     car_initial_percent = 0.0
                 if car_initial_percent < 99.5:
-                    car_charge_mandatory = MultiStepsPowerLoadConstraint(
+                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                        total_capacity_wh=self.car.car_battery_capacity,
                         load=self,
                         mandatory=False,
                         end_of_constraint=None,

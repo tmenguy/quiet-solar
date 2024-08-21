@@ -65,6 +65,12 @@ class LoadConstraint(object):
         self.start_of_constraint: datetime = DATETIME_MIN_UTC
 
 
+    def convert_target_value_to_energy(self, value: float) -> float:
+        return value
+
+    def convert_energy_to_target_value(self, energy: float) -> float:
+        return energy
+
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime) -> bool:
 
         if self.is_constraint_met():
@@ -161,7 +167,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
                                         time_slots: list[datetime]) -> tuple[bool, list[LoadCommand|None], npt.NDArray[np.float64]]:
-        nrj_to_be_added = self.target_value - self.current_value
+        nrj_to_be_added = self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(self.current_value)
         return self._compute_best_period_repartition(power_available_power, power_slots_duration_s, prices, prices_ordered_values, time_slots, nrj_to_be_added)
 
     def _compute_best_period_repartition(self,
@@ -232,17 +238,36 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     power_to_add : float = self._power_sorted_cmds[power_to_add_idx].power_consign
                     energy_to_add : float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
                     cost: float  = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i]))/3600.0
+                    cost_per_watt = cost / energy_to_add
                     if self._support_auto:
                         new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
                     else:
                         new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
 
-                    costs_optimizers.append((cost, energy_to_add, i, power_to_add, new_cmd))
+                    costs_optimizers.append((cost_per_watt, cost, energy_to_add, i, power_to_add, new_cmd))
 
-        costs_optimizers: list[tuple[float, float, int, float, LoadCommand]] = sorted(costs_optimizers, key=lambda x: x[0])
+        costs_optimizers: list[tuple[float, float, float, int, float, LoadCommand]] = sorted(costs_optimizers, key=lambda x: x[0])
 
 
         for price in prices_ordered_values:
+
+            # first add the optimizers if their cost per watt is lower than the current price
+            while costs_optimizers[0][0] <= price:
+                _, _, _, slot_idx, c_power, c_cmd = costs_optimizers.pop(0)
+                prev_energy = 0
+                if out_commands[slot_idx] is not None:
+                    prev_energy = (out_commands[slot_idx].power_consign * power_slots_duration_s[slot_idx]) / 3600.0
+                delta_energy = (c_power * power_slots_duration_s[slot_idx]) / 3600.0 - prev_energy
+                if delta_energy > 0.0:
+                    out_commands[slot_idx] = c_cmd
+                    out_power[slot_idx] = c_power
+                    nrj_to_be_added -= delta_energy
+
+                    if nrj_to_be_added <= 0.0:
+                        break
+
+            if nrj_to_be_added <= 0.0:
+                break
 
             price_span_h = (np.sum(power_slots_duration_s[first_slot:last_slot+1], where = prices[first_slot:last_slot+1] == price))/3600.0
 
@@ -264,33 +289,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if prices[i] == price and out_commands[i] is None:
 
                     current_energy : float = (price_power * float(power_slots_duration_s[i]))/3600.0
-                    current_cost = current_energy * price
-
-                    c_cmd = price_cmd
-                    c_power = price_power
-                    slot_idx = i
-
-                    found_opti_idx = -1
-                    for j in range(len(costs_optimizers)):
-                        # they are sorted by growing costs
-                        if costs_optimizers[j][0] >= current_cost:
-                            break
-                        if costs_optimizers[j][1] >= current_energy:
-                            found_opti_idx = j
-                            break
-
-                    if found_opti_idx >= 0:
-                        _, _, slot_idx, c_power, c_cmd = costs_optimizers.pop(found_opti_idx)
-
-                    prev_energy = 0
-                    if out_commands[slot_idx] is not None:
-                        prev_energy = (out_commands[slot_idx].power_consign * power_slots_duration_s[slot_idx]) / 3600.0
-
-                    out_commands[slot_idx] = c_cmd
-                    out_power[slot_idx] = c_power
-                    delta_energy = (c_power * power_slots_duration_s[slot_idx]) / 3600.0 - prev_energy
-
-                    nrj_to_be_added -= delta_energy
+                    out_commands[i] = price_cmd
+                    out_power[i] = price_power
+                    nrj_to_be_added -= current_energy
 
                     if nrj_to_be_added <= 0.0:
                         break
@@ -299,6 +300,39 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 break
 
         return nrj_to_be_added <= 0.0, out_commands, out_power
+
+
+class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
+
+    def __init__(self,
+                 total_capacity_wh: float,
+                 power_steps: list[LoadCommand] = None,
+                 support_auto: bool = False,
+                 **kwargs):
+
+        super().__init__(power_steps=power_steps, support_auto=support_auto, **kwargs)
+        self.total_capacity_wh = total_capacity_wh
+
+
+    def convert_target_value_to_energy(self, value: float) -> float:
+        return (value * self.total_capacity_wh) / 100.0
+
+    def convert_energy_to_target_value(self, energy: float) -> float:
+        return (100.0*energy)/self.total_capacity_wh
+
+
+    def best_duration_to_meet(self) -> timedelta:
+        """ Return the best duration to meet the constraint."""
+        seconds = (3600.0 * (((self.target_value - self.current_value)*self.total_capacity_wh)/100.0)) / self._max_power
+        return timedelta(seconds=seconds)
+
+    def compute_value(self, time: datetime) -> float:
+        """ Compute the value of the constraint whenever it is called changed state or not """
+        if self.load.current_command is None:
+            return self.current_value
+
+        return 100.0*((((time - self.last_value_update).total_seconds()) * self.load.current_command.power_consign / 3600.0)/self.total_capacity_wh)+ self.current_value
+
 
 
 class SimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
@@ -335,15 +369,11 @@ class TimeBasedSimplePowerLoadConstraint(SimplePowerLoadConstraint):
         else:
             return self.current_value
 
-    def compute_best_period_repartition(self,
-                                        power_available_power : npt.NDArray[np.float64],
-                                        power_slots_duration_s : npt.NDArray[np.float64],
-                                        prices: npt.NDArray[np.float64],
-                                        prices_ordered_values: list[float],
-                                        time_slots: list[datetime])  -> tuple[bool, list[LoadCommand|None], npt.NDArray[np.float64]]:
+    def convert_target_value_to_energy(self, value: float) -> float:
+        return (self._power * self.target_value)/3600.0
 
-        nrj_to_be_added = (self._power * (self.target_value - self.current_value) / 3600.0)
-        return self._compute_best_period_repartition(power_available_power, power_slots_duration_s, prices, prices_ordered_values, time_slots, nrj_to_be_added)
+    def convert_energy_to_target_value(self, energy: float) -> float:
+        return (energy*3600.0)/self._power
 
 
 DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.UTC)

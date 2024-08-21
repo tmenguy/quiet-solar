@@ -215,7 +215,7 @@ class PeriodSolver(object):
 
 
 
-    def solve(self) -> list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]]:
+    def solve(self) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
         """
         Solve the day for the given loads and constraints.
 
@@ -281,6 +281,7 @@ class PeriodSolver(object):
                     battery_commands[i] = charging_power
                     charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
                     total_chargeable_energy += charged_energy
+                    self._available_power[i] += charging_power
 
                 battery_charge[i] = prev_battery_charge + charged_energy
                 prev_battery_charge = battery_charge[i]
@@ -288,32 +289,26 @@ class PeriodSolver(object):
 
             # now try to discharge the battery to cover the consumption at the best prices
             total_discharged_energy = 0
-            for price in self._prices_ordered_values:
 
-                discharged_energy_for_price = 0.0
+            for i in range(len(self._available_power)):
 
-                for i in range(len(self._available_power)):
+                if battery_commands[i] == 0.0:
 
-                    if self._prices[i] == price:
+                    current_battery_charge = battery_charge[i] - total_discharged_energy
+                    charging_power = self._battery.get_best_discharge_power(float(self._available_power[i]), float(self._durations_s[i]), current_charge=float(current_battery_charge))
 
-                        current_battery_charge = battery_charge[i] - discharged_energy_for_price
-                        charging_power = self._battery.get_best_discharge_power(float(self._available_power[i]), float(self._durations_s[i]), current_charge=float(current_battery_charge))
+                    if charging_power > 0:
+                        total_discharged_energy += (charging_power*self._durations_s[i]/3600.0)
+                        battery_commands[i] = -charging_power
+                        self._available_power[i] -= charging_power
 
-                        if charging_power > 0:
-                            discharged_energy_for_price += (charging_power*self._durations_s[i]/3600.0)
-                            battery_commands[i] = -charging_power
-
-                    battery_charge[i] = battery_charge[i] - discharged_energy_for_price
-
-                total_discharged_energy += discharged_energy_for_price
+                battery_charge[i] = battery_charge[i] - total_discharged_energy
 
 
-
-            # now we have the battery commands, adapt the available power
-            self._available_power = self._available_power + battery_commands
 
         # we may have charged "too much" and if it covers everything, we could remove some charging
         # ...or on the contrary : can we optimise some "expensive" consumption by charging at cheap times?
+
         #high_prices = np.where(self._prices == self._prices_ordered_values[-1])[0]
         #high_price_energy = np.sum((np.clip(self._available_power[high_prices], 0, None) * self._durations_s[high_prices]) / 3600.0)
 
@@ -352,7 +347,7 @@ class PeriodSolver(object):
                 s_cmd = CMD_IDLE
                 for cmds in commands_lists:
                     cmd = cmds[s]
-                    #only one should be not NULL
+                    #only one should be not NULL...hum why?
                     if cmd is not None:
                         s_cmd = cmd
                         break
@@ -363,13 +358,14 @@ class PeriodSolver(object):
 
             output_cmds.append((load, lcmd))
 
-
-        if False and self._battery is not None:
+        bcmd = []
+        if self._battery is not None:
             # this would be for battery grid charging commands ... not supported for now
-            bcmd = []
             current_command = None
-            for s, charge in enumerate(battery_commands):
-                if False:
+            for s in range(battery_commands.shape[0]):
+
+                charge = float(battery_commands[s])
+                if True:
                     param = float(charge)
                     base_cmd = CMD_FORCE_CHARGE #from grid for ex
                     if param < 0.0:
@@ -385,10 +381,8 @@ class PeriodSolver(object):
                     bcmd.append((self._time_slots[s], cmd))
                     current_command = cmd
 
-            output_cmds.append((self._battery, bcmd))
-
         # cmds are correctly ordered by time for each load by construction
-        return output_cmds
+        return output_cmds, bcmd
 
 
 

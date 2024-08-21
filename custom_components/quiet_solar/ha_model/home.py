@@ -17,7 +17,7 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
-    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -46,6 +46,9 @@ _LOGGER = logging.getLogger(__name__)
 MAX_SENSOR_HISTORY_S = 60*60*24*7
 
 POWER_ALIGNEMENT_TOLERANCE_S = 120
+
+
+
 class QSHome(HADeviceMixin, AbstractDevice):
 
     _battery: QSBattery = None
@@ -58,7 +61,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
     _solar_plant: QSSolar | None = None
     _all_loads : list[AbstractLoad] = []
 
-    _period : timedelta = timedelta(hours=36)
+    _period : timedelta = timedelta(seconds=FLOATING_PERIOD_S)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
     _solver_step_s : timedelta = timedelta(seconds=900)
     _update_step_s : timedelta = timedelta(seconds=5)
@@ -347,7 +350,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 unavoidable_consumption_forecast = None
                 if await self._consumption_forecast.init_forecasts(time):
                     unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
-                                                                                                  history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600))
+                                                                                                  history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600)+1)
 
                 if unavoidable_consumption_forecast:
                     pv_forecast = None
@@ -422,12 +425,12 @@ NUM_INTERVAL_PER_HOUR = 4
 INTERVALS_MN = 60//NUM_INTERVAL_PER_HOUR # has to be a multiple of 60
 NUM_INTERVALS_PER_DAY = (24*NUM_INTERVAL_PER_HOUR)
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
-
+BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY
 class QSHomeConsumptionHistoryAndForecast:
 
-    def __init__(self, home: QSHome, storage_path:str=None) -> None:
+    def __init__(self, home: QSHome | None, storage_path:str=None) -> None:
         self.home = home
-        if home is False:
+        if home is None:
             self.hass = None
         else:
             self.hass = home.hass
@@ -560,7 +563,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
             #ok we do have the computed home consumption ... now time for the controlled loads
 
-            controlled_power_values = np.zeros((2, BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY), dtype=np.int32)
+            controlled_power_values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
             added_controlled = False
 
             for load in self.home._all_loads:
@@ -662,8 +665,16 @@ class QSSolarHistoryVals:
     def __init__(self, forecast: QSHomeConsumptionHistoryAndForecast, entity_id:str) -> None:
 
         self.forecast = forecast
-        self.home = forecast.home
-        self.hass =  self.home.hass
+        if forecast is None:
+            self.hass = None
+            self.home = None
+        else:
+            self.home = forecast.home
+            if self.home is None:
+                self.hass = None
+            else:
+                self.hass =  self.home.hass
+
         self.entity_id:str = entity_id
         self.values : npt.NDArray | None = None
         self.storage_path : str = forecast.storage_path
@@ -681,6 +692,8 @@ class QSSolarHistoryVals:
 
         now_idx, now_days = self.get_index_from_time(time_now)
 
+        time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
+
         now_idx -= 1
         end_idx = self._sanitize_idx(now_idx)
         start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
@@ -690,8 +703,9 @@ class QSSolarHistoryVals:
 
         best_past_probes_in_days = [
             1,
-            7,
+            3,
             6,
+            7,
             7*4,
             7*8,
             7*12,
@@ -721,7 +735,7 @@ class QSSolarHistoryVals:
                 # bad history
                 continue
 
-            score = float(np.sqrt(np.sum(np.square(current_values - past_values))*check_vals))/float(num_ok_vals)
+            score = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)))/float(num_ok_vals)
 
             scores.append((score, probe_days))
 
@@ -736,7 +750,7 @@ class QSSolarHistoryVals:
 
             # now we have the best past, let's forecast the future
             past_start_idx = self._sanitize_idx(now_idx - probe_days * NUM_INTERVALS_PER_DAY)
-            past_end_idx = self._sanitize_idx(past_start_idx + (futur_needed_in_hours * NUM_INTERVAL_PER_HOUR))
+            past_end_idx = self._sanitize_idx(past_start_idx + ((futur_needed_in_hours + 1) * NUM_INTERVAL_PER_HOUR)) # add one hour to cover the futur
 
             forecast_values, past_days = self._get_values(past_start_idx, past_end_idx)
             past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
@@ -748,10 +762,32 @@ class QSSolarHistoryVals:
 
             forecast = []
 
+            prob_last_idx = end_idx
+
+            # add back true value at begining if needed
+            while True:
+                if self.values[1][prob_last_idx] != 0:
+                    time_first = self.get_utc_time_from_index(prob_last_idx, self.values[1][prob_last_idx])  + timedelta(minutes=INTERVALS_MN//2)
+                    if time_first < time_now_from_idx:
+                        forecast.insert(0, ( time_first , self.values[0][prob_last_idx]) )
+                    if time_first <= time_now:
+                        break
+
+                prob_last_idx -= 1
+                prob_last_idx = self._sanitize_idx(prob_last_idx)
+
+
+
             for i in range(past_days.shape[0]):
                 if past_ok_values[i] == 0:
                     continue
-                forecast.append((time_now+timedelta(minutes=i*INTERVALS_MN), forecast_values[i]))
+                # adding INTERVALS_MN//2 has we have a mean on INTERVALS_MN
+                forecast.append((time_now_from_idx+timedelta(minutes=i*INTERVALS_MN + INTERVALS_MN//2), forecast_values[i]))
+
+            # complement with the future if there is not enough data at the end
+            if forecast[-1][0] < time_now + timedelta(hours=futur_needed_in_hours):
+                forecast.append((time_now + timedelta(hours=futur_needed_in_hours), forecast[-1][1]))
+
 
             return forecast
 
@@ -760,12 +796,8 @@ class QSSolarHistoryVals:
 
 
     def _sanitize_idx(self, idx):
-        if idx < 0:
-            idx = BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY - idx
-
-        idx = idx % (BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY)
-
-        return idx
+        # it works for negative values too -2 * 10 => 8
+        return idx % BUFFER_SIZE_IN_INTERVALS
 
 
     def _get_values(self, start_idx, end_idx):
@@ -788,9 +820,13 @@ class QSSolarHistoryVals:
 
             if file_path is None:
                 file_path = self.file_path
-            await self.hass.async_add_executor_job(
-                _save_values_to_file, file_path, self.values
-            )
+
+            if self.hass is None:
+                _save_values_to_file(file_path, self.values)
+            else:
+                await self.hass.async_add_executor_job(
+                    _save_values_to_file, file_path, self.values
+                )
     async def read_values(self):
 
             def _load_values_from_file(path: str) -> Any | None:
@@ -800,16 +836,20 @@ class QSSolarHistoryVals:
                     ret =  np.load(path)
                 except:
                     ret = None
+
                 return ret
 
-            return await self.hass.async_add_executor_job(
-                _load_values_from_file, self.file_path)
+            if self.hass is None:
+                return _load_values_from_file(self.file_path)
+            else:
+                return await self.hass.async_add_executor_job(
+                    _load_values_from_file, self.file_path)
 
     async def _store_current_vals(self, time: datetime | None = None, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
 
         if self._current_values:
             if self.values is None:
-                self.values = np.zeros((2, BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY), dtype=np.int32)
+                self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
             nv = get_average_sensor(self._current_values, last_timing=time)
             self.values[0][self._current_idx] = nv
@@ -817,10 +857,11 @@ class QSSolarHistoryVals:
 
             if extend_but_not_cover_idx is not None:
                 if extend_but_not_cover_idx <= self._current_idx:
-                    extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY
+                    # we have circled around the ring buffer
+                    extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_IN_INTERVALS
 
                 for i in range(self._current_idx+1, extend_but_not_cover_idx):
-                    new_idx = i % (BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY)
+                    new_idx = self._sanitize_idx(i)
                     self.values[0][new_idx] = nv
                     self.values[1][new_idx] = self._current_days
 
@@ -848,14 +889,19 @@ class QSSolarHistoryVals:
 
 
     def get_index_from_time(self, time: datetime):
-        days = (time-BEGINING_OF_TIME).days
-        idx = (days % BUFFER_SIZE_DAYS)
-        num_intervals = int((int(time.hour*60) + int(time.minute))//INTERVALS_MN)
-        return (idx*NUM_INTERVALS_PER_DAY) + num_intervals, days
+        days = (time - BEGINING_OF_TIME).days
+        idx = int((time-BEGINING_OF_TIME).total_seconds()//(60*INTERVALS_MN))%(BUFFER_SIZE_IN_INTERVALS)
+        return idx, days
 
     def get_utc_time_from_index(self, idx:int, days:int) -> datetime:
-        num_intervals = int(idx) % NUM_INTERVALS_PER_DAY
-        return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals*INTERVALS_MN))
+        days_index = int((days*24*60)//INTERVALS_MN)%(BUFFER_SIZE_IN_INTERVALS)
+        if idx >= days_index:
+            num_intervals = int(idx) - days_index
+            return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
+        else:
+            num_intervals = (BUFFER_SIZE_IN_INTERVALS - days_index + idx)
+            return BEGINING_OF_TIME + timedelta(days=int(days-1)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
+
 
 
     async def init(self, time:datetime, for_reset:bool = False) -> tuple[datetime | None, datetime | None]:
@@ -881,7 +927,7 @@ class QSSolarHistoryVals:
         do_save = False
         if self.values is not None:
 
-            if self.values.shape[0] != 2 or self.values.shape[1] != BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY:
+            if self.values.shape[0] != 2 or self.values.shape[1] != BUFFER_SIZE_IN_INTERVALS:
                 self.values = None
 
         if self.values is not None:
@@ -906,11 +952,12 @@ class QSSolarHistoryVals:
                 else:
                     break
 
-            if num_slots_before_now_idx*60*INTERVALS_MN > MAX_SENSOR_HISTORY_S:
-                last_bad_idx = None
+            # not sure why we would need to reset all in case we have a 1 week gap
+            # if num_slots_before_now_idx*60*INTERVALS_MN > MAX_SENSOR_HISTORY_S:
+            #    last_bad_idx = None
         else:
             do_save = True
-            self.values = np.zeros((2, BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY), dtype=np.int32)
+            self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
 
         end_time = time
@@ -925,7 +972,6 @@ class QSSolarHistoryVals:
         # we will fill INTERVALS_IN_MN slots with the mean of the values in the state
         # the last remaining for the current one will be put as current value
         self._current_idx = None
-
         history_start = None
         history_end = None
 
@@ -951,6 +997,8 @@ class QSSolarHistoryVals:
                 power_value = convert_power_to_w(float(s.state), state_attr)
 
                 await self.add_value(s.last_changed, power_value, do_save=False)
+                # need to save if one value added, only do  it once at the end
+                do_save = True
 
             if self._current_idx is not None and self._current_idx != now_idx:
                 await self._store_current_vals(time=None, do_save=False)
