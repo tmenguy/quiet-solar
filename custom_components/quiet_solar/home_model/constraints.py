@@ -148,7 +148,7 @@ class LoadConstraint(object):
         else:
             strength = "best effort"
 
-        return f"{self.name} {target_string} {target_date} ({strength})"
+        return f"{target_string} {target_date} ({strength})"
 
 
 
@@ -169,10 +169,6 @@ class LoadConstraint(object):
         #only active if the constraint finish before the end of the given time period
         return  self.end_of_constraint >= start_time and self.end_of_constraint <= end_time
 
-    def is_constraint_active_for_now_or_future(self, time: datetime) -> bool:
-        if self.end_of_constraint >= time or self._internal_start_of_constraint >= time:
-            return True
-        return False
 
     def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """

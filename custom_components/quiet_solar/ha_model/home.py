@@ -335,7 +335,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
             await load.launch_command(time=time, command = CMD_IDLE)
 
 
-        if self._last_solve_done is None or (time - self._last_solve_done).total_seconds() > timedelta(seconds=5*60):
+        if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
             do_force_solve = True
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn

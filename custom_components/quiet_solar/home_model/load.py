@@ -66,8 +66,11 @@ class AbstractLoad(AbstractDevice):
         self.reset()
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(self, c_dict)
-            if cs_load is not None and cs_load.is_constraint_active_for_now_or_future(time):
-                self.push_live_constraint(cs_load)
+            if cs_load is not None and cs_load.from_user:
+                if not cs_load.is_constraint_active_for_time_period(time):
+                    cs_load.end_of_constraint = time + timedelta(seconds=5*60)
+                if cs_load.is_constraint_active_for_time_period(time):
+                    self.push_live_constraint(cs_load)
 
         self._externally_initialized_constraints = True
 
@@ -88,17 +91,17 @@ class AbstractLoad(AbstractDevice):
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
-            if c.is_constraint_active_for_time_period(start_time, end_time) and c.is_constraint_met() is False:
+            if c.is_constraint_active_for_time_period(start_time, end_time):
                 yield c
 
     def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
         for c in self._constraints:
-            if c.is_constraint_active_for_now_or_future(time) and c.is_constraint_met() is False:
+            if c.is_constraint_active_for_time_period(time):
                 return c
         return None
 
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
-        return [c for c in self._constraints if c.is_constraint_active_for_now_or_future(time) and c.from_user]
+        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.from_user]
 
     def set_live_constraints(self, constraints: list[LoadConstraint]):
 
