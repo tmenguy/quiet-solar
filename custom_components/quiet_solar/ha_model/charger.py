@@ -262,7 +262,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             do_initial_constraints = False
             existing_constraints = []
 
-
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
@@ -299,7 +298,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if do_initial_constraints:
 
                         for ct in existing_constraints:
-                            self.push_live_constraint(ct)
+                            self.push_live_constraint(time, ct)
 
                         start_time, end_time = self.car.get_next_scheduled_event(time)
 
@@ -311,6 +310,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if start_time is not None and end_time is not None:
                             car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                                 total_capacity_wh=self.car.car_battery_capacity,
+                                time=time,
                                 load=self,
                                 load_param=self.car.name,
                                 from_user=False,
@@ -321,10 +321,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 power_steps=steps,
                                 support_auto=True
                             )
-                            self.push_live_constraint(car_charge_mandatory)
+                            self.push_live_constraint(time, car_charge_mandatory)
 
                         car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                             total_capacity_wh=self.car.car_battery_capacity,
+                            time=time,
                             load=self,
                             load_param=self.car.name,
                             from_user=False,
@@ -335,7 +336,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             power_steps=steps,
                             support_auto=True
                         )
-                        self.push_live_constraint(car_charge_best_effort)
+                        self.push_live_constraint(time, car_charge_best_effort)
 
                     # check now that we haven't set a constraint for the car : like being ready for tomorrow , or charge max now
                     # if so add a live constraint mandatory with an end
@@ -345,29 +346,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if self.is_next_charge_full():
                             target_charge = 100
 
-                        time_to_charge = datetime.now(pytz.utc) + timedelta(seconds=60*5)
-
-                        do_add = True
-                        for c in self._constraints:
-                            if isinstance(c, MultiStepsPowerLoadConstraintChargePercent) and c.from_user and c.is_constraint_active_for_time_period(time):
-                                if c.end_of_constraint <= time_to_charge:
-                                    c.target_value = max(c.target_value, target_charge)
-                                    do_add = False
-
-                        if do_add:
-                            car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
-                                total_capacity_wh=self.car.car_battery_capacity,
-                                load=self,
-                                load_param=self.car.name,
-                                from_user=True,
-                                mandatory=True,
-                                end_of_constraint=time_to_charge,
-                                initial_value=car_initial_percent,
-                                target_value=target_charge,
-                                power_steps=steps,
-                                support_auto=True
-                            )
-                            self.push_live_constraint(car_charge_mandatory)
+                        car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                            total_capacity_wh=self.car.car_battery_capacity,
+                            time=time,
+                            load=self,
+                            load_param=self.car.name,
+                            from_user=True,
+                            as_fast_as_possible=True,
+                            mandatory=True,
+                            end_of_constraint=time,
+                            initial_value=car_initial_percent,
+                            target_value=target_charge,
+                            power_steps=steps,
+                            support_auto=True
+                        )
+                        self.push_live_constraint(time, car_charge_mandatory)
                         self._do_force_next_charge = False
             else:
                 self.reset()

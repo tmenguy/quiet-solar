@@ -65,12 +65,12 @@ class AbstractLoad(AbstractDevice):
     def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict]):
         self.reset()
         for c_dict in constraints_dicts:
-            cs_load = LoadConstraint.new_from_saved_dict(self, c_dict)
+            cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
             if cs_load is not None and cs_load.from_user:
                 if not cs_load.is_constraint_active_for_time_period(time):
                     cs_load.end_of_constraint = time + timedelta(seconds=5*60)
                 if cs_load.is_constraint_active_for_time_period(time):
-                    self.push_live_constraint(cs_load)
+                    self.push_live_constraint(time, cs_load)
 
         self._externally_initialized_constraints = True
 
@@ -103,13 +103,15 @@ class AbstractLoad(AbstractDevice):
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
         return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.from_user]
 
-    def set_live_constraints(self, constraints: list[LoadConstraint]):
+    def set_live_constraints(self,time: datetime, constraints: list[LoadConstraint]):
 
         self._constraints = constraints
         if not constraints:
             return
 
         self._constraints.sort(key=lambda x: x.end_of_constraint)
+
+        #remove all the infinite constraints but the last one
         if self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
             removed_infinits = []
             while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
@@ -122,11 +124,47 @@ class AbstractLoad(AbstractDevice):
             for k in removed_infinits:
                 if k.is_constraint_met():
                     continue
-                if k.is_mandatory:
+                if k.score() > keep.score():
                     keep = k
-                    break
 
             self._constraints.append(keep)
+
+
+        # only one as fas as possible constraint can be active at a time.... and has to be first
+        removed_as_fast = [(i,c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
+        if len(removed_as_fast) == 0 or (len(removed_as_fast) == 1 and removed_as_fast[0][0] == 0):
+            # ok if there is a asfast constraint it should be the first one
+            pass
+        else:
+            new_constraints = []
+            for i, c in enumerate(self._constraints):
+                if i < removed_as_fast[0][0]:
+                    continue
+                if c.as_fast_as_possible:
+                    continue
+                new_constraints.append(c)
+
+            keep = removed_as_fast[0][1]
+            end_ctr = keep.end_of_constraint
+            for (_, k) in removed_as_fast:
+                if k.is_constraint_met():
+                    continue
+                if k.score() > keep.score():
+                    keep = k
+            keep.end_of_constraint = end_ctr
+            self._constraints = [keep].extend(new_constraints)
+
+        #and now we may have to recompute the start values of the constraints
+        prev_end_energy = None
+        for c in self._constraints:
+            if prev_end_energy is not None:
+                c.reset_initial_value_to_follow_prev(time, c.convert_energy_to_target_value(prev_end_energy))
+                if c.is_constraint_met():
+                    # keep the prev energy as it was possibly higher to meet this constraint
+                    continue
+            prev_end_energy = c.convert_target_value_to_energy(c.target_value)
+
+        self._constraints = [c for c in self._constraints if c.is_constraint_met() is False]
 
         #recompute the constraint start:
         current_start = DATETIME_MIN_UTC
@@ -134,31 +172,19 @@ class AbstractLoad(AbstractDevice):
             c._internal_start_of_constraint = max(current_start, c.start_of_constraint)
             current_start = c.end_of_constraint
 
-        #and now we may have to recompute the start values of the constraints!
-        prev_end_energy = None
-        for c in self._constraints:
-            if prev_end_energy is not None:
-                c._internal_initial_value = c.convert_energy_to_target_value(prev_end_energy)
-                c.current_value = c._internal_initial_value
-            prev_end_energy = c.convert_target_value_to_energy(c.target_value)
 
 
-    def push_live_constraint(self, constraint: LoadConstraint| None = None):
+
+    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None):
         if constraint is not None:
             for c in self._constraints:
                 if c == constraint:
                     return
-            if constraint.end_of_constraint == DATETIME_MAX_UTC and len(self._constraints) > 0:
-                #only one infinite is allowed!
-                while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
-                    self._constraints.pop()
-                    if len(self._constraints) == 0:
-                        break
             self._constraints.append(constraint)
-        self.set_live_constraints(self._constraints)
+            self.set_live_constraints(time, self._constraints)
 
 
-    async def update_live_constraints(self, dt:datetime, period: timedelta) -> bool:
+    async def update_live_constraints(self, time:datetime, period: timedelta) -> bool:
 
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
@@ -178,7 +204,7 @@ class AbstractLoad(AbstractDevice):
             if c.skip:
                 continue
 
-            if c.end_of_constraint < dt:
+            if c.end_of_constraint < time:
 
                 # it means this constraint should be finished by now
                 if c.is_constraint_met() or c.is_mandatory is False:
@@ -187,10 +213,11 @@ class AbstractLoad(AbstractDevice):
                 else:
                     # a not met mandatory one! we should expand it or force it
                     duration_s = c.best_duration_to_meet()
-                    new_constraint_end = dt + duration_s
+                    duration_s = duration_s*(1.0 + c.pushed_count*0.2) # extend if we continue to push it
+                    new_constraint_end = time + duration_s
                     handled_constraint_force = False
                     c.skip = True
-                    nc = None
+
                     if i < len(self._constraints) - 1:
 
                         for j in range(i+1, len(self._constraints)):
@@ -200,7 +227,7 @@ class AbstractLoad(AbstractDevice):
                             if nc.skip:
                                 continue
 
-                            if nc.end_of_constraint < dt:
+                            if nc.end_of_constraint < time:
                                 c.skip = True
                                 continue
 
@@ -211,25 +238,28 @@ class AbstractLoad(AbstractDevice):
                                 if nc.is_constraint_met():
                                     nc.skip = True
                                 else:
-                                    nc.is_mandatory = True
-                                    nc.target_value = c.target_value
                                     force_solving = True
-                                    handled_constraint_force = True
-                                    # make the current constraint the next important one
-                                    # to break below after if handled_constraint_force:
-                                    c = nc
-                                    break
+                                    # nc constraint may need to be forced or not
+                                    if nc.score() > c.score():
+                                        # we should skip the current one
+                                        c.skip = True
+                                        handled_constraint_force = True
+                                        # make the current constraint the next important one
+                                        # to break below after if handled_constraint_force:
+                                        c = nc
+                                        break
+                                    else:
+                                        nc.skip = True
 
                     if handled_constraint_force is False:
 
-                        if c.pushed_count > 3:
+                        if c.pushed_count > 4:
                             # TODO: we should send a push notification to the one attached to the constraint!
                             # As it is not met and pushed too many times
                             c.skip = True
                             _LOGGER.info(f"{c.name} not met and pushed too many times")
                         else:
                             c.end_of_constraint = new_constraint_end
-                            force_solving = True
                             # unskip the current one
                             c.skip = False
                             c.pushed_count += 1
@@ -237,8 +267,9 @@ class AbstractLoad(AbstractDevice):
                             handled_constraint_force = True
 
                     if handled_constraint_force:
+                        force_solving = True
                         # ok we have pushed or made a target the next important constraint
-                        await c.update(dt)
+                        await c.update(time)
                         if c.is_constraint_met():
                             _LOGGER.info(f"{c.name} skipped because met (just after update)")
                             c.skip = True
@@ -247,8 +278,8 @@ class AbstractLoad(AbstractDevice):
             elif c.is_constraint_met():
                 c.skip = True
                 _LOGGER.info(f"{c.name} skipped because met")
-            elif c.is_constraint_active_for_time_period(dt, dt + period):
-                await c.update(dt)
+            elif c.is_constraint_active_for_time_period(time, time + period):
+                await c.update(time)
                 if c.is_constraint_met():
                     _LOGGER.info(f"{c.name} skipped because met (just after update)")
                     c.skip = True
@@ -259,7 +290,7 @@ class AbstractLoad(AbstractDevice):
         if len(constraints) != len(self._constraints):
             force_solving = True
         
-        self.set_live_constraints(constraints)
+        self.set_live_constraints(time, constraints)
 
         return force_solving
 

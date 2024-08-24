@@ -19,9 +19,11 @@ import importlib
 class LoadConstraint(object):
 
     def __init__(self,
+                 time:datetime,
                  load,
                  load_param:str |None = None,
                  from_user: bool = False,
+                 as_fast_as_possible: bool = False,
                  mandatory: bool = True,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
@@ -42,6 +44,7 @@ class LoadConstraint(object):
         self.load = load
         self.load_param = load_param
         self.from_user = from_user
+        self.as_fast_as_possible = as_fast_as_possible
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self.__class__.__name__)
 
 
@@ -57,25 +60,42 @@ class LoadConstraint(object):
         self.start_of_constraint: datetime = start_of_constraint
         self.initial_value = initial_value
         self.target_value = target_value
-
         self._internal_initial_value = self.initial_value
         self.current_value = self._internal_initial_value
         self.name = f"Constraint for {self.load.name} ({self.initial_value}/{self.target_value}/{self.is_mandatory})"
         self._internal_start_of_constraint: datetime = self.start_of_constraint # this one can be overriden by the prev onstraint of the load
-        nt = datetime.now(pytz.UTC)
-        self.last_value_update = nt
-        self.last_state_update = nt
+
+        # will correct end of constraint if needed
+        if self.as_fast_as_possible:
+            dt_to_finish = self.best_duration_to_meet()
+            self.end_of_constraint = time + dt_to_finish
+
+        self.last_value_update = time
+        self.last_state_update = time
         self.skip = False
         self.pushed_count = 0
 
 
     def __eq__(self, other):
-        if other.to_dict() == self.to_dict():
+        od = other.to_dict()
+        d = self.to_dict()
+
+        if od.get("as_fast_as_possible", False) != d.get("as_fast_as_possible", False):
+            return False
+
+        if od.get("as_fast_as_possible", False) == True:
+            od.pop("end_of_constraint", None)
+            d.pop("end_of_constraint", None)
+            od.pop("start_of_constraint", None)
+            d.pop("start_of_constraint", None)
+
+        if  od == d:
             return other.name == self.name
+
         return False
 
     @classmethod
-    def new_from_saved_dict(cls, load, data: dict) -> Self:
+    def new_from_saved_dict(cls, time, load, data: dict) -> Self:
         try:
             module = importlib.import_module("quiet_solar.home_model.constraints")
         except:
@@ -87,12 +107,13 @@ class LoadConstraint(object):
             return None
         my_class = getattr(module,class_name)
         kwargs = my_class.from_dict_to_kwargs(data)
-        my_instance = my_class(load = load, **kwargs)
+        my_instance = my_class(time=time, load=load, **kwargs)
         return my_instance
 
     def to_dict(self) -> dict:
         return {
             "qs_class_type": self.__class__.__name__,
+            "as_fast_as_possible": self.as_fast_as_possible,
             "load_param": self.load_param,
             "from_user": self.from_user,
             "mandatory": self.is_mandatory,
@@ -178,13 +199,30 @@ class LoadConstraint(object):
         if self.target_value is None:
             return False
 
-        if self.target_value > self._internal_initial_value and current_value >= self.target_value:
+        if self.target_value > self.initial_value and current_value >= self.target_value:
             return True
 
-        if self.target_value < self._internal_initial_value and current_value <= self.target_value:
+        if self.target_value < self.initial_value and current_value <= self.target_value:
             return True
 
         return False
+
+    def score(self):
+        score = self.convert_target_value_to_energy(self.target_value)
+        if self.is_mandatory:
+            score += 100000000.0
+        if self.as_fast_as_possible:
+            score += 1000000000.0
+        if self.from_user:
+            score += 10000000000.0
+        return score
+
+
+
+
+    def reset_initial_value_to_follow_prev(self,time: datetime, initial_value:float):
+        self._internal_initial_value = initial_value
+        self.current_value = initial_value
 
     async def update(self, time: datetime):
         """ Update the constraint with the new value. to be called by a load that can compute the value based or sensors or external data"""
@@ -197,6 +235,8 @@ class LoadConstraint(object):
                 value = self.compute_value(time)
             self.current_value = value
             self.last_value_update = time
+
+
 
     @abstractmethod
     def compute_value(self, time: datetime) -> float:
@@ -224,10 +264,21 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                  support_auto: bool = False,
                  **kwargs):
 
-        super().__init__(**kwargs)
+        # do this before super as best_duration_to_meet is used in the super call
+        if kwargs.get("as_fast_as_possible", False):
+            support_auto = False
+            mx_power = 0.0
+            if power is not None:
+                mx_power = power
+            elif power_steps is not None:
+                sorted_cmds = [c for c in power_steps if c.power_consign > 0.0]
+                sorted_cmds = sorted(sorted_cmds, key=lambda x: x.power_consign)
+                mx_power = sorted_cmds[-1].power_consign
 
-        if power_steps is None and power is not None:
-            power_steps = [copy_command(CMD_ON, power_consign=power)]
+            power_steps = [copy_command(CMD_ON, power_consign=mx_power)]
+        else:
+            if power_steps is None and power is not None:
+                power_steps = [copy_command(CMD_ON, power_consign=power)]
 
         self._power_cmds = power_steps
         self._power_sorted_cmds = [c for c in power_steps if c.power_consign > 0.0]
@@ -236,6 +287,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         self._max_power = self._power_sorted_cmds[-1].power_consign
         self._min_power = self._power_sorted_cmds[0].power_consign
         self._support_auto = support_auto
+
+        super().__init__(**kwargs)
+
+
 
     def to_dict(self) -> dict:
         data = super().to_dict()
@@ -408,10 +463,10 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
     def __init__(self,
                  total_capacity_wh: float,
                  **kwargs):
-
-        super().__init__(**kwargs)
+        # do this before super as best_duration_to_meet is used in the super call
         self.total_capacity_wh = total_capacity_wh
 
+        super().__init__(**kwargs)
 
     def to_dict(self) -> dict:
         data = super().to_dict()

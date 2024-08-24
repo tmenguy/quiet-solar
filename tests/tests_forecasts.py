@@ -19,10 +19,10 @@ from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, \
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 
-def test_constraint_save_dump(cs):
+def test_constraint_save_dump(time, cs):
     dc_dump = cs.to_dict()
     load = cs.load
-    cs_load = LoadConstraint.new_from_saved_dict(load, dc_dump)
+    cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
     assert cs == cs_load
 
 class TestForecast(TestCase):
@@ -93,7 +93,6 @@ class TestForecast(TestCase):
         async def _async_test():
             test_folder = os.path.dirname(os.path.realpath(__file__))
             conso_path = os.path.join(test_folder, "data", "2024_20_8_before_reset")
-            conso_path_file = os.path.join(conso_path, "qs_home_non_controlled_consumption_power.npy")
             debug_conf_file = os.path.join(conso_path, "debug_conf.pickle")
 
             debug_conf = None
@@ -129,18 +128,23 @@ class TestForecast(TestCase):
                        (timedelta(hours=17, minutes=10), 0.27/1000.0)
                        ]
 
-            charger = TestLoad(name="charger")
 
-            steps = []
-            for a in range(7, 32 + 1):
-                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3))
+            for j in range(2):
 
-            charge_mandatory_end = time + timedelta(hours=11)
-            car_capacity = 22000
-            target_mandatory = 80
-            target_best_effort = 100
+                charger = TestLoad(name="charger")
+                steps = []
+                for a in range(7, 32 + 1):
+                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3))
 
-            car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                charge_mandatory_end = time + timedelta(hours=11)
+                charge_manual_end = time + timedelta(minutes=5)
+                car_capacity = 22000
+                target_mandatory = 80
+                target_best_effort = 100
+                target_manual = 100
+
+                car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                    time=time,
                     total_capacity_wh=car_capacity,
                     load=charger,
                     mandatory=True,
@@ -149,10 +153,11 @@ class TestForecast(TestCase):
                     target_value=target_mandatory,
                     power_steps=steps,
                     support_auto=True,
-            )
-            charger.push_live_constraint(car_charge_mandatory)
-            test_constraint_save_dump(car_charge_mandatory)
-            car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
+                )
+                charger.push_live_constraint(time, car_charge_mandatory)
+                test_constraint_save_dump(time, car_charge_mandatory)
+                car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
+                    time=time,
                     total_capacity_wh=car_capacity,
                     load=charger,
                     mandatory=False,
@@ -161,52 +166,84 @@ class TestForecast(TestCase):
                     target_value=target_best_effort,
                     power_steps=steps,
                     support_auto=True,
-            )
-            charger.push_live_constraint(car_charge_as_best)
-            test_constraint_save_dump(car_charge_as_best)
-
-            battery = Battery(name="battery")
-            battery.max_charging_power = 10500
-            battery.max_discharging_power = 10500
-            battery.capacity = 21000
-            battery._current_charge_value = 10000
-
-            s = PeriodSolver(
-                start_time=time,
-                end_time=time + timedelta(seconds=FLOATING_PERIOD_S),
-                tariffs=tarrifs,
-                actionable_loads=[charger],
-                battery=battery,
-                pv_forecast=solar_forecast,
-                unavoidable_consumption_forecast=conso_forecast
-            )
-            cmds, battery_comands = s.solve()
-
-            assert cmds is not None
-
-            cmds_charger = cmds[0][1]
-
-            assert len(cmds_charger) > 0
+                )
+                charger.push_live_constraint(time, car_charge_as_best)
+                test_constraint_save_dump(time, car_charge_as_best)
 
 
-            target_energy_mandatory = car_capacity * target_mandatory / 100.0
-            target_energy_best_effort = car_capacity * target_best_effort / 100.0
 
-            for i in range(1, len(cmds_charger)):
-                cmd_duration = (cmds_charger[i][0] - cmds_charger[i-1][0]).total_seconds()
-                cmd_added_energy = (cmds_charger[i - 1][1].power_consign * cmd_duration) / 3600.0
+                if j > 0:
 
-                if cmds_charger[i][0] <= charge_mandatory_end:
-                    target_energy_mandatory -= cmd_added_energy
+                    car_charge_manual = MultiStepsPowerLoadConstraintChargePercent(
+                        time=time,
+                        total_capacity_wh=car_capacity,
+                        load=charger,
+                        mandatory=True,
+                        from_user=True,
+                        as_fast_as_possible=True,
+                        end_of_constraint=time,
+                        initial_value=0,
+                        target_value=target_manual,
+                        power_steps=steps,
+                        support_auto=True,
+                    )
+                    charger.push_live_constraint(time, car_charge_manual)
+                    test_constraint_save_dump(time, car_charge_manual)
+                    charge_manual_end = car_charge_manual.end_of_constraint
 
-                target_energy_best_effort -= cmd_added_energy
-
-                if target_energy_mandatory > 0 and cmds_charger[i][0] > charge_mandatory_end:
-                    assert False
 
 
-            assert target_energy_mandatory <= 0
-            assert target_energy_best_effort <= 0
+                battery = Battery(name="battery")
+                battery.max_charging_power = 10500
+                battery.max_discharging_power = 10500
+                battery.capacity = 21000
+                battery._current_charge_value = 10000
+
+                s = PeriodSolver(
+                    start_time=time,
+                    end_time=time + timedelta(seconds=FLOATING_PERIOD_S),
+                    tariffs=tarrifs,
+                    actionable_loads=[charger],
+                    battery=battery,
+                    pv_forecast=solar_forecast,
+                    unavoidable_consumption_forecast=conso_forecast
+                )
+                cmds, battery_comands = s.solve()
+
+                assert cmds is not None
+
+                cmds_charger = cmds[0][1]
+
+                assert len(cmds_charger) > 0
+
+
+                target_energy_mandatory = car_capacity * target_mandatory / 100.0
+                target_energy_best_effort = car_capacity * target_best_effort / 100.0
+                target_energy_manual = car_capacity * target_manual / 100.0
+
+                for i in range(1, len(cmds_charger)):
+                    cmd_duration = (cmds_charger[i][0] - cmds_charger[i-1][0]).total_seconds()
+                    cmd_added_energy = (cmds_charger[i - 1][1].power_consign * cmd_duration) / 3600.0
+
+                    if cmds_charger[i][0] <= charge_manual_end:
+                        target_energy_manual -= cmd_added_energy
+
+                    if cmds_charger[i][0] <= charge_mandatory_end:
+                        target_energy_mandatory -= cmd_added_energy
+
+                    target_energy_best_effort -= cmd_added_energy
+
+                    if j > 0:
+                        if target_energy_manual > 0 and cmds_charger[i][0] > charge_manual_end:
+                            assert False
+
+                    if target_energy_mandatory > 0 and cmds_charger[i][0] > charge_mandatory_end:
+                        assert False
+
+                if j > 0:
+                    assert target_energy_manual <= 0
+                assert target_energy_mandatory <= 0
+                assert target_energy_best_effort <= 0
 
 
         asyncio.run(_async_test())
