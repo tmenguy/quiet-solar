@@ -27,6 +27,7 @@
             },
             "car": {
                 "data": {
+                    "calendar": "Add a calendar to define when the car needs to be ready",
                     "car_battery_capacity": "Battery capacity (Wh)",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
@@ -67,6 +68,7 @@
                     "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
                     "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "Add some car information to define when and how it is connected to your charger",
@@ -84,12 +86,14 @@
             "charger_generic": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -97,10 +101,12 @@
             "charger_ocpp": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -109,10 +115,12 @@
             "charger_wallbox": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",
@@ -121,6 +129,7 @@
             "fp_heater": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
                     "name": "Name",
                     "power": "Power of the eater (W)",
                     "select": "Fil pilote value",
@@ -141,6 +150,7 @@
             "on_off_duration": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
                     "name": "Name",
                     "power": "Power of the load (W)",
                     "switch": "On/Off of the load"
@@ -191,6 +201,9 @@
             },
             "qs_home_serialize_for_debug": {
                 "name": "Quiet Solar Dump for Debug"
+            },
+            "qs_next_car_charge_force_now": {
+                "name": "Force Charge Now"
             }
         },
         "select": {
@@ -203,6 +216,11 @@
                     "home_mode_reset_sensors": "WARN: reset sensors from HA history",
                     "home_mode_sensors_only": "Only run sensors"
                 }
+            }
+        },
+        "switch": {
+            "qs_next_car_charge_full": {
+                "name": "Next Car Charge to 100%"
             }
         }
     },
@@ -234,6 +252,7 @@
             },
             "car": {
                 "data": {
+                    "calendar": "Add a calendar to define when the car needs to be ready",
                     "car_battery_capacity": "Battery capacity (Wh)",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
@@ -274,6 +293,7 @@
                     "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
                     "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "Add some car information to define when and how it is connected to your charger",
@@ -281,13 +301,15 @@
             },
             "charger_generic": {
                 "data": {
-                    "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -295,10 +317,12 @@
             "charger_ocpp": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -306,11 +330,13 @@
             },
             "charger_wallbox": {
                 "data": {
-                    "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)",
+                    "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
+                    "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",
@@ -319,6 +345,7 @@
             "fp_heater": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
                     "name": "Name",
                     "power": "Power of the eater (W)",
                     "select": "Fil pilote value",
@@ -339,6 +366,7 @@
             "on_off_duration": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
                     "name": "Name",
                     "power": "Power of the load (W)",
                     "switch": "On/Off of the load"

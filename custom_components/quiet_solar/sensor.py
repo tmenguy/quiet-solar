@@ -1,7 +1,9 @@
 
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from typing import Any
 
+import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
@@ -15,7 +17,7 @@ from .ha_model.charger import QSChargerGeneric
 
 from .const import (
     DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
-    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
+    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, HA_CONSTRAINT_SENSOR_HISTORY,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -86,6 +88,12 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_power_sensor))
 
+
+        constraints_sensor = QSSensorEntityDescription(
+            key="current_constraint",
+            name=device.get_virtual_current_constraint_entity_name()
+        )
+        entities.append(QSLoadSensorCurrentConstraints(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
     return entities
 
@@ -184,7 +192,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
             f"{self.device.device_id}-{description.key}"
         )
     @callback
-    def async_update_callback(self) -> None:
+    def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
 
         #if self.entity_description.value_fn is None:
@@ -236,6 +244,9 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
         """Restore ATTR_CHANGED_BY on startup since it is likely no longer in the activity log."""
         await super().async_added_to_hass()
 
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {}
+
         last_sensor_state = await self.async_get_last_sensor_data()
         if (
             not last_sensor_state
@@ -245,7 +256,49 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
         self._attr_native_value = last_sensor_state.native_value
         self._attr_extra_state_attributes = last_sensor_state.native_attr
 
+
+
     # @property
     # def extra_state_attributes(self) -> dict[str, Any]:
     #    """Return the device specific state attributes."""
 
+
+class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
+
+    device: AbstractLoad
+    @callback
+    def async_update_callback(self, time:datetime) -> None:
+        """Update the entity's state."""
+        do_save = False
+        self._attr_available = True
+
+        current_constraint = self.device.get_current_active_constraint(time)
+
+        if current_constraint is None:
+            new_val = "NO TARGET"
+        else:
+            new_val = current_constraint.get_readable_name_for_load()
+
+        if self._attr_native_value != new_val:
+            do_save = True
+            self._attr_native_value = new_val
+
+        loads = self.device.get_active_constraints_for_storage(time)
+        serialized_loads = [ l.to_dict() for l in loads]
+
+        old = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
+
+        if old != serialized_loads:
+            do_save = True
+            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_loads
+
+        if do_save:
+            self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """add back the stored constraints."""
+        await super().async_added_to_hass()
+        stored_cs = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
+        await self.hass.async_add_executor_job(
+            self.device.load_constraints_from_storage, datetime.now(pytz.UTC), stored_cs
+        )

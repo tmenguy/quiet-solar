@@ -110,6 +110,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
         self.register_all_on_change_states()
+        self._last_solve_done  : datetime | None = None
 
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ]
@@ -268,7 +269,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         # check for active loads
         # for now we just check if a charger is plugged in
         for load in self._all_loads:
-            await load.check_load_activity_and_constraints(time)
+            await load.do_run_check_load_activity_and_constraints(time)
 
     async def update_all_states(self, time: datetime):
 
@@ -333,56 +334,59 @@ class QSHome(HADeviceMixin, AbstractDevice):
             # set them back to a kind of "idle" state, many times will be "OFF" CMD
             await load.launch_command(time=time, command = CMD_IDLE)
 
-        if self.home_mode == QSHomeMode.HOME_MODE_ON.value:
 
-            # we may also want to force solve ... if we have less energy than what was expected too ....
+        if self._last_solve_done is None or (time - self._last_solve_done).total_seconds() > timedelta(seconds=5*60):
+            do_force_solve = True
 
-            if do_force_solve:
+        # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-                active_loads = []
-                for load in all_loads:
+        if do_force_solve and len(all_loads) > 0:
 
-                    if load.is_load_active(time) is False:
-                        continue
+            self._last_solve_done = time
 
-                    active_loads.append(load)
+            active_loads = []
+            for load in all_loads:
 
-                unavoidable_consumption_forecast = None
-                if await self._consumption_forecast.init_forecasts(time):
-                    unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
-                                                                                                  history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600)+1)
+                if load.is_load_active(time) is False:
+                    continue
 
-                if unavoidable_consumption_forecast:
-                    pv_forecast = None
+                active_loads.append(load)
 
-                    if self._solar_plant:
-                        pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
+            unavoidable_consumption_forecast = None
+            if await self._consumption_forecast.init_forecasts(time):
+                unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
+                                                                                              history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600)+1)
+
+            if unavoidable_consumption_forecast:
+                pv_forecast = None
+
+                if self._solar_plant:
+                    pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
 
 
+                solver = PeriodSolver(
+                    start_time = time,
+                    end_time = time + self._period,
+                    tariffs = None,
+                    actionable_loads = active_loads,
+                    battery = self._battery,
+                    pv_forecast  = pv_forecast,
+                    unavoidable_consumption_forecast = unavoidable_consumption_forecast,
+                    step_s = self._solver_step_s
+                )
 
-                    solver = PeriodSolver(
-                        start_time = time,
-                        end_time = time + self._period,
-                        tariffs = None,
-                        actionable_loads = active_loads,
-                        battery = self._battery,
-                        pv_forecast  = pv_forecast,
-                        unavoidable_consumption_forecast = unavoidable_consumption_forecast,
-                        step_s = self._solver_step_s
-                    )
+                # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
+                # use the available power virtual sensor to modify the begining of the PeriodSolver available power
+                # computation based on forecasts
 
-                    # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
-                    # use the available power virtual sensor to modify the begining of the PeriodSolver available power
-                    # computation based on forecasts
+                self._commands = solver.solve()
 
-                    self._commands = solver.solve()
-
-            for load, commands in self._commands:
-                while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
-                    cmd_time, command = commands.pop(0)
-                    await load.launch_command(time, command)
-                    # only launch one at a time for a given load
-                    break
+        for load, commands in self._commands:
+            while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+                cmd_time, command = commands.pop(0)
+                await load.launch_command(time, command)
+                # only launch one at a time for a given load
+                break
 
 
     async def reset_forecasts(self, time: datetime = None):

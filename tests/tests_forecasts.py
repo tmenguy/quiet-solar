@@ -14,10 +14,16 @@ from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFE
 from quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
 from quiet_solar.home_model.battery import Battery
 from quiet_solar.home_model.commands import copy_command, CMD_AUTO_GREEN_ONLY
-from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, MultiStepsPowerLoadConstraintChargePercent
+from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, \
+    MultiStepsPowerLoadConstraintChargePercent, LoadConstraint
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 
+def test_constraint_save_dump(cs):
+    dc_dump = cs.to_dict()
+    load = cs.load
+    cs_load = LoadConstraint.new_from_saved_dict(load, dc_dump)
+    assert cs == cs_load
 
 class TestForecast(TestCase):
 
@@ -145,6 +151,7 @@ class TestForecast(TestCase):
                     support_auto=True,
             )
             charger.push_live_constraint(car_charge_mandatory)
+            test_constraint_save_dump(car_charge_mandatory)
             car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=car_capacity,
                     load=charger,
@@ -156,6 +163,7 @@ class TestForecast(TestCase):
                     support_auto=True,
             )
             charger.push_live_constraint(car_charge_as_best)
+            test_constraint_save_dump(car_charge_as_best)
 
             battery = Battery(name="battery")
             battery.max_charging_power = 10500

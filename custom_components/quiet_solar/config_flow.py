@@ -25,7 +25,8 @@ from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
-
+from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
+from homeassistant.components.schedule import DOMAIN as SCHEDULE_DOMAIN
 
 
 from .entity import LOAD_TYPES
@@ -41,7 +42,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
-    OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR
+    OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
+    CONF_DEFAULT_CAR_CHARGE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +61,22 @@ def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
         and ent.domain in ALLOWED_DOMAINS
     ]
     return entities
+
+
+def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
+    """Return an entity selector which compatible entities."""
+
+    if domains is None:
+        ALLOWED_DOMAINS = [CALENDAR_DOMAIN]
+    else:
+        ALLOWED_DOMAINS = domains
+    entities = [
+        ent.entity_id
+        for ent in hass.states.async_all(ALLOWED_DOMAINS)
+        if ent.domain in ALLOWED_DOMAINS
+    ]
+    return entities
+
 
 def selectable_temperature_entities(
     hass: HomeAssistant,
@@ -121,7 +139,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict[key_sc] = vals_sc
 
-    def get_common_schema(self, add_power_value_selector=None, add_load_power_sensor=False, add_load_power_sensor_mandatory=False) -> dict:
+    def get_common_schema(self,
+                          add_power_value_selector=None,
+                          add_load_power_sensor=False,
+                          add_load_power_sensor_mandatory=False,
+                          add_calendar=False) -> dict:
 
         default = self.config_entry.data.get(CONF_NAME)
 
@@ -153,6 +175,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             if len(power_entities) > 0:
                 self.add_entity_selector(sc, CONF_ACCURATE_POWER_SENSOR, add_load_power_sensor_mandatory, entity_list=power_entities)
 
+        if add_calendar:
+            entities = selectable_calendar_entities(self.hass)
+            if len(entities) > 0:
+                self.add_entity_selector(sc, CONF_CALENDAR, False, entity_list=entities)
+
         return sc
 
 
@@ -161,7 +188,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     def get_all_charger_schema_base(self, add_load_power_sensor_mandatory ):
 
-        sc = self.get_common_schema(add_load_power_sensor=True, add_load_power_sensor_mandatory=add_load_power_sensor_mandatory)
+        sc = self.get_common_schema(add_load_power_sensor=True,
+                                    add_load_power_sensor_mandatory=add_load_power_sensor_mandatory,
+                                    add_calendar=True)
 
         sc.update( {
                     vol.Required(CONF_NAME): cv.string,
@@ -482,7 +511,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
 
-        sc_dict = self.get_common_schema()
+        sc_dict = self.get_common_schema(add_calendar=True)
 
         self.add_entity_selector(sc_dict, CONF_CAR_PLUGGED, False, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CAR_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
@@ -519,6 +548,16 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             step=1,
                             mode=selector.NumberSelectorMode.BOX,
                             unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+                        )
+                    ),
+                vol.Optional(CONF_DEFAULT_CAR_CHARGE, default=self.config_entry.data.get(CONF_DEFAULT_CAR_CHARGE, 100)):
+                    selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement=PERCENTAGE,
                         )
                     ),
 
@@ -594,7 +633,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True)
+        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
@@ -614,7 +653,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True)
+        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 

@@ -1,4 +1,6 @@
+import copy
 from datetime import datetime
+from datetime import date
 from datetime import timedelta
 from abc import abstractmethod
 from typing import Callable, Self, Awaitable
@@ -9,17 +11,23 @@ import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
 
+import importlib
+
+
+
 
 class LoadConstraint(object):
 
     def __init__(self,
                  load,
+                 load_param:str |None = None,
+                 from_user: bool = False,
                  mandatory: bool = True,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
                  initial_value: float = 0.0,
                  target_value: float = 0.0,
-                 update_value_callback: Callable[[Self, datetime], Awaitable[float]]| None = None,
+                 **kwargs
                  ):
 
         """
@@ -29,15 +37,15 @@ class LoadConstraint(object):
         :param end_of_constraint: constraint end time if None the constraint is always active
         :param initial_value: the constraint start value
         :param target_value: the constraint target value if None it means that the constraint is always active
-        :param update_value_callback: a callback to compute the value of the constraint, typically passed by the load
         """
 
         self.load = load
-        self.is_mandatory = mandatory
+        self.load_param = load_param
+        self.from_user = from_user
+        self._update_value_callback = load.get_update_value_callback_for_constraint_class(self.__class__.__name__)
 
 
-        self.name = f"Constraint for {load.name} ({initial_value}/{target_value}/{mandatory})"
-
+        # ok fill form the args
         if end_of_constraint is None:
             end_of_constraint = DATETIME_MAX_UTC
 
@@ -45,24 +53,61 @@ class LoadConstraint(object):
             start_of_constraint = DATETIME_MIN_UTC
 
         self.end_of_constraint: datetime = end_of_constraint
-
-        self.user_start_of_constraint: datetime = start_of_constraint
+        self.is_mandatory = mandatory
         self.start_of_constraint: datetime = start_of_constraint
-
         self.initial_value = initial_value
         self.target_value = target_value
-        self.current_value = initial_value
 
-        self._update_value_callback = update_value_callback
-
-
+        self._internal_initial_value = self.initial_value
+        self.current_value = self._internal_initial_value
+        self.name = f"Constraint for {self.load.name} ({self.initial_value}/{self.target_value}/{self.is_mandatory})"
+        self._internal_start_of_constraint: datetime = self.start_of_constraint # this one can be overriden by the prev onstraint of the load
         nt = datetime.now(pytz.UTC)
         self.last_value_update = nt
         self.last_state_update = nt
-
         self.skip = False
         self.pushed_count = 0
-        self.start_of_constraint: datetime = DATETIME_MIN_UTC
+
+
+    def __eq__(self, other):
+        if other.to_dict() == self.to_dict():
+            return other.name == self.name
+        return False
+
+    @classmethod
+    def new_from_saved_dict(cls, load, data: dict) -> Self:
+        try:
+            module = importlib.import_module("quiet_solar.home_model.constraints")
+        except:
+            return None
+        if module is None:
+            return None
+        class_name = data.pop("qs_class_type", None)
+        if class_name is None:
+            return None
+        my_class = getattr(module,class_name)
+        kwargs = my_class.from_dict_to_kwargs(data)
+        my_instance = my_class(load = load, **kwargs)
+        return my_instance
+
+    def to_dict(self) -> dict:
+        return {
+            "qs_class_type": self.__class__.__name__,
+            "load_param": self.load_param,
+            "from_user": self.from_user,
+            "mandatory": self.is_mandatory,
+            "initial_value": self.initial_value,
+            "target_value": self.target_value,
+            "start_of_constraint" : f"{self.start_of_constraint}",
+            "end_of_constraint": f"{self.end_of_constraint}"
+        }
+
+    @classmethod
+    def from_dict_to_kwargs(cls, data: dict) -> dict:
+        res = copy.deepcopy(data)
+        res["start_of_constraint"] = datetime.fromisoformat(data["start_of_constraint"])
+        res["end_of_constraint"] = datetime.fromisoformat(data["end_of_constraint"])
+        return res
 
 
     def convert_target_value_to_energy(self, value: float) -> float:
@@ -71,13 +116,52 @@ class LoadConstraint(object):
     def convert_energy_to_target_value(self, energy: float) -> float:
         return energy
 
-    def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime) -> bool:
+
+    def _get_target_date_string(self) -> str:
+        if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
+            target = "no time constraint"
+        else:
+            local_target_date = self.end_of_constraint.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
+            local_today = date.today()
+            local_tomorrow = date.today() + timedelta(days=1)
+            if local_constraint_day == local_today:
+                target = "by today: " + local_target_date.strftime("%Y-%m-%d %H:%M")
+            elif local_constraint_day == local_tomorrow:
+                target = "by tomorrow: " + local_target_date.strftime("%Y-%m-%d %H:%M")
+            else:
+                target = local_target_date.strftime("%Y-%m-%d %H:%M")
+
+        return target
+
+    def _get_readable_target_value_string(self) -> str:
+        target_string =  f"{int(self.target_value)} Wh"
+        if self.target_value >= 2000:
+            target_string = f"{int(self.target_value / 1000)} kWh"
+        return target_string
+
+    def get_readable_name_for_load(self) -> str:
+        target_date = self._get_target_date_string()
+        target_string = self._get_readable_target_value_string()
+        if self.is_mandatory:
+            strength = "for sure"
+        else:
+            strength = "best effort"
+
+        return f"{self.name} {target_string} {target_date} ({strength})"
+
+
+
+    def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime | None = None) -> bool:
 
         if self.is_constraint_met():
             return False
 
+        if end_time is None:
+            end_time = DATETIME_MAX_UTC
+
         if self.end_of_constraint == DATETIME_MAX_UTC:
-            if self.start_of_constraint > end_time:
+            if self._internal_start_of_constraint > end_time:
                 return False
             else:
                 return True
@@ -85,6 +169,10 @@ class LoadConstraint(object):
         #only active if the constraint finish before the end of the given time period
         return  self.end_of_constraint >= start_time and self.end_of_constraint <= end_time
 
+    def is_constraint_active_for_now_or_future(self, time: datetime) -> bool:
+        if self.end_of_constraint >= time or self._internal_start_of_constraint >= time:
+            return True
+        return False
 
     def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """
@@ -94,10 +182,10 @@ class LoadConstraint(object):
         if self.target_value is None:
             return False
 
-        if self.target_value > self.initial_value and current_value >= self.target_value:
+        if self.target_value > self._internal_initial_value and current_value >= self.target_value:
             return True
 
-        if self.target_value < self.initial_value and current_value <= self.target_value:
+        if self.target_value < self._internal_initial_value and current_value <= self.target_value:
             return True
 
         return False
@@ -136,21 +224,38 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
     def __init__(self,
                  power_steps: list[LoadCommand] = None,
+                 power: float | None = None,
                  support_auto: bool = False,
                  **kwargs):
 
         super().__init__(**kwargs)
+
+        if power_steps is None and power is not None:
+            power_steps = [copy_command(CMD_ON, power_consign=power)]
+
         self._power_cmds = power_steps
         self._power_sorted_cmds = [c for c in power_steps if c.power_consign > 0.0]
         self._power_sorted_cmds = sorted(self._power_sorted_cmds, key=lambda x: x.power_consign)
+        self._power = self._power_sorted_cmds[-1].power_consign
         self._max_power = self._power_sorted_cmds[-1].power_consign
         self._min_power = self._power_sorted_cmds[0].power_consign
         self._support_auto = support_auto
 
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["power_steps"] = [c.to_dict() for c in self._power_cmds]
+        data["support_auto"] = self._support_auto
+        return data
+
+    @classmethod
+    def from_dict_to_kwargs(cls, data: dict) -> dict:
+        res = super().from_dict_to_kwargs(data)
+        res["power_steps"] = [LoadCommand(**c) for c in data["power_steps"]]
+        return res
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        seconds = (3600.0 * (self.target_value - self.initial_value)) / self._max_power
+        seconds = (3600.0 * (self.target_value - self._internal_initial_value)) / self._max_power
         return timedelta(seconds=seconds)
 
     def compute_value(self, time: datetime) -> float:
@@ -194,8 +299,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             last_slot = bisect_left(time_slots, self.end_of_constraint)
             last_slot = max(0, last_slot - 1) # -1 as the last_slot index is the index of the slot not the time anchor
 
-        if self.start_of_constraint != DATETIME_MIN_UTC:
-            first_slot = bisect_left(time_slots, self.start_of_constraint)
+        if self._internal_start_of_constraint != DATETIME_MIN_UTC:
+            first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
         for i in range(first_slot, last_slot + 1):
 
@@ -306,13 +411,20 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 
     def __init__(self,
                  total_capacity_wh: float,
-                 power_steps: list[LoadCommand] = None,
-                 support_auto: bool = False,
                  **kwargs):
 
-        super().__init__(power_steps=power_steps, support_auto=support_auto, **kwargs)
+        super().__init__(**kwargs)
         self.total_capacity_wh = total_capacity_wh
 
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["total_capacity_wh"] = self.total_capacity_wh
+        return data
+
+    def _get_readable_target_value_string(self) -> str:
+        target_string =  f"{int(round(self.target_value))} %"
+        return target_string
 
     def convert_target_value_to_energy(self, value: float) -> float:
         return (value * self.total_capacity_wh) / 100.0
@@ -334,31 +446,23 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
         return 100.0*((((time - self.last_value_update).total_seconds()) * self.load.current_command.power_consign / 3600.0)/self.total_capacity_wh)+ self.current_value
 
 
-
-class SimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
-
-
-    def __init__(self,
-                 power: float = 0.0,
-                 **kwargs
-                 ):
-        power_steps = [copy_command(CMD_ON, power_consign=power)]
-        self._power = power
-        super().__init__(power_steps=power_steps, support_auto=False, **kwargs)
+class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
 
-class TimeBasedSimplePowerLoadConstraint(SimplePowerLoadConstraint):
-
-    def __init__(self,
-                 power: float = 0.0,
-                 **kwargs
-                 ):
-        super().__init__(power=power, **kwargs)
+    def _get_readable_target_value_string(self) -> str:
+        target_string =  f"{int(self.target_value)} s"
+        if self.target_value >= 4*3600:
+            target_string = f"{int(round(self.target_value / 3600))} h"
+        elif self.target_value >= 3600:
+            target_string = f"{int(self.target_value / 3600)} h {int((self.target_value % 3600)/60)} mn"
+        elif self.target_value >= 60:
+            target_string = f"{int(self.target_value / 60)} mn"
+        return target_string
 
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        return timedelta(seconds=self.target_value - self.initial_value)
+        return timedelta(seconds=self.target_value - self._internal_initial_value)
 
 
     def compute_value(self, time: datetime) -> float:

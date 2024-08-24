@@ -16,6 +16,7 @@ CONF_POWER = "power"
 CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
 CONF_SWITCH = "switch"
 CONF_SELECT = "select"
+CONF_CALENDAR = "calendar"
 
 
 
@@ -41,6 +42,7 @@ CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
 CONF_CHARGER_IS_3P = "charger_is_3p"
 CONF_CHARGER_CONSUMPTION = "charger_consumption"
+CONF_DEFAULT_CAR_CHARGE = "default_car_charge"
 
 CONF_CHARGER_DEVICE_OCPP = "charger_device_ocpp"
 CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"
@@ -73,5 +75,13 @@ SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumpti
 
 BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
+
+SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
+
+BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
+
+
+
+HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 
 FLOATING_PERIOD_S = 48 * 3600

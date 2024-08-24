@@ -11,7 +11,8 @@ from homeassistant.core import HomeAssistant, State, callback, Event, EventState
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
-from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR
+from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
+    CONF_CALENDAR
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -161,6 +162,7 @@ class HADeviceMixin:
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
 
+        self.calendar = kwargs.pop(CONF_CALENDAR, None)
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
         self.secondary_power_sensor = None
         self.best_power_value = None
@@ -195,8 +197,23 @@ class HADeviceMixin:
         self.attach_power_to_probe(self.command_based_power_sensor,
                                    non_ha_entity_get_state=self.command_power_state_getter)
 
-
         self._unsub = None
+
+
+    def get_next_scheduled_event(self, time:datetime) -> tuple[datetime|None,datetime|None]:
+        if self.calendar is None:
+            return None, None
+
+        state = self.hass.states.get(self.calendar)
+        state_attr = {}
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            state = None
+
+        if state is not None:
+            state_attr = state.attributes
+
+        return state_attr.get("start_time", None), state_attr.get("end_time", None)
+
 
     def attach_exposed_has_entity(self, ha_object):
         self._exposed_entities.add(ha_object)
@@ -242,6 +259,12 @@ class HADeviceMixin:
         if not isinstance(self, AbstractLoad):
             return None
         return f"{self.device_id}_power"
+
+    def get_virtual_current_constraint_entity_name(self) -> str | None:
+        if not isinstance(self, AbstractLoad):
+            return None
+        return f"{self.device_id}_constraint"
+
 
     def get_best_power_HA_entity(self):
         if self.accurate_power_sensor is not None:
@@ -401,7 +424,7 @@ class HADeviceMixin:
             self.add_to_history(entity_id, time)
 
         for ha_object in self._exposed_entities:
-            ha_object.async_update_callback()
+            ha_object.async_update_callback(time)
 
     def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], float] | None = None,
                               non_ha_entity_get_state: Callable[[str, datetime | None], tuple[

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+
 
 @dataclass
 class LoadCommand:
@@ -6,6 +7,10 @@ class LoadCommand:
     power_consign: float
     def __eq__(self, other):
         return other is not None and self.command == other.command
+
+    def to_dict(self) -> dict:
+        return asdict(self) #self.__dict__
+
 
 def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
     if power_consign is None:

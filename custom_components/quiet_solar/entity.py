@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.core import callback
@@ -68,7 +70,7 @@ class QSBaseEntity(Entity):
             _attr_has_entity_name = True
 
     @callback
-    def async_update_callback(self) -> None:
+    def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
         return
 

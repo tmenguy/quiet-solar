@@ -2,7 +2,8 @@ from unittest import TestCase
 
 import pytz
 
-from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint
+from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
+    LoadConstraint
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 from datetime import datetime
@@ -11,7 +12,14 @@ from datetime import timedelta
 from quiet_solar.home_model.commands import LoadCommand
 
 
+def test_constraint_save_dump(cs):
+    dc_dump = cs.to_dict()
+    load = cs.load
+    cs_load = LoadConstraint.new_from_saved_dict(load, dc_dump)
+    assert cs == cs_load
+
 class TestSolver(TestCase):
+
 
     def test_solve(self):
         # This is a simple test to check if the solver is working correctly
@@ -35,7 +43,6 @@ class TestSolver(TestCase):
         cumulus_parents = TestLoad(name="cumulus_parents")
         cumulus_children = TestLoad(name="cumulus_children")
 
-        dt + timedelta(hours=1)
 
         car_steps = []
         for a in range(7, 33):
@@ -52,6 +59,12 @@ class TestSolver(TestCase):
         )
         car.push_live_constraint(car_charge_mandatory)
 
+
+
+
+        test_constraint_save_dump(car_charge_mandatory)
+
+
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
             load = car,
             mandatory = False,
@@ -62,6 +75,8 @@ class TestSolver(TestCase):
             support_auto = True
         )
         car.push_live_constraint(car_charge_best_effort)
+
+        test_constraint_save_dump(car_charge_best_effort)
 
 
         pool_constraint = TimeBasedSimplePowerLoadConstraint(
@@ -74,6 +89,8 @@ class TestSolver(TestCase):
         )
         pool.push_live_constraint(pool_constraint)
 
+        test_constraint_save_dump(pool_constraint)
+
         cumulus_parents_constraint = TimeBasedSimplePowerLoadConstraint(
             load = cumulus_parents,
             mandatory = True,
@@ -84,6 +101,8 @@ class TestSolver(TestCase):
         )
         cumulus_parents.push_live_constraint(cumulus_parents_constraint)
 
+        test_constraint_save_dump(cumulus_parents_constraint)
+
         cumulus_children_constraint = TimeBasedSimplePowerLoadConstraint(
             load = cumulus_children,
             mandatory = False,
@@ -93,6 +112,8 @@ class TestSolver(TestCase):
             power = 2000,
         )
         cumulus_children.push_live_constraint(cumulus_children_constraint)
+
+        test_constraint_save_dump(cumulus_children_constraint)
 
         unavoidable_consumption_forecast = [(dt, 300),
                        (dt + timedelta(hours=1) ,  300  ),

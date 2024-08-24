@@ -5,7 +5,7 @@ from collections.abc import Generator
 from .commands import LoadCommand, copy_command
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
-from typing import TYPE_CHECKING, Any, Mapping, Callable
+from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
 from ..const import CONF_POWER, CONF_SWITCH
 
@@ -47,6 +47,8 @@ class AbstractLoad(AbstractDevice):
         self.running_command_first_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
 
+        self._externally_initialized_constraints = False
+
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:
             return None
@@ -55,14 +57,30 @@ class AbstractLoad(AbstractDevice):
         else:
             return 0
 
+    async def do_run_check_load_activity_and_constraints(self, time: datetime):
+        if self._externally_initialized_constraints is False:
+            return
+        return await self.check_load_activity_and_constraints(time)
+
+    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict]):
+        self.reset()
+        for c_dict in constraints_dicts:
+            cs_load = LoadConstraint.new_from_saved_dict(self, c_dict)
+            if cs_load is not None and cs_load.is_constraint_active_for_now_or_future(time):
+                self.push_live_constraint(cs_load)
+
+        self._externally_initialized_constraints = True
+
     async def check_load_activity_and_constraints(self, time: datetime):
         return
+
+    def get_update_value_callback_for_constraint_class(self, class_name:str) -> Callable[[LoadConstraint, datetime], Awaitable[float]] | None:
+        return None
 
     def is_load_active(self, time: datetime):
         if not self._constraints:
             return False
         return True
-
 
     def reset(self):
         self.current_command = None
@@ -73,7 +91,17 @@ class AbstractLoad(AbstractDevice):
             if c.is_constraint_active_for_time_period(start_time, end_time) and c.is_constraint_met() is False:
                 yield c
 
+    def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
+        for c in self._constraints:
+            if c.is_constraint_active_for_now_or_future(time) and c.is_constraint_met() is False:
+                return c
+        return None
+
+    def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
+        return [c for c in self._constraints if c.is_constraint_active_for_now_or_future(time) and c.from_user]
+
     def set_live_constraints(self, constraints: list[LoadConstraint]):
+
         self._constraints = constraints
         if not constraints:
             return
@@ -100,20 +128,23 @@ class AbstractLoad(AbstractDevice):
         #recompute the constraint start:
         current_start = DATETIME_MIN_UTC
         for c in self._constraints:
-            c.start_of_constraint = max(current_start, c.user_start_of_constraint)
+            c._internal_start_of_constraint = max(current_start, c.start_of_constraint)
             current_start = c.end_of_constraint
 
         #and now we may have to recompute the start values of the constraints!
         prev_end_energy = None
         for c in self._constraints:
             if prev_end_energy is not None:
-                c.initial_value = c.convert_energy_to_target_value(prev_end_energy)
-                c.current_value = c.initial_value
+                c._internal_initial_value = c.convert_energy_to_target_value(prev_end_energy)
+                c.current_value = c._internal_initial_value
             prev_end_energy = c.convert_target_value_to_energy(c.target_value)
 
 
     def push_live_constraint(self, constraint: LoadConstraint| None = None):
         if constraint is not None:
+            for c in self._constraints:
+                if c == constraint:
+                    return
             if constraint.end_of_constraint == DATETIME_MAX_UTC and len(self._constraints) > 0:
                 #only one infinite is allowed!
                 while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
