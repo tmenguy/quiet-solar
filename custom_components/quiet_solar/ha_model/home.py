@@ -115,6 +115,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ]
 
+    def get_car_by_name(self, name: str) -> QSCar | None:
+        for car in self._cars:
+            if car.name == name:
+                return car
+        return None
 
     def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
             tuple[datetime | None, float | str | None, dict | None] | None):
@@ -335,58 +340,59 @@ class QSHome(HADeviceMixin, AbstractDevice):
             await load.launch_command(time=time, command = CMD_IDLE)
 
 
+        active_loads = []
+        for load in all_loads:
+
+            if load.is_load_active(time) is False:
+                continue
+
+            active_loads.append(load)
+
+
         if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
             do_force_solve = True
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-        if do_force_solve and len(all_loads) > 0:
+        if do_force_solve and active_loads:
 
             self._last_solve_done = time
-
-            active_loads = []
-            for load in all_loads:
-
-                if load.is_load_active(time) is False:
-                    continue
-
-                active_loads.append(load)
 
             unavoidable_consumption_forecast = None
             if await self._consumption_forecast.init_forecasts(time):
                 unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast(time_now=time,
                                                                                               history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600)+1)
 
-            if unavoidable_consumption_forecast:
-                pv_forecast = None
+            pv_forecast = None
 
-                if self._solar_plant:
-                    pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
+            if self._solar_plant:
+                pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
 
 
-                solver = PeriodSolver(
-                    start_time = time,
-                    end_time = time + self._period,
-                    tariffs = None,
-                    actionable_loads = active_loads,
-                    battery = self._battery,
-                    pv_forecast  = pv_forecast,
-                    unavoidable_consumption_forecast = unavoidable_consumption_forecast,
-                    step_s = self._solver_step_s
-                )
+            solver = PeriodSolver(
+                start_time = time,
+                end_time = time + self._period,
+                tariffs = None,
+                actionable_loads = active_loads,
+                battery = self._battery,
+                pv_forecast  = pv_forecast,
+                unavoidable_consumption_forecast = unavoidable_consumption_forecast,
+                step_s = self._solver_step_s
+            )
 
-                # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
-                # use the available power virtual sensor to modify the begining of the PeriodSolver available power
-                # computation based on forecasts
+            # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
+            # use the available power virtual sensor to modify the begining of the PeriodSolver available power
+            # computation based on forecasts
 
-                self._commands = solver.solve()
+            self._commands, _ = solver.solve()
 
-        for load, commands in self._commands:
-            while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
-                cmd_time, command = commands.pop(0)
-                await load.launch_command(time, command)
-                # only launch one at a time for a given load
-                break
+        if True:
+            for load, commands in self._commands:
+                while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+                    cmd_time, command = commands.pop(0)
+                    await load.launch_command(time, command)
+                    # only launch one at a time for a given load
+                    break
 
 
     async def reset_forecasts(self, time: datetime = None):

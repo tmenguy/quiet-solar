@@ -53,6 +53,10 @@ CONF_CHARGER_PAUSE_RESUME_SWITCH = "charger_pause_resume_switch"
 
 CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
+
+CHARGER_NO_CAR_CONNECTED = "No car connected"
+
+
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
 CONF_CAR_CHARGE_PERCENT_SENSOR = "car_charge_percent_sensor"

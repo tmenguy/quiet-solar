@@ -130,8 +130,18 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
         if (
             not last_sensor_state
         ):
-            return
-        self._attr_is_on = last_sensor_state.native_is_on
+            pass
+        else:
+            self._attr_is_on = last_sensor_state.native_is_on
+
+        if self._attr_is_on is  None:
+            self._attr_is_on = False
+
+
+        if self._attr_is_on:
+            await self.async_turn_on()
+        else:
+            await self.async_turn_off()
 
     @callback
     def async_update_callback(self, time:datetime) -> None:

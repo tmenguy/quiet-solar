@@ -29,7 +29,7 @@ from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.schedule import DOMAIN as SCHEDULE_DOMAIN
 
 
-from .entity import LOAD_TYPES
+from .entity import LOAD_TYPES, LOAD_NAMES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
@@ -75,6 +75,7 @@ def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
         for ent in hass.states.async_all(ALLOWED_DOMAINS)
         if ent.domain in ALLOWED_DOMAINS
     ]
+
     return entities
 
 
@@ -227,7 +228,14 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
     def get_entry_title(self, data):
-        return f"{data.get(DEVICE_TYPE, "unknown")}: {data.get(CONF_NAME, "device")}"
+
+        type = data.get(DEVICE_TYPE, None)
+        if type is None:
+            name = "unknown"
+        else:
+            name = LOAD_NAMES.get(type, "unknown")
+
+        return f"{name}: {data.get(CONF_NAME, "device")}"
     async def async_step_home(self, user_input=None):
 
         TYPE = "home"

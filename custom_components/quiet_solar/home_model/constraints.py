@@ -69,6 +69,7 @@ class LoadConstraint(object):
         if self.as_fast_as_possible:
             dt_to_finish = self.best_duration_to_meet()
             self.end_of_constraint = time + dt_to_finish
+            self.is_mandatory = True
 
         self.last_value_update = time
         self.last_state_update = time
@@ -140,16 +141,17 @@ class LoadConstraint(object):
 
     def _get_target_date_string(self) -> str:
         if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
-            target = "no time constraint"
+            target = "no limit"
         else:
             local_target_date = self.end_of_constraint.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
             local_today = date.today()
+            local_today = datetime(local_today.year, local_today.month, local_today.day)
             local_tomorrow = date.today() + timedelta(days=1)
             if local_constraint_day == local_today:
-                target = "by today: " + local_target_date.strftime("%Y-%m-%d %H:%M")
+                target = "by today " + local_target_date.strftime("%H:%M")
             elif local_constraint_day == local_tomorrow:
-                target = "by tomorrow: " + local_target_date.strftime("%Y-%m-%d %H:%M")
+                target = "by tomorrow " + local_target_date.strftime("%H:%M")
             else:
                 target = local_target_date.strftime("%Y-%m-%d %H:%M")
 
@@ -169,7 +171,10 @@ class LoadConstraint(object):
         else:
             strength = "best effort"
 
-        return f"{target_string} {target_date} ({strength})"
+        if self.load_param:
+            return f"{self.load_param}:{target_string} {target_date} ({strength})"
+        else:
+            return f"{target_string} {target_date} ({strength})"
 
 
 

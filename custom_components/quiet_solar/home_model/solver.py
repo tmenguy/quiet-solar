@@ -53,7 +53,7 @@ class PeriodSolver(object):
         self._ua_forecast: list[datetime, float] | None = unavoidable_consumption_forecast
         self._battery = battery
 
-        if len(tariffs) == 0:
+        if not tariffs:
             self._tariffs = [(start_time, 0.2)]
         elif len(tariffs) == 1:
             self._tariffs = [(start_time, tariffs[0][1])]
@@ -180,6 +180,10 @@ class PeriodSolver(object):
 
 
     def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end):
+
+        if not forecast:
+            return last_end, 0.0
+
         prev_end = last_end
         # <= end_slot and not < end_slot because an exact value on the end of the slot has to be counted "in"
         while (last_end < len(forecast) - 1 and

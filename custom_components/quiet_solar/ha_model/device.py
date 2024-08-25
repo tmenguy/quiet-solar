@@ -212,7 +212,17 @@ class HADeviceMixin:
         if state is not None:
             state_attr = state.attributes
 
-        return state_attr.get("start_time", None), state_attr.get("end_time", None)
+        start_time = state_attr.get("start_time", None)
+        end_time = state_attr.get("end_time", None)
+
+        if start_time is not None:
+            start_time = datetime.fromisoformat(start_time)
+            start_time = start_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        if end_time is not None:
+            end_time = datetime.fromisoformat(end_time)
+            end_time = end_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        return start_time, end_time
 
 
     def attach_exposed_has_entity(self, ha_object):

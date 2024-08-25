@@ -386,6 +386,9 @@
       }
     },
     "select": {
+      "selected_car_for_charger": {
+        "name": "Selected Car:"
+      },
       "home_mode": {
         "name": "Home Quiet Solar Running Mode",
         "state": {

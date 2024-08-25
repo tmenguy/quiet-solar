@@ -216,6 +216,9 @@
                     "home_mode_reset_sensors": "WARN: reset sensors from HA history",
                     "home_mode_sensors_only": "Only run sensors"
                 }
+            },
+            "selected_car_for_charger": {
+                "name": "Selected Car:"
             }
         },
         "switch": {

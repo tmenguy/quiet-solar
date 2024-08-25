@@ -33,6 +33,22 @@ LOAD_TYPES = {
     "fp_heater": QSFPHeater
 }
 
+LOAD_NAMES = {
+    "home" : "home",
+    "battery": "battery",
+    "solar": "solar",
+    "charger": "charger",
+    "charger_wallbox": "charger",
+    "charger_ocpp": "charger",
+    "charger_generic": "charger",
+    "car" : "car",
+    "pool":"pool",
+    "on_off_duration": "on/off",
+    "fp_heater":"heater"
+}
+
+
+
 def create_device_from_type(hass, home, type, config_entry: ConfigEntry):
 
     if config_entry is None:

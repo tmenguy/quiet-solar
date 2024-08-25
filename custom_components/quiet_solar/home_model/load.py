@@ -103,7 +103,7 @@ class AbstractLoad(AbstractDevice):
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
         return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.from_user]
 
-    def set_live_constraints(self,time: datetime, constraints: list[LoadConstraint]):
+    def set_live_constraints(self, time: datetime, constraints: list[LoadConstraint]):
 
         self._constraints = constraints
         if not constraints:
