@@ -8,7 +8,7 @@ import pytz
 
 import numpy as np
 
-from quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, \
+from quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE
 from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
     BUFFER_SIZE_DAYS
@@ -89,6 +89,7 @@ class TestForecast(TestCase):
 
         asyncio.run(_async_test())
 
+
     def test_read_passed_consumption_data(self):
 
         async def _async_test():
@@ -159,7 +160,7 @@ class TestForecast(TestCase):
                 test_constraint_save_dump(time, car_charge_mandatory)
                 car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
-                    type=CONSTRAINT_TYPE_FILLER,
+                    type=CONSTRAINT_TYPE_FILLER_AUTO,
                     total_capacity_wh=car_capacity,
                     load=charger,
                     initial_value=None,

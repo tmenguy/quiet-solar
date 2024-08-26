@@ -244,7 +244,7 @@ class PeriodSolver(object):
         constraints = []
         for c in self._active_constraints:
             if c.is_mandatory:
-                constraints.append((c, c.best_duration_to_meet()))
+                constraints.append((c, c.score()))
 
         constraints= sorted(constraints, key=lambda x: x[1], reverse=True)
 
@@ -324,7 +324,7 @@ class PeriodSolver(object):
         constraints = []
         for c in self._active_constraints:
             if c.is_mandatory is False:
-                constraints.append((c, c.best_duration_to_meet()))
+                constraints.append((c, c.score()))
 
         constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 

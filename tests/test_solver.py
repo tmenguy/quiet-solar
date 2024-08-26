@@ -1,16 +1,17 @@
+import asyncio
 from unittest import TestCase
 
 import pytz
 
-from quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER
+from quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, FLOATING_PERIOD_S
 from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
-    LoadConstraint
+    LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 from datetime import datetime
 from datetime import timedelta
 
-from quiet_solar.home_model.commands import LoadCommand
+from quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE
 
 
 def test_constraint_save_dump(time, cs):
@@ -70,7 +71,7 @@ class TestSolver(TestCase):
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
             time=dt,
             load = car,
-            type=CONSTRAINT_TYPE_FILLER,
+            type=CONSTRAINT_TYPE_FILLER_AUTO,
             end_of_constraint = None,
             initial_value = None,
             target_value = 22000,
@@ -111,7 +112,7 @@ class TestSolver(TestCase):
         cumulus_children_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
             load = cumulus_children,
-            type=CONSTRAINT_TYPE_FILLER,
+            type=CONSTRAINT_TYPE_FILLER_AUTO,
             end_of_constraint = dt + timedelta(hours=17),
             initial_value = 0,
             target_value = 1*3600,
@@ -184,3 +185,48 @@ class TestSolver(TestCase):
         )
         s.solve()
 
+
+    def test_auto_cmds(self):
+
+        async def _async_test():
+
+            time = datetime.now(pytz.UTC)
+            car_capacity = 22000
+            target_best_effort = 22000
+            charger = TestLoad(name="charger")
+            steps = []
+            for a in range(7, 32 + 1):
+                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 230 * 3))
+
+
+            car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
+                time=time,
+                type=CONSTRAINT_TYPE_FILLER_AUTO,
+                total_capacity_wh=car_capacity,
+                load=charger,
+                initial_value=None,
+                target_value=target_best_effort,
+                power_steps=steps,
+                support_auto=True,
+            )
+            charger.push_live_constraint(time, car_charge_as_best)
+
+            s = PeriodSolver(
+                start_time=time,
+                end_time=time + timedelta(seconds=FLOATING_PERIOD_S),
+                tariffs=None,
+                actionable_loads=[charger],
+                pv_forecast=None,
+                unavoidable_consumption_forecast=None
+            )
+            cmds, battery_comands = s.solve()
+
+            assert cmds is not None
+
+            cmds_charger = cmds[0][1]
+
+            assert len(cmds_charger)== 1
+
+            assert cmds_charger[0][1] == CMD_IDLE
+
+        asyncio.run(_async_test())

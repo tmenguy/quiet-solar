@@ -13,7 +13,7 @@ from bisect import bisect_left
 
 import importlib
 
-from ..const import CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_MANDATORY_END_TIME
+from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_MANDATORY_END_TIME
 
 
 class LoadConstraint(object):
@@ -23,7 +23,7 @@ class LoadConstraint(object):
                  load,
                  load_param:str |None = None,
                  from_user: bool = False,
-                 type: int = CONSTRAINT_TYPE_FILLER,
+                 type: int = CONSTRAINT_TYPE_FILLER_AUTO,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
                  initial_value: float | None = 0.0,
@@ -179,7 +179,7 @@ class LoadConstraint(object):
         target_string = self._get_readable_target_value_string()
 
         postfix = ""
-        if self.type <= CONSTRAINT_TYPE_FILLER:
+        if self.type <= CONSTRAINT_TYPE_FILLER_AUTO:
             postfix = " best effort"
         elif self.type >= CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE:
             postfix = " ASAP"
@@ -276,7 +276,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                  **kwargs):
 
         # do this before super as best_duration_to_meet is used in the super call
-        if kwargs.get("type", CONSTRAINT_TYPE_FILLER) >= CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE:
+        if kwargs.get("type", CONSTRAINT_TYPE_FILLER_AUTO) >= CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE:
             support_auto = False
             mx_power = 0.0
             if power is not None:
@@ -361,10 +361,17 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.end_of_constraint is not None:
             #by construction the end of the constraints IS ending on a slot
             last_slot = bisect_left(time_slots, self.end_of_constraint)
-            last_slot = max(0, last_slot - 1) # -1 as the last_slot index is the index of the slot not the time anchor
+            if last_slot >= len(power_available_power):
+                last_slot = len(power_available_power) - 1
+
+            if last_slot < len(power_available_power) - 1:
+                last_slot += 1
+
 
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
+            if first_slot > 0:
+                first_slot -= 1
 
         for i in range(first_slot, last_slot + 1):
 
