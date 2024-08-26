@@ -89,7 +89,7 @@ class QSSolarProvider:
             self.orchestrators = []
 
             for _, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
-                _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
+                #_LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
                 self.orchestrators.append(orchestrator)
 
             if len(self.orchestrators) > 0:
@@ -122,7 +122,7 @@ class QSSolarProvider:
         for v in vals[1:]:
             v_aggregated = align_time_series_and_values(v_aggregated, v, operation=lambda x, y: x + y)
 
-        _LOGGER.info(f"extract_solar_forecast_from_data for {self.domain} from {start_time} to {end_time} : {len(v_aggregated)}")
+        # _LOGGER.info(f"extract_solar_forecast_from_data for {self.domain} from {start_time} to {end_time} : {len(v_aggregated)}")
 
         return v_aggregated
 
