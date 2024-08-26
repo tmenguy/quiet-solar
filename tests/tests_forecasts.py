@@ -8,7 +8,8 @@ import pytz
 
 import numpy as np
 
-from quiet_solar.const import FLOATING_PERIOD_S
+from quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, \
+    CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE
 from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
     BUFFER_SIZE_DAYS
 from quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
@@ -145,9 +146,9 @@ class TestForecast(TestCase):
 
                 car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
+                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                     total_capacity_wh=car_capacity,
                     load=charger,
-                    mandatory=True,
                     end_of_constraint=charge_mandatory_end,
                     initial_value=0,
                     target_value=target_mandatory,
@@ -158,11 +159,10 @@ class TestForecast(TestCase):
                 test_constraint_save_dump(time, car_charge_mandatory)
                 car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
+                    type=CONSTRAINT_TYPE_FILLER,
                     total_capacity_wh=car_capacity,
                     load=charger,
-                    mandatory=False,
-                    end_of_constraint=None,
-                    initial_value=0,
+                    initial_value=None,
                     target_value=target_best_effort,
                     power_steps=steps,
                     support_auto=True,
@@ -176,11 +176,10 @@ class TestForecast(TestCase):
 
                     car_charge_manual = MultiStepsPowerLoadConstraintChargePercent(
                         time=time,
+                        type=CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE,
                         total_capacity_wh=car_capacity,
                         load=charger,
-                        mandatory=True,
                         from_user=True,
-                        as_fast_as_possible=True,
                         end_of_constraint=time,
                         initial_value=0,
                         target_value=target_manual,

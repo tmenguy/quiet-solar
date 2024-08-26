@@ -130,10 +130,10 @@ class AbstractLoad(AbstractDevice):
             self._constraints.append(keep)
 
 
-        # only one as fas as possible constraint can be active at a time.... and has to be first
+        # only one as fast as possible constraint can be active at a time.... and has to be first
         removed_as_fast = [(i,c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
         if len(removed_as_fast) == 0 or (len(removed_as_fast) == 1 and removed_as_fast[0][0] == 0):
-            # ok if there is a asfast constraint it should be the first one
+            # ok if there is a as fast constraint it should be the first one
             pass
         else:
             new_constraints = []
@@ -155,22 +155,31 @@ class AbstractLoad(AbstractDevice):
             self._constraints = [keep].extend(new_constraints)
 
         #and now we may have to recompute the start values of the constraints
-        prev_end_energy = None
+        prev_ct = None
         for c in self._constraints:
-            if prev_end_energy is not None:
-                c.reset_initial_value_to_follow_prev(time, c.convert_energy_to_target_value(prev_end_energy))
+            if prev_ct is not None:
+                c.reset_initial_value_to_follow_prev_if_needed(time, prev_ct)
                 if c.is_constraint_met():
                     # keep the prev energy as it was possibly higher to meet this constraint
                     continue
-            prev_end_energy = c.convert_target_value_to_energy(c.target_value)
+            prev_ct = c
 
         self._constraints = [c for c in self._constraints if c.is_constraint_met() is False]
 
         #recompute the constraint start:
+        kept = []
         current_start = DATETIME_MIN_UTC
         for c in self._constraints:
             c._internal_start_of_constraint = max(current_start, c.start_of_constraint)
             current_start = c.end_of_constraint
+            kept.append(c)
+            if current_start >= DATETIME_MAX_UTC:
+                break
+
+
+        self._constraints = kept
+
+
 
 
 

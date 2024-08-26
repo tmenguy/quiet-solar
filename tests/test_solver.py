@@ -2,6 +2,7 @@ from unittest import TestCase
 
 import pytz
 
+from quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER
 from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
     LoadConstraint
 from quiet_solar.home_model.load import TestLoad
@@ -51,7 +52,7 @@ class TestSolver(TestCase):
         car_charge_mandatory = MultiStepsPowerLoadConstraint(
             time=dt,
             load = car,
-            mandatory = True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
             end_of_constraint = dt + timedelta(hours=11),
             initial_value = 10000,
             target_value = 16000,
@@ -69,9 +70,9 @@ class TestSolver(TestCase):
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
             time=dt,
             load = car,
-            mandatory = False,
+            type=CONSTRAINT_TYPE_FILLER,
             end_of_constraint = None,
-            initial_value = 10000,
+            initial_value = None,
             target_value = 22000,
             power_steps = car_steps,
             support_auto = True
@@ -84,7 +85,7 @@ class TestSolver(TestCase):
         pool_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
             load = pool,
-            mandatory = True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
             end_of_constraint = dt + timedelta(hours=23),
             initial_value = 0,
             target_value = 10*3600,
@@ -97,7 +98,7 @@ class TestSolver(TestCase):
         cumulus_parents_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
             load = cumulus_parents,
-            mandatory = True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
             end_of_constraint = dt + timedelta(hours=20),
             initial_value = 0,
             target_value = 3*3600,
@@ -110,7 +111,7 @@ class TestSolver(TestCase):
         cumulus_children_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
             load = cumulus_children,
-            mandatory = False,
+            type=CONSTRAINT_TYPE_FILLER,
             end_of_constraint = dt + timedelta(hours=17),
             initial_value = 0,
             target_value = 1*3600,

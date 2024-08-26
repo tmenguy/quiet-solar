@@ -87,5 +87,11 @@ BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
-
 FLOATING_PERIOD_S = 48 * 3600
+
+
+# better for serialization that using an IntEnum
+CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE = 10
+CONSTRAINT_TYPE_MANDATORY_END_TIME  = 9
+CONSTRAINT_TYPE_FILLER = 8
+
