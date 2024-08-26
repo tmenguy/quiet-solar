@@ -129,7 +129,6 @@ class AbstractLoad(AbstractDevice):
 
             self._constraints.append(keep)
 
-
         # only one as fast as possible constraint can be active at a time.... and has to be first
         removed_as_fast = [(i,c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
         if len(removed_as_fast) == 0 or (len(removed_as_fast) == 1 and removed_as_fast[0][0] == 0):
@@ -176,12 +175,7 @@ class AbstractLoad(AbstractDevice):
             if current_start >= DATETIME_MAX_UTC:
                 break
 
-
         self._constraints = kept
-
-
-
-
 
 
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None):
