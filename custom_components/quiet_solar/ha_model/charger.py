@@ -16,7 +16,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
     CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
-    CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
 from ..home_model.constraints import MultiStepsPowerLoadConstraint, DATETIME_MIN_UTC, LoadConstraint, \
     MultiStepsPowerLoadConstraintChargePercent
 from ..ha_model.car import QSCar
@@ -370,7 +370,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         realized_charge_target = target_charge
                         car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                             total_capacity_wh=self.car.car_battery_capacity,
-                            type=CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE,
+                            type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
                             time=time,
                             load=self,
                             load_param=self.car.name,
@@ -420,12 +420,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         if realized_charge_target is None or realized_charge_target < 100:
 
+                            type = CONSTRAINT_TYPE_FILLER_AUTO
                             if realized_charge_target is None:
                                 realized_charge_target = car_initial_percent
+                                # make car charging bigger than the battery filling if it is the only car constraint
+                                type = CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
 
                             car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                                 total_capacity_wh=self.car.car_battery_capacity,
-                                type=CONSTRAINT_TYPE_FILLER_AUTO,
+                                type=type,
                                 time=time,
                                 load=self,
                                 load_param=self.car.name,

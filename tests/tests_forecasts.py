@@ -9,7 +9,7 @@ import pytz
 import numpy as np
 
 from quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
-    CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
 from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
     BUFFER_SIZE_DAYS
 from quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
@@ -177,7 +177,7 @@ class TestForecast(TestCase):
 
                     car_charge_manual = MultiStepsPowerLoadConstraintChargePercent(
                         time=time,
-                        type=CONSTRAINT_TYPE_AS_FAST_AS_POSSIBLE,
+                        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
                         total_capacity_wh=car_capacity,
                         load=charger,
                         from_user=True,

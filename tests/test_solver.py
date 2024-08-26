@@ -227,6 +227,6 @@ class TestSolver(TestCase):
 
             assert len(cmds_charger)== 1
 
-            assert cmds_charger[0][1] == CMD_IDLE
+            assert cmds_charger[0][1] == CMD_AUTO_GREEN_ONLY
 
         asyncio.run(_async_test())
