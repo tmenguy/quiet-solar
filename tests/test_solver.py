@@ -33,12 +33,7 @@ class TestSolver(TestCase):
         start_time = dt
         end_time = dt + timedelta(days=1)
 
-        tarrifs = [(  timedelta(hours=0)             ,0.27  ),
-                    ( timedelta(hours=2, minutes=10) ,0.2068),
-                    ( timedelta(hours=7, minutes=10) ,0.27  ),
-                    ( timedelta(hours=14, minutes=10),0.2068),
-                    ( timedelta(hours=17, minutes=10),0.27  )
-                   ]
+        tarrifs = 0.27/1000.0
 
         car = TestLoad(name="car")
         pool = TestLoad(name="pool")

@@ -248,9 +248,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             score = 0
             if car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+                # only if plugged .... then if home
                 score += 1
-            if car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
-                score += 2
+                if car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+                    score += 2
 
             if score > best_score:
                 best_car = car

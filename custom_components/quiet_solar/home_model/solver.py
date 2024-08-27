@@ -16,7 +16,7 @@ class PeriodSolver(object):
     def __init__(self,
                  start_time: datetime | None = None,
                  end_time: datetime | None = None,
-                 tariffs: list[tuple[timedelta, float]] = None,
+                 tariffs: list[tuple[timedelta, float]] | float | None = None,
                  actionable_loads: list[AbstractLoad] = None,
                  battery: Battery | None = None,
                  pv_forecast: list[tuple[datetime, float]] = None,
@@ -56,29 +56,14 @@ class PeriodSolver(object):
 
         if not tariffs:
             self._tariffs = [(start_time, 0.2)]
+        elif isinstance(tariffs, float):
+            self._tariffs = [(start_time, tariffs)]
         elif len(tariffs) == 1:
             self._tariffs = [(start_time, tariffs[0][1])]
         else:
-            span = end_time - start_time
-            num_day = span.days + 1
-            start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            self._tariffs = []
-            for d in range(num_day):
-                for offset, price in tariffs:
-
-                    strt = start_day + timedelta(days=d) + offset
-
-                    if strt < start_time:
-                        continue
-
-                    if strt > end_time:
-                        break
-
-                    self._tariffs.append((strt, price))
-
+            self._tariffs = tariffs
 
         self._prices_ordered_values : list[float] = sorted(list(set([ p[1] for p in self._tariffs])))
-
 
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
         self._time_slots, self._active_constraints = self.create_time_slots(self._start_time, self._end_time)

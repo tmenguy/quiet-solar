@@ -31,7 +31,14 @@
           "home_voltage": "voltage of your home (V)",
           "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
           "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
-          "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?"
+          "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+          "home_peak_price": "Peak price (€/kWh)",
+          "home_off_peak_price": "Off-peak price (€/kWh, 0 to not support off-peak)",
+          "home_start_off_peak_range_1": "Start of the first off-peak range",
+          "home_end_off_peak_range_1": "End of the first off-peak range (set same as start to disable range)",
+          "home_start_off_peak_range_2": "Start of the second off-peak range",
+          "home_end_off_peak_range_2": "End of the second off-peak range (set same as start to disable range)"
+
         }
       },
       "battery": {
@@ -243,7 +250,13 @@
           "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
           "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
           "grid_active_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]"
+          "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]",
+          "home_peak_price": "[%key:component::quiet_solar::config::step::home::data::home_peak_price%]",
+          "home_off_peak_price": "[%key:component::quiet_solar::config::step::home::data::home_off_peak_price%]",
+          "home_start_off_peak_range_1": "[%key:component::quiet_solar::config::step::home::data::home_start_off_peak_range_1%]",
+          "home_end_off_peak_range_1": "[%key:component::quiet_solar::config::step::home::data::home_end_off_peak_range_1%]",
+          "home_start_off_peak_range_2": "[%key:component::quiet_solar::config::step::home::data::home_start_off_peak_range_2%]",
+          "home_end_off_peak_range_2": "[%key:component::quiet_solar::config::step::home::data::home_end_off_peak_range_2%]"
         }
       },
       "battery": {

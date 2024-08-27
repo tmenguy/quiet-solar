@@ -17,7 +17,9 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
-    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S
+    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
+    CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
+    CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -75,6 +77,16 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
 
+        self.tariff_start_1 = kwargs.pop(CONF_HOME_START_OFF_PEAK_RANGE_1, None)
+        self.tariff_end_1  = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_1, None)
+        self.tariff_start_2 = kwargs.pop(CONF_HOME_START_OFF_PEAK_RANGE_2, None)
+        self.tariff_end_2 = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_2, None)
+        self.price_peak = kwargs.pop(CONF_HOME_PEAK_PRICE, 0.2)
+        if self.price_peak <= 0:
+            self.price_peak = 0.2
+        self.price_peak = self.price_peak / 1000.0
+        self.price_off_peak = kwargs.pop(CONF_HOME_OFF_PEAK_PRICE, 0.0) / 1000.0
+
         self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
         self.home_available_power_sensor = HOME_AVAILABLE_POWER_SENSOR
         self.home_consumption_sensor = HOME_CONSUMPTION_SENSOR
@@ -111,6 +123,71 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
         self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
+
+    def get_tariffs(self, start_time:datetime, end_time:datetime) -> list[tuple[datetime, float]] | float:
+
+        if self.price_off_peak == 0:
+            return self.price_peak
+
+        start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)  # beware it is utc time
+
+        to_prob = [
+            (self.tariff_start_1, self.tariff_end_1, self.price_off_peak),
+            (self.tariff_start_2, self.tariff_end_2, self.price_off_peak)
+        ]
+
+        ranges_off_peak = []
+
+        for start, end, price in to_prob:
+            if start is None or end is None or price is None or price == 0:
+                continue
+
+            if start == end:
+                continue
+
+            start_time_local = start_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            start_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {start}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            end_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {end}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+            if end_utc < start_utc:
+                end_utc += timedelta(days=1)
+
+            ranges_off_peak.append((start_utc, end_utc))
+
+        if not ranges_off_peak:
+            return self.price_peak
+
+        ranges_off_peak = sorted(ranges_off_peak, key=lambda x: x[0])
+
+        span = end_time - start_time
+        num_day = span.days + 1
+        start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0) # beware it is utc time
+        tariffs = []
+        curr_start = start_day
+        for d in range(num_day):
+            for first_start, first_end in ranges_off_peak:
+
+                curr_end = first_start + timedelta(days=d)
+
+                if curr_end > curr_start and curr_end >= start_time:
+                    if curr_start < start_time:
+                        curr_start = start_time
+                    tariffs.append((curr_start, self.price_peak))
+
+                curr_start = curr_end
+                curr_end = first_end + timedelta(days=d)
+
+                if curr_end > curr_start and curr_end >= start_time:
+                    if curr_start < start_time:
+                        curr_start = start_time
+                    tariffs.append((curr_start, self.price_off_peak))
+
+                curr_start = curr_end
+
+                if curr_end >= end_time:
+                    break
+
+        return tariffs
 
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ]
@@ -371,11 +448,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if self._solar_plant:
                 pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
 
-
+            end_time = time + self._period
             solver = PeriodSolver(
                 start_time = time,
-                end_time = time + self._period,
-                tariffs = None,
+                end_time = end_time,
+                tariffs = self.get_tariffs(time, end_time),
                 actionable_loads = active_loads,
                 battery = self._battery,
                 pv_forecast  = pv_forecast,
@@ -452,7 +529,10 @@ class QSHomeConsumptionHistoryAndForecast:
         self.home_non_controlled_consumption : QSSolarHistoryVals | None = None
         self._in_reset = False
         if storage_path is None:
-            self.storage_path = join(self.hass.config.path(), DOMAIN)
+            if self.hass is None:
+                self.storage_path = None
+            else:
+                self.storage_path = join(self.hass.config.path(), DOMAIN)
         else:
             self.storage_path = storage_path
 

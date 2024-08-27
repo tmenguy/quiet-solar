@@ -9,9 +9,10 @@ import pytz
 import numpy as np
 
 from quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
+    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE
 from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
-    BUFFER_SIZE_DAYS
+    BUFFER_SIZE_DAYS, QSHome
 from quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
 from quiet_solar.home_model.battery import Battery
 from quiet_solar.home_model.commands import copy_command, CMD_AUTO_GREEN_ONLY
@@ -104,6 +105,18 @@ class TestForecast(TestCase):
 
             time = debug_conf["now"]
 
+
+            kwargs = {
+                CONF_HOME_START_OFF_PEAK_RANGE_1: "14:10:00",
+                CONF_HOME_END_OFF_PEAK_RANGE_1: "17:10:00",
+                CONF_HOME_START_OFF_PEAK_RANGE_2:"02:10:00",
+                CONF_HOME_END_OFF_PEAK_RANGE_2 : "07:10:00",
+                CONF_HOME_PEAK_PRICE : 0.27,
+                CONF_HOME_OFF_PEAK_PRICE : 0.2068,
+            }
+
+            home = QSHome(hass=None, config_entry=None, name="test_home", **kwargs)
+
             conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
             await conso.init_forecasts(time)
 
@@ -123,12 +136,7 @@ class TestForecast(TestCase):
 
             assert solar_forecast[-1][0] >= time + timedelta(seconds=FLOATING_PERIOD_S - 10*60)
 
-            tarrifs = [(timedelta(hours=0), 0.27/1000.0),
-                       (timedelta(hours=2, minutes=10), 0.2068/1000.0),
-                       (timedelta(hours=7, minutes=10), 0.27/1000.0),
-                       (timedelta(hours=14, minutes=10), 0.2068/1000.0),
-                       (timedelta(hours=17, minutes=10), 0.27/1000.0)
-                       ]
+
 
 
             for j in range(2):
@@ -199,9 +207,12 @@ class TestForecast(TestCase):
                 battery.capacity = 21000
                 battery._current_charge_value = 10000
 
+                end_time = time + timedelta(seconds=FLOATING_PERIOD_S)
+                tarrifs = home.get_tariffs(start_time=time, end_time=end_time)
+
                 s = PeriodSolver(
                     start_time=time,
-                    end_time=time + timedelta(seconds=FLOATING_PERIOD_S),
+                    end_time=end_time,
                     tariffs=tarrifs,
                     actionable_loads=[charger],
                     battery=battery,

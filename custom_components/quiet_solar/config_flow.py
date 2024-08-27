@@ -43,7 +43,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
-    CONF_DEFAULT_CAR_CHARGE
+    CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
+    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -302,6 +303,41 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     cv.boolean,
             }
             )
+
+        sc_dict.update({
+            vol.Required(CONF_HOME_PEAK_PRICE,
+                         default=self.config_entry.data.get(CONF_HOME_PEAK_PRICE,
+                                                            0.2)): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0,
+                    step=0.01,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(CONF_HOME_OFF_PEAK_PRICE,
+                         default=self.config_entry.data.get(CONF_HOME_OFF_PEAK_PRICE,
+                                                            0.0)): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0,
+                    step=0.01,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+
+            vol.Required(CONF_HOME_START_OFF_PEAK_RANGE_1,
+                         default=self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_1,
+                                                            "00:00:00")): selector.TimeSelector(),
+            vol.Required(CONF_HOME_END_OFF_PEAK_RANGE_1,
+                         default=self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_1,
+                                                            "00:00:00")): selector.TimeSelector(),
+            vol.Required(CONF_HOME_START_OFF_PEAK_RANGE_2,
+                         default=self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_2,
+                                                            "00:00:00")): selector.TimeSelector(),
+            vol.Required(CONF_HOME_END_OFF_PEAK_RANGE_2,
+                         default=self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_2,
+                                                            "00:00:00")): selector.TimeSelector(),
+
+        })
 
         schema = vol.Schema(sc_dict)
 
