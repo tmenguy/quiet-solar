@@ -782,9 +782,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_amperage.set(self.max_charge, time)
             self._expected_charge_state.set(True, time)
         elif command.is_auto():
+
+            _LOGGER.info(f"update_value_callback")
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if do_force_update or for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
+                _LOGGER.info(f"update_value_callback compute")
 
                 current_power = 0.0
 
