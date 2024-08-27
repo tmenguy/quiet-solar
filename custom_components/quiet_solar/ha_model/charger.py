@@ -962,7 +962,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # force a homeassistant.update_entity service on the charger entity?
         if self.is_plugged(time=time):
             # set us in a correct current state
-            if command.is_auto() and self.current_command.is_auto():
+            if self.current_command is not None and command is not None and command.is_auto() and self.current_command.is_auto():
                 for_auto_command_init = False
 
             else:
