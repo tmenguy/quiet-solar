@@ -188,7 +188,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self._is_next_charge_full
     def get_update_value_callback_for_constraint_class(self, class_name:str) -> Callable[[LoadConstraint, datetime], Awaitable[float]] | None:
 
-        if str == MultiStepsPowerLoadConstraintChargePercent.__name__:
+        if class_name == MultiStepsPowerLoadConstraintChargePercent.__name__:
             return  self.constraint_update_value_callback_percent_soc
 
         return None
@@ -383,7 +383,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             initial_value=car_initial_percent,
                             target_value=target_charge,
                             power_steps=steps,
-                            support_auto=True
+                            support_auto=True,
                         )
                         self.push_live_constraint(time, car_charge_mandatory)
                         _LOGGER.info(
@@ -783,11 +783,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_charge_state.set(True, time)
         elif command.is_auto():
 
-            _LOGGER.info(f"update_value_callback")
+            # _LOGGER.info(f"update_value_callback")
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if do_force_update or for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
-                _LOGGER.info(f"update_value_callback compute")
+                # _LOGGER.info(f"update_value_callback compute")
 
                 current_power = 0.0
 
