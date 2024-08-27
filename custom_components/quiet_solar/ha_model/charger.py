@@ -752,6 +752,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
 
+        do_force_update = False
+        if (self.current_command is not None and
+                self.current_command.is_like(command) and
+                command.is_like(CMD_AUTO_FROM_CONSIGN) and
+                command.power_consign != self.current_command.power_consign):
+            do_force_update = True
+
+
         if for_auto_command_init:
             probe_duration = 0
             res_ensure_state = True
@@ -775,7 +783,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_charge_state.set(True, time)
         elif command.is_auto():
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
-            if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
+            if do_force_update or for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
 
                 current_power = 0.0
@@ -954,12 +962,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # force a homeassistant.update_entity service on the charger entity?
         if self.is_plugged(time=time):
             # set us in a correct current state
-            if command != self.current_command.command:
+            if command.is_auto() and self.current_command.is_auto():
+                for_auto_command_init = False
+
+            else:
                 self._reset_state_machine()
                 self.set_state_machine_to_current_state(time)
+                for_auto_command_init = True
 
             _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
-            await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
+            await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=for_auto_command_init)
             self._last_charger_state_prob_time = time
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
