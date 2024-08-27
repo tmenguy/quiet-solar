@@ -401,9 +401,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                             start_time, end_time = self.car.get_next_scheduled_event(time)
 
-                            if realized_charge_target is None:
-                                realized_charge_target = car_initial_percent
-
                             if start_time is not None and end_time is not None:
                                 car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                                     total_capacity_wh=self.car.car_battery_capacity,
@@ -413,7 +410,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     load_param=self.car.name,
                                     from_user=False,
                                     end_of_constraint=start_time,
-                                    initial_value=realized_charge_target,
+                                    initial_value=car_initial_percent,
                                     target_value=target_charge,
                                     power_steps=steps,
                                     support_auto=True
