@@ -323,8 +323,9 @@ class AbstractLoad(AbstractDevice):
 
         self.running_command = command
         self.running_command_first_launch = time
-        await self.execute_command(time, command)
-        is_command_set = await self.probe_if_command_set(time, command)
+        is_command_set = await self.execute_command(time, command)
+        if is_command_set is False:
+            is_command_set = await self.probe_if_command_set(time, command)
         if is_command_set:
             self.current_command = command
             self.running_command = None
@@ -357,8 +358,9 @@ class AbstractLoad(AbstractDevice):
     async def force_relaunch_command(self, time: datetime):
         if self.running_command is not None:
             self.running_command_num_relaunch += 1
-            await self.execute_command(time, self.running_command)
-            is_command_set = await self.probe_if_command_set(time, self.running_command)
+            is_command_set = await self.execute_command(time, self.running_command)
+            if is_command_set is False:
+                is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set:
                 self.current_command = self.running_command
                 self.running_command = None
@@ -367,8 +369,9 @@ class AbstractLoad(AbstractDevice):
 
 
 
-    async def execute_command(self, time: datetime, command: LoadCommand):
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool:
         print(f"Executing command {command}")
+        return False
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
         return True

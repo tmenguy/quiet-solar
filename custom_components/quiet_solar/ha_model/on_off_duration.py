@@ -14,7 +14,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SWITCH ]
 
-    async def execute_command(self, time: datetime, command:LoadCommand):
+    async def execute_command(self, time: datetime, command:LoadCommand) -> bool:
         if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
         elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
@@ -27,6 +27,8 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             service=action,
             target={"entity_id": self.switch_entity},
         )
+
+        return False
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
         """ check the states of the switch to see if the command is set """

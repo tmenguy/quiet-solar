@@ -957,7 +957,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_charge_state.set(True, None)
         self._expected_amperage.set(self.get_max_charging_power(), time)
 
-    async def execute_command(self, time: datetime, command: LoadCommand):
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool:
 
         # force a homeassistant.update_entity service on the charger entity?
         if self.is_plugged(time=time):
@@ -971,8 +971,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 for_auto_command_init = True
 
             _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
-            await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=for_auto_command_init)
+            res = await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=for_auto_command_init)
             self._last_charger_state_prob_time = time
+            return res
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
         await self._do_update_charger_state(time)
