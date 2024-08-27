@@ -30,6 +30,7 @@
           "name": "Name",
           "home_voltage": "voltage of your home (V)",
           "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
+          "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
           "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?"
         }
       },
@@ -40,11 +41,15 @@
           "name": "Name",
           "battery_capacity": "Capacity (Wh)",
           "battery_charge_percent_sensor": "Charge percentage (%)",
+          "battery_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
+          "battery_charge_discharge_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "battery_max_discharge_power_value": "Maximum discharge power (W)",
           "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
+          "battery_max_discharge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "battery_max_charge_power_value": "Maximum charge power (W)",
-          "battery_max_charge_power_number": "Maximum charge power (W) Number entity"
+          "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
+          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
         }
       },
       "solar": {
@@ -53,7 +58,9 @@
         "data": {
           "name": "Name",
           "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
-          "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)"
+          "inverter_active_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
+          "inverter_input_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
         }
       },
       "charger": {
@@ -73,10 +80,15 @@
           "charger_min_charge": "Minimum Current Charge Per Phase (A)",
           "charger_is_3p": "Is the charger 3 phases?",
           "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+          "charger_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+          "charger_max_charging_current_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
+          "charger_pause_resume_switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "default_car_charge": "Default car charge target in %"
         }
       },
@@ -90,7 +102,9 @@
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
           "charger_device_ocpp": "OCPP device",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the OCPP one)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
         }
       },
@@ -104,7 +118,9 @@
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
           "charger_device_wallbox": "Wallbox device",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the Wallbox one)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
         }
       },
@@ -114,12 +130,16 @@
         "data": {
           "name": "Name",
           "car_plugged": "Binary sensor to detect if the car is plugged or not",
+          "car_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "car_tracker": "car device tracker to know if the car is at home or not",
+          "car_tracker_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "car_charge_percent_sensor": "% charge of the battery",
+          "car_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "car_battery_capacity": "Battery capacity (Wh)",
           "car_charger_min_charge": "Per phase min charge in (A)",
           "car_charger_max_charge": "Per phase max charge in (A)",
           "calendar": "Add a calendar to define when the car needs to be ready",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]",
           "car_use_custom_power_charge_values": "Use custom power charge values?",
           "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
@@ -163,9 +183,12 @@
         "data": {
           "name": "Name",
           "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+          "pool_temperature_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "switch": "On/Off of the pump",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "power": "Power of the pump (W)",
           "accurate_power_sensor": "Power sensor of the pump (W, kW)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?"
         }
       },
@@ -175,9 +198,12 @@
         "data": {
           "name": "Name",
           "switch": "On/Off of the load",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "power": "Power of the load (W)",
           "accurate_power_sensor": "Power sensor of the load (W, kW)",
-          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on"
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
         }
       },
       "fp_heater": {
@@ -186,11 +212,14 @@
         "data": {
           "name": "Name",
           "switch": "On/Off of the heater",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "select": "Fil pilote value",
+          "select_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "power": "Power of the eater (W)",
           "accurate_power_sensor": "Power sensor of the load (W, kW)",
-          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on"
-
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
         }
       }
     }
@@ -213,6 +242,7 @@
           "name": "[%key:component::quiet_solar::config::step::home::data::name%]",
           "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
           "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
+          "grid_active_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]"
         }
       },
@@ -223,11 +253,15 @@
           "name": "[%key:component::quiet_solar::config::step::battery::data::name%]",
           "battery_capacity": "[%key:component::quiet_solar::config::step::battery::data::battery_capacity%]",
           "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
+          "battery_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor_qs_reset_selector%]",
           "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]",
+          "battery_charge_discharge_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor_qs_reset_selector%]",
           "battery_max_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_value%]",
           "battery_max_discharge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number%]",
+          "battery_max_discharge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number_qs_reset_selector%]",
           "battery_max_charge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_value%]",
-          "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]"
+          "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]",
+          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number_qs_reset_selector%]"
         }
       },
       "solar": {
@@ -236,7 +270,9 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::solar::data::name%]",
           "inverter_active_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor%]",
-          "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]"
+          "inverter_active_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor_qs_reset_selector%]",
+          "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]",
+          "inverter_input_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor_qs_reset_selector%]"
         }
       },
       "charger_generic": {
@@ -248,9 +284,13 @@
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
           "charger_plugged": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_plugged%]",
           "charger_max_charging_current_number": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number%]",
+          "charger_max_charging_current_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number_qs_reset_selector%]",
           "charger_pause_resume_switch": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_pause_resume_switch%]",
+          "charger_pause_resume_switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_pause_resume_switch_qs_reset_selector%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
+          "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_generic::data::calendar_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
         }
       },
@@ -264,7 +304,9 @@
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
           "charger_device_ocpp": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_device_ocpp%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_ocpp::data::calendar%]",
+          "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_ocpp::data::calendar_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::default_car_charge%]"
         }
       },
@@ -278,7 +320,9 @@
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_is_3p%]",
           "charger_device_wallbox": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_device_wallbox%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_wallbox::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_wallbox::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_wallbox::data::calendar%]",
+          "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_wallbox::data::calendar_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::default_car_charge%]"
         }
       },
@@ -288,12 +332,16 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::car::data::name%]",
           "car_plugged": "[%key:component::quiet_solar::config::step::car::data::car_plugged%]",
+          "car_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_plugged_qs_reset_selector%]",
           "car_tracker": "[%key:component::quiet_solar::config::step::car::data::car_tracker%]",
+          "car_tracker_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_tracker_qs_reset_selector%]",
           "car_charge_percent_sensor": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor%]",
+          "car_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor_qs_reset_selector%]",
           "car_battery_capacity": "[%key:component::quiet_solar::config::step::car::data::car_battery_capacity%]",
           "car_charger_min_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_min_charge%]",
           "car_charger_max_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_max_charge%]",
           "calendar": "[%key:component::quiet_solar::config::step::car::data::calendar%]",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::calendar_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::car::data::default_car_charge%]",
           "car_use_custom_power_charge_values": "[%key:component::quiet_solar::config::step::car::data::car_use_custom_power_charge_values%]",
           "car_is_custom_power_charge_values_3p": "[%key:component::quiet_solar::config::step::car::data::car_is_custom_power_charge_values_3p%]",
@@ -337,9 +385,12 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::pool::data::name%]",
           "pool_temperature_sensor": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor%]",
+          "pool_temperature_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor_qs_reset_selector%]",
           "switch": "[%key:component::quiet_solar::config::step::pool::data::switch%]",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::pool::data::switch_qs_reset_selector%]",
           "power": "[%key:component::quiet_solar::config::step::pool::data::power%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::pool::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::pool::data::accurate_power_sensor_qs_reset_selector%]",
           "pool_is_pump_variable_speed": "[%key:component::quiet_solar::config::step::pool::data::pool_is_pump_variable_speed%]"
         }
       },
@@ -349,9 +400,12 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::on_off_duration::data::name%]",
           "switch": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch%]",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch_qs_reset_selector%]",
           "power": "[%key:component::quiet_solar::config::step::on_off_duration::data::power%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::on_off_duration::data::accurate_power_sensor%]",
-          "calendar" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar%]"
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::on_off_duration::data::accurate_power_sensor_qs_reset_selector%]",
+          "calendar" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar%]",
+          "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar_qs_reset_selector%]"
         }
       },
       "fp_heater": {
@@ -360,10 +414,14 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::fp_heater::data::name%]",
           "switch": "[%key:component::quiet_solar::config::step::fp_heater::data::switch%]",
+          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::switch_qs_reset_selector%]",
           "select": "[%key:component::quiet_solar::config::step::fp_heater::data::select%]",
+          "select_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::select_qs_reset_selector%]",
           "power": "[%key:component::quiet_solar::config::step::fp_heater::data::power%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::fp_heater::data::accurate_power_sensor%]",
-          "calendar" :"[%key:component::quiet_solar::config::step::fp_heater::data::calendar%]"
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::accurate_power_sensor_qs_reset_selector%]",
+          "calendar" :"[%key:component::quiet_solar::config::step::fp_heater::data::calendar%]",
+          "calendar_qs_reset_selector" :"[%key:component::quiet_solar::config::step::fp_heater::data::calendar_qs_reset_selector%]"
         }
       }
     }

@@ -6,7 +6,7 @@ from typing import Any
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -29,50 +29,11 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     entities = []
     return entities
 
-    store_sensor = QSSensorEntityDescription(
-        key="charge_state",
-        device_class=SensorDeviceClass.ENUM,
-        options=[
-            "not_in_charge",
-            "waiting_for_a_planned_charge",
-            "charge_ended",
-            "waiting_for_current_charge",
-            "energy_flap_opened",
-            "charge_in_progress",
-            "charge_error"
-        ],
-    )
-
-    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=store_sensor))
-
-    return entities
 
 def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
     entities = []
     return entities
 
-
-    charge_sensor = QSSensorEntityDescription(
-        key="charge_state",
-        device_class=SensorDeviceClass.ENUM,
-        options=[
-            "not_in_charge",
-            "waiting_for_a_planned_charge",
-            "charge_ended",
-            "waiting_for_current_charge",
-            "energy_flap_opened",
-            "charge_in_progress",
-            "charge_error",
-            STATE_UNAVAILABLE,
-            STATE_UNKNOWN,
-        ],
-    )
-
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=charge_sensor))
-
-    entities.extend(create_ha_sensor_for_QSCar(device._default_generic_car))
-
-    return entities
 
 def create_ha_sensor_for_Load(device: AbstractLoad):
     entities = []
@@ -85,6 +46,7 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
             native_unit_of_measurement=UnitOfPower.WATT,
             state_class=SensorStateClass.MEASUREMENT,
             device_class=SensorDeviceClass.POWER,
+            entity_category=EntityCategory.DIAGNOSTIC,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_power_sensor))
 
@@ -100,7 +62,6 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
 
 def create_ha_sensor_for_QSHome(device: QSHome):
     entities = []
-
 
     home_non_controlled_consumption_sensor = QSSensorEntityDescription(
         key="home_non_controlled_consumption",
@@ -191,6 +152,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
         self._attr_unique_id = (
             f"{self.device.device_id}-{description.key}"
         )
+
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
@@ -275,7 +237,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         current_constraint = self.device.get_current_active_constraint(time)
 
         if current_constraint is None:
-            new_val = "NO TARGET"
+            new_val = 0
         else:
             new_val = current_constraint.get_readable_name_for_load()
 

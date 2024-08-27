@@ -15,10 +15,14 @@
                 "data": {
                     "battery_capacity": "Capacity (Wh)",
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
+                    "battery_charge_discharge_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
+                    "battery_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
+                    "battery_max_charge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_value": "Maximum charge power (W)",
                     "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
+                    "battery_max_discharge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "name": "Name"
                 },
@@ -28,13 +32,17 @@
             "car": {
                 "data": {
                     "calendar": "Add a calendar to define when the car needs to be ready",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "car_battery_capacity": "Battery capacity (Wh)",
                     "car_charge_percent_sensor": "% charge of the battery",
+                    "car_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
+                    "car_plugged_qs_reset_selector": "if selected reset to empty the above field",
                     "car_tracker": "car device tracker to know if the car is at home or not",
+                    "car_tracker_qs_reset_selector": "if selected reset to empty the above field",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",
                     "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
                     "charge_10": "Charge Power in W for a 10A charge (per phase), -1 for default",
@@ -86,13 +94,18 @@
             "charger_generic": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+                    "charger_max_charging_current_number_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
+                    "charger_pause_resume_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
+                    "charger_plugged_qs_reset_selector": "if selected reset to empty the above field",
                     "default_car_charge": "Default car charge target in %",
                     "name": "Name"
                 },
@@ -101,7 +114,9 @@
             "charger_ocpp": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -115,7 +130,9 @@
             "charger_wallbox": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -129,11 +146,15 @@
             "fp_heater": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "power": "Power of the eater (W)",
                     "select": "Fil pilote value",
-                    "switch": "On/Off of the heater"
+                    "select_qs_reset_selector": "if selected reset to empty the above field",
+                    "switch": "On/Off of the heater",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "Specific heater used in France",
                 "title": "A \"fil pilote\" based heater"
@@ -142,6 +163,7 @@
                 "data": {
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
                     "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+                    "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name"
                 },
@@ -150,10 +172,13 @@
             "on_off_duration": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "power": "Power of the load (W)",
-                    "switch": "On/Off of the load"
+                    "switch": "On/Off of the load",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
@@ -161,11 +186,14 @@
             "pool": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
                     "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "power": "Power of the pump (W)",
-                    "switch": "On/Off of the pump"
+                    "switch": "On/Off of the pump",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
@@ -173,7 +201,9 @@
             "solar": {
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "inverter_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
+                    "inverter_input_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
@@ -243,10 +273,14 @@
                 "data": {
                     "battery_capacity": "Capacity (Wh)",
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
+                    "battery_charge_discharge_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
+                    "battery_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
+                    "battery_max_charge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_value": "Maximum charge power (W)",
                     "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
+                    "battery_max_discharge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "name": "Name"
                 },
@@ -256,13 +290,17 @@
             "car": {
                 "data": {
                     "calendar": "Add a calendar to define when the car needs to be ready",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "car_battery_capacity": "Battery capacity (Wh)",
                     "car_charge_percent_sensor": "% charge of the battery",
+                    "car_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
+                    "car_plugged_qs_reset_selector": "if selected reset to empty the above field",
                     "car_tracker": "car device tracker to know if the car is at home or not",
+                    "car_tracker_qs_reset_selector": "if selected reset to empty the above field",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",
                     "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
                     "charge_10": "Charge Power in W for a 10A charge (per phase), -1 for default",
@@ -305,12 +343,16 @@
             "charger_generic": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
+                    "charger_max_charging_current_number_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
+                    "charger_pause_resume_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
                     "default_car_charge": "Default car charge target in %",
                     "name": "Name"
@@ -320,7 +362,9 @@
             "charger_ocpp": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the OCPP one)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -334,7 +378,9 @@
             "charger_wallbox": {
                 "data": {
                     "accurate_power_sensor": "Accurate Power sensor for the charger (W, kW) (optional, to overcharge the Wallbox one)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -348,11 +394,15 @@
             "fp_heater": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "power": "Power of the eater (W)",
                     "select": "Fil pilote value",
-                    "switch": "On/Off of the heater"
+                    "select_qs_reset_selector": "if selected reset to empty the above field",
+                    "switch": "On/Off of the heater",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "Specific heater used in France",
                 "title": "A \"fil pilote\" based heater"
@@ -361,6 +411,7 @@
                 "data": {
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
                     "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+                    "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name"
                 },
@@ -369,10 +420,13 @@
             "on_off_duration": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "power": "Power of the load (W)",
-                    "switch": "On/Off of the load"
+                    "switch": "On/Off of the load",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
@@ -380,11 +434,14 @@
             "pool": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
                     "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
                     "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "power": "Power of the pump (W)",
-                    "switch": "On/Off of the pump"
+                    "switch": "On/Off of the pump",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
@@ -392,7 +449,9 @@
             "solar": {
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "inverter_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
+                    "inverter_input_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",

@@ -60,7 +60,10 @@ def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
         if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) in UnitOfPower
         and ent.domain in ALLOWED_DOMAINS
     ]
+
+
     return entities
+
 
 
 def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
@@ -108,7 +111,13 @@ def selectable_percent_entities(
     return entities
 
 
+def _get_reset_selector_entity_name(key:str):
+    return f"{key}_qs_reset_selector"
 
+def _get_entity_key_from_selector_key(key:str):
+    if key.endswith("_qs_reset_selector"):
+        return key.replace("_qs_reset_selector", "")
+    return None
 
 class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING else object):
 
@@ -139,6 +148,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 vals_sc = selector.EntitySelector()
 
         sc_dict[key_sc] = vals_sc
+
+        if is_required is False:
+            key_sc = vol.Optional(_get_reset_selector_entity_name(key), default=False, msg="Reset the entity selector", description="Reset the entity selector")
+            sc_dict[key_sc] = cv.boolean
+
 
     def get_common_schema(self,
                           add_power_value_selector=None,
@@ -223,8 +237,25 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
     @abstractmethod
-    async def async_entry_next(self, data):
+    async def async_entry_next(self, data, type):
         """Handle the next step based on user input."""
+        data[DEVICE_TYPE] = type
+        self.clean_data(data)
+        return await self._async_entry_next(data)
+
+
+    @abstractmethod
+    async def _async_entry_next(self, data):
+        """Handle the next step based on user input."""
+
+    def clean_data(self, data):
+        for k, v in data.items():
+            key_to_be_reset = _get_entity_key_from_selector_key(k)
+            if key_to_be_reset:
+                if v:
+                    data[key_to_be_reset] = None
+                data[k] = None
+
 
 
     def get_entry_title(self, data):
@@ -241,8 +272,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "home"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema()
@@ -286,8 +316,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "solar"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema()
@@ -336,8 +365,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "charger_generic"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=True)
@@ -359,8 +387,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "charger_ocpp"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
@@ -390,8 +417,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "charger_wallbox"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
         sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
 
@@ -417,8 +443,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "battery"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema()
@@ -513,7 +538,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     return await self.async_step_car({"force_dampening": True})
 
 
-                r =  await self.async_entry_next(user_input)
+                r =  await self.async_entry_next(user_input, TYPE)
                 return r
 
 
@@ -605,8 +630,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "pool"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema(add_power_value_selector=1500, add_load_power_sensor=True)
@@ -637,8 +661,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "on_off_duration"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
@@ -657,8 +680,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = "fp_heater"
         if user_input is not None:
             #do sotme stuff to update
-            user_input[DEVICE_TYPE] = TYPE
-            r = await self.async_entry_next(user_input)
+            r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
@@ -737,7 +759,7 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
             menu_options=[t for t in LOAD_TYPES["charger"]],
         )
 
-    async def async_entry_next(self, data):
+    async def _async_entry_next(self, data):
         """Handle the next step based on user input."""
         u_id = f"Quiet Solar: {data.get(CONF_NAME, "device")} {data.get(DEVICE_TYPE, "unknown")}"
         await self.async_set_unique_id(u_id)
@@ -758,7 +780,7 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
         self._errors = {}
 
 
-    async def async_entry_next(self, data):
+    async def _async_entry_next(self, data):
         """Handle the next step based on user input."""
         self.hass.config_entries.async_update_entry(
             self.config_entry, data=data, options=self.config_entry.options, title=self.get_entry_title(data)

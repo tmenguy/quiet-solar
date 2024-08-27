@@ -77,6 +77,7 @@ SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
 SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
 SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"
 
+
 BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 

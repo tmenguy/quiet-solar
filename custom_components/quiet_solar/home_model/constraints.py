@@ -450,6 +450,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         if nrj_to_be_added <= 0.0:
                             break
+                    if len(costs_optimizers) == 0:
+                        break
 
                 if nrj_to_be_added <= 0.0:
                     break
