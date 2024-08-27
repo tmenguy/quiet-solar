@@ -68,7 +68,7 @@ class QSStateCmd():
         self.last_time_set = None
         self.last_change_asked = None
 
-    def set(self, value, time: datetime):
+    def set(self, value, time: datetime | None):
         if time is None:
             self.last_change_asked = None
 
@@ -767,13 +767,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.min_charge), time)
-        elif command == CMD_OFF  or command == CMD_IDLE:
+        elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
-        elif command == CMD_ON:
+        elif command.is_like(CMD_ON):
             self._expected_amperage.set(self.max_charge, time)
             self._expected_charge_state.set(True, time)
-        elif command == CMD_AUTO_GREEN_ONLY or command == CMD_AUTO_FROM_CONSIGN:
+        elif command.is_auto():
             # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
             if for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
@@ -825,7 +825,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                     all_p_median = get_median_sensor(available_power, last_timing=time)
 
-                    if command == CMD_AUTO_GREEN_ONLY:
+                    if command.is_like(CMD_AUTO_GREEN_ONLY):
                         target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
                     else:
                         # mode CMD_AUTO_FROM_CONSIGN
@@ -834,7 +834,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     target_power = current_power + target_delta_power
 
-                    if command == CMD_AUTO_FROM_CONSIGN:
+                    if command.is_like(CMD_AUTO_FROM_CONSIGN):
                         if command.power_consign is not None and command.power_consign >= 0:
                             # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs teh computed consign
                             target_power = max(power_steps[self.min_charge], max(command.power_consign, target_power))
@@ -873,7 +873,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             if  target_power > p_max:
                                 new_amp = self.max_charge
                             elif target_power < p_min_non_0:
-                                if command == CMD_AUTO_GREEN_ONLY:
+                                if command.is_like(CMD_AUTO_GREEN_ONLY):
                                     new_amp = 0
                                 else:
                                     # for CMD_AUTO_FROM_CONSIGN
@@ -884,13 +884,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         elif found_equal:
                             new_amp = best_i + self.min_charge
                         else:
-                            if command == CMD_AUTO_GREEN_ONLY:
+                            if command.is_like(CMD_AUTO_GREEN_ONLY):
                                 new_amp = best_i + self.min_charge
                             else:
                                 new_amp = min(self.max_charge, best_i + self.min_charge + 1)
 
                         # to smooth a bit going up for nothing
-                        if command == CMD_AUTO_GREEN_ONLY:
+                        if command.is_like(CMD_AUTO_GREEN_ONLY):
                             if target_delta_power < 0:
                                 # it means no available power ... force to go down if not done
                                 if current_real_max_charging_power <= new_amp and current_power > 0 and self._expected_charge_state.value:
@@ -954,9 +954,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # force a homeassistant.update_entity service on the charger entity?
         if self.is_plugged(time=time):
             # set us in a correct current state
-            self._reset_state_machine()
-            _LOGGER.info(f"Execute command {command.command} on charger {self.name}")
-            self.set_state_machine_to_current_state(time)
+            if command != self.current_command.command:
+                self._reset_state_machine()
+                self.set_state_machine_to_current_state(time)
+
+            _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
             await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
             self._last_charger_state_prob_time = time
 

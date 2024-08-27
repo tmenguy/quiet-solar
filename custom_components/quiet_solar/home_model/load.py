@@ -311,16 +311,16 @@ class AbstractLoad(AbstractDevice):
                 self._stacked_command = command
                 return
 
-        elif self.current_command == command:
+        # there is no running : whatever we wil not execute the stacked one but only the last one
+        self._stacked_command = None
+
+        if self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self._stacked_command = None
             self.current_command = command # needed as command == has been overcharged to not test everything
             return
-        else:
-            #no running command ... kill the stacked one and execute this one
-            self._stacked_command = None
 
-        
+
         self.running_command = command
         self.running_command_first_launch = time
         await self.execute_command(time, command)

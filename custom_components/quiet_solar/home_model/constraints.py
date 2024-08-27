@@ -557,7 +557,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
     def compute_value(self, time: datetime) -> float:
         """ Compute the value of the constraint whenever it is called changed state or not,
         hence use the old state and the last value change to add the consummed energy """
-        if self.load.current_command == CMD_ON:
+        if self.load.current_command.is_like(CMD_ON):
             return (time - self.last_value_update).total_seconds() + self.current_value
         else:
             return self.current_value

@@ -15,9 +15,9 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         return [ Platform.SENSOR, Platform.SWITCH ]
 
     async def execute_command(self, time: datetime, command:LoadCommand):
-        if command == CMD_ON:
+        if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
-        elif command == CMD_OFF or command == CMD_IDLE:
+        elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             action = SERVICE_TURN_OFF
         else:
             raise ValueError("Invalid command")
@@ -35,7 +35,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             return False
 
-        if command == CMD_ON:
+        if command.is_like(CMD_ON):
             return state.state == "on"
         else:
             return state.state == "off"

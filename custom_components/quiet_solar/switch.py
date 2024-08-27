@@ -190,9 +190,9 @@ class QSSwitchLoad(QSDeviceEntity, SwitchEntity):
         self._switch_entity = switch_entity
 
     async def execute_command(self, time: datetime, command:LoadCommand):
-        if command == CMD_ON:
+        if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
-        elif command == CMD_OFF or command == CMD_IDLE:
+        elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             action = SERVICE_TURN_OFF
         else:
             raise ValueError("Invalid command")

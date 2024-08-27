@@ -240,7 +240,7 @@ class HADeviceMixin:
         if self.is_load_command_set(time) is False:
             do_return_None = True
         else:
-            if self.current_command == CMD_OFF or self.current_command == CMD_IDLE:
+            if self.current_command.is_like(CMD_OFF) or self.current_command.is_like(CMD_IDLE):
                 command_value = 0.0
             else:
                 command_value = self.current_command.power_consign
