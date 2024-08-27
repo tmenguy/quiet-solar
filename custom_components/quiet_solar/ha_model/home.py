@@ -356,6 +356,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         if do_force_solve and active_loads:
 
+            _LOGGER.info("DO SOLVE")
+
             self._last_solve_done = time
 
             unavoidable_consumption_forecast = None
@@ -390,6 +392,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
             for load, commands in self._commands:
                 while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                     cmd_time, command = commands.pop(0)
+                    _LOGGER.info("Launch command %s at %s", command.command, cmd_time)
                     await load.launch_command(time, command)
                     # only launch one at a time for a given load
                     break

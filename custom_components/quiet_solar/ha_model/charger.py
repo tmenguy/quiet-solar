@@ -312,6 +312,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car:
                 car = self.get_best_car(time)
                 if car.name != self.car.name:
+                    _LOGGER.info("CHANGE CONNECTED CAR!")
                     self.detach_car()
 
 
@@ -381,6 +382,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             support_auto=True
                         )
                         self.push_live_constraint(time, car_charge_mandatory)
+                        _LOGGER.info(
+                            f"plugged car {self.car.name} pushed forces constraint {car_charge_mandatory.name}")
                         self._do_force_next_charge = False
 
                     if do_initial_constraints:
@@ -415,6 +418,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     power_steps=steps,
                                     support_auto=True
                                 )
+                                _LOGGER.info(
+                                    f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
                                 self.push_live_constraint(time, car_charge_mandatory)
                                 realized_charge_target = target_charge
 
@@ -438,6 +443,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 power_steps=steps,
                                 support_auto=True
                             )
+                            _LOGGER.info(f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
                             self.push_live_constraint(time, car_charge_best_effort)
 
             else:
