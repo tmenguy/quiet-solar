@@ -69,7 +69,11 @@ class QSStateCmd():
         self.last_change_asked = None
 
     def set(self, value, time: datetime):
+        if time is None:
+            self.last_change_asked = None
+
         if self.value != value:
+            _LOGGER.info(f"QSStateCmd set with change from {self.value} to {value} at {time}")
             self.reset()
             self.value = value
             self.last_change_asked = time
@@ -940,9 +944,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def set_state_machine_to_current_state(self, time: datetime):
         if self.is_charge_disabled(time):
-            self._expected_charge_state.set(False, time)
+            self._expected_charge_state.set(False, None)
         else:
-            self._expected_charge_state.set(True, time)
+            self._expected_charge_state.set(True, None)
         self._expected_amperage.set(self.get_max_charging_power(), time)
 
     async def execute_command(self, time: datetime, command: LoadCommand):
