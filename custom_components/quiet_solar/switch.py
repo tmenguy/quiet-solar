@@ -189,7 +189,7 @@ class QSSwitchLoad(QSDeviceEntity, SwitchEntity):
         super().__init__(**kwargs)
         self._switch_entity = switch_entity
 
-    async def execute_command(self, time: datetime, command:LoadCommand) -> bool:
+    async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
         if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
         elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):

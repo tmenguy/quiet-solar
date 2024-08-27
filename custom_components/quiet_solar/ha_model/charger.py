@@ -180,11 +180,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 ct.target_value = new_target
 
 
-    def is_next_charge_full(self):
+    def is_next_charge_full(self) -> bool:
         if self.car is not None:
             if self.car.car_default_charge == 100:
                 self.set_next_charge_full_or_not(True)
-
         return self._is_next_charge_full
     def get_update_value_callback_for_constraint_class(self, class_name:str) -> Callable[[LoadConstraint, datetime], Awaitable[float]] | None:
 
@@ -455,11 +454,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def min_charge(self):
-        return int(max(self.charger_min_charge, self.car.car_charger_min_charge))
+        if self.car:
+            return int(max(self.charger_min_charge, self.car.car_charger_min_charge))
+        else:
+            return self.charger_min_charge
 
     @property
     def max_charge(self):
-        return int(min(self.charger_max_charge, self.car.car_charger_max_charge))
+        if self.car:
+            return int(min(self.charger_max_charge, self.car.car_charger_max_charge))
+        else:
+            return self.charger_max_charge
 
     def get_platforms(self):
         return [Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON]
@@ -679,7 +684,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if not ((self._expected_charge_state.value is True and is_charge_enabled) or (
                 self._expected_charge_state.value is False and is_charge_disabled)):
-                # acknowledge the chariging power success above
+                # acknowledge the charging power success above
                 self._expected_amperage.success()
                 _LOGGER.info(f"Ensure State: expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
                 # if amperage is ok check if charge state is ok
@@ -748,9 +753,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result
 
+
     async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False) -> bool:
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
+
+        if self.car is None:
+            return True
 
         do_force_update = False
         if (self.current_command is not None and
@@ -759,15 +768,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 command.power_consign != self.current_command.power_consign):
             do_force_update = True
 
-
         if for_auto_command_init:
-            probe_duration = 0
             res_ensure_state = True
+            do_force_update = True
         else:
-            probe_duration = CHARGER_ADAPTATION_WINDOW
             res_ensure_state = await self._ensure_correct_state(time)
 
-        if self.is_car_stopped_asking_current(time, for_duration=probe_duration):
+        if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # we can put back the battery as possibly discharging! as the car won't consume anymore soon ...
 
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
@@ -775,6 +782,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.min_charge), time)
+            self._expected_charge_state.set(True, time) # True as teh cas stopped asking, and the wallbox may not support to stop in this case
         elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
@@ -784,8 +792,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif command.is_auto():
 
             # _LOGGER.info(f"update_value_callback")
-            # only take decision if teh state is "good" for a while CHARGER_ADAPTATION_WINDOW
-            if do_force_update or for_auto_command_init or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
+            # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW
+            if do_force_update or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
                 # _LOGGER.info(f"update_value_callback compute")
 
@@ -793,7 +801,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 current_real_max_charging_power = self._expected_amperage.value
                 if self._expected_charge_state.value:
-                    current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, probe_duration / 2.0, time)
+                    current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW / 2.0, time)
                     current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                     # time to update some dampening car values:
@@ -810,7 +818,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     else:
                         current_real_car_power = self.get_median_sensor(self.secondary_power_sensor,
-                                                                        probe_duration, time)
+                                                                        CHARGER_ADAPTATION_WINDOW, time)
                         current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
 
                     # we will compare now if the current need to be adapted compared to solar production
@@ -824,7 +832,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
 
-                available_power = self.home.get_available_power_values(probe_duration, time)
+                available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
                 # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this powe is available to the car
 
                 # do we need a bit of a PID ? (proportional integral derivative? or keep it simple for now) or a convex hul with min / max?
@@ -960,28 +968,32 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._expected_charge_state.set(True, None)
         self._expected_amperage.set(self.get_max_charging_power(), time)
 
-    async def execute_command(self, time: datetime, command: LoadCommand) -> bool:
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
 
         # force a homeassistant.update_entity service on the charger entity?
-        if self.is_plugged(time=time):
+        await self._do_update_charger_state(time)
+        if self.is_plugged(time=time) and self.car is not None:
             # set us in a correct current state
             if self.current_command is not None and command is not None and command.is_auto() and self.current_command.is_auto():
-                for_auto_command_init = False
-
+                pass
             else:
                 self._reset_state_machine()
                 self.set_state_machine_to_current_state(time)
-                for_auto_command_init = True
 
             _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
-            res = await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=for_auto_command_init)
+            res = await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=True)
             self._last_charger_state_prob_time = time
             return res
+        else:
+            return None
 
-    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         await self._do_update_charger_state(time)
-        result = await self._compute_and_launch_new_charge_state(time, command, for_auto_command_init=False)
-        return result
+        if self.is_plugged(time=time) and self.car is not None:
+            result = await self._ensure_correct_state(time)
+            return result
+        else:
+            return None
 
     async def _do_update_charger_state(self, time):
         if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL:

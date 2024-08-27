@@ -297,8 +297,6 @@ class AbstractLoad(AbstractDevice):
 
         return force_solving
 
-
-
     async def launch_command(self, time:datetime, command: LoadCommand):
 
         command = copy_command(command)
@@ -324,24 +322,35 @@ class AbstractLoad(AbstractDevice):
         self.running_command = command
         self.running_command_first_launch = time
         is_command_set = await self.execute_command(time, command)
-        if is_command_set is False:
-            is_command_set = await self.probe_if_command_set(time, command)
-        if is_command_set:
-            self.current_command = command
-            self.running_command = None
-            self.running_command_num_relaunch = 0
-            self.running_command_first_launch = None
+        if is_command_set is None:
+            # hum we may have an impossibility to launch this command
+            _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
+        else:
+            if is_command_set is False:
+                is_command_set = await self.probe_if_command_set(time, command)
+                if is_command_set is None:
+                    _LOGGER.info(f"Impossible to launch + probe this command {command.command} on this load {self.name}")
+
+            if is_command_set is True:
+                self.current_command = command
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_first_launch = None
 
     def is_load_command_set(self, time:datetime):
         return self.running_command is None and self.current_command is not None
 
-    async def check_commands(self, time: datetime):
+    async def check_commands(self, time: datetime) -> timedelta:
 
         res = timedelta(seconds=0)
 
         if self.running_command is not None:
             is_command_set = await self.probe_if_command_set(time, self.running_command)
-            if is_command_set:
+            if is_command_set is None:
+                # impossible to run this command for this load ...
+                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name})")
+
+            if is_command_set is True:
                 self.current_command = self.running_command
                 self.running_command = None
                 self.running_command_num_relaunch = 0
@@ -359,21 +368,27 @@ class AbstractLoad(AbstractDevice):
         if self.running_command is not None:
             self.running_command_num_relaunch += 1
             is_command_set = await self.execute_command(time, self.running_command)
-            if is_command_set is False:
-                is_command_set = await self.probe_if_command_set(time, self.running_command)
-            if is_command_set:
-                self.current_command = self.running_command
-                self.running_command = None
-                self.running_command_num_relaunch = 0
-                self.running_command_first_launch = None
+            if is_command_set is None:
+                _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
+            else:
+                if is_command_set is False:
+                    is_command_set = await self.probe_if_command_set(time, self.running_command)
+                    if is_command_set is None:
+                        _LOGGER.info(
+                            f"impossible to force + probe command {self.running_command.command} for this load {self.name})")
+                if is_command_set is True:
+                    self.current_command = self.running_command
+                    self.running_command = None
+                    self.running_command_num_relaunch = 0
+                    self.running_command_first_launch = None
 
 
 
-    async def execute_command(self, time: datetime, command: LoadCommand) -> bool:
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
         print(f"Executing command {command}")
         return False
 
-    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool:
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         return True
 
 

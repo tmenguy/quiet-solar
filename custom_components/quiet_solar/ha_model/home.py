@@ -89,7 +89,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.home_non_controlled_consumption = None
         self.home_consumption = None
         self.home_available_power = None
-        self.home_mode = QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+        self.home_mode = None
 
         self._last_active_load_time = None
         if self.grid_active_power_sensor_inverted:
@@ -263,9 +263,10 @@ class QSHome(HADeviceMixin, AbstractDevice):
             device.register_all_on_change_states()
             self._all_devices.append(device)
 
+
     async def update_loads_constraints(self, time: datetime):
 
-        if self.home_mode in [
+        if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value
             ]:
@@ -278,7 +279,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
     async def update_all_states(self, time: datetime):
 
-        if self.home_mode in [
+        if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             ]:
             return
@@ -298,7 +299,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
     async def update(self, time: datetime):
 
-        if self.home_mode in [
+        if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value
             ]:

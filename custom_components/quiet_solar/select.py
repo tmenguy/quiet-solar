@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,9 @@ from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
 @dataclass(frozen=True, kw_only=True)
 class QSSelectEntityDescription(SelectEntityDescription):
     qs_default_option:str | None  = None
@@ -97,14 +101,15 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
             f"{self.device.device_id}-{description.key}"
         )
         self._attr_available = True
-
-        if description.qs_default_option:
-            self._attr_current_option = description.qs_default_option
+        self._do_restore_default = True
 
     async def async_select_option(self, option: str) -> None:
         """Select an option."""
         self._attr_current_option = option
-        setattr(self.device, self.entity_description.key, option)
+        try:
+            setattr(self.device, self.entity_description.key, option)
+        except:
+            _LOGGER.info(f"can't set select option {option} on {self.device.name} for {self.entity_description.key}")
         self.async_write_ha_state()
 
     @callback
@@ -119,6 +124,16 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
         self._attr_current_option = option
         self.async_write_ha_state()
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to Home Assistant."""
+        await super().async_added_to_hass()
+
+        self._attr_available = True
+
+        if self._do_restore_default:
+            if self.entity_description.qs_default_option:
+                new_option = self.entity_description.qs_default_option.value
+                await self.async_select_option(new_option)
 
 class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
     """Entity to represent VAD sensitivity."""
@@ -132,16 +147,24 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
         self._attr_available = True
+        self._do_restore_default = False
+
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
 
-        self._attr_available = True
-
         state = await self.async_get_last_state()
+
         if state is not None and state.state in self.options:
-            await self.async_select_option(state.state)
+            new_option = state.state
+        else:
+            if self.entity_description.qs_default_option:
+                new_option = self.entity_description.qs_default_option.value
+            else:
+                new_option = QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+
+        await self.async_select_option(new_option)
 
 
 @dataclass
