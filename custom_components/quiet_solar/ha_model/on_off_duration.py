@@ -1,7 +1,9 @@
 from datetime import datetime
 
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
+from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE
 
@@ -41,4 +43,39 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             return state.state == "on"
         else:
             return state.state == "off"
+
+    async def check_load_activity_and_constraints(self, time: datetime):
+        # check that we have a connected car, and which one, or that it is completely disconnected
+        #  if there is no more car ... just reset
+
+        start_schedule, end_schedule = self.get_next_scheduled_event(time)
+
+        if start_schedule is not None and end_schedule is not None:
+
+            do_schedule = True
+
+            if self._last_completed_constraint is not None and self._last_completed_constraint.end_of_constraint >= end_schedule:
+                # we have already scheduled this event
+                do_schedule = False
+
+            if do_schedule:
+                for ct in self._constraints:
+                    if ct.end_of_constraint >= end_schedule:
+                        do_schedule = False
+                        break
+
+            if do_schedule:
+                # schedule the load to be launched
+                load_mandatory = TimeBasedSimplePowerLoadConstraint(
+                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                    time=time,
+                    load=self,
+                    from_user=False,
+                    end_of_constraint=end_schedule,
+                    power=self.power_use,
+                    target=(end_schedule - start_schedule).total_seconds()
+                )
+                self.push_live_constraint(time, load_mandatory)
+
+        return
 

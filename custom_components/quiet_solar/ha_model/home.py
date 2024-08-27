@@ -272,6 +272,12 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             for load in self._all_loads:
 
+                if not isinstance(load, AbstractLoad):
+                    continue
+
+                if load.load_is_auto_to_be_boosted:
+                    continue
+
                 if not isinstance(load, HADeviceMixin):
                     continue
 
@@ -662,6 +668,12 @@ class QSHomeConsumptionHistoryAndForecast:
 
             for load in self.home._all_loads:
 
+                if not isinstance(load, AbstractLoad):
+                    continue
+
+                if load.load_is_auto_to_be_boosted:
+                    continue
+
                 if not isinstance(load, HADeviceMixin):
                     continue
 
@@ -681,7 +693,6 @@ class QSHomeConsumptionHistoryAndForecast:
                     controlled_power_values[0] += load_sensor.values[0]
                     added_controlled = True
                 else:
-
                     if isinstance(load, AbstractLoad):
                         if load.switch_entity:
                             end_time = time

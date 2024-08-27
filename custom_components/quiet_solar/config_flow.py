@@ -44,7 +44,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
-    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE
+    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
+    CONF_LOAD_IS_BOOST_ONLY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,7 +160,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_power_value_selector=None,
                           add_load_power_sensor=False,
                           add_load_power_sensor_mandatory=False,
-                          add_calendar=False) -> dict:
+                          add_calendar=False,
+                          add_boost_only=False
+                          ) -> dict:
 
         default = self.config_entry.data.get(CONF_NAME)
 
@@ -172,6 +175,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             sc = {
                 vol.Required(CONF_NAME, default=default): cv.string,
             }
+
+        if add_boost_only:
+            sc.update({
+                vol.Optional(CONF_LOAD_IS_BOOST_ONLY,
+                             default=self.config_entry.data.get(CONF_LOAD_IS_BOOST_ONLY, False)):
+                cv.boolean,
+            })
 
         if add_power_value_selector:
 
@@ -209,8 +219,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                     add_calendar=True)
 
         sc.update( {
-                    vol.Required(CONF_NAME): cv.string,
-
                     vol.Optional(CONF_CHARGER_MAX_CHARGE, default=self.config_entry.data.get(CONF_CHARGER_MAX_CHARGE, 32)):
                         selector.NumberSelector(
                             selector.NumberSelectorConfig(
@@ -700,9 +708,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
+        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True, add_boost_only=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
+
+
 
         schema = vol.Schema(sc_dict)
 

@@ -7,7 +7,7 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
-from ..const import CONF_POWER, CONF_SWITCH
+from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY
 
 import slugify
 
@@ -38,9 +38,11 @@ class AbstractLoad(AbstractDevice):
     def __init__(self, **kwargs):
         self.switch_entity = kwargs.pop(CONF_SWITCH, None)
         self.power_use = kwargs.pop(CONF_POWER, None)
+        self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
         super().__init__(**kwargs)
 
         self._constraints: list[LoadConstraint] = []
+        self._last_completed_constraint: LoadConstraint | None = None
         self.current_command : LoadCommand | None = None
         self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
@@ -62,15 +64,18 @@ class AbstractLoad(AbstractDevice):
             return
         return await self.check_load_activity_and_constraints(time)
 
-    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict]):
+    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
         self.reset()
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
-            if cs_load is not None and cs_load.from_user:
+            if cs_load is not None:
                 if not cs_load.is_constraint_active_for_time_period(time):
                     cs_load.end_of_constraint = time + timedelta(seconds=5*60)
                 if cs_load.is_constraint_active_for_time_period(time):
                     self.push_live_constraint(time, cs_load)
+
+        if stored_executed is not None:
+            self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
 
         self._externally_initialized_constraints = True
 
@@ -101,7 +106,7 @@ class AbstractLoad(AbstractDevice):
         return None
 
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
-        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.from_user]
+        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time)]
 
     def set_live_constraints(self, time: datetime, constraints: list[LoadConstraint]):
 
@@ -286,6 +291,14 @@ class AbstractLoad(AbstractDevice):
                 if c.is_constraint_met():
                     _LOGGER.info(f"{c.name} skipped because met (just after update)")
                     c.skip = True
+                break
+
+
+        for c in self._constraints:
+            if c.skip is False:
+                continue
+            if c.is_constraint_met():
+                self._last_completed_constraint = c
                 break
 
         constraints = [c for c in self._constraints if c.skip is False]

@@ -204,6 +204,7 @@
         "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
         "data": {
           "name": "Name",
+          "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
           "switch": "On/Off of the load",
           "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "power": "Power of the load (W)",
@@ -412,6 +413,7 @@
         "description": "[%key:component::quiet_solar::config::step::on_off_duration::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::on_off_duration::data::name%]",
+          "load_is_boost_only": "[%key:component::quiet_solar::config::step::on_off_duration::data::load_is_boost_only%]",
           "switch": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch%]",
           "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch_qs_reset_selector%]",
           "power": "[%key:component::quiet_solar::config::step::on_off_duration::data::power%]",

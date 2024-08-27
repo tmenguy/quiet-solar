@@ -59,6 +59,7 @@ class LoadConstraint(object):
             start_of_constraint = DATETIME_MIN_UTC
 
         self.end_of_constraint: datetime = end_of_constraint
+        self.initial_end_of_constraint: datetime = end_of_constraint
 
         self.start_of_constraint: datetime = start_of_constraint
         self._internal_start_of_constraint: datetime = self.start_of_constraint  # this one can be overriden by the prev constraint of the load

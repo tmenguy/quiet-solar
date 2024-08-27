@@ -17,7 +17,7 @@ CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
 CONF_SWITCH = "switch"
 CONF_SELECT = "select"
 CONF_CALENDAR = "calendar"
-
+CONF_LOAD_IS_BOOST_ONLY = "load_is_boost_only"
 
 
 CONF_HOME_VOLTAGE = "home_voltage"
@@ -95,6 +95,7 @@ BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
+HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"
 FLOATING_PERIOD_S = 30 * 3600
 
 

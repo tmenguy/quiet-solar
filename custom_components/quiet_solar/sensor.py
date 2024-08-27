@@ -18,6 +18,7 @@ from .ha_model.charger import QSChargerGeneric
 from .const import (
     DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, HA_CONSTRAINT_SENSOR_HISTORY,
+    HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -245,14 +246,23 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
             do_save = True
             self._attr_native_value = new_val
 
-        loads = self.device.get_active_constraints_for_storage(time)
-        serialized_loads = [ l.to_dict() for l in loads]
+        constraints = self.device.get_active_constraints_for_storage(time)
+        serialized_constraints = [ l.to_dict() for l in constraints]
 
         old = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
 
-        if old != serialized_loads:
+        if old != serialized_constraints:
             do_save = True
-            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_loads
+            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_constraints
+
+        if self.device._last_completed_constraint is not None:
+            old = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
+            serialized_constraint = self.device._last_completed_constraint.to_dict()
+            if old != serialized_constraint:
+                do_save = True
+                self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
+
+
 
         if do_save:
             self.async_write_ha_state()
@@ -261,6 +271,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         """add back the stored constraints."""
         await super().async_added_to_hass()
         stored_cs = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
+        stored_executed = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
         await self.hass.async_add_executor_job(
-            self.device.load_constraints_from_storage, datetime.now(pytz.UTC), stored_cs
+            self.device.load_constraints_from_storage, datetime.now(pytz.UTC), stored_cs, stored_executed
         )
