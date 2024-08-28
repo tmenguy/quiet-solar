@@ -82,7 +82,7 @@ class AbstractLoad(AbstractDevice):
     async def check_load_activity_and_constraints(self, time: datetime):
         return
 
-    def get_update_value_callback_for_constraint_class(self, class_name:str) -> Callable[[LoadConstraint, datetime], Awaitable[float]] | None:
+    def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
         return None
 
     def is_load_active(self, time: datetime):
@@ -106,7 +106,7 @@ class AbstractLoad(AbstractDevice):
         return None
 
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
-        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time)]
+        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.end_of_constraint < DATETIME_MAX_UTC]
 
     def set_live_constraints(self, time: datetime, constraints: list[LoadConstraint]):
 
@@ -183,10 +183,12 @@ class AbstractLoad(AbstractDevice):
         self._constraints = kept
 
 
-    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None):
+    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None, check_end_constraint_exists:bool = False):
         if constraint is not None:
             for c in self._constraints:
                 if c == constraint:
+                    return
+                if check_end_constraint_exists and constraint is not None and c.end_of_constraint == constraint.end_of_constraint:
                     return
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)
@@ -277,9 +279,9 @@ class AbstractLoad(AbstractDevice):
                     if handled_constraint_force:
                         force_solving = True
                         # ok we have pushed or made a target the next important constraint
-                        await c.update(time)
-                        if c.is_constraint_met():
-                            _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                        do_continue_ct = await c.update(time)
+                        if do_continue_ct is False:
+                            _LOGGER.info(f"{c.name} skipped because met (just after update) or stopped by callback")
                             c.skip = True
                         break
 
@@ -287,8 +289,8 @@ class AbstractLoad(AbstractDevice):
                 c.skip = True
                 _LOGGER.info(f"{c.name} skipped because met")
             elif c.is_constraint_active_for_time_period(time, time + period):
-                await c.update(time)
-                if c.is_constraint_met():
+                do_continue_ct = await c.update(time)
+                if do_continue_ct is False:
                     _LOGGER.info(f"{c.name} skipped because met (just after update)")
                     c.skip = True
                 break

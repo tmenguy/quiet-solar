@@ -1,4 +1,5 @@
 import copy
+import logging
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
@@ -16,6 +17,7 @@ import importlib
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
 
+_LOGGER = logging.getLogger(__name__)
 
 class LoadConstraint(object):
 
@@ -28,6 +30,7 @@ class LoadConstraint(object):
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
                  initial_value: float | None = 0.0,
+                 current_value: float | None = None,
                  target_value: float = 0.0,
                  **kwargs
                  ):
@@ -48,7 +51,7 @@ class LoadConstraint(object):
         self.from_user = from_user
         self.type = type
 
-        self._update_value_callback = load.get_update_value_callback_for_constraint_class(self.__class__.__name__)
+        self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
 
 
         # ok fill form the args
@@ -71,7 +74,10 @@ class LoadConstraint(object):
 
         self.target_value = target_value
 
-        self.current_value = self._internal_initial_value
+        if current_value is None:
+            self.current_value = self._internal_initial_value
+        else:
+            self.current_value = current_value
 
         self.name = f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{self.target_value}/{self.type})"
 
@@ -136,6 +142,7 @@ class LoadConstraint(object):
             "load_param": self.load_param,
             "from_user": self.from_user,
             "initial_value": self.initial_value,
+            "current_value": self.current_value,
             "target_value": self.target_value,
             "start_of_constraint" : f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}"
@@ -240,17 +247,24 @@ class LoadConstraint(object):
         self._internal_initial_value = prev_constraint_value
         self.current_value = prev_constraint_value
 
-    async def update(self, time: datetime):
+    async def update(self, time: datetime) -> bool:
         """ Update the constraint with the new value. to be called by a load that can compute the value based or sensors or external data"""
         if time >= self.last_value_update:
+            do_continue_constraint = True
             if self._update_value_callback is not None:
-                value = await self._update_value_callback(self, time)
+                value, do_continue_constraint = await self._update_value_callback(self, time)
+                if do_continue_constraint is False:
+                    _LOGGER.info(f"{self.name} update callback asked for stop")
                 if value is None:
                     value = self.current_value
             else:
                 value = self.compute_value(time)
             self.current_value = value
             self.last_value_update = time
+            if do_continue_constraint is False or self.is_constraint_met():
+                return False
+        return True
+
 
 
 

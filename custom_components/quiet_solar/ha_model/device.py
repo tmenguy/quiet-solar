@@ -212,8 +212,8 @@ class HADeviceMixin:
         if state is not None:
             state_attr = state.attributes
 
-        start_time = state_attr.get("start_time", None)
-        end_time = state_attr.get("end_time", None)
+        start_time: str | None | datetime = state_attr.get("start_time", None)
+        end_time: str | None | datetime = state_attr.get("end_time", None)
 
         if start_time is not None:
             start_time = datetime.fromisoformat(start_time)
@@ -244,7 +244,7 @@ class HADeviceMixin:
                 command_value = 0.0
             else:
                 command_value = self.current_command.power_consign
-                if command_value is None:
+                if command_value is None or command_value == 0:
                     command_value = self.power_use
         value = None
         if self.accurate_power_sensor is not None:
@@ -358,8 +358,24 @@ class HADeviceMixin:
             val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
         return val
 
+    def get_device_real_energy(self, start_time: datetime, end_time:datetime) -> float | None:
+        duration_before_s = (end_time - start_time).total_seconds()
+        val = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, end_time)
+        if not val:
+            val = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, end_time)
+        if not val:
+            return None
+        return compute_energy_Wh_rieman_sum(val)[0]
+
+    def get_device_command_energy(self, start_time: datetime, end_time:datetime) -> float | None:
+        duration_before_s = (end_time - start_time).total_seconds()
+        val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, end_time)
+        if not val:
+            return None
+        return compute_energy_Wh_rieman_sum(val)[0]
+
     def get_last_state_value_duration(self, entity_id: str, states_vals: list[str], num_seconds_before: float | None,
-                                      time: datetime, invert_val_probe=False, allowed_max_holes_s: float = 3) -> float:
+                                      time: datetime, invert_val_probe=False, allowed_max_holes_s: float = 3) -> float | None:
 
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
@@ -370,7 +386,7 @@ class HADeviceMixin:
                                              keep_invalid_states=True)
 
         if not values:
-            return 0.0
+            return None
 
         values.sort(key=itemgetter(0), reverse=True)
 
@@ -379,6 +395,8 @@ class HADeviceMixin:
         # check the last states
         current_hole = 0.0
         first_is_met = False
+
+        all_invalid = True
 
         for i, (ts, state, attr) in enumerate(values):
             if i > 0:
@@ -390,6 +408,7 @@ class HADeviceMixin:
 
             val_prob_ok = False
             if state is not None:
+                all_invalid = False
                 if invert_val_probe:
                     val_prob_ok = state not in states_vals
                 else:
@@ -407,6 +426,9 @@ class HADeviceMixin:
                 current_hole += delta_t
                 if current_hole > allowed_max_holes_s:
                     break
+
+        if all_invalid:
+            return None
 
         return state_status_duration
 

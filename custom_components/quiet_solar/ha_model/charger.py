@@ -185,7 +185,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car.car_default_charge == 100:
                 self.set_next_charge_full_or_not(True)
         return self._is_next_charge_full
-    def get_update_value_callback_for_constraint_class(self, class_name:str) -> Callable[[LoadConstraint, datetime], Awaitable[float]] | None:
+
+    def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
+
+        class_name = constraint.__class__.__name__
 
         if class_name == MultiStepsPowerLoadConstraintChargePercent.__name__:
             return  self.constraint_update_value_callback_percent_soc
@@ -206,10 +209,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         is_plugged, state_time = self.is_charger_plugged_now(time)
 
-        if is_plugged:
-            state = QSChargerStates.PLUGGED
+        if is_plugged is None:
+            state = None
         else:
-            state = QSChargerStates.UN_PLUGGED
+            if is_plugged:
+                state = QSChargerStates.PLUGGED
+            else:
+                state = QSChargerStates.UN_PLUGGED
 
         return (state_time, state, {})
 
@@ -331,15 +337,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if self._constraints:
                     for ct in self._constraints:
-                        if ct.from_user:
-                            if ct.load_param == car.name:
-                                existing_constraints.append(ct)
-                            else:
-                                # we may want to try again to check again the car if it is teh right one
-                                self._retry_check_constraint +=1
-                                if self._retry_check_constraint < 2:
-                                    _LOGGER.info(f"retrying car attachement due to constraint mismatch {ct.load_param} != {car.name}")
-                                    return # we will try again later
+                        if ct.load_param == car.name:
+                            existing_constraints.append(ct)
+                        else:
+                            # we may want to try again to check again the car if it is the right one
+                            self._retry_check_constraint +=1
+                            if self._retry_check_constraint <= 2:
+                                _LOGGER.info(f"retrying car attachement due to constraint mismatch {ct.load_param} != {car.name}")
+                                return # we will try again later
 
                 self.reset()
                 _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
@@ -421,7 +426,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 )
                                 _LOGGER.info(
                                     f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
-                                self.push_live_constraint(time, car_charge_mandatory)
+                                self.push_live_constraint(time, car_charge_mandatory, check_end_constraint_exists=True)
                                 realized_charge_target = target_charge
 
                         if realized_charge_target is None or realized_charge_target < 100:
@@ -511,6 +516,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                               time: datetime,
                               for_duration: float | None = None,
                               invert_prob=False) -> bool | None:
+
         if not status_vals or self.charger_status_sensor is None:
             return None
 
@@ -528,7 +534,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def _check_plugged_val(self,
                            time: datetime,
                            for_duration: float | None = None,
-                           check_for_val=True) -> bool:
+                           check_for_val=True) -> bool | None:
 
         if for_duration is None or for_duration < 0:
             for_duration = 0
@@ -538,16 +544,46 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                num_seconds_before=2 * for_duration,
                                                                time=time,
                                                                invert_val_probe=not check_for_val)
+        if contiguous_status is None:
+            res = contiguous_status
+        else:
+            res = contiguous_status >= for_duration and contiguous_status > 0
 
-        return contiguous_status >= for_duration and contiguous_status > 0
 
-    def is_plugged(self, time: datetime, for_duration: float | None = None) -> bool:
+        if res is None:
+
+            if check_for_val:
+                ok_value = QSChargerStates.PLUGGED
+                not_ok_value = QSChargerStates.UN_PLUGGED
+            else:
+                ok_value = QSChargerStates.UN_PLUGGED
+                not_ok_value = QSChargerStates.PLUGGED
+
+
+            if self.car:
+                latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
+                res_car =  self.car.is_car_plugged(time, for_duration)
+                if res_car is None:
+                    return latest_charger_valid_state == ok_value
+                else:
+                    if latest_charger_valid_state is not None:
+                        if res_car is check_for_val and latest_charger_valid_state == ok_value:
+                            return True
+                        if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
+                            return False
+            return None
+
+        return res
+
+
+    def is_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self._check_plugged_val(time, for_duration, check_for_val=True)
 
-    def is_not_plugged(self, time: datetime, for_duration: float | None = None) -> bool:
+
+    def is_not_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self._check_plugged_val(time, for_duration, check_for_val=False)
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
+    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
@@ -556,7 +592,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             state_time = time
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return False, state_time
+            return None, state_time
+
         return state.state == "on", state_time
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
@@ -714,7 +751,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return False
 
-    async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> float | None:
+    async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> tuple[float | None, bool]:
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
@@ -723,36 +760,54 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.current_command is None or self.car is None or self.is_not_plugged(time=time,
                                                                                    for_duration=CHARGER_CHECK_STATE_WINDOW):
-            self.reset()
+            # if we reset here it will remove the current constraint list from the load!!!!
             _LOGGER.info(f"update_value_callback: reset because no car or not plugged")
-            return None
+            return (None, False)
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
             _LOGGER.info(f"update_value_callback:short unplug")
-            return None
+            return (None, True)
 
+        result_calculus = None
+        result = None
         if self.car.car_charge_percent_sensor is None:
-            result = 0.0
-        else:
+            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time)
+            if added_nrj and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
+                added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
+                result = ct.current_value + added_percent
+                result_calculus = result
+            else:
+                result = 0.0
+
+        if self.car.car_charge_percent_sensor is not None:
             result = self.car.get_car_charge_percent(time)
+            if result_calculus is not None:
+                if result is None:
+                    result = result_calculus
+                elif abs(result_calculus - result) > 10:
+                    _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
+                    result = min(result_calculus, result)
+
+        do_continue_constraint = True
 
         if self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW):
             # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
             _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
-            result = ct.target_value
+            do_continue_constraint = False
 
         if result is not None:
             if result > 99.8:
-                result = ct.target_value
                 _LOGGER.info(f"update_value_callback: a 100% reached")
+                do_continue_constraint = False
             elif result >= ct.target_value:
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
+                do_continue_constraint = False
 
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command)
 
-        return result
+        return (result, do_continue_constraint)
 
 
     async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False) -> bool:
@@ -1057,7 +1112,7 @@ class QSChargerOCPP(QSChargerGeneric):
         val = amps * self.home.voltage
         return val
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
+    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
@@ -1066,7 +1121,8 @@ class QSChargerOCPP(QSChargerGeneric):
             state_time = time
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return False, state_time
+            return None, state_time
+
         return state.state == "off", state_time
 
 
@@ -1109,17 +1165,26 @@ class QSChargerWallbox(QSChargerGeneric):
         self.secondary_power_sensor = self.charger_wallbox_charging_power
         self.attach_power_to_probe(self.secondary_power_sensor)
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool, datetime]:
+    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
 
-        state = self.hass.states.get(self.charger_pause_resume_switch)
-        if state is not None:
-            state_time = state.last_updated
+        state_wallbox = self.hass.states.get(self.charger_status_sensor)
+        if state_wallbox is None or state_wallbox.state in [STATE_UNAVAILABLE]:
+            #if other are not available, we can't know if the charger is plugged at all
+            if state_wallbox is not None:
+                state_time = state_wallbox.last_updated
+            else:
+                state_time = time
+            return None, state_time
         else:
-            state_time = time
+            state = self.hass.states.get(self.charger_pause_resume_switch)
+            if state is not None:
+                state_time = state.last_updated
+            else:
+                state_time = time
 
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return False, state_time
-        return True, state_time
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                return False, state_time
+            return True, state_time
 
 
 

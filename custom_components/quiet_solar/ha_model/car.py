@@ -85,6 +85,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                                                states_vals=["on"],
                                                                num_seconds_before=2 * for_duration,
                                                                time=time)
+        if contiguous_status is None:
+            return contiguous_status
 
         return contiguous_status >= for_duration and contiguous_status > 0
 
@@ -97,6 +99,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                                                states_vals=["home"],
                                                                num_seconds_before=2 * for_duration,
                                                                time=time)
+        if contiguous_status is None:
+            return contiguous_status
 
         return contiguous_status >= for_duration and contiguous_status > 0
 
