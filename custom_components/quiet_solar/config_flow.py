@@ -258,13 +258,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         """Handle the next step based on user input."""
 
     def clean_data(self, data):
+        to_be_removed = []
         for k, v in data.items():
             key_to_be_reset = _get_entity_key_from_selector_key(k)
             if key_to_be_reset:
                 if v:
-                    data[key_to_be_reset] = None
-                data[k] = None
-
+                    to_be_removed.append(key_to_be_reset)
+                data[k] = False
+        for k in to_be_removed:
+            data.pop(k)
 
 
     def get_entry_title(self, data):
