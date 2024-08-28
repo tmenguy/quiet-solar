@@ -185,6 +185,7 @@ class AbstractLoad(AbstractDevice):
 
 
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None, check_end_constraint_exists:bool = False) -> bool:
+
         if constraint is not None:
 
             if (check_end_constraint_exists and

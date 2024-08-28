@@ -15,9 +15,9 @@ from quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFE
     BUFFER_SIZE_DAYS, QSHome
 from quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
 from quiet_solar.home_model.battery import Battery
-from quiet_solar.home_model.commands import copy_command, CMD_AUTO_GREEN_ONLY
+from quiet_solar.home_model.commands import copy_command, CMD_AUTO_GREEN_ONLY, CMD_ON
 from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, \
-    MultiStepsPowerLoadConstraintChargePercent, LoadConstraint
+    MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, TimeBasedSimplePowerLoadConstraint
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 
@@ -139,19 +139,22 @@ class TestForecast(TestCase):
 
 
 
-            for j in range(2):
+            for j in range(3):
 
                 charger = TestLoad(name="charger")
+                cumulus = TestLoad(name="cumulus")
                 steps = []
                 for a in range(7, 32 + 1):
                     steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3))
 
                 charge_mandatory_end = time + timedelta(hours=11)
+                cumulus_end = time + timedelta(hours=8)
                 charge_manual_end = time + timedelta(minutes=5)
                 car_capacity = 22000
                 target_mandatory = 80
                 target_best_effort = 100
                 target_manual = 100
+                cumulus_target_s = 3600*3
 
                 car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
@@ -181,7 +184,7 @@ class TestForecast(TestCase):
 
 
 
-                if j > 0:
+                if j == 1:
 
                     car_charge_manual = MultiStepsPowerLoadConstraintChargePercent(
                         time=time,
@@ -198,6 +201,19 @@ class TestForecast(TestCase):
                     charger.push_live_constraint(time, car_charge_manual)
                     test_constraint_save_dump(time, car_charge_manual)
                     charge_manual_end = car_charge_manual.end_of_constraint
+                elif j == 2:
+                    load_mandatory = TimeBasedSimplePowerLoadConstraint(
+                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                        time=time,
+                        load=cumulus,
+                        from_user=False,
+                        end_of_constraint=cumulus_end,
+                        power=1500,
+                        initial_value=0,
+                        target_value=cumulus_target_s
+                    )
+                    cumulus.push_live_constraint(time, load_mandatory)
+                    test_constraint_save_dump(time, load_mandatory)
 
 
 
@@ -210,11 +226,16 @@ class TestForecast(TestCase):
                 end_time = time + timedelta(seconds=FLOATING_PERIOD_S)
                 tarrifs = home.get_tariffs(start_time=time, end_time=end_time)
 
+                if j in [0,1]:
+                    actionnable_loads = [charger]
+                else:
+                    actionnable_loads = [charger, cumulus]
+
                 s = PeriodSolver(
                     start_time=time,
                     end_time=end_time,
                     tariffs=tarrifs,
-                    actionable_loads=[charger],
+                    actionable_loads=actionnable_loads,
                     battery=battery,
                     pv_forecast=solar_forecast,
                     unavoidable_consumption_forecast=conso_forecast
@@ -223,14 +244,43 @@ class TestForecast(TestCase):
 
                 assert cmds is not None
 
-                cmds_charger = cmds[0][1]
+                if j in [0,1]:
+                    assert len(cmds) == 1
+                    cmds_charger = cmds[0][1]
+                    cmds_cumulus = []
+                else:
+                    assert len(cmds) == 2
+                    if  cmds[0][0].name == charger.name:
+                        cmds_charger = cmds[0][1]
+                        cmds_cumulus = cmds[1][1]
+                    else:
+                        cmds_charger = cmds[1][1]
+                        cmds_cumulus = cmds[0][1]
+                        assert len(cmds_cumulus) > 1
 
-                assert len(cmds_charger) > 0
+                assert len(cmds_charger) > 1
 
 
                 target_energy_mandatory = car_capacity * target_mandatory / 100.0
                 target_energy_best_effort = car_capacity * target_best_effort / 100.0
                 target_energy_manual = car_capacity * target_manual / 100.0
+
+                target_cumulus = cumulus_target_s
+
+                if j == 2:
+                    for i in range(1, len(cmds_cumulus)):
+                        cmd_duration = (cmds_cumulus[i][0] - cmds_cumulus[i - 1][0]).total_seconds()
+                        cmd_added_energy = (cmds_cumulus[i - 1][1].power_consign * cmd_duration) / 3600.0
+
+                        if cmds_cumulus[i][0] <= cumulus_end:
+                            if cmds_cumulus[i - 1][1].is_like(CMD_ON):
+                                target_cumulus -= cmd_duration
+
+                        if target_cumulus > 0 and cmds_cumulus[i][0] > cumulus_end:
+                            assert False
+
+                    assert target_cumulus <= 0
+
 
                 for i in range(1, len(cmds_charger)):
                     cmd_duration = (cmds_charger[i][0] - cmds_charger[i-1][0]).total_seconds()
@@ -242,16 +292,21 @@ class TestForecast(TestCase):
                     if cmds_charger[i][0] <= charge_mandatory_end:
                         target_energy_mandatory -= cmd_added_energy
 
+                    if j == 2:
+                        if cmds_charger[i][0] <= cumulus_end:
+                            if cmds_charger[i-1][1].is_like(CMD_ON):
+                                target_cumulus -= cmd_duration
+
                     target_energy_best_effort -= cmd_added_energy
 
-                    if j > 0:
+                    if j == 1:
                         if target_energy_manual > 0 and cmds_charger[i][0] > charge_manual_end:
                             assert False
 
                     if target_energy_mandatory > 0 and cmds_charger[i][0] > charge_mandatory_end:
                         assert False
 
-                if j > 0:
+                if j == 1:
                     assert target_energy_manual <= 0
                 assert target_energy_mandatory <= 0
                 assert target_energy_best_effort <= 0

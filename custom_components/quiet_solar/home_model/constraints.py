@@ -581,7 +581,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
             return self.current_value
 
     def convert_target_value_to_energy(self, value: float) -> float:
-        return (self._power * self.target_value) / 3600.0
+        return (self._power * value) / 3600.0
 
     def convert_energy_to_target_value(self, energy: float) -> float:
         return (energy * 3600.0) / self._power

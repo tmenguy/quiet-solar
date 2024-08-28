@@ -58,7 +58,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         if start_schedule is not None and end_schedule is not None:
 
             if self._last_pushed_end_constraint is not None:
-                if self._last_pushed_end_constraint.end_of_constraint == end_schedule:
+                if self._last_pushed_end_constraint == end_schedule:
                     # we already have a constraint for this end time
                     # this is a small optimisation to avoid creating a constraint object just to
                     # let push_live_constraint check that it is already in the list or completed
@@ -72,9 +72,10 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     from_user=False,
                     end_of_constraint=end_schedule,
                     power=self.power_use,
+                    initial_value=0,
                     target=(end_schedule - start_schedule).total_seconds()
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart
             self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
-            self._last_pushed_end_constraint.end_of_constraint = end_schedule
+            self._last_pushed_end_constraint = end_schedule
