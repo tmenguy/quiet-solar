@@ -318,7 +318,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                                             0.2)): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.0,
-                    step=0.01,
+                    step=0.0001,
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
@@ -327,7 +327,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                                             0.0)): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.0,
-                    step=0.01,
+                    step=0.0001,
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
