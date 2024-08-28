@@ -6,7 +6,7 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
-    CONF_DEFAULT_CAR_CHARGE
+    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_DEFAULT
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice
 
@@ -22,6 +22,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
+        self.car_is_default = kwargs.pop(CONF_CAR_IS_DEFAULT, False)
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
         self._conf_car_charger_min_charge = self.car_charger_min_charge

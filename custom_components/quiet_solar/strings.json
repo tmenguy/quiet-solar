@@ -136,6 +136,7 @@
         "description": "Add some car information to define when and how it is connected to your charger",
         "data": {
           "name": "Name",
+          "car_is_default": "Is this car the default one? (only put one car with this)",
           "car_plugged": "Binary sensor to detect if the car is plugged or not",
           "car_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "car_tracker": "car device tracker to know if the car is at home or not",
@@ -345,6 +346,7 @@
         "description": "[%key:component::quiet_solar::config::step::car::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::car::data::name%]",
+          "car_is_default": "[%key:component::quiet_solar::config::step::car::data::car_is_default%]",
           "car_plugged": "[%key:component::quiet_solar::config::step::car::data::car_plugged%]",
           "car_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_plugged_qs_reset_selector%]",
           "car_tracker": "[%key:component::quiet_solar::config::step::car::data::car_tracker%]",

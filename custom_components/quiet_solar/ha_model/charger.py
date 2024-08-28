@@ -256,11 +256,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only if plugged .... then if home
                 score += 1
                 if car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
-                    score += 2
+                    score += 1
+                    if car.car_is_default:
+                        score += 1
 
             if score > best_score:
                 best_car = car
                 best_score = score
+
+        if best_score == 0:
+            _LOGGER.info(f"No good car found for charger, trying to get the best possible one for {self.name}")
+
+            for car in self.home._cars:
+                score = 0
+
+                if car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+                    score += 1
+                    if car.car_is_default:
+                        score += 1
+
+                if score > best_score:
+                    best_car = car
+                    best_score = score
+
 
         _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
 

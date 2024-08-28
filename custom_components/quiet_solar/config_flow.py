@@ -45,7 +45,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
-    CONF_LOAD_IS_BOOST_ONLY
+    CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -579,6 +579,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
         sc_dict = self.get_common_schema(add_calendar=True)
+
+        sc_dict.update(
+            {
+                vol.Optional(CONF_CAR_IS_DEFAULT, default=self.config_entry.data.get(CONF_CAR_IS_DEFAULT, False)):
+                    cv.boolean,
+            }
+        )
 
         self.add_entity_selector(sc_dict, CONF_CAR_PLUGGED, False, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CAR_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
