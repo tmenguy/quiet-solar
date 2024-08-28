@@ -73,7 +73,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     end_of_constraint=end_schedule,
                     power=self.power_use,
                     initial_value=0,
-                    target=(end_schedule - start_schedule).total_seconds()
+                    target_value=(end_schedule - start_schedule).total_seconds()
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart
