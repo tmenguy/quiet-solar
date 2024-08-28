@@ -325,7 +325,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
             do_initial_constraints = False
-            existing_constraints = []
+            existing_user_constraints = []
 
             if self._user_attached_car_name is not None:
                 if self._user_attached_car_name == CHARGER_NO_CAR_CONNECTED:
@@ -353,9 +353,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     car = self.get_best_car(time)
 
                 if self._constraints:
+                    # only keep user constraints
                     for ct in self._constraints:
+                        if ct.from_user is False:
+                            continue
                         if ct.load_param == car.name:
-                            existing_constraints.append(ct)
+                            existing_user_constraints.append(ct)
                         else:
                             # we may want to try again to check again the car if it is the right one
                             self._retry_check_constraint +=1
@@ -363,7 +366,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 _LOGGER.info(f"retrying car attachement due to constraint mismatch {ct.load_param} != {car.name}")
                                 return # we will try again later
 
+                # this reset is key it removes the constrainst, the self._last_completed_constraint, etc
+                # it will detach the car, etc
                 self.reset()
+
                 _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
                 # find the best car .... for now
                 self.attach_car(car)
@@ -415,7 +421,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if do_initial_constraints:
 
                         if realized_charge_target is None:
-                            for ct in existing_constraints:
+                            # we do this only in case there was not a force just before....
+                            for ct in existing_user_constraints:
                                 self.push_live_constraint(time, ct)
 
                         target_charge = self.car.car_default_charge
@@ -567,7 +574,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             res = contiguous_status >= for_duration and contiguous_status > 0
 
 
-        if res is None:
+        if res is None and self.car:
 
             if check_for_val:
                 ok_value = QSChargerStates.PLUGGED
@@ -577,17 +584,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 not_ok_value = QSChargerStates.PLUGGED
 
 
-            if self.car:
-                latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
-                res_car =  self.car.is_car_plugged(time, for_duration)
-                if res_car is None:
-                    return latest_charger_valid_state == ok_value
-                else:
-                    if latest_charger_valid_state is not None:
-                        if res_car is check_for_val and latest_charger_valid_state == ok_value:
-                            return True
-                        if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
-                            return False
+            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
+            res_car =  self.car.is_car_plugged(time, for_duration)
+            if res_car is None:
+                return latest_charger_valid_state == ok_value
+            else:
+                if latest_charger_valid_state is not None:
+                    if res_car is check_for_val and latest_charger_valid_state == ok_value:
+                        return True
+                    if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
+                        return False
             return None
 
         return res
@@ -804,22 +810,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     result = result_calculus
                 elif abs(result_calculus - result) > 10:
                     _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
-                    result = min(result_calculus, result)
+                    # result = min(result_calculus, result)
 
         do_continue_constraint = True
 
         if self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW):
             # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
+            # yes the constraint is met but is it really key? it will be store in self._last_completed_constraint
+            # if we force the completion of the constraint, so for now no need
             _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
             do_continue_constraint = False
 
         if result is not None:
-            if result > 99.8:
-                _LOGGER.info(f"update_value_callback: a 100% reached")
-                do_continue_constraint = False
-            elif result >= ct.target_value:
+            # ok 0.1% of tolerance here...
+            if ct.is_constraint_met(result+0.1):
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
                 do_continue_constraint = False
+                result = ct.target
 
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command)

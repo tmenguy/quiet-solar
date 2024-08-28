@@ -93,6 +93,7 @@ class AbstractLoad(AbstractDevice):
     def reset(self):
         self.current_command = None
         self._constraints = []
+        self._last_completed_constraint = None
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
@@ -183,15 +184,24 @@ class AbstractLoad(AbstractDevice):
         self._constraints = kept
 
 
-    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None, check_end_constraint_exists:bool = False):
+    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None, check_end_constraint_exists:bool = False) -> bool:
         if constraint is not None:
+
+            if (check_end_constraint_exists and
+                    self._last_completed_constraint is not None and
+                    self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint):
+                _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as last completed one")
+                return False
+
             for c in self._constraints:
                 if c == constraint:
-                    return
+                    return False
                 if check_end_constraint_exists and constraint is not None and c.end_of_constraint == constraint.end_of_constraint:
-                    return
+                    _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as another one")
+                    return False
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)
+            return True
 
 
     async def update_live_constraints(self, time:datetime, period: timedelta) -> bool:
@@ -281,7 +291,11 @@ class AbstractLoad(AbstractDevice):
                         # ok we have pushed or made a target the next important constraint
                         do_continue_ct = await c.update(time)
                         if do_continue_ct is False:
-                            _LOGGER.info(f"{c.name} skipped because met (just after update) or stopped by callback")
+                            if c.is_constraint_met():
+                                self._last_completed_constraint = c
+                                _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                            else:
+                                _LOGGER.info(f"{c.name} stopped by callback (just after update)")
                             c.skip = True
                         break
 
@@ -291,16 +305,12 @@ class AbstractLoad(AbstractDevice):
             elif c.is_constraint_active_for_time_period(time, time + period):
                 do_continue_ct = await c.update(time)
                 if do_continue_ct is False:
-                    _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                    if c.is_constraint_met():
+                        self._last_completed_constraint = c
+                        _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                    else:
+                        _LOGGER.info(f"{c.name} stopped by callback (just after update)")
                     c.skip = True
-                break
-
-
-        for c in self._constraints:
-            if c.skip is False:
-                continue
-            if c.is_constraint_met():
-                self._last_completed_constraint = c
                 break
 
         constraints = [c for c in self._constraints if c.skip is False]

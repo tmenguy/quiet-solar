@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME
@@ -7,11 +8,16 @@ from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE
 
-
+_LOGGER = logging.getLogger(__name__)
 class QSOnOffDuration(HADeviceMixin, AbstractLoad):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._last_pushed_end_constraint = None
+
+    def reset(self):
+        super().reset()
+        self._last_pushed_end_constraint = None
 
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SWITCH ]
@@ -29,7 +35,6 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             service=action,
             target={"entity_id": self.switch_entity},
         )
-
         return False
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
@@ -37,7 +42,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         state = self.hass.states.get(self.switch_entity) # may be faster to get the python entity object no?
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return False
+            return None
 
         if command.is_like(CMD_ON):
             return state.state == "on"
@@ -52,21 +57,15 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
 
         if start_schedule is not None and end_schedule is not None:
 
-            do_schedule = True
+            if self._last_pushed_end_constraint is not None:
+                if self._last_pushed_end_constraint.end_of_constraint == end_schedule:
+                    # we already have a constraint for this end time
+                    # this is a small optimisation to avoid creating a constraint object just to
+                    # let push_live_constraint check that it is already in the list or completed
+                    return
 
-            if self._last_completed_constraint is not None and self._last_completed_constraint.end_of_constraint >= end_schedule:
-                # we have already scheduled this event
-                do_schedule = False
-
-            if do_schedule:
-                for ct in self._constraints:
-                    if ct.end_of_constraint >= end_schedule:
-                        do_schedule = False
-                        break
-
-            if do_schedule:
-                # schedule the load to be launched
-                load_mandatory = TimeBasedSimplePowerLoadConstraint(
+            # schedule the load to be launched
+            load_mandatory = TimeBasedSimplePowerLoadConstraint(
                     type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                     time=time,
                     load=self,
@@ -74,8 +73,8 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     end_of_constraint=end_schedule,
                     power=self.power_use,
                     target=(end_schedule - start_schedule).total_seconds()
-                )
-                self.push_live_constraint(time, load_mandatory)
-
-        return
-
+            )
+            # check_end_constraint_exists will check that the constraint is not already in the list
+            # or have not been done already after a restart
+            self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
+            self._last_pushed_end_constraint.end_of_constraint = end_schedule

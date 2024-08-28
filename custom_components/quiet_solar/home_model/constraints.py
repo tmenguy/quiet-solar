@@ -4,7 +4,7 @@ from datetime import datetime
 from datetime import date
 from datetime import timedelta
 from abc import abstractmethod
-from typing import Callable, Self, Awaitable
+from typing import Self
 import pytz
 
 from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command
@@ -19,12 +19,13 @@ from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FA
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class LoadConstraint(object):
 
     def __init__(self,
-                 time:datetime,
+                 time: datetime,
                  load,
-                 load_param:str |None = None,
+                 load_param: str | None = None,
                  from_user: bool = False,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
                  start_of_constraint: datetime | None = None,
@@ -42,7 +43,8 @@ class LoadConstraint(object):
         :param type: of CONSTRAINT_TYPE_* behaviour of the constraint
         :param start_of_constraint: constraint start time if None the constraint start asap, depends on the type
         :param end_of_constraint: constraint end time if None the constraint is always active, depends on the type
-        :param initial_value: the constraint start value if None it means the constraints will adapt from the previous constraint, or be computed automatically
+        :param initial_value: the constraint start value if None it means the constraints will adapt from the previous
+               constraint, or be computed automatically
         :param target_value: the constraint target value, growing number from initial_value to target_value
         """
 
@@ -52,7 +54,6 @@ class LoadConstraint(object):
         self.type = type
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
-
 
         # ok fill form the args
         if end_of_constraint is None:
@@ -65,7 +66,9 @@ class LoadConstraint(object):
         self.initial_end_of_constraint: datetime = end_of_constraint
 
         self.start_of_constraint: datetime = start_of_constraint
-        self._internal_start_of_constraint: datetime = self.start_of_constraint  # this one can be overriden by the prev constraint of the load
+
+        # this one can be overriden by the prev constraint of the load:
+        self._internal_start_of_constraint: datetime = self.start_of_constraint
 
         self.initial_value = initial_value
         self._internal_initial_value = self.initial_value
@@ -79,8 +82,8 @@ class LoadConstraint(object):
         else:
             self.current_value = current_value
 
-        self.name = f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{self.target_value}/{self.type})"
-
+        self.name = (f"Constraint for {self.load.name} ({self.load_param} "
+                     f"{self.initial_value}/{self.target_value}/{self.type})")
 
         # will correct end of constraint if needed best_duration_to_meet uses the values above
         if self.as_fast_as_possible:
@@ -92,16 +95,15 @@ class LoadConstraint(object):
         self.skip = False
         self.pushed_count = 0
 
-
     def __eq__(self, other):
-        od = other.to_dict()
-        d = self.to_dict()
-        if  od == d:
+        if other is None:
+            return None
+        if other.to_dict() == self.to_dict():
             return other.name == self.name
         return False
 
     @property
-    def as_fast_as_possible(self)->bool:
+    def as_fast_as_possible(self) -> bool:
         return self.type >= CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
 
     @property
@@ -114,23 +116,21 @@ class LoadConstraint(object):
 
     def score(self):
         score = self.convert_target_value_to_energy(self.target_value)
-        score += self.type*100000000.0
+        score += self.type * 100000000.0
         if self.from_user:
             score += 10000000000.0
         return score
 
     @classmethod
     def new_from_saved_dict(cls, time, load, data: dict) -> Self:
-        try:
-            module = importlib.import_module("quiet_solar.home_model.constraints")
-        except:
-            return None
+
+        module = importlib.import_module("quiet_solar.home_model.constraints")
         if module is None:
             return None
-        class_name = data.pop("qs_class_type", None)
+        class_name: str | None = data.pop("qs_class_type", None)
         if class_name is None:
             return None
-        my_class = getattr(module,class_name)
+        my_class = getattr(module, class_name)
         kwargs = my_class.from_dict_to_kwargs(data)
         my_instance = my_class(time=time, load=load, **kwargs)
         return my_instance
@@ -144,7 +144,7 @@ class LoadConstraint(object):
             "initial_value": self.initial_value,
             "current_value": self.current_value,
             "target_value": self.target_value,
-            "start_of_constraint" : f"{self.start_of_constraint}",
+            "start_of_constraint": f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}"
         }
 
@@ -155,13 +155,11 @@ class LoadConstraint(object):
         res["end_of_constraint"] = datetime.fromisoformat(data["end_of_constraint"])
         return res
 
-
     def convert_target_value_to_energy(self, value: float) -> float:
         return value
 
     def convert_energy_to_target_value(self, energy: float) -> float:
         return energy
-
 
     def _get_target_date_string(self) -> str:
         if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
@@ -182,7 +180,7 @@ class LoadConstraint(object):
         return target
 
     def _get_readable_target_value_string(self) -> str:
-        target_string =  f"{int(self.target_value)} Wh"
+        target_string = f"{int(self.target_value)} Wh"
         if self.target_value >= 2000:
             target_string = f"{int(self.target_value / 1000)} kWh"
         return target_string
@@ -203,8 +201,6 @@ class LoadConstraint(object):
 
         return f"{prefix}{target_string} {target_date}{postfix}"
 
-
-
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime | None = None) -> bool:
 
         if self.is_constraint_met():
@@ -219,9 +215,8 @@ class LoadConstraint(object):
             else:
                 return True
 
-        #only active if the constraint finish before the end of the given time period
-        return  self.end_of_constraint >= start_time and self.end_of_constraint <= end_time
-
+        # only active if the constraint finish before the end of the given time period
+        return start_time <= self.end_of_constraint <= end_time
 
     def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """
@@ -236,8 +231,7 @@ class LoadConstraint(object):
 
         return False
 
-
-    def reset_initial_value_to_follow_prev_if_needed(self, time: datetime, prev_constraint:Self):
+    def reset_initial_value_to_follow_prev_if_needed(self, time: datetime, prev_constraint: Self):
 
         if self.initial_value is not None:
             return
@@ -248,7 +242,8 @@ class LoadConstraint(object):
         self.current_value = prev_constraint_value
 
     async def update(self, time: datetime) -> bool:
-        """ Update the constraint with the new value. to be called by a load that can compute the value based or sensors or external data"""
+        """ Update the constraint with the new value. to be called by a load that
+            can compute the value based or sensors or external data"""
         if time >= self.last_value_update:
             do_continue_constraint = True
             if self._update_value_callback is not None:
@@ -265,9 +260,6 @@ class LoadConstraint(object):
                 return False
         return True
 
-
-
-
     @abstractmethod
     def compute_value(self, time: datetime) -> float:
         """ Compute the value of the constraint when the state change."""
@@ -279,11 +271,12 @@ class LoadConstraint(object):
     @abstractmethod
     def compute_best_period_repartition(self,
                                         do_use_available_power_only: bool,
-                                        power_available_power : npt.NDArray[np.float64],
-                                        power_slots_duration_s : npt.NDArray[np.float64],
+                                        power_available_power: npt.NDArray[np.float64],
+                                        power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[bool, list[LoadCommand|None], npt.NDArray[np.float64]]:
+                                        time_slots: list[datetime]) -> tuple[
+                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """ Compute the best repartition of the constraint over the given period."""
 
 
@@ -321,8 +314,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         super().__init__(**kwargs)
 
-
-
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["power_steps"] = [c.to_dict() for c in self._power_cmds]
@@ -345,41 +336,46 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.load.current_command is None:
             return self.current_value
 
-        return (((time - self.last_value_update).total_seconds()) * self.load.current_command.power_consign / 3600.0) + self.current_value
-
+        return (((time - self.last_value_update).total_seconds()) *
+                self.load.current_command.power_consign / 3600.0) + self.current_value
 
     def compute_best_period_repartition(self,
-                                        do_use_available_power_only:bool,
-                                        power_available_power : npt.NDArray[np.float64],
-                                        power_slots_duration_s : npt.NDArray[np.float64],
+                                        do_use_available_power_only: bool,
+                                        power_available_power: npt.NDArray[np.float64],
+                                        power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[bool, list[LoadCommand|None], npt.NDArray[np.float64]]:
-        nrj_to_be_added = self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(self.current_value)
-        return self._compute_best_period_repartition(do_use_available_power_only, power_available_power, power_slots_duration_s, prices, prices_ordered_values, time_slots, nrj_to_be_added)
+                                        time_slots: list[datetime]) -> tuple[
+                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        nrj_to_be_added = self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(
+            self.current_value)
+        return self._compute_best_period_repartition(do_use_available_power_only, power_available_power,
+                                                     power_slots_duration_s, prices, prices_ordered_values, time_slots,
+                                                     nrj_to_be_added)
 
     def _compute_best_period_repartition(self,
                                          do_use_available_power_only: bool,
-                                         power_available_power : npt.NDArray[np.float64],
-                                         power_slots_duration_s : npt.NDArray[np.float64],
+                                         power_available_power: npt.NDArray[np.float64],
+                                         power_slots_duration_s: npt.NDArray[np.float64],
                                          prices: npt.NDArray[np.float64],
                                          prices_ordered_values: list[float],
                                          time_slots: list[datetime],
-                                         nrj_to_be_added: float) -> tuple[bool, list[LoadCommand|None], npt.NDArray[np.float64]]:
+                                         nrj_to_be_added: float) -> tuple[
+                                         bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
-        out_commands : list[LoadCommand|None] = [None] * len(power_available_power)
+        out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
 
-        #first get to the available power slots (ie with negative power available, fill it at best in a greedy way
+        # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power = self._min_power
 
         first_slot = 0
         last_slot = len(power_available_power) - 1
 
-        #find the constraint last slot
+        # find the constraint last slot
         if self.end_of_constraint is not None:
-            #by construction the end of the constraints IS ending on a slot
+            # by construction the end of the constraints IS ending on a slot
             last_slot = bisect_left(time_slots, self.end_of_constraint)
             last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
             if last_slot >= len(power_available_power):
@@ -392,11 +388,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             if power_available_power[i] <= -min_power:
                 j = 0
-                while j < len(self._power_sorted_cmds) - 1 and self._power_sorted_cmds[j + 1].power_consign < -power_available_power[i]:
+                while j < len(self._power_sorted_cmds) - 1 and self._power_sorted_cmds[j + 1].power_consign < - \
+                        power_available_power[i]:
                     j += 1
 
                 if self.support_auto:
-                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=self._power_sorted_cmds[j].power_consign)
+                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY,
+                                                   power_consign=self._power_sorted_cmds[j].power_consign)
                 else:
                     out_commands[i] = copy_command(self._power_sorted_cmds[j])
 
@@ -408,10 +406,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if nrj_to_be_added <= 0.0:
                     break
 
-        if nrj_to_be_added <= 0.0 or do_use_available_power_only or self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN:
+        if (nrj_to_be_added <= 0.0 or
+                do_use_available_power_only or
+                self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN):
 
             if self.support_auto:
-                #fill all with green only command, to fill everything with the best power available
+                # fill all with green only command, to fill everything with the best power available
                 for i in range(first_slot, last_slot + 1):
                     if out_commands[i] is None:
                         out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=0.0)
@@ -419,14 +419,14 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             return nrj_to_be_added <= 0.0, out_commands, out_power
 
-        #pure solar was not enough, we will try to see if we can get a bit more solar energy directly if price is better
+        # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
         costs_optimizers = []
 
         for i in range(first_slot, last_slot + 1):
 
             if power_available_power[i] + out_power[i] <= 0.0:
-                #there is still some solar to get
-                power_to_add_idx  = -1
+                # there is still some solar to get
+                power_to_add_idx = -1
                 if out_commands[i] is None:
                     power_to_add_idx = 0
                 elif out_power_idxs[i] < len(self._power_sorted_cmds) - 1:
@@ -434,19 +434,21 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 if power_to_add_idx >= 0:
                     # all command in ECO mode now....
-                    power_to_add : float = self._power_sorted_cmds[power_to_add_idx].power_consign
-                    energy_to_add : float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
-                    cost: float  = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i]))/3600.0
+                    power_to_add: float = self._power_sorted_cmds[power_to_add_idx].power_consign
+                    energy_to_add: float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
+                    cost: float = ((power_to_add + float(power_available_power[i])) * float(
+                        power_slots_duration_s[i]) * float(prices[i])) / 3600.0
                     cost_per_watt = cost / energy_to_add
                     if self.support_auto:
-                        new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
+                        new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
+                                               power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
                     else:
                         new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
 
                     costs_optimizers.append((cost_per_watt, cost, energy_to_add, i, power_to_add, new_cmd))
 
-        costs_optimizers: list[tuple[float, float, float, int, float, LoadCommand]] = sorted(costs_optimizers, key=lambda x: x[0])
-
+        costs_optimizers: list[tuple[float, float, float, int, float, LoadCommand]] = sorted(costs_optimizers,
+                                                                                             key=lambda x: x[0])
 
         for price in prices_ordered_values:
 
@@ -471,16 +473,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if nrj_to_be_added <= 0.0:
                     break
 
-            price_span_h = (np.sum(power_slots_duration_s[first_slot:last_slot+1], where = prices[first_slot:last_slot+1] == price))/3600.0
+            price_span_h = (np.sum(power_slots_duration_s[first_slot:last_slot + 1],
+                                   where=prices[first_slot:last_slot + 1] == price)) / 3600.0
 
-            #to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
+            # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
             fill_power_idx = 0
             for fill_power_idx in range(len(self._power_sorted_cmds)):
                 if (nrj_to_be_added / self._power_sorted_cmds[fill_power_idx].power_consign) < price_span_h:
                     break
 
             if self.support_auto:
-                price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+                price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
+                                         power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
             else:
                 price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
 
@@ -490,7 +494,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 if prices[i] == price and out_commands[i] is None:
 
-                    current_energy : float = (price_power * float(power_slots_duration_s[i]))/3600.0
+                    current_energy: float = (price_power * float(power_slots_duration_s[i])) / 3600.0
                     out_commands[i] = price_cmd
                     out_power[i] = price_power
                     nrj_to_be_added -= current_energy
@@ -502,7 +506,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 break
 
         if self.support_auto:
-            #fill all with green only command, to fill everything with the best power available
+            # fill all with green only command, to fill everything with the best power available
             for i in range(first_slot, last_slot + 1):
                 if out_commands[i] is None:
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=0.0)
@@ -527,19 +531,19 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
         return data
 
     def _get_readable_target_value_string(self) -> str:
-        target_string =  f"{int(round(self.target_value))} %"
+        target_string = f"{int(round(self.target_value))} %"
         return target_string
 
     def convert_target_value_to_energy(self, value: float) -> float:
         return (value * self.total_capacity_wh) / 100.0
 
     def convert_energy_to_target_value(self, energy: float) -> float:
-        return (100.0*energy)/self.total_capacity_wh
-
+        return (100.0 * energy) / self.total_capacity_wh
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        seconds = (3600.0 * (((self.target_value - self.current_value)*self.total_capacity_wh)/100.0)) / self._max_power
+        seconds = (3600.0 * (
+                ((self.target_value - self.current_value) * self.total_capacity_wh) / 100.0)) / self._max_power
         return timedelta(seconds=seconds)
 
     def compute_value(self, time: datetime) -> float:
@@ -547,27 +551,26 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
         if self.load.current_command is None:
             return self.current_value
 
-        return 100.0*((((time - self.last_value_update).total_seconds()) * self.load.current_command.power_consign / 3600.0)/self.total_capacity_wh)+ self.current_value
+        return 100.0 * ((((time - self.last_value_update).total_seconds()) *
+                         self.load.current_command.power_consign / 3600.0) /
+                        self.total_capacity_wh) + self.current_value
 
 
 class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
-
     def _get_readable_target_value_string(self) -> str:
-        target_string =  f"{int(self.target_value)} s"
-        if self.target_value >= 4*3600:
+        target_string = f"{int(self.target_value)} s"
+        if self.target_value >= 4 * 3600:
             target_string = f"{int(round(self.target_value / 3600))} h"
         elif self.target_value >= 3600:
-            target_string = f"{int(self.target_value / 3600)} h {int((self.target_value % 3600)/60)} mn"
+            target_string = f"{int(self.target_value / 3600)} h {int((self.target_value % 3600) / 60)} mn"
         elif self.target_value >= 60:
             target_string = f"{int(self.target_value / 60)} mn"
         return target_string
 
-
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
         return timedelta(seconds=self.target_value - self.current_value)
-
 
     def compute_value(self, time: datetime) -> float:
         """ Compute the value of the constraint whenever it is called changed state or not,
@@ -578,10 +581,10 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
             return self.current_value
 
     def convert_target_value_to_energy(self, value: float) -> float:
-        return (self._power * self.target_value)/3600.0
+        return (self._power * self.target_value) / 3600.0
 
     def convert_energy_to_target_value(self, energy: float) -> float:
-        return (energy*3600.0)/self._power
+        return (energy * 3600.0) / self._power
 
 
 DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.UTC)
