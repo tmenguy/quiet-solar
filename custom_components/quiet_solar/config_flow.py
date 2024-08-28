@@ -315,22 +315,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         sc_dict.update({
             vol.Required(CONF_HOME_PEAK_PRICE,
                          default=self.config_entry.data.get(CONF_HOME_PEAK_PRICE,
-                                                            0.2)): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.0,
-                    step=0.0001,
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
+                                                            0.27)): float,
             vol.Required(CONF_HOME_OFF_PEAK_PRICE,
                          default=self.config_entry.data.get(CONF_HOME_OFF_PEAK_PRICE,
-                                                            0.0)): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.0,
-                    step=0.0001,
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            ),
+                                                            0.2068)): float,
 
             vol.Required(CONF_HOME_START_OFF_PEAK_RANGE_1,
                          default=self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_1,
