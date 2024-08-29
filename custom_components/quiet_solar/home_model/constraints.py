@@ -367,6 +367,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
         out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
 
+
+
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power = self._min_power
 
@@ -384,8 +386,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
-        for i in range(first_slot, last_slot + 1):
+        sorted_available_power = power_available_power[first_slot:last_slot + 1].argsort() # power_available_power negative value means free power
 
+        # for i in range(first_slot, last_slot + 1):
+
+        # try to shave first the biggest free slots
+        for i_sorted in sorted_available_power:
+
+            i = i_sorted + first_slot
+
+        #for i in range(first_slot, last_slot + 1):
             if power_available_power[i] <= -min_power:
                 j = 0
                 while j < len(self._power_sorted_cmds) - 1 and self._power_sorted_cmds[j + 1].power_consign < - \
