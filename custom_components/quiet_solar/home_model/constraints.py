@@ -123,10 +123,21 @@ class LoadConstraint(object):
 
     @classmethod
     def new_from_saved_dict(cls, time, load, data: dict) -> Self:
+        try:
+            module = importlib.import_module(__name__)
+        except:
+            module = None
 
-        module = importlib.import_module("quiet_solar.home_model.constraints")
         if module is None:
+            try:
+                module = importlib.import_module("quiet_solar.home_model.constraints")
+            except:
+                module = None
+
+        if module is None:
+            _LOGGER.error(f"Cannot import the module to load constraint {__name__} {data}")
             return None
+
         class_name: str | None = data.pop("qs_class_type", None)
         if class_name is None:
             return None

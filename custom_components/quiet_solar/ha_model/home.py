@@ -572,14 +572,14 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             self._commands, _ = solver.solve()
 
-        if True:
-            for load, commands in self._commands:
-                while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
-                    cmd_time, command = commands.pop(0)
-                    _LOGGER.info("Launch command %s at %s", command.command, cmd_time)
-                    await load.launch_command(time, command)
-                    # only launch one at a time for a given load
-                    break
+
+        for load, commands in self._commands:
+            while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+                cmd_time, command = commands.pop(0)
+                _LOGGER.info("Launch command %s at %s", command.command, cmd_time)
+                await load.launch_command(time, command)
+                # only launch one at a time for a given load
+                break
 
 
     async def reset_forecasts(self, time: datetime = None):

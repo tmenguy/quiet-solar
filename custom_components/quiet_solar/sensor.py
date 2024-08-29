@@ -1,4 +1,4 @@
-
+import importlib
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Callable
@@ -71,7 +71,6 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         constraints_sensor = QSSensorEntityDescription(
             key="current_constraint_current_energy",
             name=f"{device.get_virtual_current_constraint_entity_name()}_energy",
-            state_class=SensorStateClass.MEASUREMENT,
             device_class=SensorDeviceClass.ENERGY,
             native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
             entity_category=EntityCategory.DIAGNOSTIC,

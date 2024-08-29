@@ -63,7 +63,7 @@ class QSSolarProvider:
         self.orchestrators = []
         self.domain = domain
         self._latest_update_time : datetime | None = None
-        self.solar_forecast : list[tuple[datetime | None, str | float | None]] = []
+        self.solar_forecast : list[tuple[datetime | None, float | None]] = []
 
     def get_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
         return get_slots_from_time_serie(self.solar_forecast, start_time, end_time)
@@ -81,6 +81,9 @@ class QSSolarProvider:
             if len(self.orchestrators) > 0:
                 self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
                 self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
+                # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
+                for i in range(1, len(self.solar_forecast)):
+                    self.solar_forecast[i-1][1] = (self.solar_forecast[i][1] + self.solar_forecast[i-1][1])/2.0
 
             self._latest_update_time = time
 
