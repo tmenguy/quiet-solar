@@ -72,7 +72,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             # schedule the load to be launched
             type = CONSTRAINT_TYPE_MANDATORY_END_TIME
             if self.load_is_auto_to_be_boosted:
-                type=CONSTRAINT_TYPE_FILLER
+                type = CONSTRAINT_TYPE_FILLER
             load_mandatory = TimeBasedSimplePowerLoadConstraint(
                     type=type,
                     time=time,
