@@ -952,6 +952,8 @@ class QSSolarHistoryVals:
 
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad history
+                _LOGGER.info(
+                    f"get_forecast_and_set_as_current trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
             score = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)))/float(num_ok_vals)
