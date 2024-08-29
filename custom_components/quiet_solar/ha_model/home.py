@@ -184,13 +184,28 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
 
-    def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, str | float | None]]:
+    def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
                 return self._consumption_forecast.home_non_controlled_consumption.get_from_current_forecast(start_time, end_time)
         return []
 
-    def get_solar_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, str | float | None]]:
+    async def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
+
+            return  await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(
+                time_now=time,
+                history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
+
+    async def compute_non_controlled_forecast(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
+
+        unavoidable_consumption_forecast = []
+        if await self._consumption_forecast.init_forecasts(time):
+            unavoidable_consumption_forecast = await self._compute_non_controlled_forecast_intl(time)
+
+        return unavoidable_consumption_forecast
+
+
+    def get_solar_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
         if self._solar_plant:
                 return self._solar_plant.get_forecast(start_time, end_time)
         return []
@@ -466,6 +481,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
                                                                                      self.home_non_controlled_consumption,
                                                                                      do_save=True)
 
+                if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
+                    await self._compute_non_controlled_forecast_intl(time)
+
+
+
     async def update(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
@@ -530,15 +550,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             self._last_solve_done = time
 
-            unavoidable_consumption_forecast = None
-            if await self._consumption_forecast.init_forecasts(time):
-                unavoidable_consumption_forecast = await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(time_now=time,
-                                                                                                                                                    history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds()//3600)+1)
-
-            pv_forecast = None
-
-            if self._solar_plant:
-                pv_forecast = self._solar_plant.get_forecast(time, time + self._period)
+            unavoidable_consumption_forecast = await self.compute_non_controlled_forecast(time)
+            pv_forecast = self.get_solar_from_current_forecast(time, time + self._period)
 
             end_time = time + self._period
             solver = PeriodSolver(
@@ -877,7 +890,13 @@ class QSSolarHistoryVals:
         self._current_days = None
         self._init_done = False
         self._current_forecast = None
+        self._last_forecast_update_time = None
 
+
+    def update_current_forecast_if_needed(self, time: datetime) -> bool:
+        if self._current_forecast is None or self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(minutes=INTERVALS_MN):
+            return True
+        return False
 
     def get_from_current_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
         return get_slots_from_time_serie(self._current_forecast, start_time, end_time)
@@ -984,6 +1003,7 @@ class QSSolarHistoryVals:
                 forecast.append((time_now + timedelta(hours=futur_needed_in_hours), forecast[-1][1]))
 
             self._current_forecast = forecast
+            self._last_forecast_update_time = time_now
             return forecast
 
 
