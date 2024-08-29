@@ -83,7 +83,7 @@ class QSSolarProvider:
                 self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
                 # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
                 for i in range(1, len(self.solar_forecast)):
-                    self.solar_forecast[i-1][1] = (self.solar_forecast[i][1] + self.solar_forecast[i-1][1])/2.0
+                    self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + self.solar_forecast[i-1][1])/2.0)
 
             self._latest_update_time = time
 
