@@ -138,8 +138,9 @@ class LoadConstraint(object):
             _LOGGER.error(f"Cannot import the module to load constraint {__name__} {data}")
             return None
 
-        class_name: str | None = data.pop("qs_class_type", None)
+        class_name: str | None = data.get("qs_class_type", None)
         if class_name is None:
+            _LOGGER.error(f"Cannot import the load constraint: no class {data}")
             return None
         my_class = getattr(module, class_name)
         kwargs = my_class.from_dict_to_kwargs(data)
