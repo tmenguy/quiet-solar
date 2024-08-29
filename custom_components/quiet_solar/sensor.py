@@ -1,12 +1,12 @@
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -19,6 +19,7 @@ from .const import (
     DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, HA_CONSTRAINT_SENSOR_HISTORY,
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
+    QSForecastHomeNonControlledSensors, QSForecastSolarSensors,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -58,6 +59,26 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         )
         entities.append(QSLoadSensorCurrentConstraints(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
+        constraints_sensor = QSSensorEntityDescription(
+            key="current_constraint_current_value",
+            name=f"{device.get_virtual_current_constraint_entity_name()}_value",
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            qs_is_none_unavailable=True
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
+        constraints_sensor = QSSensorEntityDescription(
+            key="current_constraint_current_energy",
+            name=f"{device.get_virtual_current_constraint_entity_name()}_energy",
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.ENERGY,
+            native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            qs_is_none_unavailable=True
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
     return entities
 
 
@@ -93,6 +114,36 @@ def create_ha_sensor_for_QSHome(device: QSHome):
     )
 
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_available_power))
+
+
+    for name in QSForecastHomeNonControlledSensors:
+        home_forecast_power = QSSensorEntityDescription(
+            key=name,
+            name=name,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.POWER,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn = lambda device, key: device.home_non_controlled_power_forecast_sensor_values.get(key, None),
+            qs_is_none_unavailable=True
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+
+    for name in QSForecastSolarSensors:
+        home_forecast_power = QSSensorEntityDescription(
+            key=name,
+            name=name,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.POWER,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn = lambda device, key: device.home_solar_forecast_sensor_values.get(key, None),
+            qs_is_none_unavailable=True
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+
+
+
 
     return entities
 
@@ -132,7 +183,8 @@ async def async_setup_entry(
 @dataclass(frozen=True, kw_only=True)
 class QSSensorEntityDescription(SensorEntityDescription):
     """Describes Netatmo sensor entity."""
-    qs_name: str | None = None
+    qs_is_none_unavailable: bool  = False
+    value_fn: Callable[[AbstractDevice, str], Any] | None = None
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
@@ -158,9 +210,19 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
 
-        #if self.entity_description.value_fn is None:
-        if (state := getattr(self.device, self.entity_description.key)) is None:
-            return
+        if self.entity_description.value_fn is None:
+            state = getattr(self.device, self.entity_description.key)
+        else:
+            state = self.entity_description.value_fn(self.device, self.entity_description.key)
+
+        if state is None:
+            if self.entity_description.qs_is_none_unavailable:
+                self._attr_available = False
+                self._attr_native_value = STATE_UNAVAILABLE
+                self.async_write_ha_state()
+                return
+            else:
+                return
 
         self._attr_available = True
         self._attr_native_value = state

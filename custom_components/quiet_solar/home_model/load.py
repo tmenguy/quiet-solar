@@ -1,6 +1,8 @@
 import logging
+from bisect import bisect_left
 from datetime import datetime, timedelta
 from collections.abc import Generator
+from operator import itemgetter
 
 from .commands import LoadCommand, copy_command
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
@@ -48,7 +50,8 @@ class AbstractLoad(AbstractDevice):
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.running_command_first_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
-
+        self.current_constraint_current_value: float | None = None
+        self.current_constraint_current_energy: float | None = None
         self._externally_initialized_constraints = False
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
@@ -212,114 +215,128 @@ class AbstractLoad(AbstractDevice):
         # if it is the last and the one before are for the next days)
 
         # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
+        current_constraint = None
         if self.running_command is not None:
-            return False
+            force_solving =  False
 
-        if not self._constraints:
-            return False
+        elif not self._constraints:
+            force_solving =  False
+        else:
+            force_solving = False
+            for i, c in enumerate(self._constraints):
 
+                if c.skip:
+                    continue
 
-        force_solving = False
-        for i, c in enumerate(self._constraints):
+                if c.end_of_constraint < time:
 
-            if c.skip:
-                continue
-
-            if c.end_of_constraint < time:
-
-                # it means this constraint should be finished by now
-                if c.is_constraint_met() or c.is_mandatory is False:
-                    _LOGGER.info(f"{c.name} skipped because met or not mandatory")
-                    c.skip = True
-                else:
-                    # a not met mandatory one! we should expand it or force it
-                    duration_s = c.best_duration_to_meet()
-                    duration_s = duration_s*(1.0 + c.pushed_count*0.2) # extend if we continue to push it
-                    new_constraint_end = time + duration_s
-                    handled_constraint_force = False
-                    c.skip = True
-
-                    if i < len(self._constraints) - 1:
-
-                        for j in range(i+1, len(self._constraints)):
-
-                            nc = self._constraints[j]
-
-                            if nc.skip:
-                                continue
-
-                            if nc.end_of_constraint < time:
-                                c.skip = True
-                                continue
-
-                            if nc.end_of_constraint >= new_constraint_end:
-                                break
-
-                            if nc.end_of_constraint < new_constraint_end:
-                                if nc.is_constraint_met():
-                                    nc.skip = True
-                                else:
-                                    force_solving = True
-                                    # nc constraint may need to be forced or not
-                                    if nc.score() > c.score():
-                                        # we should skip the current one
-                                        c.skip = True
-                                        handled_constraint_force = True
-                                        # make the current constraint the next important one
-                                        # to break below after if handled_constraint_force:
-                                        c = nc
-                                        break
-                                    else:
-                                        nc.skip = True
-
-                    if handled_constraint_force is False:
-
-                        if c.pushed_count > 4:
-                            # TODO: we should send a push notification to the one attached to the constraint!
-                            # As it is not met and pushed too many times
-                            c.skip = True
-                            _LOGGER.info(f"{c.name} not met and pushed too many times")
-                        else:
-                            c.end_of_constraint = new_constraint_end
-                            # unskip the current one
-                            c.skip = False
-                            c.pushed_count += 1
-                            _LOGGER.info(f"{c.name} pushed because not mandatory and not met")
-                            handled_constraint_force = True
-
-                    if handled_constraint_force:
-                        force_solving = True
-                        # ok we have pushed or made a target the next important constraint
-                        do_continue_ct = await c.update(time)
-                        if do_continue_ct is False:
-                            if c.is_constraint_met():
-                                self._last_completed_constraint = c
-                                _LOGGER.info(f"{c.name} skipped because met (just after update)")
-                            else:
-                                _LOGGER.info(f"{c.name} stopped by callback (just after update)")
-                            c.skip = True
-                        break
-
-            elif c.is_constraint_met():
-                c.skip = True
-                _LOGGER.info(f"{c.name} skipped because met")
-            elif c.is_constraint_active_for_time_period(time, time + period):
-                do_continue_ct = await c.update(time)
-                if do_continue_ct is False:
-                    if c.is_constraint_met():
-                        self._last_completed_constraint = c
-                        _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                    # it means this constraint should be finished by now
+                    if c.is_constraint_met() or c.is_mandatory is False:
+                        _LOGGER.info(f"{c.name} skipped because met or not mandatory")
+                        c.skip = True
                     else:
-                        _LOGGER.info(f"{c.name} stopped by callback (just after update)")
+                        # a not met mandatory one! we should expand it or force it
+                        duration_s = c.best_duration_to_meet()
+                        duration_s = duration_s*(1.0 + c.pushed_count*0.2) # extend if we continue to push it
+                        new_constraint_end = time + duration_s
+                        handled_constraint_force = False
+                        c.skip = True
+
+                        if i < len(self._constraints) - 1:
+
+                            for j in range(i+1, len(self._constraints)):
+
+                                nc = self._constraints[j]
+
+                                if nc.skip:
+                                    continue
+
+                                if nc.end_of_constraint < time:
+                                    c.skip = True
+                                    continue
+
+                                if nc.end_of_constraint >= new_constraint_end:
+                                    break
+
+                                if nc.end_of_constraint < new_constraint_end:
+                                    if nc.is_constraint_met():
+                                        nc.skip = True
+                                    else:
+                                        force_solving = True
+                                        # nc constraint may need to be forced or not
+                                        if nc.score() > c.score():
+                                            # we should skip the current one
+                                            c.skip = True
+                                            handled_constraint_force = True
+                                            # make the current constraint the next important one
+                                            # to break below after if handled_constraint_force:
+                                            c = nc
+                                            break
+                                        else:
+                                            nc.skip = True
+
+                        if handled_constraint_force is False:
+
+                            if c.pushed_count > 4:
+                                # TODO: we should send a push notification to the one attached to the constraint!
+                                # As it is not met and pushed too many times
+                                c.skip = True
+                                _LOGGER.info(f"{c.name} not met and pushed too many times")
+                            else:
+                                c.end_of_constraint = new_constraint_end
+                                # unskip the current one
+                                c.skip = False
+                                c.pushed_count += 1
+                                _LOGGER.info(f"{c.name} pushed because not mandatory and not met")
+                                handled_constraint_force = True
+
+                        if handled_constraint_force:
+                            force_solving = True
+                            # ok we have pushed or made a target the next important constraint
+                            do_continue_ct = await c.update(time)
+                            if do_continue_ct is False:
+                                if c.is_constraint_met():
+                                    self._last_completed_constraint = c
+                                    _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                                else:
+                                    _LOGGER.info(f"{c.name} stopped by callback (just after update)")
+                                c.skip = True
+                            break
+
+                elif c.is_constraint_met():
                     c.skip = True
-                break
+                    _LOGGER.info(f"{c.name} skipped because met")
+                elif c.is_constraint_active_for_time_period(time, time + period):
+                    do_continue_ct = await c.update(time)
+                    if do_continue_ct is False:
+                        if c.is_constraint_met():
+                            self._last_completed_constraint = c
+                            _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                        else:
+                            _LOGGER.info(f"{c.name} stopped by callback (just after update)")
+                        c.skip = True
+                    break
 
-        constraints = [c for c in self._constraints if c.skip is False]
+            constraints = [c for c in self._constraints if c.skip is False]
 
-        if len(constraints) != len(self._constraints):
-            force_solving = True
-        
-        self.set_live_constraints(time, constraints)
+            if len(constraints) != len(self._constraints):
+                force_solving = True
+
+            self.set_live_constraints(time, constraints)
+
+            for c in self._constraints:
+                if c.is_constraint_active_for_time_period(time):
+                    current_constraint = c
+                    break
+
+
+        if current_constraint is not None:
+            self.current_constraint_current_value = current_constraint.current_value
+            self.current_constraint_current_energy = current_constraint.convert_target_value_to_energy(current_constraint.current_value)
+        else:
+            self.current_constraint_current_value = None
+            self.current_constraint_current_energy = None
+
 
         return force_solving
 
@@ -564,3 +581,28 @@ def align_time_series_and_values(
         return list(zip(t_only, new_v1, new_attr_1)), list(zip(t_only, new_v2, new_attr_2))
     else:
         return list(zip(t_only, new_v1)), list(zip(t_only, new_v2))
+
+
+def get_slots_from_time_serie(time_serie, start_time: datetime, end_time: datetime | None) -> list[
+    tuple[datetime | None, str | float | None]]:
+    if not time_serie:
+        return []
+
+    start_idx = bisect_left(time_serie, start_time, key=itemgetter(0))
+    # get one before
+    if start_idx > 0:
+        if time_serie[start_idx][0] != start_time:
+            start_idx -= 1
+
+    if end_time is None:
+        return time_serie[start_idx:start_idx + 1]
+
+    end_idx = bisect_left(time_serie, end_time, key=itemgetter(0))
+    if end_idx >= len(time_serie):
+        end_idx = len(time_serie) - 1
+    elif end_idx < len(time_serie) - 1:
+        # take one after
+        if time_serie[end_idx][0] != end_time:
+            end_idx += 1
+
+    return time_serie[start_idx:end_idx + 1]

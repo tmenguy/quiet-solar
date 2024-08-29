@@ -22,6 +22,11 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SWITCH ]
 
+    def get_virtual_current_constraint_entity_name(self) -> str | None:
+        if not isinstance(self, AbstractLoad):
+            return None
+        return f"Next ON-OFF ({self.name})"
+
     async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
         if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON

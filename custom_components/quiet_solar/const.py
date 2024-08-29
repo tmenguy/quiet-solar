@@ -78,6 +78,22 @@ SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
 SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
 SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"
 
+QSForecastHomeNonControlledSensors = {
+    "qs_no_control_forecast_15mn": 15*60,
+    "qs_no_control_forecast_30mn": 30*60,
+    "qs_no_control_forecast_1h": 60*60,
+    "qs_no_control_forecast_3h": 3*60*60,
+    "qs_no_control_forecast_6h": 6*60*60
+}
+
+QSForecastSolarSensors = {
+    "qs_solar_forecast_15mn": 15*60,
+    "qs_solar_forecast_30mn": 30*60,
+    "qs_solar_forecast_1h": 60*60,
+    "qs_solar_forecast_3h": 3*60*60,
+    "qs_solar_forecast_6h": 6*60*60
+}
+
 CONF_HOME_START_OFF_PEAK_RANGE_1 = "home_start_off_peak_range_1"
 CONF_HOME_END_OFF_PEAK_RANGE_1 = "home_end_off_peak_range_1"
 CONF_HOME_START_OFF_PEAK_RANGE_2 = "home_start_off_peak_range_2"

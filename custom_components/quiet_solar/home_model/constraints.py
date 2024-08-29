@@ -559,13 +559,18 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def _get_readable_target_value_string(self) -> str:
-        target_string = f"{int(self.target_value)} s"
+        minutes = int((self.target_value % 3600) / 60)
+        hours = int(self.target_value / 3600)
+        target_string = f"{int(self.target_value)}s"
         if self.target_value >= 4 * 3600:
-            target_string = f"{int(round(self.target_value / 3600))} h"
+            target_string = f"{hours}h"
         elif self.target_value >= 3600:
-            target_string = f"{int(self.target_value / 3600)} h {int((self.target_value % 3600) / 60)} mn"
+            if minutes > 0:
+                target_string = f"{hours}h{minutes}mn"
+            else:
+                target_string = f"{hours}h"
         elif self.target_value >= 60:
-            target_string = f"{int(self.target_value / 60)} mn"
+            target_string = f"{int(self.target_value / 60)}mn"
         return target_string
 
     def best_duration_to_meet(self) -> timedelta:
