@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
@@ -70,8 +70,11 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     return
 
             # schedule the load to be launched
+            type = CONSTRAINT_TYPE_MANDATORY_END_TIME
+            if self.load_is_auto_to_be_boosted:
+                type=CONSTRAINT_TYPE_FILLER
             load_mandatory = TimeBasedSimplePowerLoadConstraint(
-                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                    type=type,
                     time=time,
                     load=self,
                     from_user=False,
