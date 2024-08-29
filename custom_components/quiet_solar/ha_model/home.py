@@ -59,17 +59,18 @@ class QSforecastValueSensor:
         probers = {}
 
         for name, duration_s in names_and_duration.items():
-            probers[name] = cls(duration_s, getter)
+            probers[name] = cls(name, duration_s, getter)
 
         return probers
 
 
 
 
-    def __init__(self, duration_s, forecast_getter):
+    def __init__(self, name, duration_s, forecast_getter):
         self._stored_values = []
         self._getter = forecast_getter
         self._delta = timedelta(seconds=duration_s)
+        self.name = name
 
 
     def push_and_get(self, time: datetime) -> float | None:
@@ -192,7 +193,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
     async def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
-            return  await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(
+        return  await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(
                 time_now=time,
                 history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
 
@@ -481,8 +482,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
                                                                                      self.home_non_controlled_consumption,
                                                                                      do_save=True)
 
-                if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
-                    await self._compute_non_controlled_forecast_intl(time)
+            if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
+                await self._compute_non_controlled_forecast_intl(time)
 
 
 
@@ -894,7 +895,7 @@ class QSSolarHistoryVals:
 
 
     def update_current_forecast_if_needed(self, time: datetime) -> bool:
-        if self._current_forecast is None or self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(minutes=INTERVALS_MN):
+        if self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(minutes=INTERVALS_MN):
             return True
         return False
 
@@ -903,6 +904,10 @@ class QSSolarHistoryVals:
 
 
     async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, futur_needed_in_hours: int) -> list[tuple[datetime, float]]:
+
+        _LOGGER.info("get_forecast_and_set_as_current called")
+
+        self._last_forecast_update_time = time_now
 
         now_idx, now_days = self.get_index_from_time(time_now)
 
@@ -955,6 +960,7 @@ class QSSolarHistoryVals:
 
 
         if not scores:
+            _LOGGER.info("get_forecast_and_set_as_current no scores !!!")
             return []
 
 
@@ -972,6 +978,7 @@ class QSSolarHistoryVals:
 
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad forecast
+                _LOGGER.info(f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
             forecast = []
@@ -1003,10 +1010,10 @@ class QSSolarHistoryVals:
                 forecast.append((time_now + timedelta(hours=futur_needed_in_hours), forecast[-1][1]))
 
             self._current_forecast = forecast
-            self._last_forecast_update_time = time_now
+            _LOGGER.info(f"get_forecast_and_set_as_current A GOOD ONE STORED  {num_ok_vals} - {past_days.shape[0]}")
             return forecast
 
-
+        _LOGGER.info("get_forecast_and_set_as_current nothing works!")
         return []
 
 
