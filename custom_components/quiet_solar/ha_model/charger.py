@@ -515,7 +515,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def stop_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=False, time=time)
-        if self.is_charge_enabled(time):
+        charge_state = self.is_charge_enabled(time)
+        if charge_state or charge_state is None:
             _LOGGER.info("STOP CHARGE LAUNCHED")
             await self.hass.services.async_call(
                 domain=Platform.SWITCH,
@@ -526,7 +527,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def start_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=True, time=time)
-        if self.is_charge_disabled(time):
+        charge_state = self.is_charge_disabled(time)
+        if charge_state or charge_state is None:
             _LOGGER.info("START CHARGE LAUNCHED")
             await self.hass.services.async_call(
                 domain=Platform.SWITCH,
@@ -552,8 +554,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                num_seconds_before=2*for_duration,
                                                                time=time,
                                                                invert_val_probe=invert_prob)
-
-        return contiguous_status >= for_duration and contiguous_status > 0
+        if contiguous_status is None:
+            return None
+        else:
+            return contiguous_status >= for_duration and contiguous_status > 0
 
     def _check_plugged_val(self,
                            time: datetime,
@@ -622,7 +626,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return []
 
-    def _check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool:
+    def check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool | None:
 
         result = not check_for_val
         if self.is_plugged(time=time, for_duration=for_duration):
@@ -636,20 +640,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             state = self.hass.states.get(self.charger_pause_resume_switch)
             if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                result = False
+                result = None
             else:
                 result = state.state == "on"
 
-            if not check_for_val:
-                result = not result
+                if not check_for_val:
+                    result = not result
 
         return result
 
-    def is_charge_enabled(self, time: datetime, for_duration: float | None = None) -> bool:
-        return self._check_charge_state(time, for_duration, check_for_val=True)
+    def is_charge_enabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        return self.check_charge_state(time, for_duration, check_for_val=True)
 
-    def is_charge_disabled(self, time: datetime, for_duration: float | None = None) -> bool:
-        return self._check_charge_state(time, for_duration, check_for_val=False)
+    def is_charge_disabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        return self.check_charge_state(time, for_duration, check_for_val=False)
 
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
         return []
@@ -1042,10 +1046,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
     def set_state_machine_to_current_state(self, time: datetime):
-        if self.is_charge_disabled(time):
-            self._expected_charge_state.set(False, None)
-        else:
+        if self.is_charge_enabled(time):
             self._expected_charge_state.set(True, None)
+        else:
+            self._expected_charge_state.set(False, None)
         self._expected_amperage.set(self.get_max_charging_power(), time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
@@ -1210,7 +1214,32 @@ class QSChargerWallbox(QSChargerGeneric):
                 return False, state_time
             return True, state_time
 
+    def check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool | None:
 
+        result = not check_for_val
+        if self.is_plugged(time=time, for_duration=for_duration):
+
+            status_vals = self.get_car_charge_enabled_status_vals()
+
+            result = self._check_charger_status(status_vals, time, for_duration, invert_prob=not check_for_val)
+
+            if result is not None:
+                return result
+
+            state_wallbox = self.hass.states.get(self.charger_status_sensor)
+            if state_wallbox is None or state_wallbox.state in [STATE_UNAVAILABLE]:
+                return None
+
+            state = self.hass.states.get(self.charger_pause_resume_switch)
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                result = False
+            else:
+                result = state.state == "on"
+
+                if not check_for_val:
+                    result = not result
+
+        return result
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
