@@ -299,7 +299,10 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         current_constraint = self.device.get_current_active_constraint(time)
 
         if current_constraint is None:
-            new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED DONE)"
+            if self.device._last_completed_constraint is not None:
+                new_val = "COMPLETED: " + self.device._last_completed_constraint.get_readable_name_for_load()
+            else:
+                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
         else:
             new_val = current_constraint.get_readable_name_for_load()
 
