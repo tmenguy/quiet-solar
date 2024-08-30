@@ -106,7 +106,7 @@ class QSDeviceEntity(QSBaseEntity):
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
-            name=f"{device.device_type} {device.name}",
+            name=f"{LOAD_NAMES.get(device.device_type,device.device_type)} {device.name}",
             manufacturer=MANUFACTURER,
             model=device.device_type
         )
