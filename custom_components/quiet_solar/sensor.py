@@ -280,6 +280,7 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
         self._attr_native_value = last_sensor_state.native_value
         self._attr_extra_state_attributes = last_sensor_state.native_attr
 
+
     # @property
     # def extra_state_attributes(self) -> dict[str, Any]:
     #    """Return the device specific state attributes."""
