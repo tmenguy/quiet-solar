@@ -35,6 +35,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         else:
             raise ValueError("Invalid command")
 
+        _LOGGER.info(f"Executing on/off command {action} on {self.switch_entity}")
         await self.hass.services.async_call(
             domain=Platform.SWITCH,
             service=action,

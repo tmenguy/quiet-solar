@@ -21,7 +21,8 @@ import numpy as np
 
 def compute_energy_Wh_rieman_sum(
         power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-        conservative: bool = False):
+        conservative: bool = False,
+        clip_to_zero_under_power: None | float = None) -> tuple[float, float]:
     """Compute energy from power with a rieman sum."""
 
     energy = 0
@@ -29,10 +30,17 @@ def compute_energy_Wh_rieman_sum(
     if power_data and len(power_data) > 1:
 
         # compute a rieman sum, as best as possible , trapezoidal, taking pessimistic asumption
-        # as we don't want to artifically go up the previous one
+        # as we don't want to artificially go up the previous one
         # (except in rare exceptions like reset, 0 , etc)
+        prev_value = power_data[0][1]
+        if clip_to_zero_under_power is not None and prev_value is not None and prev_value < clip_to_zero_under_power:
+            prev_value = 0.0
 
         for i in range(len(power_data) - 1):
+
+            next_value = power_data[i+1][1]
+            if clip_to_zero_under_power is not None and next_value is not None and next_value < clip_to_zero_under_power:
+                next_value = 0.0
 
             dt_h = float((power_data[i + 1][0] - power_data[i][0]).total_seconds()) / 3600.0
             duration_h += dt_h
@@ -40,13 +48,15 @@ def compute_energy_Wh_rieman_sum(
             if conservative:
                 d_p_w = 0
             else:
-                d_p_w = abs(float(power_data[i + 1][1] - power_data[i][1]))
+                d_p_w = abs(float(next_value - prev_value))
 
             d_nrj_wh = dt_h * (
-                    min(power_data[i + 1][1], power_data[i][1]) + 0.5 * d_p_w
+                    min(next_value, prev_value) + 0.5 * d_p_w
             )
 
             energy += d_nrj_wh
+
+            prev_value = next_value
 
     return energy, duration_h
 
@@ -358,14 +368,14 @@ class HADeviceMixin:
             val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
         return val
 
-    def get_device_real_energy(self, start_time: datetime, end_time:datetime) -> float | None:
+    def get_device_real_energy(self, start_time: datetime, end_time:datetime, clip_to_zero_under_power: float | None = None) -> float | None:
         duration_before_s = (end_time - start_time).total_seconds()
         val = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, end_time)
         if not val:
             val = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, end_time)
         if not val:
             return None
-        return compute_energy_Wh_rieman_sum(val)[0]
+        return compute_energy_Wh_rieman_sum(val, clip_to_zero_under_power=clip_to_zero_under_power)[0]
 
     def get_device_command_energy(self, start_time: datetime, end_time:datetime) -> float | None:
         duration_before_s = (end_time - start_time).total_seconds()

@@ -799,13 +799,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         result_calculus = None
         result = None
         if self.car.car_charge_percent_sensor is None:
-            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time)
-            if added_nrj and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
-                added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
-                result = ct.current_value + added_percent
-                result_calculus = result
+
+            if self.current_command is None or self.current_command.is_like(CMD_OFF) or self.current_command.is_like(CMD_IDLE):
+                result = None
             else:
-                result = 0.0
+                added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time, clip_to_zero_under_power=self.charger_consumption_W)
+
+                if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
+                    added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
+                    result = ct.current_value + added_percent
+                    result_calculus = result
+
 
         if self.car.car_charge_percent_sensor is not None:
             result = self.car.get_car_charge_percent(time)

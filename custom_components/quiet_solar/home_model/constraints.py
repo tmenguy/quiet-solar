@@ -7,7 +7,7 @@ from abc import abstractmethod
 from typing import Self
 import pytz
 
-from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command
+from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_OFF, CMD_IDLE
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
@@ -262,18 +262,20 @@ class LoadConstraint(object):
                 value, do_continue_constraint = await self._update_value_callback(self, time)
                 if do_continue_constraint is False:
                     _LOGGER.info(f"{self.name} update callback asked for stop")
-                if value is None:
-                    value = self.current_value
             else:
                 value = self.compute_value(time)
-            self.current_value = value
+
+            if value is None:
+                value = self.current_value
+
             self.last_value_update = time
+            self.current_value = value
             if do_continue_constraint is False or self.is_constraint_met():
                 return False
         return True
 
     @abstractmethod
-    def compute_value(self, time: datetime) -> float:
+    def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint when the state change."""
 
     @abstractmethod
@@ -343,10 +345,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         seconds = (3600.0 * (self.target_value - self.current_value)) / self._max_power
         return timedelta(seconds=seconds)
 
-    def compute_value(self, time: datetime) -> float:
+    def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not """
-        if self.load.current_command is None:
-            return self.current_value
+        if self.load.current_command is None or self.load.current_command.is_like(CMD_OFF) or self.load.current_command.is_like(CMD_IDLE):
+            return None
 
         return (((time - self.last_value_update).total_seconds()) *
                 self.load.current_command.power_consign / 3600.0) + self.current_value
@@ -398,7 +400,42 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
-        sorted_available_power = power_available_power[first_slot:last_slot + 1].argsort() # power_available_power negative value means free power
+
+
+
+        sub_power_available_power = power_available_power[first_slot:last_slot + 1]
+        min_power_idx = np.argmin(sub_power_available_power)
+        left = min_power_idx
+        right = min_power_idx
+        sorted_available_power = [min_power_idx]
+        for i in range(len(sub_power_available_power) - 1):
+            if left == 0:
+                right = right + 1
+                if right >= len(sub_power_available_power):
+                    # should never happen
+                    break
+                sorted_available_power.append(right)
+            elif right == len(sub_power_available_power) - 1:
+                left = left - 1
+                if left < 0:
+                    # should never happen
+                    break
+                sorted_available_power.append(left)
+            else:
+                left_val = sub_power_available_power[left - 1]
+                right_val = sub_power_available_power[right + 1]
+
+                if left_val < right_val:
+                    left = left - 1
+                    sorted_available_power.append(left)
+                else:
+                    right = right + 1
+                    sorted_available_power.append(right)
+
+        if len(sorted_available_power) != len(sub_power_available_power):
+            _LOGGER.error(f"ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+            sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
+
 
         # for i in range(first_slot, last_slot + 1):
 
@@ -568,10 +605,10 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
                 ((self.target_value - self.current_value) * self.total_capacity_wh) / 100.0)) / self._max_power
         return timedelta(seconds=seconds)
 
-    def compute_value(self, time: datetime) -> float:
+    def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not """
-        if self.load.current_command is None:
-            return self.current_value
+        if self.load.current_command is None or self.load.current_command.is_like(CMD_OFF) or self.load.current_command.is_like(CMD_IDLE):
+            return None
 
         return 100.0 * ((((time - self.last_value_update).total_seconds()) *
                          self.load.current_command.power_consign / 3600.0) /
@@ -599,13 +636,13 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         """ Return the best duration to meet the constraint."""
         return timedelta(seconds=self.target_value - self.current_value)
 
-    def compute_value(self, time: datetime) -> float:
+    def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not,
         hence use the old state and the last value change to add the consummed energy """
-        if self.load.current_command.is_like(CMD_ON):
+        if self.load.current_command is not None and self.load.current_command.is_like(CMD_ON):
             return (time - self.last_value_update).total_seconds() + self.current_value
         else:
-            return self.current_value
+            return None
 
     def convert_target_value_to_energy(self, value: float) -> float:
         return (self._power * value) / 3600.0

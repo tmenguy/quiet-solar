@@ -79,18 +79,20 @@ class QSSolarProvider:
                 self.orchestrators.append(orchestrator)
 
             if len(self.orchestrators) > 0:
-                self.solar_forecast: list[tuple[datetime | None, str | float | None, dict | None]] = []
+                self.solar_forecast: list[tuple[datetime | None, float | None]] = []
                 self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
 
                 # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
+                prev_value = self.solar_forecast[0][1]
                 for i in range(1, len(self.solar_forecast)):
-                    self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + self.solar_forecast[i-1][1])/2.0)
+                    self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + prev_value)/2.0)
+                    prev_value = self.solar_forecast[i][1]
 
             self._latest_update_time = time
 
 
     async def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
-        tuple[datetime | None, str | float | None]]:
+        tuple[datetime | None, float | None]]:
 
         # the period may be : FLOATING_PERIOD of course
 

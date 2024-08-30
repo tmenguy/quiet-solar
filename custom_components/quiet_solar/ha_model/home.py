@@ -576,7 +576,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         for load, commands in self._commands:
             while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                 cmd_time, command = commands.pop(0)
-                _LOGGER.info("Launch command %s at %s", command.command, cmd_time)
+                _LOGGER.info("Launch command %s at %s for load %s", command.command, cmd_time, load.name)
                 await load.launch_command(time, command)
                 # only launch one at a time for a given load
                 break
@@ -905,7 +905,7 @@ class QSSolarHistoryVals:
 
     async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, futur_needed_in_hours: int) -> list[tuple[datetime, float]]:
 
-        _LOGGER.info("get_forecast_and_set_as_current called")
+        _LOGGER.debug("get_forecast_and_set_as_current called")
 
         self._last_forecast_update_time = time_now
 
@@ -952,7 +952,7 @@ class QSSolarHistoryVals:
 
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad history
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"get_forecast_and_set_as_current trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
@@ -962,7 +962,7 @@ class QSSolarHistoryVals:
 
 
         if not scores:
-            _LOGGER.info("get_forecast_and_set_as_current no scores !!!")
+            _LOGGER.debug("get_forecast_and_set_as_current no scores !!!")
             return []
 
 
@@ -980,7 +980,7 @@ class QSSolarHistoryVals:
 
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad forecast
-                _LOGGER.info(f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
+                _LOGGER.debug(f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
             forecast = []
@@ -1012,10 +1012,10 @@ class QSSolarHistoryVals:
                 forecast.append((time_now + timedelta(hours=futur_needed_in_hours), forecast[-1][1]))
 
             self._current_forecast = forecast
-            _LOGGER.info(f"get_forecast_and_set_as_current A GOOD ONE STORED  {num_ok_vals} - {past_days.shape[0]}")
+            _LOGGER.debug(f"get_forecast_and_set_as_current A GOOD ONE STORED  {num_ok_vals} - {past_days.shape[0]}")
             return forecast
 
-        _LOGGER.info("get_forecast_and_set_as_current nothing works!")
+        _LOGGER.debug("get_forecast_and_set_as_current nothing works!")
         return []
 
 
