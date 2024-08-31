@@ -336,7 +336,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.car is not None and self.car.name != self._user_attached_car_name:
                     self.detach_car()
 
-            if self.car:
+            if self.car and self._user_attached_car_name is None:
                 car = self.get_best_car(time)
                 if car.name != self.car.name:
                     _LOGGER.info("CHANGE CONNECTED CAR!")
@@ -869,8 +869,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
-            self._expected_amperage.set(int(self.min_charge), time)
-            self._expected_charge_state.set(True, time) # True as teh cas stopped asking, and the wallbox may not support to stop in this case
+            self._expected_amperage.set(int(self.charger_min_charge), time)
+            self._expected_charge_state.set(False, time)
         elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
@@ -1012,7 +1012,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     new_state = init_state
                     if new_amp < self.min_charge:
-                        new_amp = self.min_charge
+                        new_amp = self.charger_min_charge
                         new_state = False
                     elif new_amp > self.max_charge:
                         new_amp = self.max_charge
