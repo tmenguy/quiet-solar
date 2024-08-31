@@ -185,6 +185,10 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
 
+
+    def force_next_solve(self):
+        self._last_solve_done = None
+
     def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
@@ -445,7 +449,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
         # check for active loads
         # for now we just check if a charger is plugged in
         for load in self._all_loads:
-            await load.do_run_check_load_activity_and_constraints(time)
+            if await load.do_run_check_load_activity_and_constraints(time):
+                self.force_next_solve()
 
 
     async def update_forecast_probers(self, time: datetime):

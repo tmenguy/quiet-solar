@@ -62,10 +62,12 @@ class AbstractLoad(AbstractDevice):
         else:
             return 0
 
-    async def do_run_check_load_activity_and_constraints(self, time: datetime):
+    async def do_run_check_load_activity_and_constraints(self, time: datetime)-> bool:
         if self._externally_initialized_constraints is False:
-            return
-        return await self.check_load_activity_and_constraints(time)
+            return False
+        return  await self.check_load_activity_and_constraints(time)
+
+
 
     def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
         self.reset()
@@ -82,8 +84,8 @@ class AbstractLoad(AbstractDevice):
 
         self._externally_initialized_constraints = True
 
-    async def check_load_activity_and_constraints(self, time: datetime):
-        return
+    async def check_load_activity_and_constraints(self, time: datetime) -> bool:
+        return False
 
     def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
         return None

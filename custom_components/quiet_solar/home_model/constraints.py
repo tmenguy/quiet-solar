@@ -82,8 +82,7 @@ class LoadConstraint(object):
         else:
             self.current_value = current_value
 
-        self.name = (f"Constraint for {self.load.name} ({self.load_param} "
-                     f"{self.initial_value}/{self.target_value}/{self.type})")
+        self._compute_constraint_name()
 
         # will correct end of constraint if needed best_duration_to_meet uses the values above
         if self.as_fast_as_possible:
@@ -94,6 +93,16 @@ class LoadConstraint(object):
         self.last_state_update = time
         self.skip = False
         self.pushed_count = 0
+
+
+    def _compute_constraint_name(self):
+        self.name = (f"Constraint for {self.load.name} ({self.load_param} "
+                     f"{self.initial_value}/{self.target_value}/{self.type})")
+
+    def reset_load_param(self, new_param):
+        self.load_param = new_param
+        self._compute_constraint_name()
+
 
     def __eq__(self, other):
         if other is None:

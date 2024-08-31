@@ -55,7 +55,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         else:
             return state.state == "off"
 
-    async def check_load_activity_and_constraints(self, time: datetime):
+    async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
 
@@ -68,7 +68,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     # we already have a constraint for this end time
                     # this is a small optimisation to avoid creating a constraint object just to
                     # let push_live_constraint check that it is already in the list or completed
-                    return
+                    return False
 
             # schedule the load to be launched
             type = CONSTRAINT_TYPE_MANDATORY_END_TIME
@@ -86,5 +86,8 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart
-            self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
+            res = self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
             self._last_pushed_end_constraint = end_schedule
+            return res
+
+        return False
