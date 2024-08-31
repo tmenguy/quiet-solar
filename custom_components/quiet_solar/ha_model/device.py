@@ -12,7 +12,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
-    CONF_CALENDAR
+    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -280,10 +280,8 @@ class HADeviceMixin:
             return None
         return f"{self.device_id}_power"
 
-    def get_virtual_current_constraint_entity_name(self) -> str | None:
-        if not isinstance(self, AbstractLoad):
-            return None
-        return f"{self.device_id}_constraint"
+    def get_virtual_current_constraint_translation_key(self) -> str | None:
+        return SENSOR_CONSTRAINT_SENSOR
 
 
     def get_best_power_HA_entity(self):

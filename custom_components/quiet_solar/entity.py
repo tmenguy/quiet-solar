@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity import Entity, async_generate_entity_id
 
 from .ha_model.home import QSHome
 from .ha_model.battery import QSBattery
@@ -18,7 +18,7 @@ from .home_model.load import AbstractDevice
 from .const import (
     DEFAULT_ATTRIBUTION,
     DOMAIN,
-    MANUFACTURER,
+    MANUFACTURER, ENTITY_ID_FORMAT,
 )
 from .ha_model.device import HADeviceMixin
 
@@ -72,7 +72,7 @@ class QSBaseEntity(Entity):
     """QS entity base class."""
 
     _attr_attribution = DEFAULT_ATTRIBUTION
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
 
     def __init__(self, data_handler, description) -> None:
         """Set up QS entity base."""
@@ -80,10 +80,10 @@ class QSBaseEntity(Entity):
         self._attr_extra_state_attributes = {}
         self.entity_description = description
 
-        if self.entity_description.name is UNDEFINED:
-            _attr_has_entity_name = True
-        if not (self.entity_description.translation_key is UNDEFINED):
-            _attr_has_entity_name = True
+        if not (self.entity_description.name is UNDEFINED or self.entity_description.name is None):
+            self._attr_has_entity_name = False
+       # if not (self.entity_description.translation_key is UNDEFINED):
+       #     _attr_has_entity_name = True
 
     @callback
     def async_update_callback(self, time:datetime) -> None:
@@ -98,18 +98,22 @@ class QSBaseEntity(Entity):
 class QSDeviceEntity(QSBaseEntity):
     """QS entity base class."""
     device : AbstractDevice
+
     def __init__(self, data_handler, device: AbstractDevice, description) -> None:
         """Set up Netatmo entity base."""
         super().__init__(data_handler=data_handler, description=description)
         self.device = device
-
-
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
             name=f"{LOAD_NAMES.get(device.device_type,device.device_type)} {device.name}",
             manufacturer=MANUFACTURER,
             model=device.device_type
         )
+        self._attr_unique_id = f"{self.device.device_id}-{description.key}"
+        if self._attr_has_entity_name:
+            self.entity_id = async_generate_entity_id(
+                ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass
+            )
 
     @property
     def device_type(self) -> str:

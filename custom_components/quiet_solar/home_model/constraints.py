@@ -15,7 +15,7 @@ from bisect import bisect_left
 import importlib
 
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
-    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
+    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ class LoadConstraint(object):
 
     @property
     def is_before_battery(self) -> bool:
-        return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
+        return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
     def score(self):
         score = self.convert_target_value_to_energy(self.target_value)
@@ -211,7 +211,7 @@ class LoadConstraint(object):
         target_string = self._get_readable_target_value_string()
 
         postfix = ""
-        if self.type <= CONSTRAINT_TYPE_FILLER_AUTO:
+        if self.type < CONSTRAINT_TYPE_MANDATORY_END_TIME:
             postfix = " best effort"
         elif self.type >= CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE:
             postfix = " ASAP"
@@ -476,7 +476,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if (nrj_to_be_added <= 0.0 or
                 do_use_available_power_only or
-                self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN):
+                self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN):
 
             if self.support_auto:
                 # fill all with green only command, to fill everything with the best power available

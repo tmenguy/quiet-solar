@@ -19,7 +19,8 @@ from .const import (
     DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, HA_CONSTRAINT_SENSOR_HISTORY,
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
-    QSForecastHomeNonControlledSensors, QSForecastSolarSensors,
+    QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
+    SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -40,11 +41,20 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
 def create_ha_sensor_for_Load(device: AbstractLoad):
     entities = []
 
+    home_available_power = QSSensorEntityDescription(
+        key="load_current_command",
+        translation_key=SENSOR_LOAD_CURRENT_COMMAND,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device, key: "NO CMD" if device.current_command is None else device.current_command.command,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_available_power))
+
+
     if isinstance(device, HADeviceMixin) and isinstance(device, AbstractLoad):
 
         load_power_sensor = QSSensorEntityDescription(
             key="best_power_value",
-            name=device.get_virtual_load_HA_power_entity_name(),
+            translation_key=SENSOR_LOAD_BEST_POWER_VALUE,
             native_unit_of_measurement=UnitOfPower.WATT,
             state_class=SensorStateClass.MEASUREMENT,
             device_class=SensorDeviceClass.POWER,
@@ -55,13 +65,13 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
 
         constraints_sensor = QSSensorEntityDescription(
             key="current_constraint",
-            name=device.get_virtual_current_constraint_entity_name()
+            translation_key=device.get_virtual_current_constraint_translation_key()
         )
         entities.append(QSLoadSensorCurrentConstraints(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
         constraints_sensor = QSSensorEntityDescription(
             key="current_constraint_current_value",
-            name=f"{device.get_virtual_current_constraint_entity_name()}_value",
+            translation_key=SENSOR_CONSTRAINT_SENSOR_VALUE,
             state_class=SensorStateClass.MEASUREMENT,
             entity_category=EntityCategory.DIAGNOSTIC,
             qs_is_none_unavailable=True
@@ -70,7 +80,7 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
 
         constraints_sensor = QSSensorEntityDescription(
             key="current_constraint_current_energy",
-            name=f"{device.get_virtual_current_constraint_entity_name()}_energy",
+            translation_key=SENSOR_CONSTRAINT_SENSOR_ENERGY,
             device_class=SensorDeviceClass.ENERGY,
             native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
             entity_category=EntityCategory.DIAGNOSTIC,
@@ -91,7 +101,6 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
-
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_non_controlled_consumption_sensor))
 
     home_consumption_sensor = QSSensorEntityDescription(
@@ -101,7 +110,6 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
-
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_consumption_sensor))
 
     home_available_power = QSSensorEntityDescription(
@@ -111,9 +119,7 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
-
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_available_power))
-
 
     for name in QSForecastHomeNonControlledSensors:
         home_forecast_power = QSSensorEntityDescription(
@@ -197,13 +203,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
         device: AbstractDevice,
         description: QSSensorEntityDescription,
     ) -> None:
-        """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self.entity_description = description
-
-        self._attr_unique_id = (
-            f"{self.device.device_id}-{description.key}"
-        )
 
     @callback
     def async_update_callback(self, time:datetime) -> None:

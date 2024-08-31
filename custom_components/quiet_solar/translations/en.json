@@ -259,7 +259,33 @@
                 "name": "Selected Car:"
             }
         },
+        "sensor": {
+            "qs_constraint_sensor": {
+                "name": "Next"
+            },
+            "qs_constraint_sensor_charge": {
+                "name": "Next Charge"
+            },
+            "qs_constraint_sensor_energy": {
+                "name": "constraint current energy"
+            },
+            "qs_constraint_sensor_on_off": {
+                "name": "Next ON/OFF"
+            },
+            "qs_constraint_sensor_value": {
+                "name": "constraint current value"
+            },
+            "qs_load_best_power_value": {
+                "name": "QS Load Power Value"
+            },
+            "qs_load_current_command_sensor": {
+                "name": "Load Current Command"
+            }
+        },
         "switch": {
+            "qs_best_effort_green_only": {
+                "name": "Best Effort Green Only"
+            },
             "qs_next_car_charge_full": {
                 "name": "Next Car Charge to 100%"
             }

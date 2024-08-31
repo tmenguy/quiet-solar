@@ -8,7 +8,7 @@ from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE
-from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
+from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
 
 class PeriodSolver(object):
@@ -238,7 +238,7 @@ class PeriodSolver(object):
 
         for c , _ in constraints:
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
-                do_use_available_power_only=c.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN,
+                do_use_available_power_only=c.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
                 power_available_power = self._available_power,

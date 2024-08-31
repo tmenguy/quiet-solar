@@ -89,7 +89,6 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     """Mixin for button specific attributes."""
 
     entity_description: QSButtonEntityDescription
-    _attr_has_entity_name = True
     def __init__(
         self,
         data_handler,
@@ -97,13 +96,8 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
         description: QSButtonEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        self._attr_has_entity_name = True
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self.entity_description = description
 
-        self._attr_unique_id = (
-            f"button-{self.device.device_id}-{description.key}"
-        )
     async def async_press(self) -> None:
         """Process the button press."""
         await self.entity_description.async_press(self)

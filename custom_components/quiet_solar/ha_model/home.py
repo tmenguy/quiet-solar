@@ -19,7 +19,8 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
     CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
-    CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors
+    CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
+    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -677,7 +678,7 @@ class QSHomeConsumptionHistoryAndForecast:
     async def init_forecasts(self, time: datetime):
 
         if self._in_reset is False and self.home_non_controlled_consumption is None:
-            self.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+            self.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             await self.home_non_controlled_consumption.init(time)
 
         return not self._in_reset
@@ -860,7 +861,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
         if is_one_bad is False:
             # now we do have something to save!
-            home_non_controlled_consumption = QSSolarHistoryVals(entity_id=SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+            home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             home_non_controlled_consumption.values = home_consumption.values
             await home_non_controlled_consumption.save_values()
             self.home_non_controlled_consumption = None

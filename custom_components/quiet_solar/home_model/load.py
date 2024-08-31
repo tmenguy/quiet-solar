@@ -54,6 +54,11 @@ class AbstractLoad(AbstractDevice):
         self.current_constraint_current_energy: float | None = None
         self._externally_initialized_constraints = False
 
+        self.qs_best_effort_green_only = False
+
+    def support_green_only_switch(self) -> bool:
+        return False
+
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:
             return None

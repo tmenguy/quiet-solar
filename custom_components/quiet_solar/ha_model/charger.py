@@ -16,7 +16,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
     CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, SENSOR_CONSTRAINT_SENSOR_CHARGE
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
@@ -161,22 +161,27 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
 
-    def get_virtual_current_constraint_entity_name(self) -> str | None:
-        if not isinstance(self, AbstractLoad):
-            return None
-        return f"Next Charge ({self.name})"
+    def get_virtual_current_constraint_translation_key(self) -> str | None:
+        return SENSOR_CONSTRAINT_SENSOR_CHARGE
 
     def set_next_charge_full_or_not(self, value: bool):
         self._is_next_charge_full = value
 
+
+        do_update  = True
         if value:
             new_target = 100
         else:
-            new_target = self.car.car_default_charge
+            if self.car is not None:
+                new_target = self.car.car_default_charge
+            else:
+                new_target = None
+                do_update = False
 
-        for ct in self._constraints:
-            if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
-                ct.target_value = new_target
+        if do_update:
+            for ct in self._constraints:
+                if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
+                    ct.target_value = new_target
 
 
     def is_next_charge_full(self) -> bool:
@@ -457,7 +462,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             if realized_charge_target is None:
                                 realized_charge_target = car_initial_percent
                                 # make car charging bigger than the battery filling if it is the only car constraint
-                                type = CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN
+                                type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
                             car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                                 total_capacity_wh=self.car.car_battery_capacity,

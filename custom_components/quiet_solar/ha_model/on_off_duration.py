@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, SENSOR_CONSTRAINT_SENSOR_ON_OFF
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
@@ -19,13 +19,16 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         super().reset()
         self._last_pushed_end_constraint = None
 
+    def support_green_only_switch(self) -> bool:
+        if self.load_is_auto_to_be_boosted:
+            return False
+        return True
+
     def get_platforms(self):
         return [ Platform.SENSOR, Platform.SWITCH ]
 
-    def get_virtual_current_constraint_entity_name(self) -> str | None:
-        if not isinstance(self, AbstractLoad):
-            return None
-        return f"Next ON-OFF ({self.name})"
+    def get_virtual_current_constraint_translation_key(self) -> str | None:
+        return SENSOR_CONSTRAINT_SENSOR_ON_OFF
 
     async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
         if command.is_like(CMD_ON):
@@ -74,6 +77,9 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             type = CONSTRAINT_TYPE_MANDATORY_END_TIME
             if self.load_is_auto_to_be_boosted:
                 type = CONSTRAINT_TYPE_FILLER
+            elif self.qs_best_effort_green_only is True:
+                type = CONSTRAINT_TYPE_FILLER # will be after battery filling
+
             load_mandatory = TimeBasedSimplePowerLoadConstraint(
                     type=type,
                     time=time,

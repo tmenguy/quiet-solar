@@ -77,6 +77,16 @@ OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
 SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
 SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
 SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"
+FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "sensor."+SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+SENSOR_LOAD_CURRENT_COMMAND = "qs_load_current_command_sensor"
+
+
+SENSOR_LOAD_BEST_POWER_VALUE = "qs_load_best_power_value"
+SENSOR_CONSTRAINT_SENSOR = "qs_constraint_sensor"
+SENSOR_CONSTRAINT_SENSOR_VALUE = "qs_constraint_sensor_value"
+SENSOR_CONSTRAINT_SENSOR_ENERGY = "qs_constraint_sensor_energy"
+SENSOR_CONSTRAINT_SENSOR_CHARGE = "qs_constraint_sensor_charge"
+SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_15mn": 15*60,
@@ -106,8 +116,9 @@ BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
-
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
+
+SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 
 
 
@@ -119,7 +130,9 @@ FLOATING_PERIOD_S = 30 * 3600
 # better for serialization that using an IntEnum
 CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE = 10
 CONSTRAINT_TYPE_MANDATORY_END_TIME  = 9
-CONSTRAINT_TYPE_BEFORE_BATTERY_AUTO_GREEN = 8
+CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN = 8
 CONSTRAINT_TYPE_FILLER = 7
 CONSTRAINT_TYPE_FILLER_AUTO = 6
+
+ENTITY_ID_FORMAT = DOMAIN + ".{}"
 

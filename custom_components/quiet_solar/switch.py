@@ -9,9 +9,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
-from .const import SWITCH_CAR_NEXT_CHARGE_FULL
+from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT
 from .ha_model.charger import QSChargerGeneric
-from .home_model.commands import LoadCommand, CMD_ON, CMD_IDLE, CMD_OFF
+from .ha_model.device import HADeviceMixin
 from .entity import QSDeviceEntity
 
 from homeassistant.const import (
@@ -20,29 +20,51 @@ from homeassistant.const import (
     Platform
 )
 
-from .home_model.load import AbstractDevice
+from .home_model.load import AbstractDevice, AbstractLoad
 
 
 def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     entities = []
 
 
-    qs_reset_history = QSSwitchEntityDescription(
+    qs_next_charge_full = QSSwitchEntityDescription(
         key=SWITCH_CAR_NEXT_CHARGE_FULL,
         translation_key=SWITCH_CAR_NEXT_CHARGE_FULL,
-        async_press=lambda x: x.device.reset_forecasts(),
     )
 
-    entities.append(QSSwitchEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+    entities.append(QSSwitchEntityChargerFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
 
 
     return entities
 
-def create_ha_button(device: AbstractDevice):
+def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
+
+    entities = []
+
+    data_handler = None
+    if isinstance(device, HADeviceMixin):
+        data_handler = device.data_handler
+
+    if device.support_green_only_switch():
+        qs_green_only_description = QSSwitchEntityDescription(
+            key=SWITCH_BEST_EFFORT_GREEN_ONLY,
+            translation_key=SWITCH_BEST_EFFORT_GREEN_ONLY,
+        )
+        entities.append(QSSwitchEntity(data_handler=data_handler, device=device, description=qs_green_only_description))
+
+
+
+
+    return entities
+
+def create_ha_switch(device: AbstractDevice):
 
     ret = []
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_switch_for_QSCharger(device))
+
+    if isinstance(device, AbstractLoad):
+        ret.extend(create_ha_switch_for_AbstractLoad(device))
 
     return ret
 
@@ -56,7 +78,7 @@ async def async_setup_entry(
 
     if device:
 
-        entities = create_ha_button(device)
+        entities = create_ha_switch(device)
 
         if entities:
             async_add_entities(entities)
@@ -67,7 +89,8 @@ async def async_setup_entry(
 @dataclass(frozen=True, kw_only=True)
 class QSSwitchEntityDescription(SwitchEntityDescription):
     """Class describing Renault button entities."""
-    async_press: Callable[[Any], Coroutine]
+    set_val: Callable[[AbstractDevice, bool], Coroutine] | None = None
+
 
 
 @dataclass
@@ -93,7 +116,6 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
     """Mixin for button specific attributes."""
 
     entity_description: QSSwitchEntityDescription
-    _attr_has_entity_name = True
     def __init__(
         self,
         data_handler,
@@ -101,13 +123,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
         description: QSSwitchEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        self._attr_has_entity_name = True
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self.entity_description = description
-
-        self._attr_unique_id = (
-            f"switch-{self.device.device_id}-{description.key}"
-        )
 
     @property
     def extra_restore_state_data(self) -> QSExtraStoredData:
@@ -146,18 +162,42 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        if isinstance(self.device, QSChargerGeneric):
-            if self.device.car is not None:
-                if self.device.car.car_default_charge == 100:
-                    # force it at on in case the car wants a hundred anyway
-                    self._attr_is_on = True
+        pass
 
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+
+        setattr(self.device, self.entity_description.key, True)
+
+        self._attr_is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+
+        setattr(self.device, self.entity_description.key, False)
+
+        self._attr_is_on = False
+        self.async_write_ha_state()
+
+
+class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
+
+    device: QSChargerGeneric
+
+    @callback
+    def async_update_callback(self, time:datetime) -> None:
+        """Update the entity's state."""
+        if self.device.car is not None:
+            if self.device.car.car_default_charge == 100:
+                # force it at on in case the car wants a hundred anyway
+                self._attr_is_on = True
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the zone on."""
         #await self.device.async_on()
         if isinstance(self.device, QSChargerGeneric):
             self.device.set_next_charge_full_or_not(True)
+
         self._attr_is_on = True
         self.async_write_ha_state()
 
@@ -175,32 +215,3 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
         if  self._attr_is_on != new_value:
             self._attr_is_on = new_value
             self.async_write_ha_state()
-
-
-
-
-# a HaSwitchLoad is a load that is controlled by a switch entity, and it have to expose a switch for direct control to enforce a constraint
-class QSSwitchLoad(QSDeviceEntity, SwitchEntity):
-
-
-    _attr_name = None
-
-    def __init__(self, switch_entity:str, **kwargs):
-        super().__init__(**kwargs)
-        self._switch_entity = switch_entity
-
-    async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
-        if command.is_like(CMD_ON):
-            action = SERVICE_TURN_ON
-        elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
-            action = SERVICE_TURN_OFF
-        else:
-            raise ValueError("Invalid command")
-
-        await self.hass.services.async_call(
-            domain=Platform.SWITCH,
-            service=action,
-            target={"entity_id": self._switch_entity},
-        )
-
-        return False
