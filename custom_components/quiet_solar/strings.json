@@ -461,10 +461,10 @@
         "name": "Next ON/OFF"
       },
       "qs_constraint_sensor_value": {
-        "name": "constraint current value"
+        "name": "Constraint Current Value"
       },
       "qs_constraint_sensor_energy": {
-        "name": "constraint current energy"
+        "name": "Constraint Current Energy"
       }
     },
     "button": {

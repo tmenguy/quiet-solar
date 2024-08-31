@@ -267,13 +267,13 @@
                 "name": "Next Charge"
             },
             "qs_constraint_sensor_energy": {
-                "name": "constraint current energy"
+                "name": "Constraint Current Energy"
             },
             "qs_constraint_sensor_on_off": {
                 "name": "Next ON/OFF"
             },
             "qs_constraint_sensor_value": {
-                "name": "constraint current value"
+                "name": "Constraint Current Value"
             },
             "qs_load_best_power_value": {
                 "name": "QS Load Power Value"
