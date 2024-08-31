@@ -16,7 +16,7 @@ from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome, QSHomeMode
 from .home_model.load import AbstractDevice
 from .const import (
-    DOMAIN,
+    DOMAIN, CHARGER_NO_CAR_CONNECTED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -197,7 +197,6 @@ class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
 
         super().__init__(data_handler=data_handler, device=device, description=description)
 
-
     @property
     def extra_restore_state_data(self) -> QSExtraStoredData:
         """Return sensor specific state data to be restored."""
@@ -245,6 +244,10 @@ class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
         #if self.entity_description.value_fn is None:
         self._attr_options = self.device.get_car_options(time)
         self._attr_current_option = self.device.get_current_selected_car_option()
+
+        if self._attr_current_option == CHARGER_NO_CAR_CONNECTED:
+            self.user_selected_car = None
+
         self.async_write_ha_state()
 
 
