@@ -12,7 +12,8 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential,  PERCENTAGE
+from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, \
+    UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime
 
 from homeassistant.helpers import config_validation as cv, selector
 from typing import TYPE_CHECKING
@@ -45,7 +46,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
-    CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT
+    CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -670,25 +671,35 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         TYPE = "pool"
         if user_input is not None:
-            #do sotme stuff to update
+            #do some stuff to update
+            for min_temp, max_temp, default in POOL_TEMP_STEPS:
+                if user_input.get(f"water_temp_{max_temp}", -1) == -1:
+                    user_input[f"water_temp_{max_temp}"] = default
+
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1500, add_load_power_sensor=True)
+        sc_dict = self.get_common_schema(add_power_value_selector=1500, add_load_power_sensor=True, add_calendar=False)
+
+        self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
         temperature_entities = selectable_temperature_entities(self.hass)
         if len(temperature_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_POOL_TEMPERATURE_SENSOR, True, entity_list=temperature_entities)
 
-        self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
-        sc_dict.update(
-            {
-                vol.Optional(CONF_POOL_IS_PUMP_VARIABLE_SPEED,
-                             default=self.config_entry.data.get(CONF_POOL_IS_PUMP_VARIABLE_SPEED, False)):
-                    cv.boolean,
-            }
-        )
+
+        for min_temp, max_temp, default in POOL_TEMP_STEPS:
+            sc_dict[vol.Optional(f"water_temp_{max_temp}",
+                                 default=self.config_entry.data.get(f"water_temp_{max_temp}", default))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=-1,
+                    step=1,
+                    max=24,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement=UnitOfTime.HOURS,
+                )
+            )
 
         schema = vol.Schema(sc_dict)
 

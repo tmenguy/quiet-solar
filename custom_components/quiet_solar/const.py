@@ -70,6 +70,18 @@ CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P = "car_is_custom_power_charge_values_3
 CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
 
+CONF_POOL_WINTER_IDX = 0
+CONF_POOL_DEFAULT_IDX = 4
+POOL_TEMP_STEPS = [
+    [-100, 10, 2],
+    [10, 12, 4],
+    [12, 16, 7],
+    [16, 24, 12],
+    [24, 27, 14],
+    [27, 30, 20],
+    [30, 99, 24]
+]
+
 
 SOLCAST_SOLAR_DOMAIN = "solcast_solar"
 OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
@@ -87,6 +99,7 @@ SENSOR_CONSTRAINT_SENSOR_VALUE = "qs_constraint_sensor_value"
 SENSOR_CONSTRAINT_SENSOR_ENERGY = "qs_constraint_sensor_energy"
 SENSOR_CONSTRAINT_SENSOR_CHARGE = "qs_constraint_sensor_charge"
 SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
+SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_15mn": 15*60,
@@ -119,7 +132,7 @@ SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
-
+SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
 
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"

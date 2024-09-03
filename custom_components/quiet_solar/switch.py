@@ -9,7 +9,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
-from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT
+from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
+    SWITCH_POOL_FORCE_WINTER_MODE
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .entity import QSDeviceEntity
@@ -20,6 +21,7 @@ from homeassistant.const import (
     Platform
 )
 
+from .ha_model.pool import QSPool
 from .home_model.load import AbstractDevice, AbstractLoad
 
 
@@ -36,6 +38,22 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
 
 
     return entities
+
+def create_ha_switch_for_QSPool(device: QSPool):
+    entities = []
+
+
+    qs_force_winter = QSSwitchEntityDescription(
+        key=SWITCH_POOL_FORCE_WINTER_MODE,
+        translation_key=SWITCH_POOL_FORCE_WINTER_MODE,
+    )
+
+    entities.append(QSSwitchEntity(data_handler=device.data_handler, device=device, description=qs_force_winter))
+
+
+    return entities
+
+
 
 def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
 
@@ -62,6 +80,9 @@ def create_ha_switch(device: AbstractDevice):
     ret = []
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_switch_for_QSCharger(device))
+
+    if isinstance(device, QSPool):
+        create_ha_switch_for_QSPool(device)
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_switch_for_AbstractLoad(device))

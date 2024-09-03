@@ -196,12 +196,18 @@
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
-                    "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
-                    "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "pool_temperature_sensor": "Water temperature sensor",
                     "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
-                    "power": "Power of the pump (W)",
-                    "switch": "On/Off of the pump",
-                    "switch_qs_reset_selector": "if selected reset to empty the above field"
+                    "power": "Power consumption of the pump (W)",
+                    "switch": "On/Off switch of the pump filter",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field",
+                    "water_temp_10": "# Hours of pump ON for Water temp < 10\u00b0C, -1 for default, WINTER MODE",
+                    "water_temp_12": "# Hours of pump ON for Water 10\u00b0C < temp < 12\u00b0C, -1 for default,",
+                    "water_temp_16": "# Hours of pump ON for Water 12\u00b0C < temp < 16\u00b0C, -1 for default",
+                    "water_temp_24": "# Hours of pump ON for Water 16\u00b0C < temp < 24\u00b0C, -1 for default",
+                    "water_temp_27": "# Hours of pump ON for Water 24\u00b0C < temp < 27\u00b0C, -1 for default, DEFAULT IF NO TEMP",
+                    "water_temp_30": "# Hours of pump ON for Water 27\u00b0C < temp < 30\u00b0C, -1 for default",
+                    "water_temp_99": "# Hours of pump ON for Water temp > 30\u00b0C, -1 for default"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
@@ -272,6 +278,9 @@
             "qs_constraint_sensor_on_off": {
                 "name": "Next ON/OFF"
             },
+            "qs_constraint_sensor_pool": {
+                "name": "Next Pool filter"
+            },
             "qs_constraint_sensor_value": {
                 "name": "Constraint Current Value"
             },
@@ -288,6 +297,9 @@
             },
             "qs_next_car_charge_full": {
                 "name": "Next Car Charge to 100%"
+            },
+            "qs_pool_force_winter_mode": {
+                "name": "Force Winter Mode"
             }
         }
     },
@@ -478,12 +490,18 @@
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "name": "Name",
-                    "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?",
-                    "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+                    "pool_temperature_sensor": "Water temperature sensor",
                     "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
-                    "power": "Power of the pump (W)",
-                    "switch": "On/Off of the pump",
-                    "switch_qs_reset_selector": "if selected reset to empty the above field"
+                    "power": "Power consumption of the pump (W)",
+                    "switch": "On/Off switch of the pump filter",
+                    "switch_qs_reset_selector": "if selected reset to empty the above field",
+                    "water_temp_10": "# Hours of pump ON for Water temp < 10\u00b0C, -1 for default, WINTER MODE",
+                    "water_temp_12": "# Hours of pump ON for Water 10\u00b0C < temp < 12\u00b0C, -1 for default,",
+                    "water_temp_16": "# Hours of pump ON for Water 12\u00b0C < temp < 16\u00b0C, -1 for default",
+                    "water_temp_24": "# Hours of pump ON for Water 16\u00b0C < temp < 24\u00b0C, -1 for default",
+                    "water_temp_27": "# Hours of pump ON for Water 24\u00b0C < temp < 27\u00b0C, -1 for default, DEFAULT IF NO TEMP",
+                    "water_temp_30": "# Hours of pump ON for Water 27\u00b0C < temp < 30\u00b0C, -1 for default",
+                    "water_temp_99": "# Hours of pump ON for Water temp > 30\u00b0C, -1 for default"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"

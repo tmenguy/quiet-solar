@@ -535,24 +535,30 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if charge_state or charge_state is None:
             _LOGGER.info("STOP CHARGE LAUNCHED")
-            await self.hass.services.async_call(
-                domain=Platform.SWITCH,
-                service=SERVICE_TURN_OFF,
-                target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                blocking=do_force
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain=Platform.SWITCH,
+                    service=SERVICE_TURN_OFF,
+                    target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
+                    blocking=do_force
+                )
+            except:
+                _LOGGER.info("STOP CHARGE LAUNCHED, EXCEPTION")
 
     async def start_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=True, time=time)
         charge_state = self.is_charge_disabled(time)
         if charge_state or charge_state is None:
             _LOGGER.info("START CHARGE LAUNCHED")
-            await self.hass.services.async_call(
-                domain=Platform.SWITCH,
-                service=SERVICE_TURN_ON,
-                target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                blocking=False
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain=Platform.SWITCH,
+                    service=SERVICE_TURN_ON,
+                    target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
+                    blocking=False
+                )
+            except:
+                _LOGGER.info("START CHARGE LAUNCHED, EXCEPTION")
 
     def _check_charger_status(self,
                               status_vals: list[str],
@@ -851,7 +857,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if ct.is_constraint_met(result+0.1):
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
                 do_continue_constraint = False
-                result = ct.target
+                result = ct.target_value
 
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command)
@@ -859,7 +865,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return (result, do_continue_constraint)
 
 
-    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, for_auto_command_init=False) -> bool:
+    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, ct: LoadConstraint | None) -> bool:
         init_amp = self._expected_amperage.value
         init_state = self._expected_charge_state.value
 
@@ -873,7 +879,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 command.power_consign != self.current_command.power_consign):
             do_force_update = True
 
-        if for_auto_command_init:
+        if ct is None:
             res_ensure_state = True
             do_force_update = True
         else:
@@ -891,9 +897,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
+            if ct:
+                ct.num_on_off += 1
         elif command.is_like(CMD_ON):
             self._expected_amperage.set(self.max_charge, time)
             self._expected_charge_state.set(True, time)
+            if ct:
+                ct.num_on_off += 1
         elif command.is_auto():
 
             # _LOGGER.info(f"update_value_callback")
@@ -911,7 +921,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     # time to update some dampening car values:
                     if current_real_car_power is not None:
-                        if not for_auto_command_init:
+                        if ct is not None:
                             _LOGGER.info( f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                             # this following function can change the power steps of the car
                             self.car.update_dampening_value(amperage=current_real_max_charging_power,
@@ -1047,6 +1057,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                            if (self._expected_charge_state.last_change_asked is None or
                              (time - self._expected_charge_state.last_change_asked).total_seconds() >= TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
                                 self._expected_charge_state.set(new_state, time)
+                                if ct:
+                                    ct.num_on_off += 1
                            else:
                                _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
 

@@ -190,14 +190,20 @@
         "description": "This device will compute automatically the needed pump use time to keep the pool clean",
         "data": {
           "name": "Name",
-          "pool_temperature_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
+          "pool_temperature_sensor": "Water temperature sensor",
           "pool_temperature_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "switch": "On/Off of the pump",
+          "switch": "On/Off switch of the pump filter",
           "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "power": "Power of the pump (W)",
+          "power": "Power consumption of the pump (W)",
           "accurate_power_sensor": "Power sensor of the pump (W, kW)",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "pool_is_pump_variable_speed": "Is the pool pump a variable speed one?"
+          "water_temp_10": "# Hours of pump ON for Water temp < 10°C, -1 for default, WINTER MODE",
+          "water_temp_12": "# Hours of pump ON for Water 10°C < temp < 12°C, -1 for default,",
+          "water_temp_16": "# Hours of pump ON for Water 12°C < temp < 16°C, -1 for default",
+          "water_temp_24": "# Hours of pump ON for Water 16°C < temp < 24°C, -1 for default",
+          "water_temp_27": "# Hours of pump ON for Water 24°C < temp < 27°C, -1 for default, DEFAULT IF NO TEMP",
+          "water_temp_30": "# Hours of pump ON for Water 27°C < temp < 30°C, -1 for default",
+          "water_temp_99": "# Hours of pump ON for Water temp > 30°C, -1 for default"
         }
       },
       "on_off_duration": {
@@ -213,6 +219,7 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
+
         }
       },
       "fp_heater": {
@@ -407,7 +414,13 @@
           "power": "[%key:component::quiet_solar::config::step::pool::data::power%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::pool::data::accurate_power_sensor%]",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::pool::data::accurate_power_sensor_qs_reset_selector%]",
-          "pool_is_pump_variable_speed": "[%key:component::quiet_solar::config::step::pool::data::pool_is_pump_variable_speed%]"
+          "water_temp_10": "[%key:component::quiet_solar::config::step::pool::data::water_temp_10%]",
+          "water_temp_12": "[%key:component::quiet_solar::config::step::pool::data::water_temp_12%]",
+          "water_temp_16": "[%key:component::quiet_solar::config::step::pool::data::water_temp_16%]",
+          "water_temp_24": "[%key:component::quiet_solar::config::step::pool::data::water_temp_24%]",
+          "water_temp_27": "[%key:component::quiet_solar::config::step::pool::data::water_temp_27%]",
+          "water_temp_30": "[%key:component::quiet_solar::config::step::pool::data::water_temp_30%]",
+          "water_temp_99": "[%key:component::quiet_solar::config::step::pool::data::water_temp_99%]"
         }
       },
       "on_off_duration": {
@@ -460,6 +473,9 @@
       "qs_constraint_sensor_on_off": {
         "name": "Next ON/OFF"
       },
+      "qs_constraint_sensor_pool": {
+        "name": "Next Pool filter"
+      },
       "qs_constraint_sensor_value": {
         "name": "Constraint Current Value"
       },
@@ -484,6 +500,9 @@
       },
       "qs_best_effort_green_only": {
         "name": "Best Effort Green Only"
+      },
+      "qs_pool_force_winter_mode": {
+        "name": "Force Winter Mode"
       }
     },
     "select": {

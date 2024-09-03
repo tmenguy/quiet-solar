@@ -33,6 +33,8 @@ class LoadConstraint(object):
                  initial_value: float | None = 0.0,
                  current_value: float | None = None,
                  target_value: float = 0.0,
+                 num_on_off: int = 0,
+                 num_max_on_off: int | None = None,
                  **kwargs
                  ):
 
@@ -52,6 +54,9 @@ class LoadConstraint(object):
         self.load_param = load_param
         self.from_user = from_user
         self.type = type
+
+        self.num_on_off = num_on_off
+        self.num_max_on_off = num_max_on_off
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
 
@@ -165,6 +170,8 @@ class LoadConstraint(object):
             "initial_value": self.initial_value,
             "current_value": self.current_value,
             "target_value": self.target_value,
+            "num_on_off": self.num_on_off,
+            "num_max_on_off": self.num_max_on_off,
             "start_of_constraint": f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}"
         }
@@ -376,6 +383,67 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                      power_slots_duration_s, prices, prices_ordered_values, time_slots,
                                                      nrj_to_be_added)
 
+    def _num_command_state_change(self, out_commands: list[LoadCommand | None]):
+        num = 0
+        prev_cmd = None
+        empty_cmds = []
+        current_empty = None
+
+        if len(out_commands) > 0:
+
+            #do not add the first empty : no merge for first and end
+            #if out_commands[0] is None:
+            #    current_empty = [0,0]
+
+            for i, cmd in enumerate(out_commands):
+                if (cmd is None and prev_cmd is not None) or (cmd is not None and prev_cmd is None):
+                    num += 1
+                    if cmd is None:
+                        current_empty = [i,i]
+                    else:
+                        if current_empty is not None:
+                            current_empty[1] = i
+                            empty_cmds.append(current_empty)
+                            current_empty = None
+
+                prev_cmd = cmd
+            # do not add the last empty : no merge for first and end
+            #if current_empty is not None:
+            #    current_empty[1] = len(out_commands)
+            #    empty_cmds.append(current_empty)
+
+        return num, empty_cmds
+
+
+    def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, nrj_to_be_added):
+
+        if self.num_max_on_off is not None and self.support_auto is False:
+            num_command_state_change, inner_empty_cmds = self._num_command_state_change(out_commands)
+            num_allowed_switch = self.num_max_on_off - self.num_on_off
+            if num_command_state_change > num_allowed_switch:
+                # too many state changes .... need to merge some commands
+                # keep only the main one as it is solar only
+
+
+                for empty_cmd in inner_empty_cmds:
+                    empty_cmd.append(0)
+                    for i in range(empty_cmd[0], empty_cmd[1]):
+                        empty_cmd[2] += power_slots_duration_s[i]
+
+                #removed the smallest holes first
+                inner_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
+
+                for empty_cmd in inner_empty_cmds:
+                    for i in range(empty_cmd[0], empty_cmd[1]):
+                        out_commands[i] = copy_command(self._power_sorted_cmds[0])
+                        out_power[i] = out_commands[i].power_consign
+                        nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
+                        num_command_state_change -= 2  # 2 changes removed
+                        if num_command_state_change <= num_allowed_switch:
+                            break
+
+        return nrj_to_be_added
+
     def _compute_best_period_repartition(self,
                                          do_use_available_power_only: bool,
                                          power_available_power: npt.NDArray[np.float64],
@@ -389,7 +457,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
         out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
-
 
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
@@ -408,8 +475,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
-
-
 
 
         sub_power_available_power = power_available_power[first_slot:last_slot + 1]
@@ -477,6 +542,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if (nrj_to_be_added <= 0.0 or
                 do_use_available_power_only or
                 self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN):
+
+            nrj_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, nrj_to_be_added)
 
             if self.support_auto:
                 # fill all with green only command, to fill everything with the best power available
@@ -572,6 +639,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             if nrj_to_be_added <= 0.0:
                 break
+
+        nrj_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, nrj_to_be_added)
 
         if self.support_auto:
             # fill all with green only command, to fill everything with the best power available

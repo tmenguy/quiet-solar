@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from collections.abc import Generator
 from operator import itemgetter
 
-from .commands import LoadCommand, copy_command
+from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
@@ -336,10 +336,7 @@ class AbstractLoad(AbstractDevice):
 
             self.set_live_constraints(time, constraints)
 
-            for c in self._constraints:
-                if c.is_constraint_active_for_time_period(time):
-                    current_constraint = c
-                    break
+            current_constraint = self.get_current_constraint(time)
 
 
         if current_constraint is not None:
@@ -351,6 +348,12 @@ class AbstractLoad(AbstractDevice):
 
 
         return force_solving
+
+    def get_current_constraint(self, time:datetime) -> LoadConstraint | None:
+        for c in self._constraints:
+            if c.is_constraint_active_for_time_period(time):
+                return c
+        return None
 
     def _ack_command(self, command):
         self.current_command = command
@@ -388,6 +391,10 @@ class AbstractLoad(AbstractDevice):
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
         else:
+            if command.is_like(CMD_OFF) or command.is_like(CMD_IDLE) or command.is_like(CMD_ON):
+                current_constraint = self.get_current_constraint(time)
+                if current_constraint is not None:
+                    current_constraint.num_on_off +=1
             await self.check_commands(time)
 
     def is_load_command_set(self, time:datetime):
