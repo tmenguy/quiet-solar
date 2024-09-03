@@ -329,6 +329,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             do_initial_constraints = False
             existing_user_constraints = []
 
+            do_first_car_init = False
+            if self.car is None:
+                do_first_car_init = True
+
             if self._user_attached_car_name is not None:
                 if self._user_attached_car_name == CHARGER_NO_CAR_CONNECTED:
                     _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
@@ -379,6 +383,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # find the best car .... for now
                 self.attach_car(car)
                 do_initial_constraints = True
+
+                # force a stop
+                if do_first_car_init:
+                    _LOGGER.info(f"plugged and no connected car: force a stop on {car.name}")
+                    await self.stop_charge(time, do_force=True)
 
             car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None:
@@ -517,16 +526,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def detach_car(self):
         self.car = None
 
-    async def stop_charge(self, time: datetime):
-        self._expected_charge_state.register_launch(value=False, time=time)
-        charge_state = self.is_charge_enabled(time)
+    async def stop_charge(self, time: datetime, do_force=False):
+
+        charge_state = True
+        if do_force is False:
+            self._expected_charge_state.register_launch(value=False, time=time)
+            charge_state = self.is_charge_enabled(time)
+
         if charge_state or charge_state is None:
             _LOGGER.info("STOP CHARGE LAUNCHED")
             await self.hass.services.async_call(
                 domain=Platform.SWITCH,
                 service=SERVICE_TURN_OFF,
                 target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                blocking=False
+                blocking=do_force
             )
 
     async def start_charge(self, time: datetime):
@@ -1066,9 +1079,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         await self._do_update_charger_state(time)
         if self.is_plugged(time=time) and self.car is not None:
             # set us in a correct current state
+            do_reset = False
             if self.current_command is not None and command is not None and command.is_auto() and self.current_command.is_auto():
-                pass
+                if self._expected_amperage.value is None or self._expected_charge_state.value is None:
+                    do_reset = True
             else:
+                do_reset = True
+
+            if do_reset:
                 self._reset_state_machine()
                 self.set_state_machine_to_current_state(time)
 

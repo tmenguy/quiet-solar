@@ -16,6 +16,8 @@ import slugify
 if TYPE_CHECKING:
     pass
 
+NUM_MAX_INVALID_PROBES_COMMANDS = 3
+
 _LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
@@ -50,9 +52,12 @@ class AbstractLoad(AbstractDevice):
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.running_command_first_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
+        self.running_command_num_relaunch_after_invalid: int = 0
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
         self._externally_initialized_constraints = False
+
+        self._ack_command(None)
 
         self.qs_best_effort_green_only = False
 
@@ -347,6 +352,13 @@ class AbstractLoad(AbstractDevice):
 
         return force_solving
 
+    def _ack_command(self, command):
+        self.current_command = command
+        self.running_command = None
+        self.running_command_num_relaunch = 0
+        self.running_command_num_relaunch_after_invalid = 0
+        self.running_command_first_launch = None
+
     async def launch_command(self, time:datetime, command: LoadCommand):
 
         command = copy_command(command)
@@ -376,16 +388,7 @@ class AbstractLoad(AbstractDevice):
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
         else:
-            if is_command_set is False:
-                is_command_set = await self.probe_if_command_set(time, command)
-                if is_command_set is None:
-                    _LOGGER.info(f"Impossible to launch + probe this command {command.command} on this load {self.name}")
-
-            if is_command_set is True:
-                self.current_command = command
-                self.running_command = None
-                self.running_command_num_relaunch = 0
-                self.running_command_first_launch = None
+            await self.check_commands(time)
 
     def is_load_command_set(self, time:datetime):
         return self.running_command is None and self.current_command is not None
@@ -398,13 +401,14 @@ class AbstractLoad(AbstractDevice):
             is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set is None:
                 # impossible to run this command for this load ...
-                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name})")
+                self.running_command_num_relaunch_after_invalid += 1
+                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+                if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
+                    # will kill completely the command ....
+                    self._ack_command(None)
 
             if is_command_set is True:
-                self.current_command = self.running_command
-                self.running_command = None
-                self.running_command_num_relaunch = 0
-                self.running_command_first_launch = None
+                self._ack_command(self.running_command)
             else:
                 res = time - self.running_command_first_launch
 
@@ -421,16 +425,7 @@ class AbstractLoad(AbstractDevice):
             if is_command_set is None:
                 _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
             else:
-                if is_command_set is False:
-                    is_command_set = await self.probe_if_command_set(time, self.running_command)
-                    if is_command_set is None:
-                        _LOGGER.info(
-                            f"impossible to force + probe command {self.running_command.command} for this load {self.name})")
-                if is_command_set is True:
-                    self.current_command = self.running_command
-                    self.running_command = None
-                    self.running_command_num_relaunch = 0
-                    self.running_command_first_launch = None
+                await self.check_commands(time)
 
 
 
