@@ -535,11 +535,13 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         active_loads = []
         for load in all_loads:
-            if load.is_load_active(time) is False:
+            if load.is_load_active(time):
+                active_loads.append(load)
+
+            if load.get_current_constraint(time) is None or load.is_load_active(time) is False:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
                 await load.launch_command(time=time, command=CMD_IDLE)
-            else:
-                active_loads.append(load)
+
 
 
         if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
