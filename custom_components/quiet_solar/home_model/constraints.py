@@ -55,7 +55,7 @@ class LoadConstraint(object):
         self.from_user = from_user
         self.type = type
 
-        self.num_on_off = 0 #num_on_off
+        self.num_on_off = num_on_off
         self.num_max_on_off = num_max_on_off
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
