@@ -888,7 +888,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.charger_min_charge), time)
             self._expected_charge_state.set(False, time)
-        elif command.is_off_or_idle():
+        elif command.is_off_or_idle() or (constraint is None and command.is_auto()):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
         elif command.is_like(CMD_ON):
