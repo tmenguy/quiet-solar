@@ -22,6 +22,9 @@ class LoadCommand:
             return False
         return self.command == other.command
 
+    def is_off_or_idle(self) -> bool:
+        return self.command == "off" or self.command == "idle"
+
 
 def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
     if power_consign is None:

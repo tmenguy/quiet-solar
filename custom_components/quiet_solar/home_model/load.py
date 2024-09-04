@@ -48,6 +48,7 @@ class AbstractLoad(AbstractDevice):
         self._constraints: list[LoadConstraint] = []
         self._last_completed_constraint: LoadConstraint | None = None
         self.current_command : LoadCommand | None = None
+        self.prev_command: LoadCommand | None = None
         self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.running_command_first_launch: datetime | None = None
@@ -57,7 +58,7 @@ class AbstractLoad(AbstractDevice):
         self.current_constraint_current_energy: float | None = None
         self._externally_initialized_constraints = False
 
-        self._ack_command(None)
+        self._ack_command(None, None)
 
         self.qs_best_effort_green_only = False
 
@@ -355,12 +356,28 @@ class AbstractLoad(AbstractDevice):
                 return c
         return None
 
-    def _ack_command(self, command):
+    def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
+
+        self.prev_command = self.current_command
         self.current_command = command
         self.running_command = None
         self.running_command_num_relaunch = 0
         self.running_command_num_relaunch_after_invalid = 0
         self.running_command_first_launch = None
+
+        if command is not None and time is not None and self.prev_command is not None:
+            do_count = False
+            if command.is_off_or_idle() and self.prev_command.is_like(CMD_ON):
+                do_count = True
+            elif command.is_like(CMD_ON) and self.prev_command.is_off_or_idle():
+                do_count = True
+
+            if do_count:
+                current_constraint = self.get_current_constraint(time)
+                if current_constraint is not None:
+                    current_constraint.num_on_off += 1
+                    _LOGGER.info(f"Change state increment num_on_off:{current_constraint.num_on_off} ({command.command}) acked for load {self.name} (current constraint {current_constraint.name})")
+
 
     async def launch_command(self, time:datetime, command: LoadCommand):
 
@@ -391,10 +408,6 @@ class AbstractLoad(AbstractDevice):
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
         else:
-            if command.is_like(CMD_OFF) or command.is_like(CMD_IDLE) or command.is_like(CMD_ON):
-                current_constraint = self.get_current_constraint(time)
-                if current_constraint is not None:
-                    current_constraint.num_on_off +=1
             await self.check_commands(time)
 
     def is_load_command_set(self, time:datetime):
@@ -412,10 +425,10 @@ class AbstractLoad(AbstractDevice):
                 _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
                 if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
                     # will kill completely the command ....
-                    self._ack_command(None)
+                    self._ack_command(time, None)
 
             if is_command_set is True:
-                self._ack_command(self.running_command)
+                self._ack_command(time, self.running_command)
             else:
                 res = time - self.running_command_first_launch
 

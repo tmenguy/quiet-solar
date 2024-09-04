@@ -823,7 +823,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         result = None
         if self.car.car_charge_percent_sensor is None:
 
-            if self.current_command is None or self.current_command.is_like(CMD_OFF) or self.current_command.is_like(CMD_IDLE):
+            if self.current_command is None or self.current_command.is_off_or_idle():
                 result = None
             else:
                 added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time, clip_to_zero_under_power=self.charger_consumption_W)
@@ -894,16 +894,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.charger_min_charge), time)
             self._expected_charge_state.set(False, time)
-        elif command.is_like(CMD_OFF) or command.is_like(CMD_IDLE):
+        elif command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
-            if constraint:
-                constraint.num_on_off += 1
         elif command.is_like(CMD_ON):
             self._expected_amperage.set(self.max_charge, time)
             self._expected_charge_state.set(True, time)
-            if constraint:
-                constraint.num_on_off += 1
         elif command.is_auto():
 
             # _LOGGER.info(f"update_value_callback")
@@ -1046,11 +1042,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     else:
                         new_state = True
 
-
-                    _LOGGER.info(f"target_delta_power {target_delta_power} target_power {target_power}, current_power {current_power} ")
-                    _LOGGER.info(f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
-                    _LOGGER.info(f"car: {self.car.name} min charge {self.min_charge} max charge {self.max_charge}")
-                    _LOGGER.info(f"power steps {safe_powers_steps}")
+                    if init_state != new_state or new_amp != init_amp:
+                        _LOGGER.info(f"target_delta_power {target_delta_power} target_power {target_power}, current_power {current_power} ")
+                        _LOGGER.info(f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
+                        _LOGGER.info(f"car: {self.car.name} min charge {self.min_charge} max charge {self.max_charge}")
+                        _LOGGER.info(f"power steps {safe_powers_steps}")
 
                     if init_state != new_state:
                            if (self._expected_charge_state.last_change_asked is None or
@@ -1058,6 +1054,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 self._expected_charge_state.set(new_state, time)
                                 if constraint:
                                     constraint.num_on_off += 1
+
+                                if self._expected_charge_state.last_change_asked is None:
+                                    _LOGGER.info(
+                                        f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                                else:
+                                    _LOGGER.info(
+                                        f"Change State: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+
                            else:
                                _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
 

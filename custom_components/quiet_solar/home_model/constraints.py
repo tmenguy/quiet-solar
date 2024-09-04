@@ -55,7 +55,7 @@ class LoadConstraint(object):
         self.from_user = from_user
         self.type = type
 
-        self.num_on_off = num_on_off
+        self.num_on_off = 0 #num_on_off
         self.num_max_on_off = num_max_on_off
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
@@ -363,7 +363,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not """
-        if self.load.current_command is None or self.load.current_command.is_like(CMD_OFF) or self.load.current_command.is_like(CMD_IDLE):
+        if self.load.current_command is None or self.load.current_command.is_off_or_idle():
             return None
 
         return (((time - self.last_value_update).total_seconds()) *
@@ -433,7 +433,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 #removed the smallest holes first
                 inner_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
 
+                num_removed = 0
+
                 for empty_cmd in inner_empty_cmds:
+                    num_removed += 1
                     for i in range(empty_cmd[0], empty_cmd[1]):
                         out_commands[i] = copy_command(self._power_sorted_cmds[0])
                         out_power[i] = out_commands[i].power_consign
@@ -441,6 +444,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         num_command_state_change -= 2  # 2 changes removed
                         if num_command_state_change <= num_allowed_switch:
                             break
+
+                _LOGGER.info(f"Adapted command for on_off num/max: {self.num_on_off}/{self.num_max_on_off} Removed empty segments {num_removed}")
 
         return nrj_to_be_added
 
@@ -685,7 +690,7 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not """
-        if self.load.current_command is None or self.load.current_command.is_like(CMD_OFF) or self.load.current_command.is_like(CMD_IDLE):
+        if self.load.current_command is None or self.load.current_command.is_off_or_idle():
             return None
 
         return 100.0 * ((((time - self.last_value_update).total_seconds()) *
