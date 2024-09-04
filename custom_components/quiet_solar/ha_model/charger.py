@@ -242,6 +242,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_expected_charge_state = None
         self._inner_amperage = None
 
+    def is_in_state_reset(self) -> bool:
+        return self._inner_expected_charge_state is None or self._inner_amperage is None
+
+
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car .... for now default one
 
@@ -523,8 +527,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def stop_charge(self, time: datetime, do_force=False):
 
         charge_state = True
+        self._expected_charge_state.register_launch(value=False, time=time)
         if do_force is False:
-            self._expected_charge_state.register_launch(value=False, time=time)
             charge_state = self.is_charge_enabled(time)
 
         if charge_state or charge_state is None:
@@ -888,7 +892,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.charger_min_charge), time)
             self._expected_charge_state.set(False, time)
-        elif command.is_off_or_idle() or (constraint is None and command.is_auto()):
+        elif command.is_off_or_idle() or (self.is_in_state_reset() and command.is_auto()):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
         elif command.is_like(CMD_ON):
@@ -1071,6 +1075,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(
                 f"Change inner states values: change state to {int(self._expected_amperage.value)}A - charge:{self._expected_charge_state.value}")
 
+
+
+        if self.is_in_state_reset():
+            _LOGGER.info(f"update_value_callback: in state reset at the end .. force an idle like state")
+            self._expected_charge_state.set(False, time)
+            self._expected_amperage.set(int(self.charger_min_charge), time)
+
         # do it all the time
         return await self._ensure_correct_state(time)
 
@@ -1089,6 +1100,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_plugged(time=time) and self.car is not None:
             # set us in a correct current state
             do_reset = False
+            # check if on fact it is a change of power consign, we do know the commands are different
             if self.current_command is not None and command is not None and command.is_auto() and self.current_command.is_auto():
                 if self._expected_amperage.value is None or self._expected_charge_state.value is None:
                     do_reset = True
@@ -1097,7 +1109,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if do_reset:
                 self._reset_state_machine()
-                self.set_state_machine_to_current_state(time)
+                # no need : will be force to something we want in _compute_and_launch_new_charge_state
+                # self.set_state_machine_to_current_state(time)
 
             _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
             res = await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
