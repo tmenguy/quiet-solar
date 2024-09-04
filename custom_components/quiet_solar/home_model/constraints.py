@@ -622,8 +622,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
 
             price_power = price_cmd.power_consign
+            # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
+            # may depend on the load type for a bolier you want to be closer, for a car it is more the asap? let's do reverse
 
-            for i in range(first_slot, last_slot + 1):
+            for i in range(last_slot, first_slot - 1, -1):
 
                 if prices[i] == price and out_commands[i] is None:
 
