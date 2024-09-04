@@ -61,7 +61,6 @@ class QSPool(QSOnOffDuration):
 
         return self.pool_steps[idx][2]*3600.0
 
-
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
