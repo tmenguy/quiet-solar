@@ -520,7 +520,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
                     pass
 
         do_force_solve = False
-        loads_to_reset = []
         for load in all_loads:
 
             if load.is_load_active(time) is False:
@@ -533,21 +532,14 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if (await load.update_live_constraints(time, self._period)) :
                 do_force_solve = True
 
-            if load.is_load_active(time) is False:
-                loads_to_reset.append(load)
-
-        for load in loads_to_reset:
-            # set them back to a kind of "idle" state, many times will be "OFF" CMD
-            await load.launch_command(time=time, command = CMD_IDLE)
-
 
         active_loads = []
         for load in all_loads:
-
             if load.is_load_active(time) is False:
-                continue
-
-            active_loads.append(load)
+                # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                await load.launch_command(time=time, command=CMD_IDLE)
+            else:
+                active_loads.append(load)
 
 
         if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):

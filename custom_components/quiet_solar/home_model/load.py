@@ -403,6 +403,9 @@ class AbstractLoad(AbstractDevice):
             # for it has met, will be properly handled in teh update constraint for the load
             c.current_value = c.target_value
             await self.update_live_constraints(time, self.home._period)
+            if self.is_load_active(time) is False:
+                # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                await self.launch_command(time=time, command=CMD_IDLE)
 
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
