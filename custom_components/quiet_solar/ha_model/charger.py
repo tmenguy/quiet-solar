@@ -911,7 +911,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if do_force_update or (res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW):
 
                 # _LOGGER.info(f"update_value_callback compute")
-
                 current_power = 0.0
 
                 current_real_max_charging_power = self._expected_amperage.value
