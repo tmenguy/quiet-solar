@@ -94,4 +94,10 @@ class QSBattery(HADeviceMixin, Battery):
 
 
     def get_platforms(self):
-        return [ Platform.SENSOR]
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([ Platform.SENSOR])
+        return list(parent)

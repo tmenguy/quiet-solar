@@ -236,5 +236,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
     def get_platforms(self):
-        return [ Platform.SENSOR, Platform.SELECT ]
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([ Platform.SENSOR, Platform.SELECT ])
+        return list(parent)
 

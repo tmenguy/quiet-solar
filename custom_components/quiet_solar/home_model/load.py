@@ -271,6 +271,7 @@ class AbstractLoad(AbstractDevice):
         elif not self._constraints:
             force_solving =  False
         else:
+
             force_solving = False
             for i, c in enumerate(self._constraints):
 
@@ -283,6 +284,8 @@ class AbstractLoad(AbstractDevice):
                     if c.is_constraint_met() or c.is_mandatory is False:
                         _LOGGER.info(f"{c.name} skipped because met or not mandatory")
                         c.skip = True
+                        if c.is_constraint_met():
+                            self._last_completed_constraint = c
                     else:
                         # a not met mandatory one! we should expand it or force it
                         duration_s = c.best_duration_to_meet()
@@ -354,6 +357,7 @@ class AbstractLoad(AbstractDevice):
 
                 elif c.is_constraint_met():
                     c.skip = True
+                    self._last_completed_constraint = c
                     _LOGGER.info(f"{c.name} skipped because met")
                 elif c.is_constraint_active_for_time_period(time, time + period):
                     do_continue_ct = await c.update(time)
@@ -391,6 +395,15 @@ class AbstractLoad(AbstractDevice):
             if c.is_constraint_active_for_time_period(time):
                 return c
         return None
+
+    async def mark_current_constraint_has_done(self):
+        time = datetime.now(tz=pytz.UTC)
+        c = self.get_current_constraint(time)
+        if c:
+            # for it has met, will be properly handled in teh update constraint for the load
+            c.current_value = c.target_value
+            await self.update_live_constraints(time, self.home._period)
+
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
 

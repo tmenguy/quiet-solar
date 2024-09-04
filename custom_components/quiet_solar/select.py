@@ -55,15 +55,18 @@ def create_ha_select_for_QSHome(device: QSHome):
 
 
 def create_ha_select(device: AbstractDevice):
-
+    ret = []
     if isinstance(device, QSCar):
-        return create_ha_select_for_QSCar(device)
-    elif isinstance(device, QSChargerGeneric):
-        return create_ha_select_for_QSCharger(device)
-    elif isinstance(device, QSHome):
-        return create_ha_select_for_QSHome(device)
+        ret.extend(create_ha_select_for_QSCar(device))
 
-    return []
+    if isinstance(device, QSChargerGeneric):
+        ret.extend(create_ha_select_for_QSCharger(device))
+
+
+    if isinstance(device, QSHome):
+        ret.extend(create_ha_select_for_QSHome(device))
+
+    return ret
 
 async def async_setup_entry(
     hass: HomeAssistant,

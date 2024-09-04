@@ -508,7 +508,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return self.charger_max_charge
 
     def get_platforms(self):
-        return [Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON]
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON])
+        return list(parent)
 
     def attach_car(self, car):
 

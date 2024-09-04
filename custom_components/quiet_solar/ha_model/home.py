@@ -280,7 +280,13 @@ class QSHome(HADeviceMixin, AbstractDevice):
         return tariffs
 
     def get_platforms(self):
-        return [ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ]
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ])
+        return list(parent)
 
     def get_car_by_name(self, name: str) -> QSCar | None:
         for car in self._cars:

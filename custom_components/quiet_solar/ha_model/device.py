@@ -5,7 +5,7 @@ from operator import itemgetter
 from typing import Mapping, Any, Callable
 
 import pytz
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
@@ -654,6 +654,6 @@ class HADeviceMixin:
         else:
             return ret
 
-    @abstractmethod
     def get_platforms(self) -> list[str]:
         """ returns associated platforms for this device """
+        return [Platform.BUTTON, Platform.SENSOR]

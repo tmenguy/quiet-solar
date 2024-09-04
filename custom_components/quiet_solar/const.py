@@ -131,6 +131,8 @@ BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 
+BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE = "qs_load_mark_current_constraint_done"
+
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
 

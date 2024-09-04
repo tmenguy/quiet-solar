@@ -240,6 +240,9 @@
     },
     "entity": {
         "button": {
+            "qs_load_mark_current_constraint_done": {
+                "name": "Force Current Constraint Done"
+            },
             "qs_home_reset_history": {
                 "name": "Reset Quiet Solar History"
             },

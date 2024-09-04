@@ -82,7 +82,7 @@ def create_ha_switch(device: AbstractDevice):
         ret.extend(create_ha_switch_for_QSCharger(device))
 
     if isinstance(device, QSPool):
-        create_ha_switch_for_QSPool(device)
+        ret.extend(create_ha_switch_for_QSPool(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_switch_for_AbstractLoad(device))

@@ -6,11 +6,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW
+from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
+    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE
 from .entity import QSDeviceEntity
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
-from .home_model.load import AbstractDevice
+from .home_model.load import AbstractDevice, AbstractLoad
 
 
 def create_ha_button_for_QSHome(device: QSHome):
@@ -50,6 +51,21 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
 
     return entities
 
+
+def create_ha_button_for_AbstractLoad(device: AbstractLoad):
+    entities = []
+
+
+    qs_reset_history = QSButtonEntityDescription(
+        key=BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
+        translation_key=BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
+        async_press=lambda x: x.device.mark_current_constraint_has_done(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+
+    return entities
+
 def create_ha_button(device: AbstractDevice):
 
     ret = []
@@ -58,6 +74,9 @@ def create_ha_button(device: AbstractDevice):
 
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_button_for_QSChargerGeneric(device))
+
+    if isinstance(device, AbstractLoad):
+        ret.extend(create_ha_button_for_AbstractLoad(device))
     return ret
 
 async def async_setup_entry(

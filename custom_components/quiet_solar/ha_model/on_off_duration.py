@@ -25,7 +25,13 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         return True
 
     def get_platforms(self):
-        return [ Platform.SENSOR, Platform.SWITCH ]
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([ Platform.SENSOR, Platform.SWITCH ])
+        return list(parent)
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_ON_OFF
