@@ -55,7 +55,18 @@ class LoadConstraint(object):
         self.from_user = from_user
         self.type = type
 
+        if num_on_off > 0 and num_on_off % 2 == 1:
+            # because of a reboot we may need a bit more ...
+            num_on_off -= 1
+
+        if num_max_on_off is not None:
+            if num_max_on_off % 2 == 1:
+                num_max_on_off += 1
+            if num_max_on_off - num_on_off <= 2:
+                num_on_off = num_max_on_off - 2
+
         self.num_on_off = num_on_off
+
         self.num_max_on_off = num_max_on_off
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
