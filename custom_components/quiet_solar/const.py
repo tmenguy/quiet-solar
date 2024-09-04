@@ -137,6 +137,7 @@ SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"
+HA_CONSTRAINT_SENSOR_LOAD_INFO = "qs_stored_load_info"
 FLOATING_PERIOD_S = 30 * 3600
 
 

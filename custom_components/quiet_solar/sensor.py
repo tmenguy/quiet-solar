@@ -21,6 +21,7 @@ from .const import (
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
     QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
+    HA_CONSTRAINT_SENSOR_LOAD_INFO,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -325,6 +326,8 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
                 do_save = True
                 self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
 
+        self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = self.device.get_to_be_saved_info()
+
 
 
         if do_save:
@@ -335,6 +338,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         await super().async_added_to_hass()
         stored_cs = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
         stored_executed = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
+        stored_load_info = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LOAD_INFO, None)
         await self.hass.async_add_executor_job(
-            self.device.load_constraints_from_storage, datetime.now(pytz.UTC), stored_cs, stored_executed
+            self.device.load_constraints_from_storage, datetime.now(pytz.UTC), stored_cs, stored_executed, stored_load_info
         )

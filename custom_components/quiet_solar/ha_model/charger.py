@@ -1053,7 +1053,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                              (time - self._expected_charge_state.last_change_asked).total_seconds() >= TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
                                 self._expected_charge_state.set(new_state, time)
                                 if constraint:
-                                    constraint.num_on_off += 1
+                                    self.num_on_off += 1
 
                                 if self._expected_charge_state.last_change_asked is None:
                                     _LOGGER.info(

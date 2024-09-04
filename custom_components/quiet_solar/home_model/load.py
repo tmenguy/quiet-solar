@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from collections.abc import Generator
 from operator import itemgetter
 
+import pytz
+
 from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
@@ -62,6 +64,14 @@ class AbstractLoad(AbstractDevice):
 
         self.qs_best_effort_green_only = False
 
+        self.num_max_on_off = kwargs.pop("num_max_on_off", None)
+        if self.num_max_on_off is not None:
+            if self.num_max_on_off % 2 == 1:
+                self.num_max_on_off += 1
+
+        self.num_on_off = 0
+        self._last_constraint_update: datetime|None = None
+
     def support_green_only_switch(self) -> bool:
         return False
 
@@ -78,9 +88,10 @@ class AbstractLoad(AbstractDevice):
             return False
         return  await self.check_load_activity_and_constraints(time)
 
+    def get_to_be_saved_info(self) -> dict:
+        return {"num_on_off": self.num_on_off}
 
-
-    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
+    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_load_info: dict | None):
         self.reset()
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
@@ -92,6 +103,17 @@ class AbstractLoad(AbstractDevice):
 
         if stored_executed is not None:
             self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
+
+        if stored_load_info:
+            self.num_on_off =  stored_load_info.get("num_on_off", 0)
+
+            if self.num_on_off > 0 and self.num_on_off % 2 == 1:
+                # because of a reboot we may need a bit more ...
+                self.num_on_off -= 1
+
+            if self.num_max_on_off is not None:
+                if self.num_max_on_off - self.num_on_off <= 2:
+                    self.num_on_off = self.num_max_on_off - 2
 
         self._externally_initialized_constraints = True
 
@@ -220,12 +242,26 @@ class AbstractLoad(AbstractDevice):
             self.set_live_constraints(time, self._constraints)
             return True
 
+    def reset_daily_load_datas(self, time:datetime):
+        self.num_on_off = 0
 
     async def update_live_constraints(self, time:datetime, period: timedelta) -> bool:
 
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
         # if it is the last and the one before are for the next days)
+        if self._last_constraint_update is None:
+            self._last_constraint_update = time
+
+        prev_local_date = self._last_constraint_update.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        now_local_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
+        if prev_local_date.day != now_local_date.day:
+            # we should reset some stuffs
+            self.reset_daily_load_datas(time)
+
+
+
 
         # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
         current_constraint = None
@@ -347,7 +383,7 @@ class AbstractLoad(AbstractDevice):
             self.current_constraint_current_value = None
             self.current_constraint_current_energy = None
 
-
+        self._last_constraint_update = time
         return force_solving
 
     def get_current_constraint(self, time:datetime) -> LoadConstraint | None:
@@ -373,10 +409,8 @@ class AbstractLoad(AbstractDevice):
                 do_count = True
 
             if do_count:
-                current_constraint = self.get_current_constraint(time)
-                if current_constraint is not None:
-                    current_constraint.num_on_off += 1
-                    _LOGGER.info(f"Change state increment num_on_off:{current_constraint.num_on_off} ({command.command}) acked for load {self.name} (current constraint {current_constraint.name})")
+                self.num_on_off += 1
+                _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
 
 
     async def launch_command(self, time:datetime, command: LoadCommand):

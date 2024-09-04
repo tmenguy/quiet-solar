@@ -13,6 +13,7 @@ class QSPool(QSOnOffDuration):
 
     def __init__(self, **kwargs):
 
+
         self.pool_steps = []
         for min_temp, max_temp, default in POOL_TEMP_STEPS:
             val =  kwargs.pop(f"water_temp_{max_temp}", default)
@@ -22,7 +23,11 @@ class QSPool(QSOnOffDuration):
 
         self.qs_pool_force_winter_mode = False
 
+        kwargs["num_max_on_off"] = 8
+
         super().__init__(**kwargs)
+
+
 
         self.attach_ha_state_to_probe(self.pool_temperature_sensor,
                                       is_numerical=True)
@@ -93,7 +98,6 @@ class QSPool(QSOnOffDuration):
                     power=self.power_use,
                     initial_value=0,
                     target_value=self.get_pool_filter_time_s(time),
-                    num_max_on_off=6 # so 3 on/off cycle per day here
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart

@@ -33,8 +33,6 @@ class LoadConstraint(object):
                  initial_value: float | None = 0.0,
                  current_value: float | None = None,
                  target_value: float = 0.0,
-                 num_on_off: int = 0,
-                 num_max_on_off: int | None = None,
                  **kwargs
                  ):
 
@@ -54,20 +52,6 @@ class LoadConstraint(object):
         self.load_param = load_param
         self.from_user = from_user
         self.type = type
-
-        if num_on_off > 0 and num_on_off % 2 == 1:
-            # because of a reboot we may need a bit more ...
-            num_on_off -= 1
-
-        if num_max_on_off is not None:
-            if num_max_on_off % 2 == 1:
-                num_max_on_off += 1
-            if num_max_on_off - num_on_off <= 2:
-                num_on_off = num_max_on_off - 2
-
-        self.num_on_off = num_on_off
-
-        self.num_max_on_off = num_max_on_off
 
         self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
 
@@ -181,8 +165,6 @@ class LoadConstraint(object):
             "initial_value": self.initial_value,
             "current_value": self.current_value,
             "target_value": self.target_value,
-            "num_on_off": self.num_on_off,
-            "num_max_on_off": self.num_max_on_off,
             "start_of_constraint": f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}"
         }
@@ -428,9 +410,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
     def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, nrj_to_be_added):
 
-        if self.num_max_on_off is not None and self.support_auto is False:
+        if self.load.num_max_on_off is not None and self.support_auto is False:
             num_command_state_change, inner_empty_cmds = self._num_command_state_change(out_commands)
-            num_allowed_switch = self.num_max_on_off - self.num_on_off
+            num_allowed_switch = self.load.num_max_on_off - self.load.num_on_off
             if num_command_state_change > num_allowed_switch:
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
@@ -456,7 +438,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         if num_command_state_change <= num_allowed_switch:
                             break
 
-                _LOGGER.info(f"Adapted command for on_off num/max: {self.num_on_off}/{self.num_max_on_off} Removed empty segments {num_removed}")
+                _LOGGER.info(f"Adapted command for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off} Removed empty segments {num_removed}")
 
         return nrj_to_be_added
 
