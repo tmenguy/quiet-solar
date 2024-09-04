@@ -247,7 +247,7 @@ class LoadConstraint(object):
         if self.target_value is None:
             return False
 
-        if current_value >= self.target_value:
+        if current_value >= (0.995*self.target_value): #0.5% tolerance
             return True
 
         return False
