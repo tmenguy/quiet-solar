@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from collections.abc import Generator
 from operator import itemgetter
 
-from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE
+from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
