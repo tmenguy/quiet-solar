@@ -1,14 +1,12 @@
 import logging
 import pickle
 from enum import StrEnum
-import os
 from operator import itemgetter
 from os.path import join
 from typing import Mapping, Any
 from datetime import datetime, timedelta
 
 import aiofiles.os
-import homeassistant
 import pytz
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.models import LazyState
@@ -475,7 +473,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
             ]:
             return
 
-
         if self._solar_plant:
             await self._solar_plant.update_forecast(time)
 
@@ -487,19 +484,20 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
                                                                                      self.home_non_controlled_consumption,
                                                                                      do_save=True)
-
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
                 await self._compute_non_controlled_forecast_intl(time)
 
 
 
-    async def update(self, time: datetime):
+    async def update_loads(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value
             ]:
             return
+
+        await self.update_loads_constraints(time)
 
         all_loads = self._all_loads
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:

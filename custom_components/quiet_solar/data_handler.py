@@ -32,9 +32,8 @@ class QSDataHandler:
         self.home: QSHome | None = None
         self._cached_config_entries :list[ConfigEntry] = []
 
-        self._scan_interval = 2
-        self._refresh_constraints_interval = 15
-        self._refresh_states_interval = 5
+        self._load_update_scan_interval = 7
+        self._refresh_states_interval = 4
         self._refresh_forecast_probers_interval = 30
 
 
@@ -83,13 +82,7 @@ class QSDataHandler:
 
             config_entry.async_on_unload(
                 async_track_time_interval(
-                    self.hass, self.async_update, timedelta(seconds=self._scan_interval)
-                )
-            )
-
-            config_entry.async_on_unload(
-                async_track_time_interval(
-                    self.hass, self.async_update_loads_constraints, timedelta(seconds=self._refresh_constraints_interval)
+                    self.hass, self.async_update_loads, timedelta(seconds=self._load_update_scan_interval)
                 )
             )
 
@@ -108,14 +101,11 @@ class QSDataHandler:
 
 
 
-    async def async_update(self, event_time: datetime) -> None:
-        await self.home.update(event_time)
+    async def async_update_loads(self, event_time: datetime) -> None:
+        await self.home.update_loads(event_time)
 
     async def async_update_all_states(self, event_time: datetime) -> None:
         await self.home.update_all_states(event_time)
-
-    async def async_update_loads_constraints(self, event_time: datetime) -> None:
-        await self.home.update_loads_constraints(event_time)
 
     async def async_update_forecast_probers(self, event_time: datetime) -> None:
         await self.home.update_forecast_probers(event_time)

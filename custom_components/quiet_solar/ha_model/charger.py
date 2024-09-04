@@ -24,9 +24,6 @@ from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_
     CMD_AUTO_FROM_CONSIGN, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
-
-
-
 _LOGGER = logging.getLogger(__name__)
 
 CHARGER_STATE_REFRESH_INTERVAL = 3
@@ -48,12 +45,9 @@ class QSOCPPChargePointStatus(StrEnum):
     FINISHING = "Finishing"
     RESERVED = "Reserved"
 
-
 class QSChargerStates(StrEnum):
     PLUGGED = "plugged"
     UN_PLUGGED = "unplugged"
-
-
 
 
 class QSStateCmd():
@@ -1114,10 +1108,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         await self._do_update_charger_state(time)
-        if self.is_plugged(time=time) and self.car is not None:
+        is_plugged = self.is_plugged(time=time)
+        if is_plugged is None:
+            is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+
+        if is_plugged and self.car is not None:
             result = await self._ensure_correct_state(time)
             return result
         else:
+            if self.car is None:
+                _LOGGER.info(f"Bad prob command set: plugged {is_plugged} NO CAR")
+            else:
+                _LOGGER.info(f"Bad prob command set: plugged {is_plugged} Car: {self.car.name}")
             return None
 
     async def _do_update_charger_state(self, time):

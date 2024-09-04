@@ -463,7 +463,7 @@ class AbstractLoad(AbstractDevice):
 
             if is_command_set is True:
                 self._ack_command(time, self.running_command)
-            else:
+            elif self.running_command_first_launch is not None:
                 res = time - self.running_command_first_launch
 
 
