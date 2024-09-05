@@ -719,8 +719,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
             service = number.SERVICE_SET_VALUE
-            min_value = float(self.min_charge)
-            max_value = float(self.max_charge)
+            min_value = float(self.charger_min_charge)
+            max_value = float(self.charger_max_charge)
             data[number.ATTR_VALUE] = int(min(max_value, max(min_value, range_value)))
             domain = number.DOMAIN
 
