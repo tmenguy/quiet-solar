@@ -129,6 +129,7 @@ class AbstractLoad(AbstractDevice):
         return True
 
     def reset(self):
+        _LOGGER.info(f"Reset load {self.name}")
         self.current_command = None
         self._constraints = []
         self._last_completed_constraint = None
@@ -410,6 +411,11 @@ class AbstractLoad(AbstractDevice):
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
 
+        if command is not None:
+            _LOGGER.info(f"ack command {command.command} for load {self.name}")
+        else:
+            _LOGGER.info(f"ack command None for load {self.name}")
+
         self.prev_command = self.current_command
         self.current_command = command
         self.running_command = None
@@ -433,6 +439,8 @@ class AbstractLoad(AbstractDevice):
 
         command = copy_command(command)
 
+        _LOGGER.info(f"launch command {command} for this load {self.name})")
+
         if self.running_command is not None:
             if self.running_command == command:
                 self._stacked_command = None #no need of it anymore
@@ -444,7 +452,7 @@ class AbstractLoad(AbstractDevice):
         # there is no running : whatever we wil not execute the stacked one but only the last one
         self._stacked_command = None
 
-        if self.current_command == command:
+        if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self._stacked_command = None
             self.current_command = command # needed as command == has been overcharged to not test everything
@@ -490,6 +498,7 @@ class AbstractLoad(AbstractDevice):
 
     async def force_relaunch_command(self, time: datetime):
         if self.running_command is not None:
+            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name})")
             self.running_command_num_relaunch += 1
             is_command_set = await self.execute_command(time, self.running_command)
             if is_command_set is None:
