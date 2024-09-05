@@ -54,6 +54,7 @@ class AbstractLoad(AbstractDevice):
         self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
         self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
         self.running_command_first_launch: datetime | None = None
+        self.running_command_last_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
         self.running_command_num_relaunch_after_invalid: int = 0
         self.current_constraint_current_value: float | None = None
@@ -422,6 +423,7 @@ class AbstractLoad(AbstractDevice):
         self.running_command_num_relaunch = 0
         self.running_command_num_relaunch_after_invalid = 0
         self.running_command_first_launch = None
+        self.running_command_last_launch = None
 
         if command is not None and time is not None and self.prev_command is not None:
             do_count = False
@@ -461,6 +463,7 @@ class AbstractLoad(AbstractDevice):
 
         self.running_command = command
         self.running_command_first_launch = time
+        self.running_command_last_launch = time
         is_command_set = await self.execute_command(time, command)
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
@@ -490,8 +493,8 @@ class AbstractLoad(AbstractDevice):
 
             if is_command_set is True:
                 self._ack_command(time, self.running_command)
-            elif self.running_command_first_launch is not None:
-                res = time - self.running_command_first_launch
+            elif self.running_command_last_launch is not None:
+                res = time - self.running_command_last_launch
 
 
         if self.running_command is None and self._stacked_command is not None:
@@ -504,6 +507,7 @@ class AbstractLoad(AbstractDevice):
             _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name})")
             self.running_command_num_relaunch += 1
             is_command_set = await self.execute_command(time, self.running_command)
+            self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
             else:

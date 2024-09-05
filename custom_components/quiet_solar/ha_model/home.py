@@ -512,7 +512,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         for load in all_loads:
 
             wait_time = await load.check_commands(time=time)
-            if wait_time > timedelta(seconds=60):
+            if wait_time > timedelta(seconds=30):
                 if load.running_command_num_relaunch < 3:
                     await load.force_relaunch_command(time)
                 else:

@@ -1106,7 +1106,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         # force a homeassistant.update_entity service on the charger entity?
         await self._do_update_charger_state(time)
-        if self.is_plugged(time=time) and self.car is not None:
+        is_plugged = self.is_plugged(time=time)
+        if is_plugged is None:
+            is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+
+        if is_plugged and self.car is not None:
             # set us in a correct current state
             do_reset = False
             # check if on fact it is a change of power consign, we do know the commands are different
@@ -1134,18 +1138,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if is_plugged is None:
             is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
 
+        result = None
         if is_plugged and self.car is not None:
             if self.is_in_state_reset():
-                await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
-
-            result = await self._ensure_correct_state(time)
-            return result
+                result = await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
+            else:
+                result = await self._ensure_correct_state(time)
         else:
             if self.car is None:
                 _LOGGER.info(f"Bad prob command set: plugged {is_plugged} NO CAR")
             else:
                 _LOGGER.info(f"Bad prob command set: plugged {is_plugged} Car: {self.car.name}")
-            return None
+
+        return result
 
     async def _do_update_charger_state(self, time):
         if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL:
