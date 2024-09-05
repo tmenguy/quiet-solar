@@ -318,12 +318,12 @@ class HADeviceMixin:
             return vals[-1][1]
 
     def get_device_power_latest_possible_valid_value(self, tolerance_seconds: float | None, time) -> float | None:
-        val = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
-        if not val:
-            val = self.get_sensor_latest_possible_valid_value(self.secondary_power_sensor, tolerance_seconds, time)
-        if not val:
-            val = self.get_sensor_latest_possible_valid_value(self.command_based_power_sensor, tolerance_seconds, time)
-        return val
+        value= self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
+        if value is None:
+            value = self.get_sensor_latest_possible_valid_value(self.secondary_power_sensor, tolerance_seconds, time)
+        if value is None:
+            value = self.get_sensor_latest_possible_valid_value(self.command_based_power_sensor, tolerance_seconds, time)
+        return value
 
     def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
@@ -343,28 +343,28 @@ class HADeviceMixin:
 
     def get_median_power(self, num_seconds: float | None, time) -> float | None:
         val = self.get_median_sensor(self.accurate_power_sensor, num_seconds, time)
-        if not val:
+        if val is None:
             val = self.get_median_sensor(self.secondary_power_sensor, num_seconds, time)
-        if not val:
+        if val is None:
             val = self.get_median_sensor(self.command_based_power_sensor, num_seconds, time)
         return val
 
     def get_average_power(self, num_seconds: float | None, time) -> float | None:
         val = self.get_average_sensor(self.accurate_power_sensor, num_seconds, time)
-        if not val:
+        if val is None:
             val = self.get_average_sensor(self.secondary_power_sensor, num_seconds, time)
-        if not val:
+        if val is None:
             val = self.get_average_sensor(self.command_based_power_sensor, num_seconds, time)
         return val
 
     def get_device_power_values(self, duration_before_s: float, time: datetime) -> list[
         tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
-        val = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, time)
-        if not val:
-            val = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, time)
-        if not val:
-            val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
-        return val
+        vals = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, time)
+        if not vals:
+            vals = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, time)
+        if not vals:
+            vals = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
+        return vals
 
     def get_device_real_energy(self, start_time: datetime, end_time:datetime, clip_to_zero_under_power: float | None = None) -> float | None:
         duration_before_s = (end_time - start_time).total_seconds()
