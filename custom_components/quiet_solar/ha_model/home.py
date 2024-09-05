@@ -713,7 +713,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
 
         solar_production_minus_battery = None
-
+        _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
         if is_one_bad is False:
             if self.home._solar_plant is not None:
                 solar_production = None
@@ -743,6 +743,7 @@ class QSHomeConsumptionHistoryAndForecast:
                         solar_production_minus_battery.values[0] = solar_production_minus_battery.values[0] - battery_charge.values[0]
 
         home_consumption = None
+        _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
         if is_one_bad is False:
             if self.home.grid_active_power_sensor:
                 home_consumption = QSSolarHistoryVals(entity_id=self.home.grid_active_power_sensor, forecast=self)
@@ -763,6 +764,7 @@ class QSHomeConsumptionHistoryAndForecast:
                         else:
                             home_consumption.values[0] = solar_production_minus_battery.values[0] + home_consumption.values[0]
 
+        _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")
         if is_one_bad is False and home_consumption is not None:
 
             #ok we do have the computed home consumption ... now time for the controlled loads
@@ -796,6 +798,7 @@ class QSHomeConsumptionHistoryAndForecast:
                             end = e
                     controlled_power_values[0] += load_sensor.values[0]
                     added_controlled = True
+                    _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {load.name} {ha_best_entity_id}")
                 else:
                     if isinstance(load, AbstractLoad):
                         if load.switch_entity:
@@ -832,12 +835,17 @@ class QSHomeConsumptionHistoryAndForecast:
                                     controlled_power_values[0] += load_sensor.values[0]
                                     added_controlled = True
 
+                                _LOGGER.info(
+                                    f"Resetting home consumption 5: is_one_bad {is_one_bad} load {load.name} HAS A SWITCH")
+
+            _LOGGER.info(f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}")
             if is_one_bad is False and added_controlled:
                 home_consumption.values[0] = home_consumption.values[0] - controlled_power_values[0]
 
 
 
         if is_one_bad is False and home_consumption is not None:
+            _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
             # ok we do have now a pretty good idea of the non-controllable house consumption:
             # let's first clean it with the proper start and end
             strt_idx, strt_days = home_consumption.get_index_from_time(strt)
@@ -857,6 +865,7 @@ class QSHomeConsumptionHistoryAndForecast:
                 # equal
                 is_one_bad = True
 
+        _LOGGER.info(f"Resetting home consumption 8: is_one_bad {is_one_bad}")
         if is_one_bad is False:
             # now we do have something to save!
             home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
