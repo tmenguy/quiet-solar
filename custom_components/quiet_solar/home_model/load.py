@@ -476,6 +476,9 @@ class AbstractLoad(AbstractDevice):
         res = timedelta(seconds=0)
 
         if self.running_command is not None:
+            _LOGGER.info(
+                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+
             is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set is None:
                 # impossible to run this command for this load ...
