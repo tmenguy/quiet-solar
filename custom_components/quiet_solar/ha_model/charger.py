@@ -243,7 +243,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_amperage = None
 
     def is_in_state_reset(self) -> bool:
-        return self._inner_expected_charge_state is None or self._inner_amperage is None
+        return self._inner_expected_charge_state is None or self._inner_amperage is None or self._expected_charge_state.value is None or self._expected_amperage.value is None
 
 
     def get_best_car(self, time: datetime) -> QSCar | None:
@@ -748,9 +748,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result
 
+    def _is_state_set(self, time: datetime) -> bool:
+        return self._expected_amperage.value is not None and self._expected_charge_state.value is not None
+
     async def _ensure_correct_state(self, time) -> bool:
 
-        if self._expected_amperage.value is None or self._expected_charge_state.value is None:
+        if self.is_in_state_reset():
             _LOGGER.info(f"Ensure State: no correct expected state")
             return False
 
@@ -1132,6 +1135,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
 
         if is_plugged and self.car is not None:
+            if self.is_in_state_reset():
+                await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
+
             result = await self._ensure_correct_state(time)
             return result
         else:
