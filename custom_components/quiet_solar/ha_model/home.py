@@ -875,6 +875,8 @@ class QSHomeConsumptionHistoryAndForecast:
             self.home_non_controlled_consumption = None
 
         self._in_reset = False
+
+        await self.init_forecasts(time)
         return True
 
 
