@@ -1053,9 +1053,9 @@ class QSSolarHistoryVals:
                 """Write numpy."""
                 try:
                     np.save(path, values)
-                    _LOGGER.info(f"Write numpy success for {path} for reset {for_reset}")
+                    _LOGGER.info(f"Write numpy SUCCESS for {path} for reset {for_reset}")
                 except:
-                    _LOGGER.info(f"Write numpy failed for {path} for reset {for_reset}")
+                    _LOGGER.info(f"Write numpy FAILED for {path} for reset {for_reset}")
                     pass
 
             if file_path is None:
