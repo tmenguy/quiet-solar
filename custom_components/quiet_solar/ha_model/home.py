@@ -871,6 +871,7 @@ class QSHomeConsumptionHistoryAndForecast:
             home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             home_non_controlled_consumption.values = home_consumption.values
             await home_non_controlled_consumption.save_values()
+            _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
             self.home_non_controlled_consumption = None
 
         self._in_reset = False
