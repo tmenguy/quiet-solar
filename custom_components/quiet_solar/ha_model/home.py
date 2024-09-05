@@ -870,7 +870,7 @@ class QSHomeConsumptionHistoryAndForecast:
             # now we do have something to save!
             home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             home_non_controlled_consumption.values = home_consumption.values
-            await home_non_controlled_consumption.save_values()
+            await home_non_controlled_consumption.save_values(for_reset=True)
             _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
             self.home_non_controlled_consumption = None
 
@@ -1048,12 +1048,14 @@ class QSSolarHistoryVals:
             return np.concatenate((self.values[0][start_idx:], self.values[0][:end_idx+1])), np.concatenate((self.values[1][start_idx:], self.values[1][:end_idx+1]))
 
 
-    async def save_values(self, file_path: str = None) -> None:
+    async def save_values(self, file_path: str = None, for_reset: bool=False) -> None:
             def _save_values_to_file(path: str, values) -> None:
                 """Write numpy."""
                 try:
                     np.save(path, values)
+                    _LOGGER.info(f"Write numpy success for {path} for reset {for_reset}")
                 except:
+                    _LOGGER.info(f"Write numpy failed for {path} for reset {for_reset}")
                     pass
 
             if file_path is None:
