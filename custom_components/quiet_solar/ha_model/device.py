@@ -292,6 +292,13 @@ class HADeviceMixin:
         else:
             return None
 
+    def _get_power_measure(self, fall_back_on_command: bool = True) -> str | None:
+        best = self.get_best_power_HA_entity()
+        if best is None and fall_back_on_command:
+            return self.command_based_power_sensor
+        return None
+
+
 
     def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None = None,
                                                time = None) -> str | float | None:
@@ -302,12 +309,24 @@ class HADeviceMixin:
         if last_valid is None:
             return None
 
-        if time is None or time >= last_valid[0]:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+
+        if time >= last_valid[0]:
 
             if tolerance_seconds is None or tolerance_seconds == 0:
                 return last_valid[1]
 
-            if time is not None and (time - last_valid[0]).total_seconds() > tolerance_seconds:
+            hist_f = self._entity_probed_state.get(entity_id, [])
+
+            if not hist_f:
+                return last_valid[1]
+
+            if hist_f[-1][0] == last_valid[0] or hist_f[-1][1] is not None:
+                # HA update only changed sensor ... if it is the last valid, whatever the time, it is valid
+                return last_valid[1]
+
+            if (time - last_valid[0]).total_seconds() > tolerance_seconds:
                 return None
 
             return last_valid[1]
@@ -318,12 +337,7 @@ class HADeviceMixin:
             return vals[-1][1]
 
     def get_device_power_latest_possible_valid_value(self, tolerance_seconds: float | None, time) -> float | None:
-        value= self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
-        if value is None:
-            value = self.get_sensor_latest_possible_valid_value(self.secondary_power_sensor, tolerance_seconds, time)
-        if value is None:
-            value = self.get_sensor_latest_possible_valid_value(self.command_based_power_sensor, tolerance_seconds, time)
-        return value
+        return self.get_sensor_latest_possible_valid_value(self._get_power_measure(), tolerance_seconds, time)
 
     def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
@@ -342,35 +356,23 @@ class HADeviceMixin:
         return get_average_sensor(entity_id_values, time)
 
     def get_median_power(self, num_seconds: float | None, time) -> float | None:
-        val = self.get_median_sensor(self.accurate_power_sensor, num_seconds, time)
-        if val is None:
-            val = self.get_median_sensor(self.secondary_power_sensor, num_seconds, time)
-        if val is None:
-            val = self.get_median_sensor(self.command_based_power_sensor, num_seconds, time)
-        return val
+        return self.get_median_sensor(self._get_power_measure(), num_seconds, time)
+
+
 
     def get_average_power(self, num_seconds: float | None, time) -> float | None:
-        val = self.get_average_sensor(self.accurate_power_sensor, num_seconds, time)
-        if val is None:
-            val = self.get_average_sensor(self.secondary_power_sensor, num_seconds, time)
-        if val is None:
-            val = self.get_average_sensor(self.command_based_power_sensor, num_seconds, time)
-        return val
+        return self.get_average_sensor(self._get_power_measure(), num_seconds, time)
+
+
 
     def get_device_power_values(self, duration_before_s: float, time: datetime) -> list[
         tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
-        vals = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, time)
-        if not vals:
-            vals = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, time)
-        if not vals:
-            vals = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, time)
-        return vals
+        return self.get_state_history_data(self._get_power_measure(), duration_before_s, time)
+
 
     def get_device_real_energy(self, start_time: datetime, end_time:datetime, clip_to_zero_under_power: float | None = None) -> float | None:
         duration_before_s = (end_time - start_time).total_seconds()
-        val = self.get_state_history_data(self.accurate_power_sensor, duration_before_s, end_time)
-        if not val:
-            val = self.get_state_history_data(self.secondary_power_sensor, duration_before_s, end_time)
+        val = self.get_state_history_data(self._get_power_measure(fall_back_on_command=False), duration_before_s, end_time)
         if not val:
             return None
         return compute_energy_Wh_rieman_sum(val, clip_to_zero_under_power=clip_to_zero_under_power)[0]
