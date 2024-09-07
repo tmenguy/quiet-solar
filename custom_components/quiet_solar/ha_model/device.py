@@ -295,8 +295,8 @@ class HADeviceMixin:
     def _get_power_measure(self, fall_back_on_command: bool = True) -> str | None:
         best = self.get_best_power_HA_entity()
         if best is None and fall_back_on_command:
-            return self.command_based_power_sensor
-        return None
+            best = self.command_based_power_sensor
+        return best
 
 
 
