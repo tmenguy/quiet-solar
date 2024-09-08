@@ -124,10 +124,11 @@ class LoadConstraint(object):
         return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
     def score(self):
-        score = self.convert_target_value_to_energy(self.target_value)
-        score += self.type * 100000000.0
+        score_offset = 100000000
+        score = int(self.convert_target_value_to_energy(self.target_value))
+        score += self.type * score_offset
         if self.from_user:
-            score += 10000000000.0
+            score += 100*score_offset
         return score
 
     @classmethod

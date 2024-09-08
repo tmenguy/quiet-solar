@@ -11,14 +11,6 @@ from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STA
 _LOGGER = logging.getLogger(__name__)
 class QSOnOffDuration(HADeviceMixin, AbstractLoad):
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._last_pushed_end_constraint = None
-
-    def reset(self):
-        super().reset()
-        self._last_pushed_end_constraint = None
-
     def support_green_only_switch(self) -> bool:
         if self.load_is_auto_to_be_boosted:
             return False
@@ -98,7 +90,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart
-            res = self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
+            res = self.push_live_constraint(time, load_mandatory)
             self._last_pushed_end_constraint = end_schedule
             return res
 

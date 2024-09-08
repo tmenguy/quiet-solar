@@ -153,6 +153,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         _LOGGER.info(f"Creating Charger: {self.name}")
 
+        self._power_steps = []
+
 
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
@@ -348,8 +350,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         _LOGGER.info("CHANGE CONNECTED CAR!")
                         self.detach_car()
 
-
-
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
@@ -382,110 +382,91 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.attach_car(car)
                 do_initial_constraints = True
 
-                # force a stop
-                if do_first_car_init:
-                    _LOGGER.info(f"plugged and no connected car: force a stop on {car.name}")
-                    await self.stop_charge(time, do_force=True)
-
             car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None:
                 car_initial_percent = 0.0
 
             if car_initial_percent < 99.5:
 
-                if do_initial_constraints or self._do_force_next_charge:
+                realized_charge_target = None
 
-                    # add a constraint ... for now just fill the car as much as possible
-                    power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
+                target_charge = self.car.car_default_charge
+                if self.is_next_charge_full():
+                    target_charge = 100
 
-                    steps = []
-                    for a in range(min_charge, max_charge + 1):
-                        steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
+                # add a constraint ... for now just fill the car as much as possible
+                if self._do_force_next_charge:
+                    do_force_solve = True
+                    realized_charge_target = target_charge
+                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                        total_capacity_wh=self.car.car_battery_capacity,
+                        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+                        time=time,
+                        load=self,
+                        load_param=self.car.name,
+                        from_user=True,
+                        initial_value=car_initial_percent,
+                        target_value=target_charge,
+                        power_steps=self._power_steps,
+                        support_auto=True,
+                    )
+                    self.push_live_constraint(time, car_charge_mandatory)
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} pushed forces constraint {car_charge_mandatory.name}")
+                    self._do_force_next_charge = False
 
-                    realized_charge_target = None
-                    if self._do_force_next_charge:
+                if do_initial_constraints:
+
+                    if realized_charge_target is None:
+                        # we do this only in case there was not a force just before....as it could be only a forced one we interrupted!
+                        for ct in existing_user_constraints:
+                            self.push_live_constraint(time, ct)
+
+                start_time, end_time = self.car.get_next_scheduled_event(time)
+
+                if start_time is not None and end_time is not None:
+                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                        total_capacity_wh=self.car.car_battery_capacity,
+                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                        time=time,
+                        load=self,
+                        load_param=self.car.name,
+                        from_user=False,
+                        end_of_constraint=start_time,
+                        initial_value=car_initial_percent,
+                        target_value=target_charge,
+                        power_steps=self._power_steps,
+                        support_auto=True
+                    )
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                    if self.push_live_constraint(time, car_charge_mandatory):
                         do_force_solve = True
-                        target_charge = self.car.car_default_charge
-                        if self.is_next_charge_full():
-                            target_charge = 100
+                    realized_charge_target = target_charge
 
-                        realized_charge_target = target_charge
-                        car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
-                            total_capacity_wh=self.car.car_battery_capacity,
-                            type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-                            time=time,
-                            load=self,
-                            load_param=self.car.name,
-                            from_user=True,
-                            initial_value=car_initial_percent,
-                            target_value=target_charge,
-                            power_steps=steps,
-                            support_auto=True,
-                        )
-                        self.push_live_constraint(time, car_charge_mandatory)
-                        _LOGGER.info(
-                            f"plugged car {self.car.name} pushed forces constraint {car_charge_mandatory.name}")
-                        self._do_force_next_charge = False
+                if realized_charge_target is None or realized_charge_target < 100:
+                    do_force_solve = True
+                    type = CONSTRAINT_TYPE_FILLER_AUTO
+                    if realized_charge_target is None:
+                        realized_charge_target = car_initial_percent
+                        # make car charging bigger than the battery filling if it is the only car constraint
+                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
-                    if do_initial_constraints:
-
-                        if realized_charge_target is None:
-                            # we do this only in case there was not a force just before....
-                            for ct in existing_user_constraints:
-                                self.push_live_constraint(time, ct)
-
-                        target_charge = self.car.car_default_charge
-
-                        if self.is_next_charge_full():
-                            target_charge = 100
-
-                        if realized_charge_target is None or realized_charge_target < target_charge:
-
-                            start_time, end_time = self.car.get_next_scheduled_event(time)
-
-                            if start_time is not None and end_time is not None:
-                                do_force_solve = True
-                                car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
-                                    total_capacity_wh=self.car.car_battery_capacity,
-                                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                    time=time,
-                                    load=self,
-                                    load_param=self.car.name,
-                                    from_user=False,
-                                    end_of_constraint=start_time,
-                                    initial_value=car_initial_percent,
-                                    target_value=target_charge,
-                                    power_steps=steps,
-                                    support_auto=True
-                                )
-                                _LOGGER.info(
-                                    f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
-                                self.push_live_constraint(time, car_charge_mandatory, check_end_constraint_exists=True)
-                                realized_charge_target = target_charge
-
-                        if realized_charge_target is None or realized_charge_target < 100:
-                            do_force_solve = True
-                            type = CONSTRAINT_TYPE_FILLER_AUTO
-                            if realized_charge_target is None:
-                                realized_charge_target = car_initial_percent
-                                # make car charging bigger than the battery filling if it is the only car constraint
-                                type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-
-                            car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
-                                total_capacity_wh=self.car.car_battery_capacity,
-                                type=type,
-                                time=time,
-                                load=self,
-                                load_param=self.car.name,
-                                from_user=False,
-                                initial_value=realized_charge_target,
-                                target_value=100,
-                                power_steps=steps,
-                                support_auto=True
-                            )
-                            _LOGGER.info(f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
-                            self.push_live_constraint(time, car_charge_best_effort)
-
+                    car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
+                        total_capacity_wh=self.car.car_battery_capacity,
+                        type=type,
+                        time=time,
+                        load=self,
+                        load_param=self.car.name,
+                        from_user=False,
+                        initial_value=realized_charge_target,
+                        target_value=100,
+                        power_steps=self._power_steps,
+                        support_auto=True
+                    )
+                    _LOGGER.info(f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
+                    if self.push_live_constraint(time, car_charge_best_effort):
+                        do_force_solve = True
             else:
                 _LOGGER.info(f"plugged car {self.car.name} already full: reset and detach car")
                 self.reset()
@@ -527,15 +508,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if car.calendar is None:
             car.calendar = self.calendar
 
+        power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
+
+        steps = []
+        for a in range(min_charge, max_charge + 1):
+            steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
+
+        self._power_steps = steps
+
     def detach_car(self):
         self.car = None
+        self._power_steps = []
 
-    async def stop_charge(self, time: datetime, do_force=False):
 
-        charge_state = True
+    async def stop_charge(self, time: datetime):
+
         self._expected_charge_state.register_launch(value=False, time=time)
-        if do_force is False:
-            charge_state = self.is_charge_enabled(time)
+        charge_state = self.is_charge_enabled(time)
 
         if charge_state or charge_state is None:
             _LOGGER.info("STOP CHARGE LAUNCHED")
@@ -544,7 +533,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     domain=Platform.SWITCH,
                     service=SERVICE_TURN_OFF,
                     target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                    blocking=do_force
+                    blocking=False
                 )
             except:
                 _LOGGER.info("STOP CHARGE LAUNCHED, EXCEPTION")
@@ -900,7 +889,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             _LOGGER.info(f"update_value_callback:car stopped asking current")
             self._expected_amperage.set(int(self.charger_min_charge), time)
-            self._expected_charge_state.set(False, time)
+            self._expected_charge_state.set(True, time)
         elif command.is_off_or_idle() or (self.is_in_state_reset() and command.is_auto()):
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
@@ -1324,3 +1313,4 @@ class QSChargerWallbox(QSChargerGeneric):
 
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
         return [ChargerStatus.WAITING_FOR_CAR]
+

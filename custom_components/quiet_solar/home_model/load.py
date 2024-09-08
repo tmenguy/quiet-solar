@@ -47,7 +47,7 @@ class AbstractLoad(AbstractDevice):
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
         super().__init__(**kwargs)
 
-        self._constraints: list[LoadConstraint] = []
+        self._constraints: list[LoadConstraint|None] = []
         self._last_completed_constraint: LoadConstraint | None = None
         self.current_command : LoadCommand | None = None
         self.prev_command: LoadCommand | None = None
@@ -72,6 +72,7 @@ class AbstractLoad(AbstractDevice):
 
         self.num_on_off = 0
         self._last_constraint_update: datetime|None = None
+        self._last_pushed_end_constraint = None
 
     def support_green_only_switch(self) -> bool:
         return False
@@ -134,6 +135,7 @@ class AbstractLoad(AbstractDevice):
         self.current_command = None
         self._constraints = []
         self._last_completed_constraint = None
+        self._last_pushed_end_constraint = None
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
@@ -155,25 +157,27 @@ class AbstractLoad(AbstractDevice):
         if not constraints:
             return
 
+        self._constraints = [c for c in self._constraints if c is not None]
         self._constraints.sort(key=lambda x: x.end_of_constraint)
 
         #remove all the infinite constraints but the last one
         if self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
-            removed_infinits = []
+            removed_infinits : list[LoadConstraint] = []
             while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
                 removed_infinits.append(self._constraints.pop())
                 if len(self._constraints) == 0:
                     break
 
             #only one infinite is allowed!
-            keep = removed_infinits[0]
-            for k in removed_infinits:
-                if k.is_constraint_met():
-                    continue
-                if k.score() > keep.score():
-                    keep = k
+            if removed_infinits:
+                keep : LoadConstraint = removed_infinits[0]
+                for k in removed_infinits:
+                    if k.is_constraint_met():
+                        continue
+                    if k.score() > keep.score():
+                        keep = k
 
-            self._constraints.append(keep)
+                self._constraints.append(keep)
 
         # only one as fast as possible constraint can be active at a time.... and has to be first
         removed_as_fast = [(i,c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
@@ -198,6 +202,41 @@ class AbstractLoad(AbstractDevice):
                     keep = k
             keep.end_of_constraint = end_ctr
             self._constraints = [keep].extend(new_constraints)
+
+        #check all the constraints that have teh same end time, keep the highest score
+        current_end = DATETIME_MIN_UTC
+
+        current_cluster : list[tuple[int, LoadConstraint]] = []
+        clusters : list[list[tuple[int, LoadConstraint]]] = []
+        for i, c in enumerate(self._constraints):
+            if c.end_of_constraint == DATETIME_MAX_UTC or c.end_of_constraint == DATETIME_MIN_UTC:
+                continue
+
+            if c.end_of_constraint == current_end:
+                current_cluster.append((i,c))
+            else:
+                if len(current_cluster) > 1:
+                    clusters.append(current_cluster)
+                current_cluster = [(i,c)]
+                current_end = c.end_of_constraint
+
+        if len(current_cluster) > 1:
+            clusters.append(current_cluster)
+
+        if len(clusters) > 0:
+            for current_cluster in clusters:
+                keep_ic : tuple[int, LoadConstraint] = current_cluster[0]
+                for i, c in current_cluster:
+                    if c.score() > keep_ic[1].score():
+                        keep_ic = (i,c)
+
+                for i, c in current_cluster:
+                    if i == keep_ic[0]:
+                        continue
+                    else:
+                        self._constraints[i] = None
+
+            self._constraints = [c for c in self._constraints if c is not None]
 
         #and now we may have to recompute the start values of the constraints
         prev_ct = None
@@ -224,22 +263,27 @@ class AbstractLoad(AbstractDevice):
         self._constraints = kept
 
 
-    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None, check_end_constraint_exists:bool = False) -> bool:
+    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
 
         if constraint is not None:
 
-            if (check_end_constraint_exists and
-                    self._last_completed_constraint is not None and
-                    self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint):
+            if (self._last_completed_constraint is not None and
+                self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
+                self._last_completed_constraint.score() >= constraint.score()):
                 _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as last completed one")
                 return False
 
-            for c in self._constraints:
+            for i, c in enumerate(self._constraints):
                 if c == constraint:
                     return False
-                if check_end_constraint_exists and constraint is not None and c.end_of_constraint == constraint.end_of_constraint:
-                    _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as another one")
-                    return False
+                if  c.end_of_constraint == constraint.end_of_constraint:
+                    if c.score() == constraint.score():
+                        _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
+                        return False
+                    else:
+                        self._constraints[i] = None
+                        _LOGGER.info(f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one")
+
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)
             return True

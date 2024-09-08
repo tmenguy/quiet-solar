@@ -101,7 +101,7 @@ class QSPool(QSOnOffDuration):
             )
             # check_end_constraint_exists will check that the constraint is not already in the list
             # or have not been done already after a restart
-            res = self.push_live_constraint(time, load_mandatory, check_end_constraint_exists=True)
+            res = self.push_live_constraint(time, load_mandatory)
             self._last_pushed_end_constraint = end_schedule
             return res
 
