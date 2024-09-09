@@ -131,8 +131,8 @@ class AbstractLoad(AbstractDevice):
         if self._last_hash_state is None:
             self._last_hash_state = new_hash
         elif self._last_hash_state != new_hash:
+            _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
             await self.on_hash_state_change(time)
-
 
         self._last_hash_state = new_hash
 
