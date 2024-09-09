@@ -488,20 +488,21 @@ class AbstractLoad(AbstractDevice):
         _LOGGER.info(f"launch command {command} for this load {self.name})")
 
         if self.running_command is not None:
+            # already launched command
             if self.running_command == command:
                 self._stacked_command = None #no need of it anymore
                 return
             else:
+                # another command has been launched, stack this one
                 self._stacked_command = command
                 return
 
-        # there is no running : whatever we wil not execute the stacked one but only the last one
+        # there is no running : whatever we will not execute the stacked one but only the last one
         self._stacked_command = None
 
         if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
-            self._stacked_command = None
-            self.current_command = command # needed as command == has been overcharged to not test everything
+            self.current_command = command # needed as command == may have been overcharged to not test everything
             return
 
 
@@ -512,8 +513,12 @@ class AbstractLoad(AbstractDevice):
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
+        elif is_command_set is True:
+            self._ack_command(time, self.running_command)
         else:
             await self.check_commands(time)
+
+        return
 
     def is_load_command_set(self, time:datetime):
         return self.running_command is None and self.current_command is not None
@@ -554,6 +559,8 @@ class AbstractLoad(AbstractDevice):
             self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
+            elif is_command_set is True:
+                self._ack_command(time, self.running_command)
             else:
                 await self.check_commands(time)
 
