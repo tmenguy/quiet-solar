@@ -279,6 +279,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 data["data"]["url"] = mobile_app_url
                 data["data"]["clickAction"] = mobile_app_url
 
+            _LOGGER.info(f"Full Sending notification for Charger, car {load_name} app: {mobile_app} with: {data}")
+
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
                 service=mobile_app,
