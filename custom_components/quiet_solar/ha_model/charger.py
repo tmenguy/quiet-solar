@@ -275,13 +275,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 "message": f"{readable_state}",
             }
             if mobile_app_url is not None:
-                data["url"] = mobile_app_url
-                data["clickAction"] = mobile_app_url
+                data["data"] = {}
+                data["data"]["url"] = mobile_app_url
+                data["data"]["clickAction"] = mobile_app_url
 
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
                 service=f"{Platform.NOTIFY}.{mobile_app_url}",
-                data=data,
+                service_data=data,
             )
 
 

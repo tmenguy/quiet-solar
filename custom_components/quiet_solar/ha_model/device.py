@@ -316,13 +316,14 @@ class HADeviceMixin:
                 "message": f"{readable_state}",
             }
             if self.mobile_app_url is not None:
-                data["url"] = self.mobile_app_url
-                data["clickAction"] = self.mobile_app_url
+                data["data"] = {}
+                data["data"]["url"] = self.mobile_app_url
+                data["data"]["clickAction"] = self.mobile_app_url
 
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
                 service=f"{self.mobile_app}.{self.mobile_app}",
-                data=data,
+                service_data=data,
             )
 
     def get_best_power_HA_entity(self):
