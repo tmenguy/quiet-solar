@@ -47,7 +47,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
-    CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_CAR_MOBILE_APP, CONF_CAR_MOBILE_APP_NOTHING
+    CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
+    CONF_MOBILE_APP_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,7 +164,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_load_power_sensor=False,
                           add_load_power_sensor_mandatory=False,
                           add_calendar=False,
-                          add_boost_only=False
+                          add_boost_only=False,
+                          add_mobile_app=False,
                           ) -> dict:
 
         default = self.config_entry.data.get(CONF_NAME)
@@ -207,6 +209,43 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             entities = selectable_calendar_entities(self.hass)
             if len(entities) > 0:
                 self.add_entity_selector(sc, CONF_CALENDAR, False, entity_list=entities)
+
+        if add_mobile_app:
+            options = []
+            # hass.services.has_service("notify", "mobile_app_loaded_late")
+            for service_name in self.hass.services.async_services_for_domain(NOTIFY_DOMAIN):
+                if "mobile" in service_name:
+                    options.append(service_name)
+
+
+
+            if options:
+                options.append(CONF_MOBILE_APP_NOTHING)
+                default = self.config_entry.data.get(CONF_MOBILE_APP)
+
+                if default:
+                    keysc = vol.Optional(CONF_MOBILE_APP, default=default)
+                else:
+                    keysc = vol.Optional(CONF_MOBILE_APP, default=CONF_MOBILE_APP_NOTHING)
+
+                sc.update({
+                    keysc: SelectSelector(
+                        SelectSelectorConfig(
+                            options=options,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )})
+
+                default = self.config_entry.data.get(CONF_MOBILE_APP_URL)
+                if default is None:
+                    sc.update({
+                        vol.Optional(CONF_MOBILE_APP_URL): cv.string,
+                    })
+                else:
+                    sc.update({
+                        vol.Optional(CONF_MOBILE_APP_URL, default=default): cv.string,
+                    })
+
 
         return sc
 
@@ -578,9 +617,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 return r
 
 
-
-
-        sc_dict = self.get_common_schema(add_calendar=True)
+        sc_dict = self.get_common_schema(add_calendar=True, add_mobile_app=True)
 
         sc_dict.update(
             {
@@ -592,42 +629,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         self.add_entity_selector(sc_dict, CONF_CAR_PLUGGED, False, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CAR_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
 
-
-        options = []
-        # hass.services.has_service("notify", "mobile_app_loaded_late")
-        for service_name in self.hass.services.async_services_for_domain(NOTIFY_DOMAIN):
-            if "mobile" in service_name:
-                options.append(service_name)
-
-        if options:
-            options.append(CONF_CAR_MOBILE_APP_NOTHING)
-
-        if False:
-            mobile_entries =  self.hass.data.get(MOBILE_APP_DOMAIN, {}).get(DATA_CONFIG_ENTRIES, {})
-            if mobile_entries:
-
-                options.append(CONF_CAR_MOBILE_APP_NOTHING)
-                for web_hook_id, mobile_entry in mobile_entries.items():
-
-                    mobile_device_name = mobile_entry.data.get(ATTR_DEVICE_NAME, None)
-                    if mobile_device_name:
-                        options.append(SelectOptionDict(value=CONF_CAR_MOBILE_APP, label=mobile_device_name))
-
-        if options:
-            default = self.config_entry.data.get(CONF_CAR_MOBILE_APP)
-
-            if default:
-                keysc = vol.Optional(CONF_CAR_MOBILE_APP, default=default)
-            else:
-                keysc = vol.Optional(CONF_CAR_MOBILE_APP, default=CONF_CAR_MOBILE_APP_NOTHING)
-
-            sc_dict.update({
-                keysc: SelectSelector(
-                    SelectSelectorConfig(
-                        options=options,
-                        mode=SelectSelectorMode.LIST,
-                    )
-                )})
 
         percent_entities = selectable_percent_entities(self.hass)
         if len(percent_entities) > 0 :

@@ -542,6 +542,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
                 await load.launch_command(time=time, command=CMD_IDLE)
 
+            load.do_probe_state_change(time)
+
 
 
         if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):

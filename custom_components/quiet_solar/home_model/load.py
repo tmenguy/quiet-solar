@@ -5,13 +5,14 @@ from collections.abc import Generator
 from operator import itemgetter
 
 import pytz
+from homeassistant.const import Platform
 
 from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
-from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY
+from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING
 
 import slugify
 
@@ -73,6 +74,7 @@ class AbstractLoad(AbstractDevice):
         self.num_on_off = 0
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint = None
+        self._last_hash_state = None
 
     def support_green_only_switch(self) -> bool:
         return False
@@ -122,6 +124,24 @@ class AbstractLoad(AbstractDevice):
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         return False
 
+    async def do_probe_state_change(self, time: datetime):
+
+        new_hash = self.get_active_state_hash(time)
+
+        if self._last_hash_state is None:
+            self._last_hash_state = new_hash
+            await self.on_hash_state_change(time)
+        elif self._last_hash_state != new_hash:
+            await self.on_hash_state_change(time)
+
+
+        self._last_hash_state = new_hash
+
+    async def on_hash_state_change(self, time: datetime):
+        pass
+
+
+
     def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
         return None
 
@@ -147,6 +167,34 @@ class AbstractLoad(AbstractDevice):
             if c.is_constraint_active_for_time_period(time):
                 return c
         return None
+
+    def get_active_readable_name(self, time:datetime) -> str:
+
+        current_constraint = self.get_current_active_constraint(time)
+
+        if current_constraint is None:
+            if self._last_completed_constraint is not None:
+                new_val = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
+            else:
+                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+        else:
+            new_val = current_constraint.get_readable_name_for_load()
+
+        return new_val
+
+    def get_active_state_hash(self, time:datetime) -> str:
+
+        current_constraint = self.get_current_active_constraint(time)
+
+        if current_constraint is None:
+            if self._last_completed_constraint is not None:
+                new_val = "COMPLETED:" + self._last_completed_constraint.name + "-" + self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+        else:
+            new_val = "RUNNING:" + current_constraint.name + "-" + current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+
+        return new_val
 
     def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
         return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.end_of_constraint < DATETIME_MAX_UTC]

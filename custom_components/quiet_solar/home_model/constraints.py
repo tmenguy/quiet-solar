@@ -124,8 +124,8 @@ class LoadConstraint(object):
         return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
     def score(self):
-        score_offset = 100000000
-        score = int(self.convert_target_value_to_energy(self.target_value))
+        score_offset = 10000000000
+        score = int(100.0*self.convert_target_value_to_energy(self.target_value))
         score += self.type * score_offset
         if self.from_user:
             score += 100*score_offset
@@ -191,7 +191,7 @@ class LoadConstraint(object):
             local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
             local_today = date.today()
             local_today = datetime(local_today.year, local_today.month, local_today.day)
-            local_tomorrow = date.today() + timedelta(days=1)
+            local_tomorrow = local_today + timedelta(days=1)
             if local_constraint_day == local_today:
                 target = "by today " + local_target_date.strftime("%H:%M")
             elif local_constraint_day == local_tomorrow:

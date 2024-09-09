@@ -296,15 +296,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         do_save = False
         self._attr_available = True
 
-        current_constraint = self.device.get_current_active_constraint(time)
-
-        if current_constraint is None:
-            if self.device._last_completed_constraint is not None:
-                new_val = "COMPLETED: " + self.device._last_completed_constraint.get_readable_name_for_load()
-            else:
-                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
-        else:
-            new_val = current_constraint.get_readable_name_for_load()
+        new_val = self.device.get_active_readable_name(time)
 
         if self._attr_native_value != new_val:
             do_save = True
@@ -327,8 +319,6 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
                 self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
 
         self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = self.device.get_to_be_saved_info()
-
-
 
         if do_save:
             self.async_write_ha_state()

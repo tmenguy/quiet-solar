@@ -12,7 +12,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
-    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR
+    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -174,6 +174,18 @@ class HADeviceMixin:
 
         self.calendar = kwargs.pop(CONF_CALENDAR, None)
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
+        self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
+        if self.mobile_app is None or self.mobile_app == CONF_MOBILE_APP_NOTHING:
+            self.mobile_app = None
+
+        self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
+        if self.mobile_app_url is None or len(self.mobile_app_url) == 0:
+            self.mobile_app_url = None
+        elif self.mobile_app_url == "/":
+            self.mobile_app_url = None
+        elif self.mobile_app_url[0] != '/':
+            self.mobile_app_url = f"/{self.mobile_app_url}"
+
         self.secondary_power_sensor = None
         self.best_power_value = None
 
@@ -283,6 +295,23 @@ class HADeviceMixin:
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR
 
+
+    async def on_hash_state_change(self, time: datetime):
+
+        if self.mobile_app is not None and isinstance(self, AbstractLoad):
+            readable_state = self.get_active_readable_name(time)
+            data={
+                "message": f"{readable_state}",
+            }
+            if self.mobile_app_url is not None:
+                data["url"] = self.mobile_app_url
+                data["clickAction"] = self.mobile_app_url
+
+            await self.hass.services.async_call(
+                domain=Platform.NOTIFY,
+                service=f"{self.mobile_app}.{self.mobile_app}",
+                data=data,
+            )
 
     def get_best_power_HA_entity(self):
         if self.accurate_power_sensor is not None:
