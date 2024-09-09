@@ -1,7 +1,5 @@
 from typing import Any
 
-from homeassistant.core import callback, Event, EventStateChangedData
-from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
 from homeassistant.components import number
 
