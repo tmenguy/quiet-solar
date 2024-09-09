@@ -16,6 +16,8 @@ from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBIL
 
 import slugify
 
+from ..ha_model.charger import QSChargerGeneric
+
 if TYPE_CHECKING:
     pass
 

@@ -248,6 +248,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self._inner_expected_charge_state is None or self._inner_amperage is None or self._expected_charge_state.value is None or self._expected_amperage.value is None
 
 
+
+    async def on_hash_state_change(self, time: datetime):
+
+        if self.car:
+            await self.car.on_hash_state_change(time)
+        else:
+            await super().on_hash_state_change(time)
+
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car .... for now default one
 

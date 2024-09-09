@@ -300,12 +300,14 @@ class HADeviceMixin:
 
     async def on_hash_state_change(self, time: datetime):
 
-        if self.mobile_app is not None and isinstance(self, AbstractLoad):
-
-
+        if isinstance(self, AbstractLoad):
             readable_state = self.get_active_readable_name(time)
+        else:
+            readable_state = "WRONG STATE"
 
-            _LOGGER.info(f"Sending notification for {self.mobile_app} with: {readable_state}")
+        _LOGGER.info(f"Sending notification for {self.mobile_app} with: {readable_state}")
+
+        if self.mobile_app is not None:
 
             data={
                 "message": f"{readable_state}",
