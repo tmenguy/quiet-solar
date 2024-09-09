@@ -191,19 +191,25 @@ class AbstractLoad(AbstractDevice):
 
         if current_constraint is None:
             if self._last_completed_constraint is not None:
+                load_param = "NO"
+                if self._last_completed_constraint.load_param is not None:
+                    load_param = self._last_completed_constraint.load_param
                 new_val = ("COMPLETED:" +
                            self._last_completed_constraint.name +
                            "-" +
-                           self._last_completed_constraint.load_param +
+                           load_param +
                            "-" +
                            self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
             else:
                 new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
         else:
+            load_param = "NO"
+            if current_constraint.load_param is not None:
+                load_param = current_constraint.load_param
             new_val = ("RUNNING:" +
                        current_constraint.name +
                        "-" +
-                        current_constraint.load_param +
+                       load_param +
                        "-" +
                        current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
 
