@@ -176,7 +176,9 @@ class HADeviceMixin:
 
         self.calendar = kwargs.pop(CONF_CALENDAR, None)
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
+
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
+
         if self.mobile_app is None or self.mobile_app == CONF_MOBILE_APP_NOTHING:
             self.mobile_app = None
 
@@ -305,7 +307,7 @@ class HADeviceMixin:
         else:
             readable_state = "WRONG STATE"
 
-        _LOGGER.info(f"Sending notification for {self.mobile_app} with: {readable_state}")
+        _LOGGER.info(f"Sending notification for load {self.name} app: {self.mobile_app} with: {readable_state}")
 
         if self.mobile_app is not None:
 
