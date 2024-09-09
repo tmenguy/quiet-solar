@@ -252,9 +252,38 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def on_hash_state_change(self, time: datetime):
 
         if self.car:
-            await self.car.on_hash_state_change(time)
+            load_name = self.car.name
+            mobile_app = self.car.mobile_app
+            mobile_app_url = self.car.mobile_app_url
         else:
-            await super().on_hash_state_change(time)
+            load_name = self.name
+            mobile_app = self.mobile_app
+            mobile_app_url = self.mobile_app_url
+
+
+        if isinstance(self, AbstractLoad):
+            readable_state = self.get_active_readable_name(time)
+        else:
+            readable_state = "WRONG STATE"
+
+        _LOGGER.info(f"Sending notification for Charger, car {load_name} app: {mobile_app} with: {readable_state}")
+
+        if mobile_app is not None:
+
+            data={
+                "title": f"What will happen for {load_name}?",
+                "message": f"{readable_state}",
+            }
+            if mobile_app_url is not None:
+                data["url"] = mobile_app_url
+                data["clickAction"] = mobile_app_url
+
+            await self.hass.services.async_call(
+                domain=Platform.NOTIFY,
+                service=f"{Platform.NOTIFY}.{mobile_app_url}",
+                data=data,
+            )
+
 
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car .... for now default one
