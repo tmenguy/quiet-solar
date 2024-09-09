@@ -310,6 +310,7 @@ class HADeviceMixin:
         if self.mobile_app is not None:
 
             data={
+                "title": f"What will happen for {self.name}?",
                 "message": f"{readable_state}",
             }
             if self.mobile_app_url is not None:

@@ -16,8 +16,6 @@ from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBIL
 
 import slugify
 
-from ..ha_model.charger import QSChargerGeneric
-
 if TYPE_CHECKING:
     pass
 
@@ -129,6 +127,8 @@ class AbstractLoad(AbstractDevice):
     async def do_probe_state_change(self, time: datetime):
 
         new_hash = self.get_active_state_hash(time)
+
+        _LOGGER.info(f"do_probe_state_change for {new_hash}")
 
         if self._last_hash_state is None:
             await self.on_hash_state_change(time)
