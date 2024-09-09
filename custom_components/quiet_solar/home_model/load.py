@@ -128,10 +128,6 @@ class AbstractLoad(AbstractDevice):
 
         new_hash = self.get_active_state_hash(time)
 
-        _LOGGER.info(f"do_probe_state_change for {new_hash}")
-
-        await self.on_hash_state_change(time)
-
         if self._last_hash_state is None:
             self._last_hash_state = new_hash
         elif self._last_hash_state != new_hash:
