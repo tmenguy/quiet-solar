@@ -130,8 +130,9 @@ class AbstractLoad(AbstractDevice):
 
         _LOGGER.info(f"do_probe_state_change for {new_hash}")
 
+        await self.on_hash_state_change(time)
+
         if self._last_hash_state is None:
-            await self.on_hash_state_change(time)
             self._last_hash_state = new_hash
         elif self._last_hash_state != new_hash:
             await self.on_hash_state_change(time)
@@ -190,11 +191,21 @@ class AbstractLoad(AbstractDevice):
 
         if current_constraint is None:
             if self._last_completed_constraint is not None:
-                new_val = "COMPLETED:" + self._last_completed_constraint.name + "-" + self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+                new_val = ("COMPLETED:" +
+                           self._last_completed_constraint.name +
+                           "-" +
+                           self._last_completed_constraint.load_param +
+                           "-" +
+                           self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
             else:
                 new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
         else:
-            new_val = "RUNNING:" + current_constraint.name + "-" + current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+            new_val = ("RUNNING:" +
+                       current_constraint.name +
+                       "-" +
+                        current_constraint.load_param +
+                       "-" +
+                       current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
 
         return new_val
 
