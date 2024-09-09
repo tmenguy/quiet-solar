@@ -281,7 +281,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
-                service=f"{Platform.NOTIFY}.{mobile_app_url}",
+                service=mobile_app,
                 service_data=data,
             )
 

@@ -322,7 +322,7 @@ class HADeviceMixin:
 
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
-                service=f"{self.mobile_app}.{self.mobile_app}",
+                service=self.mobile_app,
                 service_data=data,
             )
 
