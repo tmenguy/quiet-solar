@@ -129,8 +129,8 @@ class AbstractLoad(AbstractDevice):
         new_hash = self.get_active_state_hash(time)
 
         if self._last_hash_state is None:
-            self._last_hash_state = new_hash
             await self.on_hash_state_change(time)
+            self._last_hash_state = new_hash
         elif self._last_hash_state != new_hash:
             await self.on_hash_state_change(time)
 

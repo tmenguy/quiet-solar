@@ -1,3 +1,4 @@
+import logging
 from abc import abstractmethod
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from ..home_model.load import AbstractLoad
 
 import numpy as np
 
+_LOGGER = logging.getLogger(__name__)
 
 def compute_energy_Wh_rieman_sum(
         power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
@@ -299,7 +301,12 @@ class HADeviceMixin:
     async def on_hash_state_change(self, time: datetime):
 
         if self.mobile_app is not None and isinstance(self, AbstractLoad):
+
+
             readable_state = self.get_active_readable_name(time)
+
+            _LOGGER.info(f"Sending notification for {self.mobile_app} with: {readable_state}")
+
             data={
                 "message": f"{readable_state}",
             }

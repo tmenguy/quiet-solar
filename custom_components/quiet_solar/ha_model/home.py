@@ -542,7 +542,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
                 await load.launch_command(time=time, command=CMD_IDLE)
 
-            load.do_probe_state_change(time)
+            await load.do_probe_state_change(time)
 
 
 
