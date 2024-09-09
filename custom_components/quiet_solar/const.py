@@ -67,6 +67,7 @@ CONF_CAR_CHARGER_MAX_CHARGE = "car_charger_max_charge"
 CONF_CAR_CUSTOM_POWER_CHARGE_VALUES = "car_use_custom_power_charge_values"
 CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P = "car_is_custom_power_charge_values_3p"
 CONF_CAR_MOBILE_APP = "car_mobile_app"
+CONF_CAR_MOBILE_APP_NOTHING ="No Notifications"
 
 CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
