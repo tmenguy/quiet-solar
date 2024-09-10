@@ -154,13 +154,13 @@ class AbstractLoad(AbstractDevice):
 
         new_hash = self.get_active_state_hash(time)
 
-        if self._last_hash_state is None:
-            self._last_hash_state = new_hash
-        elif self._last_hash_state != new_hash:
-            _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
-            await self.on_hash_state_change(time)
+        if new_hash is not None:
 
-        self._last_hash_state = new_hash
+            if self._last_hash_state != new_hash:
+                _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
+                await self.on_hash_state_change(time)
+
+            self._last_hash_state = new_hash
 
     async def on_hash_state_change(self, time: datetime):
         pass
