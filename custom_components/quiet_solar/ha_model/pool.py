@@ -77,13 +77,6 @@ class QSPool(QSOnOffDuration):
 
         if end_schedule is not None:
 
-            if self._last_pushed_end_constraint is not None:
-                if self._last_pushed_end_constraint == end_schedule:
-                    # we already have a constraint for this end time
-                    # this is a small optimisation to avoid creating a constraint object just to
-                    # let push_live_constraint check that it is already in the list or completed
-                    return False
-
             # schedule the load to be launched
             type = CONSTRAINT_TYPE_MANDATORY_END_TIME
             if self.qs_best_effort_green_only is True:
@@ -99,11 +92,7 @@ class QSPool(QSOnOffDuration):
                     initial_value=0,
                     target_value=self.get_pool_filter_time_s(time),
             )
-            # check_end_constraint_exists will check that the constraint is not already in the list
-            # or have not been done already after a restart
-            res = self.push_live_constraint(time, load_mandatory)
-            self._last_pushed_end_constraint = end_schedule
-            return res
+            return self.push_unique_and_current_end_of_constraint_from_agenda(time=time, new_ct=load_mandatory)
 
         return False
 

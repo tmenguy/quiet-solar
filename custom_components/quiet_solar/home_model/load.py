@@ -73,11 +73,37 @@ class AbstractLoad(AbstractDevice):
 
         self.num_on_off = 0
         self._last_constraint_update: datetime|None = None
-        self._last_pushed_end_constraint = None
+        self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
 
     def support_green_only_switch(self) -> bool:
         return False
+
+    def push_unique_and_current_end_of_constraint_from_agenda(self, time: datetime, new_ct: LoadConstraint):
+
+        new_end_constraint = new_ct.end_of_constraint
+
+        if new_end_constraint is None or new_end_constraint == DATETIME_MAX_UTC or new_end_constraint == DATETIME_MIN_UTC:
+            return False
+
+        if self._last_pushed_end_constraint_from_agenda is None:
+            self._last_pushed_end_constraint_from_agenda = new_end_constraint
+        else:
+            # if the agenda has changed ... we should remove an existing uneeded constraint
+            if self._last_pushed_end_constraint_from_agenda != new_end_constraint:
+                for i, ct in enumerate(self._constraints):
+                    if (isinstance(ct, new_ct.__class__)
+                            and ct.type == new_ct.type
+                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda):
+                        self._constraints[i] = None
+                        break
+
+                self._constraints = [c for c in self._constraints if c is not None]
+
+        res = self.push_live_constraint(time, new_ct)
+        self._last_pushed_end_constraint_from_agenda = new_end_constraint
+
+        return res
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:
@@ -154,7 +180,7 @@ class AbstractLoad(AbstractDevice):
         self.current_command = None
         self._constraints = []
         self._last_completed_constraint = None
-        self._last_pushed_end_constraint = None
+        self._last_pushed_end_constraint_from_agenda = None
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:

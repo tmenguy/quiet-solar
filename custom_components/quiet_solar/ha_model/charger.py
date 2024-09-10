@@ -154,7 +154,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         _LOGGER.info(f"Creating Charger: {self.name}")
 
         self._power_steps = []
-        self._last_agenda_start_time = None
+
 
 
 
@@ -238,7 +238,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.detach_car()
         self._reset_state_machine()
         self._do_force_next_charge = False
-        self._last_agenda_start_time = None
 
 
     def _reset_state_machine(self):
@@ -470,19 +469,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if start_time is not None:
 
-                    if self._last_agenda_start_time is None:
-                        self._last_agenda_start_time = start_time
-                    else:
-                        # if the agenda has changed ... we should remove an existing uneeded constraint
-                        if self._last_agenda_start_time != start_time:
-                            for i, ct in enumerate(self._constraints):
-                                if (isinstance(ct, MultiStepsPowerLoadConstraintChargePercent)
-                                        and ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
-                                        and ct.end_of_constraint == self._last_agenda_start_time):
-                                    self._constraints[i] = None
-                                    break
-
-                            self._constraints = [c for c in self._constraints if c is not None]
 
                     car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                         total_capacity_wh=self.car.car_battery_capacity,
@@ -497,10 +483,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         power_steps=self._power_steps,
                         support_auto=True
                     )
+
+                    if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
+                        do_force_solve = True
+
                     _LOGGER.info(
                         f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
-                    if self.push_live_constraint(time, car_charge_mandatory):
-                        do_force_solve = True
+
+
+
                     realized_charge_target = target_charge
 
                 if realized_charge_target is None or realized_charge_target < 100:
