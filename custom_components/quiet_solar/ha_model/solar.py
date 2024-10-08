@@ -68,15 +68,22 @@ class QSSolarProvider:
     def get_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
         return get_slots_from_time_serie(self.solar_forecast, start_time, end_time)
 
+
+    def is_orchestrator(self, entity_id, orchestrator) -> bool:
+        return True
+
     async def update(self, time: datetime) -> None:
 
         if len(self.orchestrators) == 0 or self._latest_update_time is None or (time - self._latest_update_time).total_seconds() > 15*60:
 
             self.orchestrators = []
 
-            for _, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
+            for entry_id, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
                 #_LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
-                self.orchestrators.append(orchestrator)
+                if orchestrator is not None and self.is_orchestrator(entry_id, orchestrator):
+                    self.orchestrators.append(orchestrator)
+                else:
+                    _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
 
             if len(self.orchestrators) > 0:
                 self.solar_forecast: list[tuple[datetime | None, float | None]] = []
@@ -162,6 +169,13 @@ class QSSolarProviderSolcast(QSSolarProvider):
     def __init__(self, solar: QSSolar, **kwargs) -> None:
         super().__init__(solar=solar, domain=SOLCAST_SOLAR_DOMAIN, **kwargs)
 
+    def is_orchestrator(self, entity_id, orchestrator) -> bool:
+        try:
+            data = orchestrator.solcast._data_forecasts
+        except:
+            return False
+        return True
+
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None]]:
         data = orchestrator.solcast._data_forecasts
@@ -186,6 +200,13 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
 
     def __init__(self, solar: QSSolar, **kwargs) -> None:
         super().__init__(solar=solar, domain=OPEN_METEO_SOLAR_DOMAIN, **kwargs)
+
+    def is_orchestrator(self, entity_id, orchestrator) -> bool:
+        try:
+            data = orchestrator.data.watts
+        except:
+            return False
+        return True
 
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None]]:
