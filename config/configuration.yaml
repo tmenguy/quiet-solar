@@ -16,10 +16,3 @@ logger:
   #start: true
   #wait: true
   #port: 5678
-
-vacuum:
-  - platform: iaqualinkRobots
-    username: thomas.menguy@gmail.com
-    password: J!3Qy88r
-    api_key: EOOEMOW4YR6QNB07
-    name: peyrebelle_pool_robot
