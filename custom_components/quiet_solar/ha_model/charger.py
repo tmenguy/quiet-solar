@@ -290,9 +290,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
     def get_best_car(self, time: datetime) -> QSCar | None:
-        # find the best car .... for now default one
+        # find the best car ....
 
-        best_car = self._default_generic_car
+        if self._user_attached_car_name is not None:
+            if self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
+                car = self.home.get_car_by_name(self._user_attached_car_name)
+                if car is not None:
+                    _LOGGER.info(f"Best Car from user selection: {car.name}")
+                    return car
+            else:
+                _LOGGER.info(f"NO GOOD CAR BECAUSE: CHARGER_NO_CAR_CONNECTED")
+                return None
+
+        best_car = self.get_default_car()
         best_score = 0
 
         for car in self.home._cars:
@@ -309,11 +319,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 best_score = score
 
         if best_score == 0:
-            _LOGGER.info(f"No good car found for charger, trying to get the best possible one for {self.name}")
-            return None
-
-
-        _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
+            _LOGGER.info(f"Default best car used: {best_car.name}")
+        else:
+            _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
         return best_car
 
     def get_default_car(self):
@@ -368,7 +376,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
             existing_user_constraints = []
-            car_initial_percent = 0.0
 
             if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
                 car_initial_percent = 100.0
@@ -376,32 +383,26 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 existing_user_constraints = []
 
-                if self._user_attached_car_name is not None:
-                    if self._user_attached_car_name == CHARGER_NO_CAR_CONNECTED:
-                        _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
-                        self.reset()
-                        return True
+                best_car = self.get_best_car(time)
 
-                    if self.car is not None and self.car.name != self._user_attached_car_name:
+                # user forced a "deconnection"
+                if best_car is None:
+                    _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
+                    self.reset()
+                    return True
+
+                elif self.car:
+                    # there is already a car connected, check if it is the right one
+                    #change car we have a better one ...
+                    if best_car.name != self.car.name:
+                        _LOGGER.info("CHANGE CONNECTED CAR!")
                         self.detach_car()
-
-                if self.car and self._user_attached_car_name is None:
-                    car = self.get_best_car(time)
-                    if car is not None:
-                        #change car we have a better one ...
-                        if car.name != self.car.name:
-                            _LOGGER.info("CHANGE CONNECTED CAR!")
-                            self.detach_car()
 
                 if not self.car:
                     # we may have some saved constraints that have been loaded already from the storage at init
                     # so we need to check if they are still valid
-                    if self._user_attached_car_name is not None and self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
-                        car = self.home.get_car_by_name(self._user_attached_car_name)
-                    else:
-                        car = self.get_best_car(time)
-                        if car is None:
-                            car = self.get_default_car()
+
+                    car = best_car
 
                     if self._constraints:
                         # only keep user constraints
@@ -427,7 +428,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     car_initial_percent = 0.0
 
             if car_initial_percent >= 99.99:
-                _LOGGER.info(f"plugged car {self.car.name} already full or not asking current: reset and detach car")
+                if self.car:
+                    car_name = self.car
+                else:
+                    car_name = "NO KNOWN CAR"
+                _LOGGER.info(f"plugged car {car_name} already full or not asking current: reset and detach car")
                 self.reset()
                 do_force_solve = True
             else:
