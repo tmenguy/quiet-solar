@@ -29,6 +29,7 @@ class AbstractDevice(object):
         self._device_type = device_type
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
+        self._constraints: list[LoadConstraint | None] = []
 
     @property
     def device_type(self):
@@ -46,9 +47,10 @@ class AbstractLoad(AbstractDevice):
         self.switch_entity = kwargs.pop(CONF_SWITCH, None)
         self.power_use = kwargs.pop(CONF_POWER, None)
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
+
         super().__init__(**kwargs)
 
-        self._constraints: list[LoadConstraint|None] = []
+
         self._last_completed_constraint: LoadConstraint | None = None
         self.current_command : LoadCommand | None = None
         self.prev_command: LoadCommand | None = None
@@ -242,6 +244,9 @@ class AbstractLoad(AbstractDevice):
 
     def set_live_constraints(self, time: datetime, constraints: list[LoadConstraint]):
 
+        if not constraints:
+            constraints = []
+
         self._constraints = constraints
         if not constraints:
             return
@@ -354,6 +359,9 @@ class AbstractLoad(AbstractDevice):
 
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
 
+        if not self._constraints:
+            self._constraints = []
+
         if constraint is not None:
 
             if (self._last_completed_constraint is not None and
@@ -361,6 +369,8 @@ class AbstractLoad(AbstractDevice):
                 self._last_completed_constraint.score() >= constraint.score()):
                 _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as last completed one")
                 return False
+
+
 
             for i, c in enumerate(self._constraints):
                 if c == constraint:
@@ -382,6 +392,9 @@ class AbstractLoad(AbstractDevice):
 
     async def update_live_constraints(self, time:datetime, period: timedelta) -> bool:
 
+        if not self._constraints:
+            self._constraints = []
+
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
         # if it is the last and the one before are for the next days)
@@ -395,15 +408,13 @@ class AbstractLoad(AbstractDevice):
             # we should reset some stuffs
             self.reset_daily_load_datas(time)
 
-
-
-
         # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
         current_constraint = None
         if self.running_command is not None:
             force_solving =  False
 
         elif not self._constraints:
+            self._constraints = []
             force_solving =  False
         else:
 
@@ -424,7 +435,7 @@ class AbstractLoad(AbstractDevice):
                     else:
                         # a not met mandatory one! we should expand it or force it
                         duration_s = c.best_duration_to_meet()
-                        duration_s = duration_s*(1.0 + c.pushed_count*0.2) # extend if we continue to push it
+                        duration_s = max(timedelta(seconds=1200), duration_s*(1.0 + c.pushed_count*0.2)) # extend if we continue to push it
                         new_constraint_end = time + duration_s
                         handled_constraint_force = False
                         c.skip = True
@@ -474,7 +485,7 @@ class AbstractLoad(AbstractDevice):
                                 # unskip the current one
                                 c.skip = False
                                 c.pushed_count += 1
-                                _LOGGER.info(f"{c.name} pushed because not mandatory and not met")
+                                _LOGGER.info(f"{c.name} pushed because mandatory and not met")
                                 handled_constraint_force = True
 
                         if handled_constraint_force:

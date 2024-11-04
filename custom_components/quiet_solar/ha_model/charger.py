@@ -164,7 +164,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def set_next_charge_full_or_not(self, value: bool):
         self._is_next_charge_full = value
 
-
         do_update  = True
         if value:
             new_target = 100
@@ -175,7 +174,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 new_target = None
                 do_update = False
 
-        if do_update:
+        if do_update and self._constraints:
             for ct in self._constraints:
                 if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
                     ct.target_value = new_target
@@ -424,7 +423,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.attach_car(car)
 
                 car_initial_percent = self.car.get_car_charge_percent(time)
-                if car_initial_percent is None:
+                if car_initial_percent is None or car_initial_percent >= 95.0: # for possible percent issue
                     car_initial_percent = 0.0
 
             if car_initial_percent >= 99.99:
@@ -869,27 +868,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         result_calculus = None
         result = None
-        if self.car.car_charge_percent_sensor is None:
 
-            if self.current_command is None or self.current_command.is_off_or_idle():
-                result = None
-            else:
-                added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time, clip_to_zero_under_power=self.charger_consumption_W)
+        if self.current_command is None or self.current_command.is_off_or_idle():
+            result = None
+        else:
+            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time, clip_to_zero_under_power=self.charger_consumption_W)
 
-                if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
-                    added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
-                    result = ct.current_value + added_percent
-                    result_calculus = result
+            if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
+                added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
+                result_calculus = ct.current_value + added_percent
 
+                result = self.car.get_car_charge_percent(time)
 
-        if self.car.car_charge_percent_sensor is not None:
-            result = self.car.get_car_charge_percent(time)
-            if result_calculus is not None:
                 if result is None:
                     result = result_calculus
-                elif abs(result_calculus - result) > 10:
-                    _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
-                    # result = min(result_calculus, result)
+                else:
+                    if abs(result_calculus - result) > 10:
+                        _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
+                    result = min(result_calculus, result)
 
         do_continue_constraint = True
 
