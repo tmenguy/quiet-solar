@@ -480,10 +480,18 @@ class QSHome(HADeviceMixin, AbstractDevice):
             return
 
         if self._solar_plant:
-            await self._solar_plant.update_forecast(time)
+            try:
+                await self._solar_plant.update_forecast(time)
+            except Exception as err:
+                _LOGGER.error(f"Error updating solar forecast {err}")
 
         for device in self._all_devices:
-            await device.update_states(time)
+            try:
+                await device.update_states(time)
+            except Exception as err:
+                if isinstance(device, AbstractDevice):
+                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}")
+
 
         if await self._consumption_forecast.init_forecasts(time):
             if self.home_non_controlled_consumption is not None:
@@ -503,7 +511,10 @@ class QSHome(HADeviceMixin, AbstractDevice):
             ]:
             return
 
-        await self.update_loads_constraints(time)
+        try:
+            await self.update_loads_constraints(time)
+        except Exception as err:
+            _LOGGER.error(f"Error updating loads constraints {err}")
 
         all_loads = self._all_loads
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
@@ -511,13 +522,17 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         for load in all_loads:
 
-            wait_time = await load.check_commands(time=time)
-            if wait_time > timedelta(seconds=30):
-                if load.running_command_num_relaunch < 3:
-                    await load.force_relaunch_command(time)
-                else:
-                    # we have an issue with this command ....
-                    pass
+            try:
+                wait_time = await load.check_commands(time=time)
+                if wait_time > timedelta(seconds=30):
+                    if load.running_command_num_relaunch < 3:
+                        await load.force_relaunch_command(time)
+                    else:
+                        # we have an issue with this command ....
+                        pass
+            except Exception as err:
+                _LOGGER.error(f"Error checking load commands {load.name} {err}")
+
 
         do_force_solve = False
         for load in all_loads:
@@ -529,8 +544,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 continue
 
 
-            if (await load.update_live_constraints(time, self._period)) :
-                do_force_solve = True
+            try:
+                if (await load.update_live_constraints(time, self._period)) :
+                    do_force_solve = True
+            except Exception as err:
+                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}")
 
 
         active_loads = []

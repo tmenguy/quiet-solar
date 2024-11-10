@@ -367,7 +367,7 @@ class AbstractLoad(AbstractDevice):
             if (self._last_completed_constraint is not None and
                 self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
                 self._last_completed_constraint.score() >= constraint.score()):
-                _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as last completed one")
+                _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as last completed one")
                 return False
 
 
@@ -377,7 +377,7 @@ class AbstractLoad(AbstractDevice):
                     return False
                 if  c.end_of_constraint == constraint.end_of_constraint:
                     if c.score() == constraint.score():
-                        _LOGGER.info(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
+                        _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
                         return False
                     else:
                         self._constraints[i] = None
@@ -609,7 +609,12 @@ class AbstractLoad(AbstractDevice):
         self.running_command = command
         self.running_command_first_launch = time
         self.running_command_last_launch = time
-        is_command_set = await self.execute_command(time, command)
+        try:
+            is_command_set = await self.execute_command(time, command)
+        except Exception as e:
+            _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}")
+            is_command_set = None
+
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")

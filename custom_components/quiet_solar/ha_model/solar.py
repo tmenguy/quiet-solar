@@ -82,6 +82,7 @@ class QSSolarProvider:
                 #_LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
                 if orchestrator is not None and self.is_orchestrator(entry_id, orchestrator):
                     self.orchestrators.append(orchestrator)
+                    _LOGGER.info(f"Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
                 else:
                     _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
 
@@ -89,13 +90,15 @@ class QSSolarProvider:
                 self.solar_forecast: list[tuple[datetime | None, float | None]] = []
                 self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
 
-                # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
-                prev_value = self.solar_forecast[0][1]
-                for i in range(1, len(self.solar_forecast)):
-                    self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + prev_value)/2.0)
-                    prev_value = self.solar_forecast[i][1]
+                if len(self.solar_forecast) > 0:
 
-            self._latest_update_time = time
+                    # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
+                    prev_value = self.solar_forecast[0][1]
+                    for i in range(1, len(self.solar_forecast)):
+                        self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + prev_value)/2.0)
+                        prev_value = self.solar_forecast[i][1]
+
+                    self._latest_update_time = time
 
 
     async def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
@@ -182,6 +185,9 @@ class QSSolarProviderSolcast(QSSolarProvider):
         if data is not None:
 
             start_idx = bisect_left(data, start_time, key=itemgetter('period_start'))
+            if start_idx >= len(data):
+                return []
+
             if start_idx > 0:
                 if data[start_idx]['period_start'] != start_time:
                     start_idx -= 1
@@ -218,6 +224,9 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
             data.sort(key=itemgetter(0))
 
             start_idx = bisect_left(data, start_time, key=itemgetter(0))
+            if start_idx >= len(data):
+                return []
+
             if start_idx > 0:
                 if data[start_idx][0] != start_time:
                     start_idx -= 1

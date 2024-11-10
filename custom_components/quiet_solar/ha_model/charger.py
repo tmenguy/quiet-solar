@@ -58,6 +58,7 @@ class QSStateCmd():
     def reset(self):
         self.value = None
         self._num_launched = 0
+        self._num_set = 0
         self.last_time_set = None
         self.last_change_asked = None
 
@@ -67,10 +68,26 @@ class QSStateCmd():
 
         if self.value != value:
             _LOGGER.info(f"QSStateCmd set with change from {self.value} to {value} at {time}")
+            num_set = self._num_set
             self.reset()
             self.value = value
             self.last_change_asked = time
+            self._num_set = num_set + 1
             return True
+
+    def is_ok_to_set(self, time: datetime, min_change_time: float):
+
+        if self.last_change_asked is None or time is None:
+            return True
+
+        # for initial in/out!
+        if self._num_set <= 2:
+            return True
+
+        if (time - self.last_change_asked).total_seconds() > min_change_time:
+            return True
+
+        return False
 
     def success(self):
         self._num_launched = 0
@@ -1008,7 +1025,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if command.is_like(CMD_AUTO_FROM_CONSIGN):
                             if command.power_consign is not None and command.power_consign >= 0:
                                 # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs teh computed consign
+                                auto_target_power = target_power
                                 target_power = max(power_steps[self.min_charge], max(command.power_consign, target_power))
+                                if target_power > auto_target_power:
+                                    _LOGGER.info(f"update_value_callback: target power from consign {command.power_consign} to {target_power}")
 
 
                         safe_powers_steps = power_steps[self.min_charge:self.max_charge + 1]
@@ -1091,21 +1111,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             _LOGGER.info(f"power steps {safe_powers_steps}")
 
                         if init_state != new_state:
-                               if (self._expected_charge_state.last_change_asked is None or constraint is None or
-                                 (time - self._expected_charge_state.last_change_asked).total_seconds() >= TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
-                                    self._expected_charge_state.set(new_state, time)
-                                    if constraint:
-                                        self.num_on_off += 1
+                           # we need to wait a bit before changing the state of the charger
+                           if constraint is None or self._expected_charge_state.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
+                                self._expected_charge_state.set(new_state, time)
+                                if constraint:
+                                    self.num_on_off += 1
 
-                                    if self._expected_charge_state.last_change_asked is None:
-                                        _LOGGER.info(
-                                            f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
-                                    else:
-                                        _LOGGER.info(
-                                            f"Change State: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                                if self._expected_charge_state.last_change_asked is None:
+                                    _LOGGER.info(
+                                        f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                                else:
+                                    _LOGGER.info(
+                                        f"Change State: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
 
-                               else:
-                                   _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                           else:
+                               new_amp = self.min_charge #force to minimum charge
+                               _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
 
                         if new_amp is not None:
                             self._expected_amperage.set(int(new_amp), time)
@@ -1163,13 +1184,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"Execute command {command.command}/{command.power_consign} on charger {self.name}")
                 res = await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
             else:
-                # we where already in automatic command ... no need to reset anything : just let the call back plays its role
+                # we where already in automatic command ... no need to reset anything : just let the callback plays its role
                 _LOGGER.info(f"Recieved and acknowledged command {command.command}/{command.power_consign} on charger {self.name}")
                 res = True
 
             return res
         else:
-            return None
+            if is_plugged:
+                return None
+            else:
+                if command.is_off_or_idle():
+                    return True
+                return None
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         await self._do_update_charger_state(time)

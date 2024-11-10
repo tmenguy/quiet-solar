@@ -624,7 +624,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             price_power = price_cmd.power_consign
             # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
-            # may depend on the load type for a bolier you want to be closer, for a car it is more the asap? let's do reverse
+            # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
 
             for i in range(last_slot, first_slot - 1, -1):
 
