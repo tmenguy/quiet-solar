@@ -440,7 +440,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.attach_car(car)
 
                 car_initial_percent = self.car.get_car_charge_percent(time)
-                if car_initial_percent is None or car_initial_percent >= 95.0: # for possible percent issue
+                if car_initial_percent is None: # for possible percent issue
                     car_initial_percent = 0.0
 
             if car_initial_percent >= 99.99:
@@ -515,7 +515,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     realized_charge_target = target_charge
 
-                if realized_charge_target is None or realized_charge_target < 100:
+                if realized_charge_target is None or realized_charge_target < target_charge:
                     do_force_solve = True
                     type = CONSTRAINT_TYPE_FILLER_AUTO
                     if realized_charge_target is None:
@@ -531,7 +531,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         load_param=self.car.name,
                         from_user=False,
                         initial_value=realized_charge_target,
-                        target_value=100,
+                        target_value=target_charge,
                         power_steps=self._power_steps,
                         support_auto=True
                     )
@@ -883,19 +883,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:short unplug")
             return (None, True)
 
-        result_calculus = None
+
         result = None
 
         if self.current_command is None or self.current_command.is_off_or_idle():
             result = None
         else:
-            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time, clip_to_zero_under_power=self.charger_consumption_W)
+            result = self.car.get_car_charge_percent(time)
 
+            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
+                                                    clip_to_zero_under_power=self.charger_consumption_W)
             if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
-
-                result = self.car.get_car_charge_percent(time)
 
                 if result is None:
                     result = result_calculus
@@ -919,7 +919,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
                 do_continue_constraint = False
                 result = ct.target_value
-
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
 
