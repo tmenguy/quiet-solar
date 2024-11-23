@@ -118,9 +118,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         res = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=60)
         if res is None:
             return None
-        if res >= 99.99:
-            #possible twingo error ....
-            return None
         return res
 
 

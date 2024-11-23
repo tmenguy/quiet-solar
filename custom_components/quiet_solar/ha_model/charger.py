@@ -409,9 +409,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 is_car_charged = True
 
             else:
-
                 existing_user_constraints = []
-
                 best_car = self.get_best_car(time)
 
                 # user forced a "deconnection"
@@ -453,8 +451,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # find the best car .... for now
                     self.attach_car(car)
 
-
-                if self.car.seen_charged_or_not_asking_current:
+                if self.car.seen_charged_or_not_asking_current and self._do_force_next_charge is False:
                     is_car_charged = True
                     _LOGGER.info(f"plugged car {self.car.name} seen as not asking current")
                 else:
@@ -463,11 +460,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         car_initial_percent = 0.0
                         _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
 
-
                     if car_initial_percent >= 99.99:
                         is_car_charged = True
                         _LOGGER.info(f"plugged car {self.car.name} seems already full {car_initial_percent}")
-
 
             if is_car_charged:
                 if self.car:
@@ -932,7 +927,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     if abs(result_calculus - result) > 10:
                         _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
-                    result = result_calculus # min(result_calculus, result)
+                    result = min(result_calculus, result)
 
         do_continue_constraint = True
 
