@@ -335,9 +335,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 best_score = score
 
         if best_score == 0:
-            _LOGGER.info(f"Default best car used: {best_car.name}")
+            _LOGGER.debug(f"Default best car used: {best_car.name}")
         else:
-            _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
+            _LOGGER.debug(f"Best Car: {best_car.name} with score {best_score}")
         return best_car
 
     def get_default_car(self):
@@ -419,6 +419,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # so we need to check if they are still valid
 
                     car = best_car
+                    _LOGGER.info(f"plugging car {car.name} not connected: reset and attach car")
 
                     if self._constraints:
                         # only keep user constraints
@@ -475,9 +476,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         power_steps=self._power_steps,
                         support_auto=True,
                     )
-                    self.push_live_constraint(time, car_charge_mandatory)
-                    _LOGGER.info(
-                        f"plugged car {self.car.name} pushed forces constraint {car_charge_mandatory.name}")
+                    if self.push_live_constraint(time, car_charge_mandatory):
+                        _LOGGER.info(
+                            f"plugged car {self.car.name} pushed forces constraint {car_charge_mandatory.name}")
                     self._do_force_next_charge = False
 
 
@@ -507,9 +508,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
                         do_force_solve = True
-
-                    _LOGGER.info(
-                        f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                        _LOGGER.info(
+                            f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
 
 
 
@@ -535,9 +535,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         power_steps=self._power_steps,
                         support_auto=True
                     )
-                    _LOGGER.info(f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
+
                     if self.push_live_constraint(time, car_charge_best_effort):
                         do_force_solve = True
+                        _LOGGER.info(
+                            f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
@@ -573,6 +575,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self.detach_car()
 
         self.car = car
+
+        # reset dampening to conf values
+        car.reset()
+
         if car.calendar is None:
             car.calendar = self.calendar
 
@@ -902,7 +908,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     if abs(result_calculus - result) > 10:
                         _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
-                    result = min(result_calculus, result)
+                    # result = min(result_calculus, result)
 
         do_continue_constraint = True
 
@@ -1189,12 +1195,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             return res
         else:
-            if is_plugged:
-                return None
-            else:
-                if command.is_off_or_idle():
-                    return True
-                return None
+            if command.is_off_or_idle():
+                return True
+            return None
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         await self._do_update_charger_state(time)
@@ -1207,10 +1210,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # need to call again _compute_and_launch_new_charge_state in case the car stopped asking for current in the middle
             result = await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
         else:
-            if self.car is None:
-                _LOGGER.info(f"Bad prob command set: plugged {is_plugged} NO CAR")
+            if command.is_off_or_idle():
+                result = True
             else:
-                _LOGGER.info(f"Bad prob command set: plugged {is_plugged} Car: {self.car.name}")
+                if self.car is None:
+                    _LOGGER.info(f"Bad prob command set: plugged {is_plugged} NO CAR")
+                else:
+                    _LOGGER.info(f"Bad prob command set: plugged {is_plugged} Car: {self.car.name}")
 
         return result
 
