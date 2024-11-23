@@ -546,11 +546,13 @@ class AbstractLoad(AbstractDevice):
         time = datetime.now(tz=pytz.UTC)
         c = self.get_current_constraint(time)
         if c:
-            # for it has met, will be properly handled in teh update constraint for the load
+            # for it has met, will be properly handled in the update constraint for the load
             c.current_value = c.target_value
             await self.update_live_constraints(time, self.home._period)
             if self.is_load_active(time) is False or self.get_current_constraint(time) is None:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                _LOGGER.info(
+                    f"launch command idle in mark_current_constraint_has_done constraint {self.get_current_constraint(time)} is active {self.is_load_active(time)}")
                 await self.launch_command(time=time, command=CMD_IDLE)
 
 
@@ -609,19 +611,23 @@ class AbstractLoad(AbstractDevice):
         self.running_command = command
         self.running_command_first_launch = time
         self.running_command_last_launch = time
-        try:
-            is_command_set = await self.execute_command(time, command)
-        except Exception as e:
-            _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}")
-            is_command_set = None
+
+        is_command_set = await self.probe_if_command_set(time, self.running_command)
+        if is_command_set is True:
+            _LOGGER.info(f"Cmomand already set  {command} for this load {self.name}")
+            pass
+        else:
+            try:
+                is_command_set = await self.execute_command(time, command)
+            except Exception as e:
+                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}")
+                is_command_set = None
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
             _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
         elif is_command_set is True:
             self._ack_command(time, self.running_command)
-        else:
-            await self.check_commands(time)
 
         return
 
@@ -652,6 +658,7 @@ class AbstractLoad(AbstractDevice):
 
 
         if self.running_command is None and self._stacked_command is not None:
+            _LOGGER.info(f"launch stacked command")
             await self.launch_command(time, self._stacked_command)
 
         return res

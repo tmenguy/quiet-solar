@@ -66,7 +66,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     self.conf_customized_amp_to_power_1p[a] = self.customized_amp_to_power_1p[a] = self.amp_to_power_1p[a] = val_1p
                     self.conf_customized_amp_to_power_3p[a] = self.customized_amp_to_power_3p[a] = self.amp_to_power_3p[a] = val_3p
 
-        self.interpolate_power_steps(do_recompute_min_charge=True)
+
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
                                       is_numerical=True)
@@ -78,9 +78,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       is_numerical=False)
 
         self._salvable_dampening = {}
+        self.seen_charged_or_not_asking_current = False
+
+        self.reset()
 
     def reset(self):
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
+        self.seen_charged_or_not_asking_current = False
 
     def is_car_plugged(self, time:datetime, for_duration:float|None) -> bool | None:
 
@@ -111,7 +115,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return contiguous_status >= for_duration and contiguous_status > 0
 
     def get_car_charge_percent(self, time: datetime) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=60)
+        res = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=60)
+        if res is None:
+            return None
+        if res >= 99.99:
+            #possible twingo error ....
+            return None
+        return res
 
 
     async def _save_dampening_values(self):
