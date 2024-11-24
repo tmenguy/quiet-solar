@@ -399,7 +399,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_car_charged = False
             car_initial_percent = 0.0
 
-            if and self._do_force_next_charge is False and self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+            if self._do_force_next_charge is False and self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
                 if self.car:
                     car_name = self.car.name
                     self.car.seen_charged_or_not_asking_current = True
