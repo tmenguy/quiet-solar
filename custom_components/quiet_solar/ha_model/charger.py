@@ -250,7 +250,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def reset(self):
         _LOGGER.info(f"Charger reset")
-        super().reset()
+        self.reset_load_only()
         self.detach_car()
         self._reset_state_machine()
         self._do_force_next_charge = False
@@ -464,7 +464,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         is_car_charged = True
                         _LOGGER.info(f"plugged car {self.car.name} seems already full {car_initial_percent}")
 
-            if is_car_charged:
+            if is_car_charged and self._do_force_next_charge is False:
                 if self.car:
                     self.car.seen_charged_or_not_asking_current = True
                 self.reset_load_only()
@@ -478,6 +478,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # add a constraint ... for now just fill the car as much as possible
                 if self._do_force_next_charge:
                     do_force_solve = True
+                    self.reset_load_only()
+                    if self.car:
+                        self.car.seen_charged_or_not_asking_current = False
                     realized_charge_target = target_charge
                     car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                         total_capacity_wh=self.car.car_battery_capacity,
