@@ -78,13 +78,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       is_numerical=False)
 
         self._salvable_dampening = {}
-        self.seen_charged_or_not_asking_current = False
 
         self.reset()
 
     def reset(self):
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
-        self.seen_charged_or_not_asking_current = False
 
     def is_car_plugged(self, time:datetime, for_duration:float|None) -> bool | None:
 

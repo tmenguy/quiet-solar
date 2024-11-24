@@ -190,10 +190,13 @@ class AbstractLoad(AbstractDevice):
                 yield c
 
     def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
+        if not self._constraints:
+            self._constraints = []
         for c in self._constraints:
             if c.is_constraint_active_for_time_period(time):
                 return c
         return None
+
 
     def get_active_readable_name(self, time:datetime) -> str:
 
@@ -355,6 +358,8 @@ class AbstractLoad(AbstractDevice):
                 break
 
         self._constraints = kept
+        if not self._constraints:
+            self._constraints = []
 
 
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
@@ -523,7 +528,7 @@ class AbstractLoad(AbstractDevice):
 
             self.set_live_constraints(time, constraints)
 
-            current_constraint = self.get_current_constraint(time)
+            current_constraint = self.get_current_active_constraint(time)
 
 
         if current_constraint is not None:
@@ -536,23 +541,19 @@ class AbstractLoad(AbstractDevice):
         self._last_constraint_update = time
         return force_solving
 
-    def get_current_constraint(self, time:datetime) -> LoadConstraint | None:
-        for c in self._constraints:
-            if c.is_constraint_active_for_time_period(time):
-                return c
-        return None
+
 
     async def mark_current_constraint_has_done(self):
         time = datetime.now(tz=pytz.UTC)
-        c = self.get_current_constraint(time)
+        c = self.get_current_active_constraint(time)
         if c:
             # for it has met, will be properly handled in the update constraint for the load
             c.current_value = c.target_value
             await self.update_live_constraints(time, self.home._period)
-            if self.is_load_active(time) is False or self.get_current_constraint(time) is None:
+            if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
                 _LOGGER.info(
-                    f"launch command idle in mark_current_constraint_has_done constraint {self.get_current_constraint(time)} is active {self.is_load_active(time)}")
+                    f"launch command idle in mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
                 await self.launch_command(time=time, command=CMD_IDLE)
 
 
