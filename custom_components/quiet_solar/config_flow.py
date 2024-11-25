@@ -119,7 +119,7 @@ def selectable_percent_number_entities(
 ) -> list:
     """Return an entity selector which compatible entities."""
 
-    ALLOWED_DOMAINS = [SENSOR_DOMAIN]
+    ALLOWED_DOMAINS = [NUMBER_DOMAIN]
     entities = [
         ent.entity_id
         for ent in hass.states.async_all(ALLOWED_DOMAINS)
