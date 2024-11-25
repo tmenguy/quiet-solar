@@ -229,10 +229,5 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         if isinstance(self.device, QSChargerGeneric):
             self.device.set_next_charge_full_or_not(False)
 
-            if self.device.is_next_charge_full():
-                new_value = True
-
-
-        if  self._attr_is_on != new_value:
-            self._attr_is_on = new_value
-            self.async_write_ha_state()
+        self._attr_is_on = new_value
+        self.async_write_ha_state()
