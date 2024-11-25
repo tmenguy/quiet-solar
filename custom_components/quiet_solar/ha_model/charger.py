@@ -195,9 +195,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
     def is_next_charge_full(self) -> bool:
-        if self.car is not None:
-            if self.car.car_default_charge == 100:
-                self.set_next_charge_full_or_not(True)
         return self._is_next_charge_full
 
     def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
