@@ -172,9 +172,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._power_steps = []
 
-
-
-
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CHARGE
 
@@ -394,10 +391,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             do_force_solve = True
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
-            target_charge = self.car.car_default_charge
-            if self.is_next_charge_full():
-                target_charge = 100
-
             is_car_fully_charged = False
             car_initial_percent = 0.0
 
@@ -460,7 +453,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.attach_car(car)
 
 
-
                 car_initial_percent = self.car.get_car_charge_percent(time)
                 if car_initial_percent is None: # for possible percent issue
                     car_initial_percent = 0.0
@@ -476,6 +468,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if ct is not None:
                     do_force_solve = True
             else:
+
+                target_charge = self.car.car_default_charge
+                if self.is_next_charge_full():
+                    target_charge = 100
+
+                if self.car:
+                    mx_limit =  self.car.get_max_charge_limit()
+                    if mx_limit is not None and (mx_limit < target_charge or (mx_limit == 100 and target_charge < 100)):
+                        _LOGGER.info(f"plugged car {self.car.name} set max charge limit to {target_charge}%")
+                        await self.car.set_max_charge_limit(target_charge, time)
+
+
                 realized_charge_target = None
                 # add a constraint ... for now just fill the car as much as possible
                 force_constraint = None
@@ -707,7 +711,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 ok_value = QSChargerStates.UN_PLUGGED
                 not_ok_value = QSChargerStates.PLUGGED
 
-
             latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
             res_car =  self.car.is_car_plugged(time, for_duration)
             if res_car is None:
@@ -906,7 +909,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
-
         await self._do_update_charger_state(time)
 
         if self.current_command is None or self.car is None or self.is_not_plugged(time=time,
@@ -919,9 +921,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # could be a "short" unplug
             _LOGGER.info(f"update_value_callback:short unplug")
             return (None, True)
-
-
-        result = None
 
         if self.current_command is None or self.current_command.is_off_or_idle():
             result = None

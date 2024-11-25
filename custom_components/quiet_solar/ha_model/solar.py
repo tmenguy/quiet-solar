@@ -200,8 +200,6 @@ class QSSolarProviderSolcast(QSSolarProvider):
         return []
 
 
-
-
 class QSSolarProviderOpenWeather(QSSolarProvider):
 
     def __init__(self, solar: QSSolar, **kwargs) -> None:
@@ -237,6 +235,4 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
 
             return [ (d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx:end_idx+1]]
         return []
-
-
 

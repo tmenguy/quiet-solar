@@ -1,9 +1,9 @@
-import copy
+
 from datetime import datetime
-
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
-
-from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
+from typing import Any, Callable, Awaitable
+from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
+from homeassistant.components import number, homeassistant
+from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_DEFAULT, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING
@@ -20,6 +20,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_plugged = kwargs.pop(CONF_CAR_PLUGGED, None)
         self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
+        self.car_charge_percent_max_number = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, None)
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
         self.car_is_default = kwargs.pop(CONF_CAR_IS_DEFAULT, False)
@@ -117,6 +118,44 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if res is None:
             return None
         return res
+
+    async def set_max_charge_limit(self, percent, time: datetime):
+
+        if self.car_charge_percent_max_number is None:
+            return
+
+        if self.get_max_charge_limit() != percent:
+            data: dict[str, Any] = {ATTR_ENTITY_ID: self.car_charge_percent_max_number}
+            service = number.SERVICE_SET_VALUE
+            data[number.ATTR_VALUE] = int(percent)
+            domain = number.DOMAIN
+
+            await self.hass.services.async_call(
+                domain, service, data, blocking=False
+            )
+
+        # await self.hass.services.async_call(
+        #    domain=domain, service=service, service_data={number.ATTR_VALUE:int(min(max_value, max(min_value, range_value)))}, target={ATTR_ENTITY_ID: self.charger_max_charging_current_number}, blocking=blocking
+        # )
+
+    def get_max_charge_limit(self):
+
+        result = None
+        if self.car_charge_percent_max_number is not None:
+
+            state = self.hass.states.get(self.car_charge_percent_max_number)
+
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                result = None
+            else:
+                try:
+                    result = int(state.state)
+                except TypeError:
+                    result = None
+                except ValueError:
+                    result = None
+
+        return result
 
 
     async def _save_dampening_values(self):

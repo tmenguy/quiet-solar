@@ -146,6 +146,8 @@
           "mobile_app_url": "Open the mobile app at this relative URL",
           "car_charge_percent_sensor": "% charge of the battery",
           "car_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "car_charge_percent_max_number": "% set car charge limit",
+          "car_charge_percent_max_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "car_battery_capacity": "Battery capacity (Wh)",
           "car_charger_min_charge": "Per phase min charge in (A)",
           "car_charger_max_charge": "Per phase max charge in (A)",
@@ -366,6 +368,8 @@
           "mobile_app_url": "[%key:component::quiet_solar::config::step::car::data::mobile_app_url%]",
           "car_charge_percent_sensor": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor%]",
           "car_charge_percent_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor_qs_reset_selector%]",
+          "car_charge_percent_max_number": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_max_number%]",
+          "car_charge_percent_max_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_max_number_qs_reset_selector%]",
           "car_battery_capacity": "[%key:component::quiet_solar::config::step::car::data::car_battery_capacity%]",
           "car_charger_min_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_min_charge%]",
           "car_charger_max_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_max_charge%]",
@@ -505,7 +509,7 @@
     },
     "switch": {
       "qs_next_car_charge_full": {
-        "name": "Next Car Charge to 100%"
+        "name": "Force next charge to 100%"
       },
       "qs_best_effort_green_only": {
         "name": "Best Effort Green Only"

@@ -34,6 +34,8 @@
                     "calendar": "Add a calendar to define when the car needs to be ready",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "car_battery_capacity": "Battery capacity (Wh)",
+                    "car_charge_percent_max_number": "% set car charge limit",
+                    "car_charge_percent_max_number_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charger_max_charge": "Per phase max charge in (A)",
@@ -302,7 +304,7 @@
                 "name": "Best Effort Green Only"
             },
             "qs_next_car_charge_full": {
-                "name": "Next Car Charge to 100%"
+                "name": "Force next charge to 100%"
             },
             "qs_pool_force_winter_mode": {
                 "name": "Force Winter Mode"
@@ -344,6 +346,8 @@
                     "calendar": "Add a calendar to define when the car needs to be ready",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "car_battery_capacity": "Battery capacity (Wh)",
+                    "car_charge_percent_max_number": "% set car charge limit",
+                    "car_charge_percent_max_number_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "car_charger_max_charge": "Per phase max charge in (A)",

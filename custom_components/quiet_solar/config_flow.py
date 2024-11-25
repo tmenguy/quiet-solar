@@ -35,7 +35,7 @@ from .entity import LOAD_TYPES, LOAD_NAMES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, \
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_HOME_VOLTAGE, \
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
@@ -70,7 +70,6 @@ def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
     return entities
 
 
-
 def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
     """Return an entity selector which compatible entities."""
 
@@ -101,7 +100,7 @@ def selectable_temperature_entities(
     ]
     return entities
 
-def selectable_percent_entities(
+def selectable_percent_sensor_entities(
     hass: HomeAssistant,
 ) -> list:
     """Return an entity selector which compatible entities."""
@@ -115,6 +114,19 @@ def selectable_percent_entities(
     ]
     return entities
 
+def selectable_percent_number_entities(
+    hass: HomeAssistant,
+) -> list:
+    """Return an entity selector which compatible entities."""
+
+    ALLOWED_DOMAINS = [SENSOR_DOMAIN]
+    entities = [
+        ent.entity_id
+        for ent in hass.states.async_all(ALLOWED_DOMAINS)
+        if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) == PERCENTAGE
+        and ent.domain in ALLOWED_DOMAINS
+    ]
+    return entities
 
 def _get_reset_selector_entity_name(key:str):
     return f"{key}_qs_reset_selector"
@@ -248,9 +260,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
         return sc
-
-
-
 
 
     def get_all_charger_schema_base(self, add_load_power_sensor_mandatory ):
@@ -533,7 +542,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             self.add_entity_selector(sc_dict, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, False,
                                      entity_list=number_entites)
 
-        percent_entities = selectable_percent_entities(self.hass)
+        percent_entities = selectable_percent_sensor_entities(self.hass)
         if len(percent_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_BATTERY_CHARGE_PERCENT_SENSOR, False, entity_list=percent_entities)
 
@@ -575,9 +584,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             step_id=TYPE,
             data_schema=schema
         )
-
-
-
 
     async def async_step_car(self, user_input=None):
 
@@ -630,10 +636,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         self.add_entity_selector(sc_dict, CONF_CAR_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
 
 
-        percent_entities = selectable_percent_entities(self.hass)
+        percent_entities = selectable_percent_sensor_entities(self.hass)
         if len(percent_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_CAR_CHARGE_PERCENT_SENSOR, False, entity_list=percent_entities)
 
+        num_percent_entity = selectable_percent_number_entities(self.hass)
+        if len(num_percent_entity) > 0 :
+            self.add_entity_selector(sc_dict, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, False, entity_list=num_percent_entity)
 
         sc_dict.update(
             {
