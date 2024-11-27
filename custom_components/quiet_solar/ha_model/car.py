@@ -1,4 +1,4 @@
-
+import logging
 from datetime import datetime
 from typing import Any, Callable, Awaitable
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
@@ -10,6 +10,8 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice
 
+
+_LOGGER = logging.getLogger(__name__)
 
 MIN_CHARGE_POWER_W = 150
 
@@ -119,24 +121,24 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return None
         return res
 
-    async def set_max_charge_limit(self, percent, time: datetime):
+    async def set_max_charge_limit(self, percent):
 
         if self.car_charge_percent_max_number is None:
             return
 
-        if self.get_max_charge_limit() != percent:
+        current_charge_limit = self.get_max_charge_limit()
+
+        if current_charge_limit != percent:
+            _LOGGER.info(f"Car {self.name} set max charge limit from {current_charge_limit}% to {percent}%")
+
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.car_charge_percent_max_number}
             service = number.SERVICE_SET_VALUE
             data[number.ATTR_VALUE] = int(percent)
             domain = number.DOMAIN
 
             await self.hass.services.async_call(
-                domain, service, data, blocking=False
+                domain, service, data
             )
-
-        # await self.hass.services.async_call(
-        #    domain=domain, service=service, service_data={number.ATTR_VALUE:int(min(max_value, max(min_value, range_value)))}, target={ATTR_ENTITY_ID: self.charger_max_charging_current_number}, blocking=blocking
-        # )
 
     def get_max_charge_limit(self):
 

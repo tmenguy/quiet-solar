@@ -175,7 +175,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CHARGE
 
-    def set_next_charge_full_or_not(self, value: bool):
+    async def set_next_charge_full_or_not(self, value: bool):
         self._is_next_charge_full = value
 
         do_update  = True
@@ -188,11 +188,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 new_target = None
                 do_update = False
 
+        await self.adapt_car_max_charge_if_needed(new_target)
+
         if do_update and self._constraints:
             for ct in self._constraints:
                 if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
                     ct.target_value = new_target
 
+    async def adapt_car_max_charge_if_needed(self, target_charge):
+        if self.car:
+            await self.car.set_max_charge_limit(target_charge)
 
     def is_next_charge_full(self) -> bool:
         return self._is_next_charge_full
@@ -470,11 +475,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.is_next_charge_full():
                     target_charge = 100
 
-                if self.car:
-                    mx_limit =  self.car.get_max_charge_limit()
-                    if mx_limit is not None and (mx_limit < target_charge or (mx_limit == 100 and target_charge < 100)):
-                        _LOGGER.info(f"plugged car {self.car.name} set max charge limit to {target_charge}%")
-                        await self.car.set_max_charge_limit(target_charge, time)
+                await self.adapt_car_max_charge_if_needed(target_charge)
 
 
                 realized_charge_target = None
@@ -998,6 +999,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW
                 if res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
+
+                    await self.adapt_car_max_charge_if_needed(constraint.target_value)
 
                     # _LOGGER.info(f"update_value_callback compute")
                     current_power = 0.0

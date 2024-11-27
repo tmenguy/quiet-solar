@@ -40,7 +40,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         await self.hass.services.async_call(
             domain=Platform.SWITCH,
             service=action,
-            target={"entity_id": self.switch_entity},
+            target={"entity_id": self.switch_entity}
         )
         return False
 

@@ -218,7 +218,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         """Turn the zone on."""
         #await self.device.async_on()
         if isinstance(self.device, QSChargerGeneric):
-            self.device.set_next_charge_full_or_not(True)
+            await self.device.set_next_charge_full_or_not(True)
 
         self._attr_is_on = True
         self.async_write_ha_state()
@@ -228,7 +228,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         #await self.device.async_off()
         new_value = False
         if isinstance(self.device, QSChargerGeneric):
-            self.device.set_next_charge_full_or_not(False)
+            await self.device.set_next_charge_full_or_not(False)
 
         self._attr_is_on = new_value
         self.async_write_ha_state()
