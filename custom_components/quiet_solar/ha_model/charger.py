@@ -1061,7 +1061,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         if command.is_like(CMD_AUTO_FROM_CONSIGN):
                             if command.power_consign is not None and command.power_consign >= 0:
-                                # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs teh computed consign
+                                # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs the computed consign
                                 auto_target_power = target_power
                                 target_power = max(power_steps[self.min_charge], max(command.power_consign, target_power))
                                 if target_power > auto_target_power:
@@ -1074,33 +1074,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             #only relevant in case of CMD_AUTO_GREEN_ONLY
                             new_amp = 0
                         else:
-                            #they are not necessarily ordered depends on the measures, etc
-                            best_dist = 1000000000 # (1 GW :) )
-                            best_i = -1
-                            p_min_non_0 = 1000000000
-                            p_max = -1
-                            found_equal = False
-                            for i,p in enumerate(safe_powers_steps):
-
-                                if p > 0:
-                                    if p < p_min_non_0:
-                                        p_min_non_0 = p
-                                if p > p_max:
-                                    p_max = p
-
-                                if p == target_power:
-                                    best_i = i
-                                    found_equal = True
+                            #safe_powers_steps are now necessarily ordered,
+                            best_dist = -1
+                            for i, p in enumerate(safe_powers_steps):
+                                if p >= target_power:
+                                    best_dist = i
                                     break
-                                elif target_power > p and abs(p - target_power) < best_dist:
-                                    best_dist = abs(p - target_power)
-                                    best_i = i
-
-
-                            if best_i < 0:
-                                if  target_power > p_max:
+                            if best_dist < 0:
+                                if  target_power >= safe_powers_steps[-1]:
                                     new_amp = self.max_charge
-                                elif target_power < p_min_non_0:
+                                elif target_power < safe_powers_steps[0]:
                                     if command.is_like(CMD_AUTO_GREEN_ONLY):
                                         new_amp = 0
                                     else:
@@ -1108,14 +1091,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                         new_amp = self.min_charge
                                 else:
                                     new_amp = self.min_charge
-
-                            elif found_equal:
-                                new_amp = best_i + self.min_charge
+                            elif safe_powers_steps[best_dist] == target_power:
+                                new_amp = best_dist + self.min_charge
                             else:
-                                if command.is_like(CMD_AUTO_GREEN_ONLY):
-                                    new_amp = best_i + self.min_charge
+                                if command.is_like(CMD_AUTO_FROM_CONSIGN):
+                                    new_amp = best_dist + self.min_charge
                                 else:
-                                    new_amp = min(self.max_charge, best_i + self.min_charge + 1)
+                                    if best_dist == 0:
+                                        new_amp = 0
+                                    else:
+                                        new_amp = best_dist - 1 + self.min_charge
 
                             # to smooth a bit going up for nothing
                             if command.is_like(CMD_AUTO_GREEN_ONLY):

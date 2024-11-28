@@ -93,7 +93,7 @@ class PeriodSolver(object):
         active_constraints = []
         for load in self._loads:
             for constraint in load.get_active_constraint_generator(start_time, end_time):
-                if constraint.end_of_constraint != DATETIME_MAX_UTC:
+                if constraint.end_of_constraint is not None and constraint.end_of_constraint != DATETIME_MAX_UTC:
                     anchors.add(constraint.end_of_constraint)
                 active_constraints.append(constraint)
 
@@ -137,7 +137,7 @@ class PeriodSolver(object):
 
         #anchors contain start stop and everything needed to create the slots
         i_tariff = 0
-        i_ua = -1 #the latest entry used in the previosu slot
+        i_ua = -1 #the latest entry used in the previous slot
         i_pv = -1
 
 

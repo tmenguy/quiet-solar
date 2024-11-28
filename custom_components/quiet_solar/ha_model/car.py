@@ -258,8 +258,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             else:
                 measured_3p =  self.customized_amp_to_power_3p[a]
 
-            if a == self.car_charger_max_charge and measured_3p <= 0:
-                measured_3p = self.theoretical_amp_to_power_3p[self.car_charger_max_charge]
+            if a == self.car_charger_max_charge:
+                if measured_3p <= 0 or (prev_measured_val > 0 and measured_3p > 0 and measured_3p < prev_measured_val):
+                    measured_3p = max(prev_measured_val, self.theoretical_amp_to_power_3p[self.car_charger_max_charge])
 
             if measured_3p > prev_measured_val or a == self.car_charger_max_charge:
                 # only increasing values allowed

@@ -558,7 +558,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         for i in range(first_slot, last_slot + 1):
 
-            if power_available_power[i] + out_power[i] <= 0.0:
+            if power_available_power[i] + out_power[i] < -min_power/4:
                 # there is still some solar to get
                 power_to_add_idx = -1
                 if out_commands[i] is None:
@@ -607,7 +607,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if nrj_to_be_added <= 0.0:
                     break
 
-            price_span_h = (np.sum(power_slots_duration_s[first_slot:last_slot + 1],
+            # 0.75 to fill a bit quicker if possible
+            price_span_h = 0.75* (np.sum(power_slots_duration_s[first_slot:last_slot + 1],
                                    where=prices[first_slot:last_slot + 1] == price)) / 3600.0
 
             # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
@@ -615,6 +616,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             for fill_power_idx in range(len(self._power_sorted_cmds)):
                 if (nrj_to_be_added / self._power_sorted_cmds[fill_power_idx].power_consign) < price_span_h:
                     break
+
+            if len(self._power_sorted_cmds) > 1:
+                fill_power_idx = min(fill_power_idx+1, len(self._power_sorted_cmds) - 1)
 
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
