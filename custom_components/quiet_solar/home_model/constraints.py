@@ -608,17 +608,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     break
 
             # 0.75 to fill a bit quicker if possible
-            price_span_h = 0.75* (np.sum(power_slots_duration_s[first_slot:last_slot + 1],
-                                   where=prices[first_slot:last_slot + 1] == price)) / 3600.0
+            price_span_h =((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
+                                   where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
+
+            if len(self._power_sorted_cmds) > 1 and self.support_auto:
+                # 0.75 to fill a bit quicker if possible soften a bit the energy quantity of each steps
+                price_span_h = 0.75*price_span_h
 
             # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
             fill_power_idx = 0
             for fill_power_idx in range(len(self._power_sorted_cmds)):
-                if (nrj_to_be_added / self._power_sorted_cmds[fill_power_idx].power_consign) < price_span_h:
+                if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_idx].power_consign:
                     break
-
-            if len(self._power_sorted_cmds) > 1:
-                fill_power_idx = min(fill_power_idx+1, len(self._power_sorted_cmds) - 1)
 
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,

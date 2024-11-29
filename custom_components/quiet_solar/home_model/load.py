@@ -551,10 +551,7 @@ class AbstractLoad(AbstractDevice):
             c.current_value = c.target_value
             await self.update_live_constraints(time, self.home._period)
             if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
-                # set them back to a kind of "idle" state, many times will be "OFF" CMD
-                _LOGGER.info(
-                    f"launch command idle in mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
-                await self.launch_command(time=time, command=CMD_IDLE)
+                await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
 
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
@@ -584,11 +581,11 @@ class AbstractLoad(AbstractDevice):
                 _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
 
 
-    async def launch_command(self, time:datetime, command: LoadCommand):
+    async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
 
         command = copy_command(command)
 
-        _LOGGER.info(f"launch command {command} for this load {self.name})")
+
 
         if self.running_command is not None:
             # already launched command
@@ -598,6 +595,7 @@ class AbstractLoad(AbstractDevice):
             else:
                 # another command has been launched, stack this one
                 self._stacked_command = command
+                _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
                 return
 
         # there is no running : whatever we will not execute the stacked one but only the last one
@@ -613,21 +611,24 @@ class AbstractLoad(AbstractDevice):
         self.running_command_first_launch = time
         self.running_command_last_launch = time
 
+        _LOGGER.info(f"launch_command: {command} for this load {self.name}), ctxt: {ctxt}")
+
         is_command_set = await self.probe_if_command_set(time, self.running_command)
         if is_command_set is True:
-            _LOGGER.info(f"Cmomand already set  {command} for this load {self.name}")
+            _LOGGER.info(f"launch_command: Command already set {command} for this load {self.name}, ctxt: {ctxt}")
             pass
         else:
             try:
                 is_command_set = await self.execute_command(time, command)
             except Exception as e:
-                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}")
+                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}, ctxt: {ctxt}")
                 is_command_set = None
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
-            _LOGGER.info(f"Impossible to launch this command {command.command} on this load {self.name}")
+            _LOGGER.info(f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}")
         elif is_command_set is True:
+            _LOGGER.info(f"launch_command: ack command {command} for this load {self.name}), ctxt: {ctxt}")
             self._ack_command(time, self.running_command)
 
         return
@@ -659,8 +660,7 @@ class AbstractLoad(AbstractDevice):
 
 
         if self.running_command is None and self._stacked_command is not None:
-            _LOGGER.info(f"launch stacked command")
-            await self.launch_command(time, self._stacked_command)
+            await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
 
         return res
 

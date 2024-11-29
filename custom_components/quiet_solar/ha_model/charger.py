@@ -178,26 +178,28 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def set_next_charge_full_or_not(self, value: bool):
         self._is_next_charge_full = value
 
-        do_update  = True
-        if value:
-            new_target = 100
-        else:
-            if self.car is not None:
-                new_target = self.car.car_default_charge
-            else:
-                new_target = None
-                do_update = False
+        new_target = await self.setup_car_charge_target_if_needed()
 
-        await self.adapt_car_max_charge_if_needed(new_target)
-
-        if do_update and self._constraints:
+        if new_target and self._constraints:
             for ct in self._constraints:
                 if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
                     ct.target_value = new_target
 
-    async def adapt_car_max_charge_if_needed(self, target_charge):
-        if self.car:
-            await self.car.set_max_charge_limit(target_charge)
+    async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
+
+        target_charge = asked_target_charge
+
+        if target_charge is None:
+            if self.is_next_charge_full():
+                target_charge = 100
+            else:
+                if self.car:
+                    target_charge = self.car.car_default_charge
+
+            if self.car and target_charge is not None:
+                await self.car.set_max_charge_limit(target_charge)
+
+        return target_charge
 
     def is_next_charge_full(self) -> bool:
         return self._is_next_charge_full
@@ -249,7 +251,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def reset(self):
         _LOGGER.info(f"Charger reset")
-        self.reset_load_only()
+        super().reset()
         self.detach_car()
         self._reset_state_machine()
         self._do_force_next_charge = False
@@ -454,13 +456,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # find the best car .... for now
                     self.attach_car(car)
 
+                target_charge = await self.setup_car_charge_target_if_needed()
 
                 car_initial_percent = self.car.get_car_charge_percent(time)
                 if car_initial_percent is None: # for possible percent issue
                     car_initial_percent = 0.0
                     _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
 
-                if car_initial_percent >= 99.9:
+                if car_initial_percent >= 0.99*target_charge:
                     is_car_fully_charged = True
                     _LOGGER.info(f"plugged car {self.car.name} seems already full {car_initial_percent}")
 
@@ -471,12 +474,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     do_force_solve = True
             else:
 
-                target_charge = self.car.car_default_charge
-                if self.is_next_charge_full():
-                    target_charge = 100
-
-                await self.adapt_car_max_charge_if_needed(target_charge)
-
+                target_charge = await self.setup_car_charge_target_if_needed()
 
                 realized_charge_target = None
                 # add a constraint ... for now just fill the car as much as possible
@@ -780,18 +778,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return []
 
     def is_car_stopped_asking_current(self, time: datetime,
-                                      for_duration: float | None = CHARGER_ADAPTATION_WINDOW) -> bool:
+                                      for_duration: float | None = CHARGER_ADAPTATION_WINDOW) -> bool | None:
 
         result = False
         if self.is_plugged(time=time, for_duration=for_duration):
 
             status_vals = self.get_car_stopped_asking_current_status_vals()
 
-            result = self._check_charger_status(status_vals, time, for_duration)
-
-            if result is None:
+            if status_vals and len(status_vals) > 0:
+                result = self._check_charger_status(status_vals, time, for_duration)
+                if result:
+                    _LOGGER.info(
+                        f"is_car_stopped_asking_current: because charger state in {status_vals} for  {for_duration} seconds")
+            else:
                 if self.is_charge_enabled(time=time, for_duration=for_duration):
                     result =  self.is_charging_power_zero(time=time, for_duration=for_duration)
+                    if result:
+                        _LOGGER.info(f"is_car_stopped_asking_current: because Charging power is zero for {for_duration} seconds")
 
         return result
 
@@ -944,7 +947,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
             # yes the constraint is met but is it really key? it will be store in self._last_completed_constraint
             # if we force the completion of the constraint, so for now no need
-            _LOGGER.info(f"update_value_callback:stop asking, set ct as target")
+            _LOGGER.info(f"update_value_callback:stop asking current, stop constraint do_continue_constraint=False")
             do_continue_constraint = False
 
         if result is not None:
@@ -973,9 +976,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
-            _LOGGER.info(f"update_value_callback:car stopped asking current")
-            if probe_only is False:
-                self._expected_amperage.set(int(self.charger_min_charge), time)
+            _LOGGER.info(f"update_value_callback:car stopped asking current ... do nothing")
+            # if probe_only is False:
+                # self._expected_amperage.set(int(self.charger_min_charge), time)
                 # self._expected_charge_state.set(True, time) # is it really needed?
         elif command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
@@ -1000,7 +1003,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW
                 if res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
 
-                    await self.adapt_car_max_charge_if_needed(constraint.target_value)
+                    await self.setup_car_charge_target_if_needed(constraint.target_value)
 
                     # _LOGGER.info(f"update_value_callback compute")
                     current_power = 0.0
@@ -1057,88 +1060,65 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
 
 
-                        target_power = current_power + target_delta_power
+                        auto_target_power = current_power + target_delta_power
+
+                        higher_do_not_cross_power_boundary = auto_target_power
+                        lower_do_not_go_below_power_boundary = None
 
                         if command.is_like(CMD_AUTO_FROM_CONSIGN):
-                            if command.power_consign is not None and command.power_consign >= 0:
+                            if command.power_consign is not None and command.power_consign > 0:
                                 # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs the computed consign
-                                auto_target_power = target_power
-                                target_power = max(power_steps[self.min_charge], max(command.power_consign, target_power))
-                                if target_power > auto_target_power:
-                                    _LOGGER.info(f"update_value_callback: target power from consign {command.power_consign} to {target_power}")
+                                target_charge = max(power_steps[self.min_charge], command.power_consign)
+                                lower_do_not_go_below_power_boundary = target_charge
+                                if auto_target_power <= target_charge :
+                                    # we do not have a do not cross boundary at all
+                                    higher_do_not_cross_power_boundary = None
+                                else:
+                                    # we will try to not cross it
+                                    higher_do_not_cross_power_boundary = auto_target_power
 
 
                         safe_powers_steps = power_steps[self.min_charge:self.max_charge + 1]
 
-                        if target_power <= 0:
+                        if higher_do_not_cross_power_boundary is not None and higher_do_not_cross_power_boundary <= 0:
                             #only relevant in case of CMD_AUTO_GREEN_ONLY
                             new_amp = 0
                         else:
                             #safe_powers_steps are now necessarily ordered,
-                            if False:
-                                best_dist = -1
+                            best_lower = None
+                            if lower_do_not_go_below_power_boundary:
                                 for i, p in enumerate(safe_powers_steps):
-                                    if p >= target_power:
-                                        best_dist = i
+                                    if p >= lower_do_not_go_below_power_boundary:
+                                        best_lower = i
                                         break
-                                if best_dist < 0:
-                                    if  target_power >= safe_powers_steps[-1]:
-                                        new_amp = self.max_charge
-                                    elif target_power < safe_powers_steps[0]:
-                                        if command.is_like(CMD_AUTO_GREEN_ONLY):
-                                            new_amp = 0
-                                        else:
-                                            # for CMD_AUTO_FROM_CONSIGN
-                                            new_amp = self.min_charge
+
+                                if best_lower is None:
+                                    best_lower = len(safe_powers_steps) - 1
+
+                            best_higher = None
+                            if higher_do_not_cross_power_boundary:
+                                for i in range(len(safe_powers_steps) -1, -1, -1):
+                                    if safe_powers_steps[i] <= higher_do_not_cross_power_boundary:
+                                        best_higher = i
                                     else:
-                                        new_amp = self.min_charge
-                                elif safe_powers_steps[best_dist] == target_power:
-                                    new_amp = best_dist + self.min_charge
+                                        break
+
+                                if best_higher is None:
+                                    best_higher = -1
+
+                            # both can't be None
+                            if best_lower is None:
+                                if best_higher < 0:
+                                    # nothing works, case o green only case ... stop charge
+                                    new_amp = 0
                                 else:
-                                    if command.is_like(CMD_AUTO_FROM_CONSIGN):
-                                        new_amp = best_dist + self.min_charge
-                                    else:
-                                        if best_dist == 0:
-                                            new_amp = 0
-                                        else:
-                                            new_amp = best_dist - 1 + self.min_charge
-
-                            #they are not necessarily ordered depends on the measures, etc
-                            best_dist = 1000000000 # (1 GW :) )
-                            best_i = -1
-                            p_min_non_0 = 1000000000
-                            p_max = -1
-                            found_equal = False
-                            for i,p in enumerate(safe_powers_steps):
-
-                                if p > 0:
-                                    if p < p_min_non_0:
-                                        p_min_non_0 = p
-                                if p > p_max:
-                                    p_max = p
-
-                                if p == target_power:
-                                    best_i = i
-                                    found_equal = True
-                                    break
-                                elif target_power > p and abs(p - target_power) < best_dist:
-                                    best_dist = abs(p - target_power)
-                                    best_i = i
-
-
-                            if best_i < 0:
-                                if  target_power > p_max:
-                                    new_amp = self.max_charge
-                                elif target_power < p_min_non_0:
-                                    if command.is_like(CMD_AUTO_GREEN_ONLY):
-                                        new_amp = 0
-                                    else:
-                                        # for CMD_AUTO_FROM_CONSIGN
-                                        new_amp = self.min_charge
-                                else:
-                                    new_amp = self.min_charge
-
-
+                                    new_amp = best_higher + self.min_charge
+                            elif best_higher is None:
+                                new_amp = best_lower + self.min_charge
+                            else:
+                                # best_lower can't be < 0 and as a good "max" at len(safe_powers_steps) - 1
+                                # best_higher can be < 0
+                                new_amp = max(best_higher, best_lower) + self.min_charge
 
                             # to smooth a bit going up for nothing
                             if command.is_like(CMD_AUTO_GREEN_ONLY):
@@ -1165,7 +1145,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             new_state = True
 
                         if init_state != new_state or new_amp != init_amp:
-                            _LOGGER.info(f"target_delta_power {target_delta_power} target_power {target_power}, current_power {current_power} ")
+                            _LOGGER.info(f"target_delta_power {target_delta_power} target_powers {higher_do_not_cross_power_boundary}/{lower_do_not_go_below_power_boundary}, current_power {current_power} ")
                             _LOGGER.info(f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
                             _LOGGER.info(f"car: {self.car.name} min charge {self.min_charge} max charge {self.max_charge}")
                             _LOGGER.info(f"power steps {safe_powers_steps}")

@@ -558,8 +558,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             if load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
-                _LOGGER.info(f"launch command idle in update loads constraint {load.get_current_active_constraint(time)} is active {load.is_load_active(time)}")
-                await load.launch_command(time=time, command=CMD_IDLE)
+                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle in update_loads")
 
             await load.do_probe_state_change(time)
 
@@ -601,8 +600,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         for load, commands in self._commands:
             while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                 cmd_time, command = commands.pop(0)
-                _LOGGER.info("Launch command %s at %s for load %s", command.command, cmd_time, load.name)
-                await load.launch_command(time, command)
+                await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
                 # only launch one at a time for a given load
                 break
 

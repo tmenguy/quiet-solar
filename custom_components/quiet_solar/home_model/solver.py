@@ -93,7 +93,7 @@ class PeriodSolver(object):
         active_constraints = []
         for load in self._loads:
             for constraint in load.get_active_constraint_generator(start_time, end_time):
-                if constraint.end_of_constraint is not None and constraint.end_of_constraint != DATETIME_MAX_UTC:
+                if constraint.end_of_constraint != DATETIME_MAX_UTC:
                     anchors.add(constraint.end_of_constraint)
                 active_constraints.append(constraint)
 
