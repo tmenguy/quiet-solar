@@ -630,14 +630,17 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 fill_power_aggressive_idx = 0
 
 
+
+            # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
+            price_power = self._power_sorted_cmds[fill_power_idx].power_consign
+
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
                                          power_consign=self._power_sorted_cmds[fill_power_aggressive_idx].power_consign)
             else:
                 price_cmd = copy_command(self._power_sorted_cmds[fill_power_aggressive_idx])
 
-            # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
-            price_power = self._power_sorted_cmds[fill_power_idx].power_consign
+
 
             # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
             # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
