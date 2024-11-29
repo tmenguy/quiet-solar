@@ -607,27 +607,38 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if nrj_to_be_added <= 0.0:
                     break
 
-            # 0.75 to fill a bit quicker if possible
-            price_span_h =((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
-                                   where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
 
-            if len(self._power_sorted_cmds) > 1 and self.support_auto:
+
+            if len(self._power_sorted_cmds) > 1:
+
+                price_span_h = ((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
+                                        where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
+
+                # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
+                fill_power_idx = 0
+                for fill_power_idx in range(len(self._power_sorted_cmds)):
+                    if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_idx].power_consign:
+                        break
                 # 0.75 to fill a bit quicker if possible soften a bit the energy quantity of each steps
-                price_span_h = 0.75*price_span_h
+                price_span_h = 0.75 * price_span_h
+                fill_power_aggressive_idx = 0
+                for fill_power_aggressive_idx in range(len(self._power_sorted_cmds)):
+                    if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_aggressive_idx].power_consign:
+                        break
+            else:
+                fill_power_idx = 0
+                fill_power_aggressive_idx = 0
 
-            # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
-            fill_power_idx = 0
-            for fill_power_idx in range(len(self._power_sorted_cmds)):
-                if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_idx].power_consign:
-                    break
 
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                         power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+                                         power_consign=self._power_sorted_cmds[fill_power_aggressive_idx].power_consign)
             else:
-                price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
+                price_cmd = copy_command(self._power_sorted_cmds[fill_power_aggressive_idx])
 
-            price_power = price_cmd.power_consign
+            # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
+            price_power = self._power_sorted_cmds[fill_power_idx].power_consign
+
             # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
             # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
 
