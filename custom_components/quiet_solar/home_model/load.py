@@ -395,7 +395,7 @@ class AbstractLoad(AbstractDevice):
     def reset_daily_load_datas(self, time:datetime):
         self.num_on_off = 0
 
-    async def update_live_constraints(self, time:datetime, period: timedelta) -> bool:
+    async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
 
         if not self._constraints:
             self._constraints = []
@@ -435,11 +435,13 @@ class AbstractLoad(AbstractDevice):
                     if c.is_constraint_met() or c.is_mandatory is False:
                         _LOGGER.info(f"{c.name} skipped because met or not mandatory")
                         c.skip = True
+                        force_solving = True
                         if c.is_constraint_met():
                             self._last_completed_constraint = c
-                    else:
+
+                    elif c.end_of_constraint < time + end_constraint_min_tolerancy:
                         # a not met mandatory one! we should expand it or force it
-                        duration_s = c.best_duration_to_meet()
+                        duration_s = c.best_duration_to_meet() + end_constraint_min_tolerancy
                         duration_s = max(timedelta(seconds=1200), duration_s*(1.0 + c.pushed_count*0.2)) # extend if we continue to push it
                         new_constraint_end = time + duration_s
                         handled_constraint_force = False
@@ -486,12 +488,13 @@ class AbstractLoad(AbstractDevice):
                                 c.skip = True
                                 _LOGGER.info(f"{c.name} not met and pushed too many times")
                             else:
-                                c.end_of_constraint = new_constraint_end
+
                                 # unskip the current one
                                 c.skip = False
                                 c.pushed_count += 1
-                                _LOGGER.info(f"{c.name} pushed because mandatory and not met")
+                                _LOGGER.info(f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}")
                                 handled_constraint_force = True
+                                c.end_of_constraint = new_constraint_end
 
                         if handled_constraint_force:
                             force_solving = True

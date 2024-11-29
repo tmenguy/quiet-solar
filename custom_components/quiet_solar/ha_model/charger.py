@@ -481,15 +481,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 force_constraint = None
 
                 if self._do_force_next_charge is False:
-                    num_active_constraints = 0
                     for ct in self._constraints:
                         if ct.is_constraint_active_for_time_period(time):
                             if ct.as_fast_as_possible:
-                                force_constraint = ct
-                                if num_active_constraints != 0:
-                                    self._do_force_next_charge = True
+                                self._do_force_next_charge = True
                                 break
-                            num_active_constraints += 1
 
 
                 if self._do_force_next_charge:
@@ -515,30 +511,36 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self._do_force_next_charge = False
                     realized_charge_target = target_charge
 
-                start_time, _ = self.car.get_next_scheduled_event(time)
+                start_time, end_time = self.car.get_next_scheduled_event(time)
                 # only add it if it is "after" the end of the forced constraint
                 if start_time is not None and (force_constraint is None or start_time > force_constraint.end_of_constraint):
 
-                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
-                        total_capacity_wh=self.car.car_battery_capacity,
-                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                        time=time,
-                        load=self,
-                        load_param=self.car.name,
-                        from_user=False,
-                        end_of_constraint=start_time,
-                        initial_value=car_initial_percent,
-                        target_value=target_charge,
-                        power_steps=self._power_steps,
-                        support_auto=True
-                    )
-
-                    if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
-                        do_force_solve = True
+                    if time > start_time:
+                        # it means .... we are in the middle of the scheduled event, in theory it is passed, do nothing
+                        # if there is a mandatory one unfinished it should have been pushed already to try to complete it
                         _LOGGER.info(
-                            f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                            f"plugged car {self.car.name} NOT pushing mandatory constraint as we are in the middle of a scheduled event start:{start_time} end:{end_time} time:{time}")
+                    else:
+                        car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                            total_capacity_wh=self.car.car_battery_capacity,
+                            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                            time=time,
+                            load=self,
+                            load_param=self.car.name,
+                            from_user=False,
+                            end_of_constraint=start_time,
+                            initial_value=car_initial_percent,
+                            target_value=target_charge,
+                            power_steps=self._power_steps,
+                            support_auto=True
+                        )
 
-                    realized_charge_target = target_charge
+                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
+                            do_force_solve = True
+                            _LOGGER.info(
+                                f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+
+                        realized_charge_target = target_charge
 
                 if realized_charge_target is None or realized_charge_target <= 99.9:
 
@@ -924,9 +926,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return (None, True)
 
         if self.current_command is None or self.current_command.is_off_or_idle():
+            _LOGGER.info(f"update_value_callback:no command or idle/off")
             result = None
         else:
             result = self.car.get_car_charge_percent(time)
+            result_calculus = None
 
             added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
                                                     clip_to_zero_under_power=self.charger_consumption_W)
@@ -937,9 +941,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if result is None:
                     result = result_calculus
                 else:
-                    if abs(result_calculus - result) > 10:
-                        _LOGGER.info(f"update_value_callback: sensor {result} != calculus {result_calculus}")
                     result = min(result_calculus, result)
+
+            _LOGGER.info(f"update_value_callback: sensor {result} and calculus {result_calculus}")
 
         do_continue_constraint = True
 
@@ -976,7 +980,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
-            _LOGGER.info(f"update_value_callback:car stopped asking current ... do nothing")
+            _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
             # if probe_only is False:
                 # self._expected_amperage.set(int(self.charger_min_charge), time)
                 # self._expected_charge_state.set(True, time) # is it really needed?
@@ -1176,7 +1180,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
         if self.is_in_state_reset():
-            _LOGGER.info(f"update_value_callback: in state reset at the end .. force an idle like state")
+            _LOGGER.info(f"_compute_and_launch_new_charge_state: in state reset at the end .. force an idle like state")
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
 
