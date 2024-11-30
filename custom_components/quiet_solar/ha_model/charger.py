@@ -938,12 +938,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
 
+            _LOGGER.info(f"update_value_callback: sensor {result} and calculus {result_calculus}")
+
+            if result_calculus is not None:
                 if result is None:
                     result = result_calculus
                 else:
                     result = min(result_calculus, result)
-
-            _LOGGER.info(f"update_value_callback: sensor {result} and calculus {result_calculus}")
 
         do_continue_constraint = True
 
