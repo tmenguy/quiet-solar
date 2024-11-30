@@ -619,30 +619,38 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 for fill_power_idx in range(len(self._power_sorted_cmds)):
                     if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_idx].power_consign:
                         break
-                # 0.75 to fill a bit quicker if possible soften a bit the energy quantity of each steps
-                price_span_h = 0.75 * price_span_h
-                fill_power_aggressive_idx = 0
-                for fill_power_aggressive_idx in range(len(self._power_sorted_cmds)):
-                    if nrj_to_be_added <= price_span_h * self._power_sorted_cmds[fill_power_aggressive_idx].power_consign:
-                        break
             else:
                 fill_power_idx = 0
-                fill_power_aggressive_idx = 0
 
             # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
             price_power = self._power_sorted_cmds[fill_power_idx].power_consign
 
+            explore_range = range(last_slot, first_slot - 1, -1)
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                         power_consign=self._power_sorted_cmds[fill_power_aggressive_idx].power_consign)
+                                         power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+
+                if self.load and self.load.current_command and self.load.current_command.is_like(CMD_AUTO_FROM_CONSIGN):
+                    # we are already in auto consign mode for this load : we want to keep the continuity of the command
+                    if first_slot == 0 and prices[first_slot] == price:
+                        # in this particular case : we will go from now to end to keep the continuity with the current command
+                        explore_range = range(first_slot, last_slot + 1)
+                        # if not done : force the first slot to be a consign!
+                        if out_commands[first_slot] is not None and out_commands[first_slot].is_like(CMD_AUTO_GREEN_ONLY):
+                            out_commands[first_slot] = price_cmd
+                            # put back the removed energy
+                            nrj_to_be_added += (out_power[first_slot] * power_slots_duration_s[first_slot]) / 3600.0
+                            out_power[first_slot] = price_power
+                            nrj_to_be_added -= (price_power * power_slots_duration_s[first_slot]) / 3600.0
+
             else:
-                price_cmd = copy_command(self._power_sorted_cmds[fill_power_aggressive_idx])
+                price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
 
 
             # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
             # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
 
-            for i in range(last_slot, first_slot - 1, -1):
+            for i in explore_range:
 
                 if prices[i] == price and out_commands[i] is None:
 
