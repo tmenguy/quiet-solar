@@ -666,7 +666,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=0.0)
                     out_power[i] = 0.0
 
-            if self.load.current_command.command == CMD_AUTO_FROM_CONSIGN.command and out_commands[0].command == CMD_AUTO_GREEN_ONLY.command or out_commands[first_slot].command == CMD_AUTO_GREEN_ONLY.command:
+            if self.load and self.load.current_command and self.load.current_command.command == CMD_AUTO_FROM_CONSIGN.command and (out_commands[0].command == CMD_AUTO_GREEN_ONLY.command or out_commands[first_slot].command == CMD_AUTO_GREEN_ONLY.command):
                 _LOGGER.info(f"We will switch from a consign to a green only command for {self.load.name} {self.load_param} {first_slot}/{last_slot}")
                 for i in range(first_slot, last_slot + 1):
                     _LOGGER.info(f" ==> CMD: {time_slots[i]} {out_commands[i]} ")
