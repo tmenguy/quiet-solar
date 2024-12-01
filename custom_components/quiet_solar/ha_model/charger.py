@@ -791,6 +791,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         result = False
         if self.is_plugged(time=time, for_duration=for_duration):
 
+            result = None
+
             max_charging_power = self.get_max_charging_power()
             if max_charging_power is None:
                 return None
@@ -806,7 +808,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if result:
                     _LOGGER.info(
                         f"is_car_stopped_asking_current: because charger state in {status_vals} for  {for_duration} seconds")
-            else:
+
+            if result is None:
                 if self.is_charge_enabled(time=time, for_duration=for_duration):
                     result =  self.is_charging_power_zero(time=time, for_duration=for_duration)
                     if result:
