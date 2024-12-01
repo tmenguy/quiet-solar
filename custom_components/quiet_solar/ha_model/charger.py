@@ -986,9 +986,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
             _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
-            # if probe_only is False:
-                # self._expected_amperage.set(int(self.charger_min_charge), time)
-                # self._expected_charge_state.set(True, time) # is it really needed?
+            if probe_only is False:
+                self._expected_amperage.set(int(self.charger_min_charge), time)
+                self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box
         elif command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
