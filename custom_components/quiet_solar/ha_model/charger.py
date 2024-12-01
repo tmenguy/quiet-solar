@@ -397,187 +397,167 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             do_force_solve = True
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
-            is_car_fully_charged = False
-            car_initial_percent = 0.0
+            existing_constraints = []
+            best_car = self.get_best_car(time)
 
-            if self._do_force_next_charge is False and self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
-                if self.car:
-                    car_name = self.car.name
-                else:
-                    car_name = "NO KNOWN CAR"
-                _LOGGER.info(f"plugged car {car_name} is not asking current")
-                is_car_fully_charged = True
-            else:
-                existing_constraints = []
-                best_car = self.get_best_car(time)
+            # user forced a "deconnection"
+            if best_car is None:
+                _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
+                self.reset()
+                return True
 
-                # user forced a "deconnection"
-                if best_car is None:
-                    _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
-                    self.reset()
-                    return True
+            elif self.car:
+                # there is already a car connected, check if it is the right one
+                #change car we have a better one ...
+                if best_car.name != self.car.name:
+                    _LOGGER.info("CHANGE CONNECTED CAR!")
+                    self.detach_car()
 
-                elif self.car:
-                    # there is already a car connected, check if it is the right one
-                    #change car we have a better one ...
-                    if best_car.name != self.car.name:
-                        _LOGGER.info("CHANGE CONNECTED CAR!")
-                        self.detach_car()
+            if not self.car:
+                # we may have some saved constraints that have been loaded already from the storage at init
+                # so we need to check if they are still valid
 
-                if not self.car:
-                    # we may have some saved constraints that have been loaded already from the storage at init
-                    # so we need to check if they are still valid
+                car = best_car
+                _LOGGER.info(f"plugging car {car.name} not connected: reset and attach car")
 
-                    car = best_car
-                    _LOGGER.info(f"plugging car {car.name} not connected: reset and attach car")
-
-                    if self._constraints and self._do_force_next_charge is False:
-                        # only keep user constraints...well in fact getting the as fast as possible one is enough
-                        for ct in self._constraints:
-
-                            if ct.from_user is False or ct.as_fast_as_possible is False:
-                                continue
-
-                            _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}")
-
-                            if ct.load_param != car.name:
-                                _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}, forcing to current car")
-                                ct.reset_load_param(car.name)
-
-                            existing_constraints.append(ct)
-
-                    # this reset is key it removes the constraint, the self._last_completed_constraint, etc
-                    # it will detach the car, etc
-                    self.reset()
-
-                    if existing_constraints:
-                        for ct in existing_constraints:
-                            self.push_live_constraint(time, ct)
-
-                    _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
-                    # find the best car .... for now
-                    self.attach_car(car)
-
-                target_charge = await self.setup_car_charge_target_if_needed()
-
-                car_initial_percent = self.car.get_car_charge_percent(time)
-                if car_initial_percent is None: # for possible percent issue
-                    car_initial_percent = 0.0
-                    _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
-
-                if car_initial_percent >= 0.99*target_charge:
-                    is_car_fully_charged = True
-                    _LOGGER.info(f"plugged car {self.car.name} seems already full {car_initial_percent}")
-
-            if is_car_fully_charged and self._do_force_next_charge is False:
-                ct = self.get_current_active_constraint(time)
-                self.reset_load_only()
-                if ct is not None:
-                    do_force_solve = True
-            else:
-
-                target_charge = await self.setup_car_charge_target_if_needed()
-
-                realized_charge_target = None
-                # add a constraint ... for now just fill the car as much as possible
-                force_constraint = None
-
-                # in case a user pressed the button ....clean everything and force the charge
-                if self._do_force_next_charge is True:
-                    do_force_solve = True
-                    self.reset_load_only() # cleanup any previous constraints to force this one!
-                    force_constraint = MultiStepsPowerLoadConstraintChargePercent(
-                        total_capacity_wh=self.car.car_battery_capacity,
-                        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-                        time=time,
-                        load=self,
-                        load_param=self.car.name,
-                        from_user=True,
-                        initial_value=car_initial_percent,
-                        target_value=target_charge,
-                        power_steps=self._power_steps,
-                        support_auto=True,
-                    )
-                    if self.push_live_constraint(time, force_constraint):
-                        _LOGGER.info(
-                            f"plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
-                        do_force_solve = True
-                else:
-                    # we may have a as fast as possible constraint still active ... if so we need to update it
+                if self._constraints and self._do_force_next_charge is False:
+                    # only keep user constraints...well in fact getting the as fast as possible one is enough
                     for ct in self._constraints:
-                        if ct.is_constraint_active_for_time_period(time):
-                            if ct.as_fast_as_possible:
-                                force_constraint = ct
-                                if force_constraint.target_value != target_charge:
-                                    do_force_solve = True
-                                force_constraint.target_value = target_charge
-                                break
 
-                if force_constraint is not None:
-                    self._do_force_next_charge = False
-                    realized_charge_target = target_charge
+                        if ct.from_user is False or ct.as_fast_as_possible is False:
+                            continue
 
-                start_time, end_time = self.car.get_next_scheduled_event(time)
-                # only add it if it is "after" the end of the forced constraint
-                if start_time is not None and (force_constraint is None or start_time > force_constraint.end_of_constraint):
+                        _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}")
 
-                    if time > start_time:
-                        # it means .... we are in the middle of the scheduled event, in theory it is passed, do nothing
-                        # if there is a mandatory one unfinished it should have been pushed already to try to complete it
-                        _LOGGER.info(
-                            f"plugged car {self.car.name} NOT pushing mandatory constraint as we are in the middle of a scheduled event start:{start_time} end:{end_time} time:{time}")
-                    else:
-                        car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
-                            total_capacity_wh=self.car.car_battery_capacity,
-                            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                            time=time,
-                            load=self,
-                            load_param=self.car.name,
-                            from_user=False,
-                            end_of_constraint=start_time,
-                            initial_value=car_initial_percent,
-                            target_value=target_charge,
-                            power_steps=self._power_steps,
-                            support_auto=True
-                        )
+                        if ct.load_param != car.name:
+                            _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}, forcing to current car")
+                            ct.reset_load_param(car.name)
 
-                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
-                            do_force_solve = True
-                            _LOGGER.info(
-                                f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                        existing_constraints.append(ct)
 
-                        realized_charge_target = target_charge
+                # this reset is key it removes the constraint, the self._last_completed_constraint, etc
+                # it will detach the car, etc
+                self.reset()
 
-                if realized_charge_target is None or realized_charge_target <= 99.9:
+                _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
+                # find the best car .... for now
+                self.attach_car(car)
 
-                    if realized_charge_target is None:
-                        realized_charge_target = car_initial_percent
-                        # make car charging bigger than the battery filling if it is the only car constraint
-                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                        realized_charge_target = car_initial_percent
-                    else:
-                        #there was already a charge before and it is not full ... try solar only
-                        type = CONSTRAINT_TYPE_FILLER_AUTO
-                        target_charge = 100
-                        realized_charge_target = 0
 
-                    car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
+            car_initial_percent = self.car.get_car_charge_percent(time)
+            if car_initial_percent is None: # for possible percent issue
+                car_initial_percent = 0.0
+                _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
+
+            target_charge = await self.setup_car_charge_target_if_needed()
+
+            if existing_constraints:
+                for ct in existing_constraints:
+                    if ct.target_value != target_charge:
+                        do_force_solve = True
+                    ct.target_value = target_charge
+                    self.push_live_constraint(time, ct)
+
+            realized_charge_target = None
+            # add a constraint ... for now just fill the car as much as possible
+            force_constraint = None
+
+            # in case a user pressed the button ....clean everything and force the charge
+            if self._do_force_next_charge is True:
+                do_force_solve = True
+                self.reset_load_only() # cleanup any previous constraints to force this one!
+                force_constraint = MultiStepsPowerLoadConstraintChargePercent(
+                    total_capacity_wh=self.car.car_battery_capacity,
+                    type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+                    time=time,
+                    load=self,
+                    load_param=self.car.name,
+                    from_user=True,
+                    initial_value=car_initial_percent,
+                    target_value=target_charge,
+                    power_steps=self._power_steps,
+                    support_auto=True,
+                )
+                if self.push_live_constraint(time, force_constraint):
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
+                    do_force_solve = True
+            else:
+                # we may have a as fast as possible constraint still active ... if so we need to update it
+                for ct in self._constraints:
+                    if ct.is_constraint_active_for_time_period(time):
+                        if ct.as_fast_as_possible:
+                            force_constraint = ct
+                            if force_constraint.target_value != target_charge:
+                                do_force_solve = True
+                            force_constraint.target_value = target_charge
+                            break
+
+            if force_constraint is not None:
+                self._do_force_next_charge = False
+                realized_charge_target = target_charge
+
+            start_time, end_time = self.car.get_next_scheduled_event(time)
+            # only add it if it is "after" the end of the forced constraint
+            if start_time is not None and (force_constraint is None or start_time > force_constraint.end_of_constraint):
+
+                if time > start_time:
+                    # it means .... we are in the middle of the scheduled event, in theory it is passed, do nothing
+                    # if there is a mandatory one unfinished it should have been pushed already to try to complete it
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} NOT pushing mandatory constraint as we are in the middle of a scheduled event start:{start_time} end:{end_time} time:{time}")
+                else:
+                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                         total_capacity_wh=self.car.car_battery_capacity,
-                        type=type,
+                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                         time=time,
                         load=self,
                         load_param=self.car.name,
                         from_user=False,
-                        initial_value=realized_charge_target,
+                        end_of_constraint=start_time,
+                        initial_value=car_initial_percent,
                         target_value=target_charge,
                         power_steps=self._power_steps,
                         support_auto=True
                     )
 
-                    if self.push_live_constraint(time, car_charge_best_effort):
+                    if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
                         do_force_solve = True
                         _LOGGER.info(
-                            f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
+                            f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+
+                    realized_charge_target = target_charge
+
+            if realized_charge_target is None or realized_charge_target <= 99.9:
+
+                if realized_charge_target is None:
+                    realized_charge_target = car_initial_percent
+                    # make car charging bigger than the battery filling if it is the only car constraint
+                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    realized_charge_target = car_initial_percent
+                else:
+                    #there was already a charge before and it is not full ... try solar only
+                    type = CONSTRAINT_TYPE_FILLER_AUTO
+                    target_charge = 100
+                    realized_charge_target = 0
+
+                car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
+                    total_capacity_wh=self.car.car_battery_capacity,
+                    type=type,
+                    time=time,
+                    load=self,
+                    load_param=self.car.name,
+                    from_user=False,
+                    initial_value=realized_charge_target,
+                    target_value=target_charge,
+                    power_steps=self._power_steps,
+                    support_auto=True
+                )
+
+                if self.push_live_constraint(time, car_charge_best_effort):
+                    do_force_solve = True
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
@@ -974,10 +954,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
             # yes the constraint is met but is it really key? it will be store in self._last_completed_constraint
             # if we force the completion of the constraint, so for now no need
-            _LOGGER.info(f"update_value_callback:stop asking current, stop constraint do_continue_constraint=False")
+            _LOGGER.info(f"update_value_callback:stop asking current, stop constraint do_continue_constraint=False, force constraint met")
             do_continue_constraint = False
-
-        if result is not None:
+            result = ct.target_value
+        elif result is not None:
             # ok 0.1% of tolerance here...
             if ct.is_constraint_met(result+0.1):
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")

@@ -116,7 +116,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return contiguous_status >= for_duration and contiguous_status > 0
 
     def get_car_charge_percent(self, time: datetime) -> float | None:
-        res = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=60)
+        res = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=600)
         if res is None:
             return None
         return res
