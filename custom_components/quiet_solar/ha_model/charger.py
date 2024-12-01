@@ -128,6 +128,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_pause_resume_switch = kwargs.pop(CONF_CHARGER_PAUSE_RESUME_SWITCH, None)
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
         self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
+        self.charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge, 8))
+
         self.charger_is_3p = kwargs.pop(CONF_CHARGER_IS_3P, False)
         self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
 
@@ -995,11 +997,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
             _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
             if probe_only is False:
-                self._expected_amperage.set(int(self.min_charge), time)
+                self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
                 self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
-            self._expected_amperage.set(int(self.charger_min_charge), time)
+            self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not use charger min charge so next time we plug ...it may work
         elif command.is_like(CMD_ON):
             self._expected_amperage.set(self.max_charge, time)
             self._expected_charge_state.set(True, time)
@@ -1012,7 +1014,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.is_in_state_reset():
                     # set default values
                     self._expected_charge_state.set(False, time)
-                    self._expected_amperage.set(int(self.charger_min_charge), time)
+                    self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not use charger min charge so next time we plug ...it may work
             else:
 
                 res_ensure_state = await self._ensure_correct_state(time)
@@ -1153,7 +1155,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         new_state = init_state
                         if new_amp < self.min_charge:
-                            new_amp = self.charger_min_charge
+                            new_amp = self.charger_default_idle_charge # do not use charger min charge so next time we plug ...it may work
                             new_state = False
                         elif new_amp > self.max_charge:
                             new_amp = self.max_charge
@@ -1195,7 +1197,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_in_state_reset():
             _LOGGER.info(f"_compute_and_launch_new_charge_state: in state reset at the end .. force an idle like state")
             self._expected_charge_state.set(False, time)
-            self._expected_amperage.set(int(self.charger_min_charge), time)
+            self._expected_amperage.set(int(self.charger_default_idle_charge), time)
 
         if init_amp != self._expected_amperage.value or init_state != self._expected_charge_state.value:
             _LOGGER.info(
@@ -1204,14 +1206,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         # do it all the time
         return await self._ensure_correct_state(time, probe_only=probe_only)
-
-
-    def set_state_machine_to_current_state(self, time: datetime):
-        if self.is_charge_enabled(time):
-            self._expected_charge_state.set(True, None)
-        else:
-            self._expected_charge_state.set(False, None)
-        self._expected_amperage.set(self.get_max_charging_power(), time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
 
