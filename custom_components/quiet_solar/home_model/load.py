@@ -12,7 +12,8 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
-from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING
+from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
 
 import slugify
 
@@ -128,8 +129,7 @@ class AbstractLoad(AbstractDevice):
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
             if cs_load is not None:
-                if not cs_load.is_constraint_active_for_time_period(time):
-                    cs_load.end_of_constraint = time + timedelta(seconds=5*60)
+                # only restore constraints that can still be active
                 if cs_load.is_constraint_active_for_time_period(time):
                     self.push_live_constraint(time, cs_load)
 
@@ -491,6 +491,7 @@ class AbstractLoad(AbstractDevice):
 
                                 # unskip the current one
                                 c.skip = False
+                                c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE # force as much as we can....
                                 c.pushed_count += 1
                                 _LOGGER.info(f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}")
                                 handled_constraint_force = True

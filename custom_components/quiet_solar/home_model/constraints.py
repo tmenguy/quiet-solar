@@ -472,6 +472,37 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if last_slot >= len(power_available_power):
                 last_slot = len(power_available_power) - 1
 
+        if self.as_fast_as_possible:
+
+            # fill with the best (more power) possible commands
+
+            as_fast_power = -1
+            as_fast_cmd_idx = None
+
+            for i in range(len(self._power_sorted_cmds)):
+                if as_fast_cmd_idx is None or self._power_sorted_cmds[i].power_consign > as_fast_power:
+                    as_fast_power = self._power_sorted_cmds[i].power_consign
+                    as_fast_cmd_idx = i
+
+            if self.support_auto:
+                as_fast_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
+                                               power_consign=self._power_sorted_cmds[as_fast_cmd_idx].power_consign)
+            else:
+                as_fast_cmd = copy_command(self._power_sorted_cmds[as_fast_cmd_idx])
+
+            for i in range(first_slot, last_slot + 1):
+
+                    current_energy: float = (as_fast_power * float(power_slots_duration_s[i])) / 3600.0
+                    out_commands[i] = as_fast_cmd
+                    out_power[i] = as_fast_power
+                    nrj_to_be_added -= current_energy
+
+                    if nrj_to_be_added <= 0.0:
+                        break
+
+            return nrj_to_be_added <= 0.0, out_commands, out_power
+
+
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 

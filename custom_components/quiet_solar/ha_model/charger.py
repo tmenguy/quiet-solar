@@ -406,7 +406,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"plugged car {car_name} is not asking current")
                 is_car_fully_charged = True
             else:
-                existing_user_constraints = []
+                existing_constraints = []
                 best_car = self.get_best_car(time)
 
                 # user forced a "deconnection"
@@ -432,24 +432,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if self._constraints and self._do_force_next_charge is False:
                         # only keep user constraints...well in fact getting the as fast as possible one is enough
                         for ct in self._constraints:
-                            if ct.as_fast_as_possible:
-                                self._do_force_next_charge = True
-                                _LOGGER.info(f"Found a user stored car constraint with {ct.load_param} for {car.name}, forcing it")
-                            elif ct.from_user is False:
+
+                            if ct.from_user is False or ct.as_fast_as_possible is False:
                                 continue
 
+                            _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}")
+
                             if ct.load_param != car.name:
-                                _LOGGER.info(f"Found a user stored car constraint with {ct.load_param} for {car.name}, forcing it")
+                                _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}, forcing to current car")
                                 ct.reset_load_param(car.name)
 
-                            existing_user_constraints.append(ct)
+                            existing_constraints.append(ct)
 
                     # this reset is key it removes the constraint, the self._last_completed_constraint, etc
                     # it will detach the car, etc
                     self.reset()
 
-                    if self._do_force_next_charge is False and existing_user_constraints:
-                        for ct in existing_user_constraints:
+                    if existing_constraints:
+                        for ct in existing_constraints:
                             self.push_live_constraint(time, ct)
 
                     _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
@@ -480,15 +480,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # add a constraint ... for now just fill the car as much as possible
                 force_constraint = None
 
-                if self._do_force_next_charge is False:
-                    for ct in self._constraints:
-                        if ct.is_constraint_active_for_time_period(time):
-                            if ct.as_fast_as_possible:
-                                self._do_force_next_charge = True
-                                break
-
-
-                if self._do_force_next_charge:
+                # in case a user pressed the button ....clean everything and force the charge
+                if self._do_force_next_charge is True:
                     do_force_solve = True
                     self.reset_load_only() # cleanup any previous constraints to force this one!
                     force_constraint = MultiStepsPowerLoadConstraintChargePercent(
@@ -507,7 +500,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         _LOGGER.info(
                             f"plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
                         do_force_solve = True
+                else:
+                    # we may have a as fast as possible constraint still active ... if so we need to update it
+                    for ct in self._constraints:
+                        if ct.is_constraint_active_for_time_period(time):
+                            if ct.as_fast_as_possible:
+                                force_constraint = ct
+                                if force_constraint.target_value != target_charge:
+                                    do_force_solve = True
+                                force_constraint.target_value = target_charge
+                                break
 
+                if force_constraint is not None:
                     self._do_force_next_charge = False
                     realized_charge_target = target_charge
 
