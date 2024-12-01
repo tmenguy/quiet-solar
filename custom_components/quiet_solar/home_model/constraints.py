@@ -82,8 +82,6 @@ class LoadConstraint(object):
         else:
             self.current_value = current_value
 
-        self._compute_constraint_name()
-
         # will correct end of constraint if needed best_duration_to_meet uses the values above
         if self.as_fast_as_possible:
             dt_to_finish = self.best_duration_to_meet()
@@ -94,14 +92,12 @@ class LoadConstraint(object):
         self.skip = False
         self.pushed_count = 0
 
-
-    def _compute_constraint_name(self):
-        self.name = (f"Constraint for {self.load.name} ({self.load_param} "
-                     f"{self.initial_value}/{self.target_value}/{self.type})")
-
     def reset_load_param(self, new_param):
         self.load_param = new_param
-        self._compute_constraint_name()
+
+    @property
+    def name(self):
+        return f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{self.target_value}/{self.type})"
 
 
     def __eq__(self, other):
@@ -475,6 +471,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.as_fast_as_possible:
 
             # fill with the best (more power) possible commands
+            _LOGGER.info(f"_compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added}")
 
             as_fast_power = -1
             as_fast_cmd_idx = None
@@ -665,6 +662,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # we are already in auto consign mode for this load : we want to keep the continuity of the command
                     if first_slot == 0 and prices[first_slot] == price:
                         # in this particular case : we will go from now to end to keep the continuity with the current command
+                        _LOGGER.info(
+                            f"_compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
+
                         explore_range = range(first_slot, last_slot + 1)
                         # if not done : force the first slot to be a consign!
                         if out_commands[first_slot] is not None and out_commands[first_slot].is_like(CMD_AUTO_GREEN_ONLY):

@@ -789,6 +789,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         result = False
         if self.is_plugged(time=time, for_duration=for_duration):
 
+            max_charging_power = self.get_max_charging_power()
+            if max_charging_power is None:
+                return None
+
+            # check that in fact the car could receive something...if not it may be waiting for power but cant get it
+            if max_charging_power < self.min_charge:
+                return None
+
             status_vals = self.get_car_stopped_asking_current_status_vals()
 
             if status_vals and len(status_vals) > 0:
@@ -987,8 +995,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
             _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
             if probe_only is False:
-                self._expected_amperage.set(int(self.charger_min_charge), time)
-                self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box
+                self._expected_amperage.set(int(self.min_charge), time)
+                self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_min_charge), time)
