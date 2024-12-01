@@ -582,60 +582,45 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             return nrj_to_be_added <= 0.0, out_commands, out_power
 
         # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
-        costs_optimizers = []
-
         for i in range(first_slot, last_slot + 1):
 
             if power_available_power[i] + out_power[i] < -min_power/4:
                 # there is still some solar to get
                 power_to_add_idx = -1
+                init_power_to_add_idx = out_power_idxs[i]
+                if init_power_to_add_idx is None:
+                    init_power_to_add_idx = -1
+
                 if out_commands[i] is None:
                     power_to_add_idx = 0
                 elif out_power_idxs[i] < len(self._power_sorted_cmds) - 1:
                     power_to_add_idx = out_power_idxs[i] + 1
 
-                if power_to_add_idx >= 0:
+                if power_to_add_idx > init_power_to_add_idx:
                     # all command in ECO mode now....
                     power_to_add: float = self._power_sorted_cmds[power_to_add_idx].power_consign
+                    prev_energy = 0
+                    if out_commands[i] is not None:
+                        prev_energy = (out_commands[i].power_consign * power_slots_duration_s[i]) / 3600.0
+
                     energy_to_add: float = (power_to_add * float(power_slots_duration_s[i])) / 3600.0
-                    cost: float = ((power_to_add + float(power_available_power[i])) * float(
-                        power_slots_duration_s[i]) * float(prices[i])) / 3600.0
+                    cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0
                     cost_per_watt = cost / energy_to_add
-                    if self.support_auto:
-                        new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                               power_consign=self._power_sorted_cmds[power_to_add_idx].power_consign)
-                    else:
-                        new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
 
-                    costs_optimizers.append((cost_per_watt, cost, energy_to_add, i, power_to_add, new_cmd))
+                    # if we have a lower cost per watt, than the lowest available price, use this bit of extra solar production
+                    if cost_per_watt < prices_ordered_values[0]:
 
-        costs_optimizers: list[tuple[float, float, float, int, float, LoadCommand]] = sorted(costs_optimizers,
-                                                                                             key=lambda x: x[0])
+                        if self.support_auto:
+                            new_cmd = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=power_to_add)
+                        else:
+                            new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
+
+                        out_commands[i] = new_cmd
+                        out_power[i] = power_to_add
+                        out_power_idxs[i] = power_to_add_idx
+                        nrj_to_be_added += prev_energy - energy_to_add
 
         for price in prices_ordered_values:
-
-            if costs_optimizers:
-                # first add the optimizers if their cost per watt is lower than the current price
-                while costs_optimizers[0][0] <= price:
-                    _, _, _, slot_idx, c_power, c_cmd = costs_optimizers.pop(0)
-                    prev_energy = 0
-                    if out_commands[slot_idx] is not None:
-                        prev_energy = (out_commands[slot_idx].power_consign * power_slots_duration_s[slot_idx]) / 3600.0
-                    delta_energy = (c_power * power_slots_duration_s[slot_idx]) / 3600.0 - prev_energy
-                    if delta_energy > 0.0:
-                        out_commands[slot_idx] = c_cmd
-                        out_power[slot_idx] = c_power
-                        nrj_to_be_added -= delta_energy
-
-                        if nrj_to_be_added <= 0.0:
-                            break
-                    if len(costs_optimizers) == 0:
-                        break
-
-                if nrj_to_be_added <= 0.0:
-                    break
-
-
 
             if len(self._power_sorted_cmds) > 1:
 
@@ -656,7 +641,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             explore_range = range(last_slot, first_slot - 1, -1)
             if self.support_auto:
                 price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                         power_consign=self._power_sorted_cmds[fill_power_idx].power_consign)
+                                         power_consign=price_power)
 
                 if self.load and self.load.current_command and self.load.current_command.is_like(CMD_AUTO_FROM_CONSIGN):
                     # we are already in auto consign mode for this load : we want to keep the continuity of the command
@@ -666,17 +651,21 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             f"_compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
 
                         explore_range = range(first_slot, last_slot + 1)
-                        # if not done : force the first slot to be a consign!
+                        # if not done : force the first slot to be a consign! if None it will be added below in the explore_range
                         if out_commands[first_slot] is not None and out_commands[first_slot].is_like(CMD_AUTO_GREEN_ONLY):
                             out_commands[first_slot] = price_cmd
                             # put back the removed energy
                             nrj_to_be_added += (out_power[first_slot] * power_slots_duration_s[first_slot]) / 3600.0
                             out_power[first_slot] = price_power
+                            out_power_idxs[first_slot] = fill_power_idx
                             nrj_to_be_added -= (price_power * power_slots_duration_s[first_slot]) / 3600.0
 
             else:
                 price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
 
+
+            if nrj_to_be_added <= 0.0:
+                break
 
             # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
             # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
@@ -704,12 +693,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if out_commands[i] is None:
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=0.0)
                     out_power[i] = 0.0
-
-            if self.load and self.load.current_command and self.load.current_command.command == CMD_AUTO_FROM_CONSIGN.command and (out_commands[0].command == CMD_AUTO_GREEN_ONLY.command or out_commands[first_slot].command == CMD_AUTO_GREEN_ONLY.command):
-                _LOGGER.info(f"We will switch from a consign to a green only command for {self.load.name} {self.load_param} {first_slot}/{last_slot}")
-                for i in range(first_slot, last_slot + 1):
-                    _LOGGER.info(f" ==> CMD: {time_slots[i]} {out_commands[i]} ")
-
 
         return nrj_to_be_added <= 0.0, out_commands, out_power
 
