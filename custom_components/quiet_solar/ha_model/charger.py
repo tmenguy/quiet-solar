@@ -948,25 +948,27 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     else:
                         result = min(result_calculus, result)
 
-        do_continue_constraint = True
+        is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW)
 
-        if self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW):
-            # do we need to say that the car is not charging anymore? ... and so the constraint is ok?
-            # yes the constraint is met but is it really key? it will be store in self._last_completed_constraint
-            # if we force the completion of the constraint, so for now no need
-            _LOGGER.info(f"update_value_callback:stop asking current, stop constraint do_continue_constraint=False, force constraint met")
-            do_continue_constraint = False
-            # force met constraint
-            result = ct.target_value
-        elif result is not None:
-            # ok 0.1% of tolerance here...
-            if ct.is_constraint_met(result+0.5):
-                _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
-                do_continue_constraint = False
+        if ct.target_value >= 100:
+            # the only way when at a 100 to stop is that the car will stop asking current
+            if is_car_stopped_asked_current:
+                _LOGGER.info(f"update_value_callback: FINISH 100% target and car stop asking current")
+                # force met constraint
+                result = ct.target_value
+            elif result is not None:
+                # force to not finish until the car stopped asking current
+                result = min(result, 99)
+        elif ct.is_constraint_met(result) or is_car_stopped_asked_current:
+                _LOGGER.info(f"update_value_callback: FINISH under 100%>{ct.target_value}% met:{ct.is_constraint_met(result)} stopped_asking: {is_car_stopped_asked_current}")
                 # force met constraint
                 result = ct.target_value
 
-        await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
+        if ct.is_constraint_met(result):
+            do_continue_constraint = False
+        else:
+            do_continue_constraint = True
+            await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
 
         return (result, do_continue_constraint)
 
