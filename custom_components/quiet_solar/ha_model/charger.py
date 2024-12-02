@@ -443,13 +443,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # find the best car .... for now
                 self.attach_car(car)
 
+            target_charge = await self.setup_car_charge_target_if_needed()
 
             car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None: # for possible percent issue
                 car_initial_percent = 0.0
                 _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
-
-            target_charge = await self.setup_car_charge_target_if_needed()
+            elif car_initial_percent >= target_charge:
+                if target_charge == 100:
+                    _LOGGER.info(f"plugged car {self.car.name} as a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at 0")
+                    car_initial_percent = 0
+                else:
+                    _LOGGER.info(
+                        f"plugged car {self.car.name} as a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
+                    car_initial_percent = max(0, target_charge - 5)
 
             if existing_constraints:
                 for ct in existing_constraints:
