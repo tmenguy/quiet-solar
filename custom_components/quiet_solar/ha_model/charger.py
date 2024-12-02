@@ -964,7 +964,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # force met constraint
                 result = ct.target_value
 
-        if ct.is_constraint_met(result):
+        if result is not None and ct.is_constraint_met(result):
             do_continue_constraint = False
         else:
             do_continue_constraint = True
