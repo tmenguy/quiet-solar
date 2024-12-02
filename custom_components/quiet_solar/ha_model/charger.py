@@ -959,7 +959,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             elif result is not None:
                 # force to not finish until the car stopped asking current
                 result = min(result, 99)
-        elif ct.is_constraint_met(result) or is_car_stopped_asked_current:
+        elif (result is not None and ct.is_constraint_met(result)) or is_car_stopped_asked_current:
                 _LOGGER.info(f"update_value_callback: FINISH under 100%>{ct.target_value}% met:{ct.is_constraint_met(result)} stopped_asking: {is_car_stopped_asked_current}")
                 # force met constraint
                 result = ct.target_value
