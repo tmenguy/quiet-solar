@@ -135,6 +135,8 @@ class AbstractLoad(AbstractDevice):
 
         if stored_executed is not None:
             self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
+        else:
+            self._last_completed_constraint = None
 
         if stored_load_info:
             self.num_on_off =  stored_load_info.get("num_on_off", 0)
@@ -157,8 +159,8 @@ class AbstractLoad(AbstractDevice):
         new_hash = self.get_active_state_hash(time)
 
         if new_hash is not None:
-
-            if self._last_hash_state != new_hash:
+            # do not notify just after a reset (self._last_hash_state None)
+            if self._last_hash_state is not None and self._last_hash_state != new_hash:
                 _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
                 await self.on_hash_state_change(time)
 
