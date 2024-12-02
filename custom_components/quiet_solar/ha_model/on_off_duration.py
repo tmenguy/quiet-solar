@@ -60,7 +60,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
 
-        start_schedule, end_schedule = self.get_next_scheduled_event(time)
+        start_schedule, end_schedule = await self.get_next_scheduled_event(time)
 
         if start_schedule is not None and end_schedule is not None:
 

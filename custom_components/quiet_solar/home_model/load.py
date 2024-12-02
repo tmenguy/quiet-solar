@@ -198,15 +198,19 @@ class AbstractLoad(AbstractDevice):
         return None
 
 
-    def get_active_readable_name(self, time:datetime) -> str:
+    def get_active_readable_name(self, time:datetime, filter_for_human_notification=False) -> str | None:
 
         current_constraint = self.get_current_active_constraint(time)
+
+        new_val = None
 
         if current_constraint is None:
             if self._last_completed_constraint is not None:
                 new_val = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
             else:
-                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+                if filter_for_human_notification is False:
+                    new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+
         else:
             new_val = current_constraint.get_readable_name_for_load()
 

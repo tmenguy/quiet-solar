@@ -6,14 +6,17 @@ from operator import itemgetter
 from typing import Mapping, Any, Callable
 
 import pytz
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform, \
+    ATTR_ENTITY_ID
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
+from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
-    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL
+    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
+    FLOATING_PERIOD_S
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -226,7 +229,7 @@ class HADeviceMixin:
         self._unsub = None
 
 
-    def get_next_scheduled_event(self, time:datetime) -> tuple[datetime|None,datetime|None]:
+    async def get_next_scheduled_event(self, time:datetime, after_end_time=False) -> tuple[datetime|None,datetime|None]:
         if self.calendar is None:
             return None, None
 
@@ -247,6 +250,32 @@ class HADeviceMixin:
         if end_time is not None:
             end_time = datetime.fromisoformat(end_time)
             end_time = end_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+
+        if after_end_time and start_time is not None and end_time is not None and time >= start_time and time <= end_time:
+            # time is "during the current event" but if we want the next "start" ask the calendar
+            data = {ATTR_ENTITY_ID: self.calendar}
+            service = calendar.SERVICE_GET_EVENTS
+            data[calendar.EVENT_START_DATETIME] = end_time + timedelta(seconds=1)
+            data[calendar.EVENT_DURATION] = timedelta(seconds=FLOATING_PERIOD_S+1)
+            domain = calendar.DOMAIN
+
+            start_time = None
+            end_time = None
+            try:
+                resp = await self.hass.services.async_call(
+                    domain, service, data, blocking=True, return_response=True
+                )
+                for cals in resp:
+                    events = resp[cals].get("events", [])
+                    for event in events:
+                        # events are sorted by time ... pick teh first one
+                        start_time = datetime.fromisoformat(event["start"])
+                        end_time = datetime.fromisoformat(event["end"])
+                        break
+            except Exception as err:
+                _LOGGER.error(f"Error reading calendar {self.calendar} {err}")
+
 
         return start_time, end_time
 
@@ -303,13 +332,13 @@ class HADeviceMixin:
     async def on_hash_state_change(self, time: datetime):
 
         if isinstance(self, AbstractLoad):
-            readable_state = self.get_active_readable_name(time)
+            readable_state = self.get_active_readable_name(time, filter_for_human_notification=True)
         else:
             readable_state = "WRONG STATE"
 
         _LOGGER.info(f"Sending notification for load {self.name} app: {self.mobile_app} with: {readable_state}")
 
-        if self.mobile_app is not None:
+        if self.mobile_app is not None and readable_state is not None:
 
             data={
                 "title": f"What will happen for {self.name}?",

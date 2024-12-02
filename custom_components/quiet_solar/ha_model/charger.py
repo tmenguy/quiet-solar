@@ -285,13 +285,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
         if isinstance(self, AbstractLoad):
-            readable_state = self.get_active_readable_name(time)
+            readable_state = self.get_active_readable_name(time, filter_for_human_notification=True)
         else:
             readable_state = "WRONG STATE"
 
         _LOGGER.info(f"Sending notification for Charger, car {load_name} app: {mobile_app} with: {readable_state}")
 
-        if mobile_app is not None:
+        if mobile_app is not None and readable_state is not None:
 
             data={
                 "title": f"What will happen for {load_name}?",
@@ -497,7 +497,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._do_force_next_charge = False
                 realized_charge_target = target_charge
 
-            start_time, end_time = self.car.get_next_scheduled_event(time)
+            start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
             # only add it if it is "after" the end of the forced constraint
             if start_time is not None and (force_constraint is None or start_time > force_constraint.end_of_constraint):
 
@@ -956,12 +956,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # if we force the completion of the constraint, so for now no need
             _LOGGER.info(f"update_value_callback:stop asking current, stop constraint do_continue_constraint=False, force constraint met")
             do_continue_constraint = False
+            # force met constraint
             result = ct.target_value
         elif result is not None:
             # ok 0.1% of tolerance here...
-            if ct.is_constraint_met(result+0.1):
+            if ct.is_constraint_met(result+0.5):
                 _LOGGER.info(f"update_value_callback: more than target {result} >= {ct.target_value}")
                 do_continue_constraint = False
+                # force met constraint
                 result = ct.target_value
 
         await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
