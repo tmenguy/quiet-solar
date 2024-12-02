@@ -943,8 +943,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     if result > result_calculus + 10 and result < 98:
                         # in case the initial value was 0 for example because of a bad car % value
-                        # reset the current value
-                        result = result
+                        # reset the current value if now the result is valid
+                        pass
                     else:
                         result = min(result_calculus, result)
 
