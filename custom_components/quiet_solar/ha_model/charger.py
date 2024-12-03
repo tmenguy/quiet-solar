@@ -927,7 +927,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         """
         await self._do_update_charger_state(time)
 
-        if self.current_command is None or self.car is None or self.is_not_plugged(time=time,
+        if self.car is None or self.is_not_plugged(time=time,
                                                                                    for_duration=CHARGER_CHECK_STATE_WINDOW):
             # if we reset here it will remove the current constraint list from the load!!!!
             _LOGGER.info(f"update_value_callback: reset because no car or not plugged")
@@ -1008,7 +1008,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if probe_only is False:
                 self._expected_amperage.set(int(max(self.min_charge, self.charger_default_idle_charge)), time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
                 self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
-        elif command.is_off_or_idle():
+        elif command is None or command.is_off_or_idle():
             self._expected_charge_state.set(False, time)
             self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not use charger min charge so next time we plug ...it may work
         elif command.is_like(CMD_ON):
@@ -1219,6 +1219,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
 
         # force a homeassistant.update_entity service on the charger entity?
+        if command is None:
+            return True
+
         await self._do_update_charger_state(time)
         is_plugged = self.is_plugged(time=time)
         if is_plugged is None:

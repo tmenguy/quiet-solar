@@ -298,7 +298,7 @@ class HADeviceMixin:
         if self.is_load_command_set(time) is False:
             do_return_None = True
         else:
-            if self.current_command.is_off_or_idle():
+            if self.current_command is None or self.current_command.is_off_or_idle():
                 command_value = 0.0
             else:
                 command_value = self.current_command.power_consign
