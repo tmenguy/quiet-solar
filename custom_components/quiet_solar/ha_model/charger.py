@@ -948,6 +948,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
                                                     clip_to_zero_under_power=self.charger_consumption_W)
             if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
+                added_nrj = self.efficiency_factor*added_nrj
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
 

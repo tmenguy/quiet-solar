@@ -540,15 +540,17 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if load.is_load_active(time) is False:
                 continue
 
-            if load.is_load_command_set(time) is False:
-                continue
+            # dangerous : won't be moving some constraints where they should! remove it ... and let the launch command
+            # with stacked command and other do th ejob of running the right command when it should
+            # if load.is_load_command_set(time) is False:
+            #     continue
 
 
             try:
                 # need to add this self._update_step_s to add a tolerancy for the mandatory not met constraint, to not
                 # send an unwanted command (see bellow while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                 # to not accidentaly send an idle command on an unfinished command
-                if (await load.update_live_constraints(time, self._period, 4*self._update_step_s)) :
+                if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
                     do_force_solve = True
             except Exception as err:
                 _LOGGER.error(f"Error updating live constraints for load {load.name} {err}")

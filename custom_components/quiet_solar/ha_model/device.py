@@ -252,11 +252,11 @@ class HADeviceMixin:
             end_time = end_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
 
-        if after_end_time and start_time is not None and end_time is not None and time >= start_time and time <= end_time:
+        if after_end_time and start_time is not None and end_time is not None and time >= start_time:
             # time is "during the current event" but if we want the next "start" ask the calendar
             data = {ATTR_ENTITY_ID: self.calendar}
             service = calendar.SERVICE_GET_EVENTS
-            data[calendar.EVENT_START_DATETIME] = end_time + timedelta(seconds=1)
+            data[calendar.EVENT_START_DATETIME] = end_time - timedelta(seconds=1) # -1 to get the "current one" will filter it below in the loop if needed
             data[calendar.EVENT_DURATION] = timedelta(seconds=FLOATING_PERIOD_S+1)
             domain = calendar.DOMAIN
 
@@ -269,8 +269,11 @@ class HADeviceMixin:
                 for cals in resp:
                     events = resp[cals].get("events", [])
                     for event in events:
-                        # events are sorted by time ... pick teh first one
-                        start_time = datetime.fromisoformat(event["start"])
+                        # events are sorted by time ... pick the first ok one
+                        st_time = datetime.fromisoformat(event["start"])
+                        if st_time <= time:
+                            continue
+                        start_time = st_time
                         end_time = datetime.fromisoformat(event["end"])
                         break
             except Exception as err:

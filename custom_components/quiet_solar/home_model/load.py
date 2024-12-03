@@ -411,8 +411,6 @@ class AbstractLoad(AbstractDevice):
 
     async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
 
-        if not self._constraints:
-            self._constraints = []
 
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
@@ -427,108 +425,106 @@ class AbstractLoad(AbstractDevice):
             # we should reset some stuffs
             self.reset_daily_load_datas(time)
 
-        # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
-        current_constraint = None
-        if self.running_command is not None:
-            force_solving =  False
 
-        elif not self._constraints:
+        current_constraint = None
+        #if self.running_command is not None:
+        #    force_solving =  False
+        #elif
+        # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
+        # well don't like it ... running command will be gracefully handled by launch command
+        if not self._constraints:
             self._constraints = []
             force_solving =  False
         else:
-
             force_solving = False
+
+            # be sure we don't forget one ...
+            for c in self._constraints:
+                c.skip = False
+
             for i, c in enumerate(self._constraints):
 
                 if c.skip:
                     continue
 
-                if c.end_of_constraint < time:
+                do_update_c = False
 
-                    # it means this constraint should be finished by now
-                    if c.is_constraint_met() or c.is_mandatory is False:
-                        _LOGGER.info(f"{c.name} skipped because met or not mandatory")
-                        c.skip = True
-                        force_solving = True
-                        if c.is_constraint_met():
-                            self._last_completed_constraint = c
-
-                    elif c.end_of_constraint < time + end_constraint_min_tolerancy:
-                        # a not met mandatory one! we should expand it or force it
-                        duration_s = c.best_duration_to_meet() + end_constraint_min_tolerancy
-                        duration_s = max(timedelta(seconds=1200), duration_s*(1.0 + c.pushed_count*0.2)) # extend if we continue to push it
-                        new_constraint_end = time + duration_s
-                        handled_constraint_force = False
-                        c.skip = True
-
-                        if i < len(self._constraints) - 1:
-
-                            for j in range(i+1, len(self._constraints)):
-
-                                nc = self._constraints[j]
-
-                                if nc.skip:
-                                    continue
-
-                                if nc.end_of_constraint < time:
-                                    c.skip = True
-                                    continue
-
-                                if nc.end_of_constraint >= new_constraint_end:
-                                    break
-
-                                if nc.end_of_constraint < new_constraint_end:
-                                    if nc.is_constraint_met():
-                                        nc.skip = True
-                                    else:
-                                        force_solving = True
-                                        # nc constraint may need to be forced or not
-                                        if nc.score() > c.score():
-                                            # we should skip the current one
-                                            c.skip = True
-                                            handled_constraint_force = True
-                                            # make the current constraint the next important one
-                                            # to break below after if handled_constraint_force:
-                                            c = nc
-                                            break
-                                        else:
-                                            nc.skip = True
-
-                        if handled_constraint_force is False:
-
-                            if c.pushed_count > 4:
-                                # TODO: we should send a push notification to the one attached to the constraint!
-                                # As it is not met and pushed too many times
-                                c.skip = True
-                                _LOGGER.info(f"{c.name} not met and pushed too many times")
-                            else:
-
-                                # unskip the current one
-                                c.skip = False
-                                c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE # force as much as we can....
-                                c.pushed_count += 1
-                                _LOGGER.info(f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}")
-                                handled_constraint_force = True
-                                c.end_of_constraint = new_constraint_end
-
-                        if handled_constraint_force:
-                            force_solving = True
-                            # ok we have pushed or made a target the next important constraint
-                            do_continue_ct = await c.update(time)
-                            if do_continue_ct is False:
-                                if c.is_constraint_met():
-                                    self._last_completed_constraint = c
-                                    _LOGGER.info(f"{c.name} skipped because met (just after update)")
-                                else:
-                                    _LOGGER.info(f"{c.name} stopped by callback (just after update)")
-                                c.skip = True
-                            break
-
-                elif c.is_constraint_met():
+                if c.is_constraint_met():
                     c.skip = True
+                    force_solving = True
                     self._last_completed_constraint = c
                     _LOGGER.info(f"{c.name} skipped because met")
-                elif c.is_constraint_active_for_time_period(time, time + period):
+                elif c.end_of_constraint <= time  and c.is_mandatory is False:
+                    _LOGGER.info(f"{c.name} skipped because not mandatory")
+                    c.skip = True
+                    force_solving = True
+                elif c.is_mandatory and c.end_of_constraint <  time + end_constraint_min_tolerancy:
+                    # a not met mandatory one! we should expand it or force it
+                    duration_s = c.best_duration_to_meet() + end_constraint_min_tolerancy
+                    duration_s = max(timedelta(seconds=1200), duration_s*(1.0 + c.pushed_count*0.2)) # extend if we continue to push it
+                    new_constraint_end = time + duration_s
+                    handled_constraint_force = False
+                    c.skip = True
+
+                    if i < len(self._constraints) - 1:
+
+                        for j in range(i+1, len(self._constraints)):
+
+                            nc = self._constraints[j]
+
+                            if nc.skip:
+                                continue
+
+                            if nc.end_of_constraint < time:
+                                c.skip = True
+                                continue
+
+                            if nc.end_of_constraint >= new_constraint_end:
+                                break
+
+                            if nc.end_of_constraint < new_constraint_end:
+                                if nc.is_constraint_met():
+                                    nc.skip = True
+                                else:
+                                    force_solving = True
+                                    # nc constraint may need to be forced or not
+                                    if nc.score() > c.score():
+                                        # we should skip the current one
+                                        c.skip = True
+                                        handled_constraint_force = True
+                                        # make the current constraint the next important one
+                                        # to break below after if handled_constraint_force:
+                                        c = nc
+                                        break
+                                    else:
+                                        nc.skip = True
+
+                    if handled_constraint_force is False:
+
+                        if c.pushed_count > 4:
+                            # TODO: we should send a push notification to the one attached to the constraint!
+                            # As it is not met and pushed too many times
+                            c.skip = True
+                            _LOGGER.info(f"{c.name} not met and pushed too many times")
+                        else:
+
+                            # unskip the current one
+                            c.skip = False
+                            c.pushed_count += 1
+                            _LOGGER.info(f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}")
+                            handled_constraint_force = True
+                            c.end_of_constraint = new_constraint_end
+
+                    if handled_constraint_force:
+                        force_solving = True
+                        # ok we have pushed or made a target the next important constraint
+                        do_update_c = True
+                        c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE  # force as much as we can....
+                        _LOGGER.info(f"{c.name} handled_constraint_force")
+                else:
+                    do_update_c = True
+
+                if do_update_c and c.is_constraint_active_for_time_period(time, time + period):
                     do_continue_ct = await c.update(time)
                     if do_continue_ct is False:
                         if c.is_constraint_met():
@@ -606,15 +602,10 @@ class AbstractLoad(AbstractDevice):
 
 
         if self.running_command is not None:
-            # already launched command
-            if self.running_command == command:
-                self._stacked_command = None #no need of it anymore
-                return
-            else:
-                # another command has been launched, stack this one
-                self._stacked_command = command
-                _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
-                return
+            # another command has been launched, stack this one (we replace the previous stacked one)
+            self._stacked_command = command
+            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
+            return
 
         # there is no running : whatever we will not execute the stacked one but only the last one
         self._stacked_command = None
@@ -634,7 +625,6 @@ class AbstractLoad(AbstractDevice):
         is_command_set = await self.probe_if_command_set(time, self.running_command)
         if is_command_set is True:
             _LOGGER.info(f"launch_command: Command already set {command} for this load {self.name}, ctxt: {ctxt}")
-            pass
         else:
             try:
                 is_command_set = await self.execute_command(time, command)
@@ -684,7 +674,7 @@ class AbstractLoad(AbstractDevice):
 
     async def force_relaunch_command(self, time: datetime):
         if self.running_command is not None:
-            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name})")
+            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
             self.running_command_num_relaunch += 1
             is_command_set = await self.execute_command(time, self.running_command)
             self.running_command_last_launch = time
