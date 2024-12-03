@@ -172,8 +172,8 @@ class AbstractLoad(AbstractDevice):
             if (self._last_hash_state is not None and self._last_hash_state != new_hash) or self._to_be_notified_completion is not None:
                 _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
                 await self.on_hash_state_change(time)
-
-            self._last_hash_state = new_hash
+            if new_hash is not None and self._to_be_notified_completion is None:
+                self._last_hash_state = new_hash
 
         self._to_be_notified_completion = None
 
