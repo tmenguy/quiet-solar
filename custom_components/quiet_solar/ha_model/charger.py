@@ -943,7 +943,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
                                                     clip_to_zero_under_power=self.charger_consumption_W)
             if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
-                added_nrj = self.efficiency_factor*added_nrj
+                added_nrj = added_nrj/self.efficiency_factor # divide by efficiency factor as her ewe want to know what will be the impact in percent
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
 
@@ -953,7 +953,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if result is None:
                     result = result_calculus
                 else:
-                    if result > result_calculus + 10 and result < 98:
+                    if result > result_calculus + 10 and result <= 99:
                         # in case the initial value was 0 for example because of a bad car % value
                         # reset the current value if now the result is valid
                         pass
