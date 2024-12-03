@@ -96,7 +96,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "default_car_charge": "Default car charge target in %"
+          "default_car_charge": "generic car default charge target in %",
+          "device_efficiency": "generic car charging power efficiency in %"
         }
       },
       "charger_ocpp": {
@@ -112,7 +113,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
+          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::charger_generic::data::device_efficiency%]"
         }
       },
       "charger_wallbox": {
@@ -128,7 +130,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
+          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::charger_generic::data::device_efficiency%]"
         }
       },
       "car": {
@@ -153,7 +156,8 @@
           "car_charger_max_charge": "Per phase max charge in (A)",
           "calendar": "Add a calendar to define when the car needs to be ready",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]",
+          "default_car_charge": "Default car charge in %",
+          "device_efficiency": "Car charging power efficiency in %",
           "car_use_custom_power_charge_values": "Use custom power charge values?",
           "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
           "charge_1": "Charge Power in W for a  1A charge (per phase), -1 for default",
@@ -318,7 +322,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_generic::data::calendar%]",
           "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_generic::data::calendar_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]"
+          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::charger_generic::data::device_efficiency%]"
         }
       },
       "charger_ocpp": {
@@ -334,7 +339,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_ocpp::data::calendar%]",
           "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_ocpp::data::calendar_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::default_car_charge%]"
+          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::charger_ocpp::data::device_efficiency%]"
         }
       },
       "charger_wallbox": {
@@ -350,7 +356,8 @@
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_wallbox::data::accurate_power_sensor_qs_reset_selector%]",
           "calendar" : "[%key:component::quiet_solar::config::step::charger_wallbox::data::calendar%]",
           "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::charger_wallbox::data::calendar_qs_reset_selector%]",
-          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::default_car_charge%]"
+          "default_car_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::charger_wallbox::data::device_efficiency%]"
         }
       },
       "car": {
@@ -376,6 +383,7 @@
           "calendar": "[%key:component::quiet_solar::config::step::car::data::calendar%]",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::car::data::calendar_qs_reset_selector%]",
           "default_car_charge": "[%key:component::quiet_solar::config::step::car::data::default_car_charge%]",
+          "device_efficiency": "[%key:component::quiet_solar::config::step::car::data::device_efficiency%]",
           "car_use_custom_power_charge_values": "[%key:component::quiet_solar::config::step::car::data::car_use_custom_power_charge_values%]",
           "car_is_custom_power_charge_values_3p": "[%key:component::quiet_solar::config::step::car::data::car_is_custom_power_charge_values_3p%]",
           "charge_1": "[%key:component::quiet_solar::config::step::car::data::charge_1%]",

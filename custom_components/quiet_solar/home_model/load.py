@@ -5,7 +5,6 @@ from collections.abc import Generator
 from operator import itemgetter
 
 import pytz
-from homeassistant.const import Platform
 
 from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
 from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
@@ -13,7 +12,7 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY
 
 import slugify
 
@@ -26,11 +25,14 @@ _LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
+        self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self.name = name
         self._device_type = device_type
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
         self._constraints: list[LoadConstraint | None] = []
+
+
 
     @property
     def device_type(self):
@@ -40,6 +42,11 @@ class AbstractDevice(object):
 
     def __repr__(self):
         return self.device_id
+
+    #it is a property as it has to be overchargeable (ex: charger for its car)
+    @property
+    def efficiency_factor(self):
+        return 100.0 / self.efficiency
 
 
 class AbstractLoad(AbstractDevice):
@@ -75,6 +82,7 @@ class AbstractLoad(AbstractDevice):
                 self.num_max_on_off += 1
 
         self.num_on_off = 0
+
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None

@@ -280,6 +280,12 @@ class LoadConstraint(object):
                 return False
         return True
 
+
+
+    def get_energy_to_be_added(self) -> float:
+        """ return the energy to be added to the load to meet the constraint"""
+        return self.load.efficiency_factor*(self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(self.current_value))
+
     @abstractmethod
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint when the state change."""
@@ -348,7 +354,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        seconds = (3600.0 * (self.target_value - self.current_value)) / self._max_power
+        seconds = self.load.efficiency_factor*((3600.0 * (self.target_value - self.current_value)) / self._max_power)
         return timedelta(seconds=seconds)
 
     def compute_value(self, time: datetime) -> float | None:
@@ -359,19 +365,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         return (((time - self.last_value_update).total_seconds()) *
                 self.load.current_command.power_consign / 3600.0) + self.current_value
 
-    def compute_best_period_repartition(self,
-                                        do_use_available_power_only: bool,
-                                        power_available_power: npt.NDArray[np.float64],
-                                        power_slots_duration_s: npt.NDArray[np.float64],
-                                        prices: npt.NDArray[np.float64],
-                                        prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[
-                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
-        nrj_to_be_added = self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(
-            self.current_value)
-        return self._compute_best_period_repartition(do_use_available_power_only, power_available_power,
-                                                     power_slots_duration_s, prices, prices_ordered_values, time_slots,
-                                                     nrj_to_be_added)
 
     def _num_command_state_change(self, out_commands: list[LoadCommand | None]):
         num = 0
@@ -439,15 +432,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return nrj_to_be_added
 
-    def _compute_best_period_repartition(self,
-                                         do_use_available_power_only: bool,
-                                         power_available_power: npt.NDArray[np.float64],
-                                         power_slots_duration_s: npt.NDArray[np.float64],
-                                         prices: npt.NDArray[np.float64],
-                                         prices_ordered_values: list[float],
-                                         time_slots: list[datetime],
-                                         nrj_to_be_added: float) -> tuple[
-                                         bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+
+    def compute_best_period_repartition(self,
+                                        do_use_available_power_only: bool,
+                                        power_available_power: npt.NDArray[np.float64],
+                                        power_slots_duration_s: npt.NDArray[np.float64],
+                                        prices: npt.NDArray[np.float64],
+                                        prices_ordered_values: list[float],
+                                        time_slots: list[datetime]) -> tuple[
+                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+
+
+        nrj_to_be_added = self.get_energy_to_be_added()
 
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
@@ -471,7 +467,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.as_fast_as_possible:
 
             # fill with the best (more power) possible commands
-            _LOGGER.info(f"_compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added}")
+            _LOGGER.info(f"compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added}")
 
             as_fast_power = -1
             as_fast_cmd_idx = None
@@ -648,7 +644,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if first_slot == 0 and prices[first_slot] == price:
                         # in this particular case : we will go from now to end to keep the continuity with the current command
                         _LOGGER.info(
-                            f"_compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
+                            f"compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
 
                         explore_range = range(first_slot, last_slot + 1)
                         # if not done : force the first slot to be a consign! if None it will be added below in the explore_range
@@ -724,8 +720,8 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        seconds = (3600.0 * (
-                ((self.target_value - self.current_value) * self.total_capacity_wh) / 100.0)) / self._max_power
+        seconds = self.load.efficiency_factor*((3600.0 * (
+                ((self.target_value - self.current_value) * self.total_capacity_wh) / 100.0)) / self._max_power)
         return timedelta(seconds=seconds)
 
     def compute_value(self, time: datetime) -> float | None:
@@ -757,7 +753,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        return timedelta(seconds=self.target_value - self.current_value)
+        return timedelta(seconds=self.load.efficiency_factor*(self.target_value - self.current_value))
 
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not,

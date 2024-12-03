@@ -79,7 +79,8 @@
                     "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
                     "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "Default car charge in %",
+                    "device_efficiency": "Car charging power efficiency in %",
                     "mobile_app": "Select a mobile app send notifications",
                     "mobile_app_qs_reset_selector": "if selected reset to empty the above field",
                     "mobile_app_url": "Open the mobile app at this relative URL",
@@ -112,7 +113,8 @@
                     "charger_pause_resume_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
                     "charger_plugged_qs_reset_selector": "if selected reset to empty the above field",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -127,7 +129,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -143,7 +146,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",
@@ -391,7 +395,8 @@
                     "charge_7": "Charge Power in W for a  7A charge (per phase), -1 for default",
                     "charge_8": "Charge Power in W for a  8A charge (per phase), -1 for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), -1 for default",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "Default car charge in %",
+                    "device_efficiency": "Car charging power efficiency in %",
                     "mobile_app": "Select a mobile app send notifications",
                     "mobile_app_qs_reset_selector": "if selected reset to empty the above field",
                     "mobile_app_url": "Open the mobile app at this relative URL",
@@ -414,7 +419,8 @@
                     "charger_pause_resume_switch": "Switch entity to pause/resume the charging",
                     "charger_pause_resume_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -429,7 +435,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -445,7 +452,8 @@
                     "charger_is_3p": "Is the charger 3 phases?",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-                    "default_car_charge": "Default car charge target in %",
+                    "default_car_charge": "generic car default charge target in %",
+                    "device_efficiency": "generic car charging power efficiency in %",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",

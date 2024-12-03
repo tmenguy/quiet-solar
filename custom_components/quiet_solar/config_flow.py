@@ -28,14 +28,13 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
-from homeassistant.components.mobile_app import DOMAIN as MOBILE_APP_DOMAIN, DATA_DEVICES, DATA_CONFIG_ENTRIES, \
-    ATTR_DEVICE_NAME
 
 from .entity import LOAD_TYPES, LOAD_NAMES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, CONF_CAR_CHARGE_PERCENT_SENSOR, \
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_HOME_VOLTAGE, \
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
@@ -48,7 +47,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
-    CONF_MOBILE_APP_URL
+    CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -178,6 +177,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_calendar=False,
                           add_boost_only=False,
                           add_mobile_app=False,
+                          add_efficiency_selector=False,
                           ) -> dict:
 
         default = self.config_entry.data.get(CONF_NAME)
@@ -216,6 +216,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             power_entities = selectable_power_entities(self.hass)
             if len(power_entities) > 0:
                 self.add_entity_selector(sc, CONF_ACCURATE_POWER_SENSOR, add_load_power_sensor_mandatory, entity_list=power_entities)
+
+        if add_efficiency_selector:
+            sc.update({
+                vol.Optional(CONF_DEVICE_EFFICIENCY, default=self.config_entry.data.get(CONF_DEVICE_EFFICIENCY, 100)):
+            selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=100,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement=PERCENTAGE,
+                )
+            )})
 
         if add_calendar:
             entities = selectable_calendar_entities(self.hass)
@@ -266,7 +279,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc = self.get_common_schema(add_load_power_sensor=True,
                                     add_load_power_sensor_mandatory=add_load_power_sensor_mandatory,
-                                    add_calendar=True)
+                                    add_calendar=True,
+                                    add_efficiency_selector=True)
 
         sc.update( {
                     vol.Optional(CONF_CHARGER_MAX_CHARGE, default=self.config_entry.data.get(CONF_CHARGER_MAX_CHARGE, 32)):
@@ -623,7 +637,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 return r
 
 
-        sc_dict = self.get_common_schema(add_calendar=True, add_mobile_app=True)
+        sc_dict = self.get_common_schema(add_calendar=True, add_mobile_app=True, add_efficiency_selector=True)
 
         sc_dict.update(
             {

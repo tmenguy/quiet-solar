@@ -16,7 +16,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
     CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, SENSOR_CONSTRAINT_SENSOR_CHARGE
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
+    SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
@@ -153,7 +154,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             CONF_CAR_CHARGER_MIN_CHARGE: self.charger_min_charge,
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
             CONF_CAR_BATTERY_CAPACITY: 22000,
-            CONF_CALENDAR: self.calendar
+            CONF_CALENDAR: self.calendar,
+            CONF_DEVICE_EFFICIENCY: self.efficiency
         }
 
         self._default_generic_car = QSCar(hass=self.hass, home=self.home, config_entry=None,
@@ -575,6 +577,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return int(max(self.charger_min_charge, self.car.car_charger_min_charge))
         else:
             return self.charger_min_charge
+
+    @property
+    def efficiency_factor(self):
+        if self.car:
+            return self.car.efficiency_factor
+        else:
+            return super().efficiency_factor
 
     @property
     def max_charge(self):

@@ -18,7 +18,7 @@ CONF_SWITCH = "switch"
 CONF_SELECT = "select"
 CONF_CALENDAR = "calendar"
 CONF_LOAD_IS_BOOST_ONLY = "load_is_boost_only"
-
+CONF_DEVICE_EFFICIENCY = "device_efficiency"
 
 CONF_HOME_VOLTAGE = "home_voltage"
 
