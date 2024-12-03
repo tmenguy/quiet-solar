@@ -933,12 +933,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:short unplug")
             return (None, True)
 
+        result_calculus = None
+        sensor_result = None
+
         if self.current_command is None or self.current_command.is_off_or_idle():
             _LOGGER.info(f"update_value_callback:no command or idle/off")
             result = None
         else:
-            result = self.car.get_car_charge_percent(time)
-            result_calculus = None
+            sensor_result = self.car.get_car_charge_percent(time)
 
             added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
                                                     clip_to_zero_under_power=self.charger_consumption_W)
@@ -947,18 +949,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
 
-            _LOGGER.info(f"update_value_callback: sensor {result} and calculus {result_calculus}")
+            result = sensor_result
+
+            _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus}")
 
             if result_calculus is not None:
-                if result is None:
+                if sensor_result is None:
                     result = result_calculus
                 else:
-                    if result > result_calculus + 10 and result <= 99:
+                    if sensor_result > result_calculus + 10 and sensor_result <= 99:
                         # in case the initial value was 0 for example because of a bad car % value
                         # reset the current value if now the result is valid
-                        pass
+                        result = sensor_result
                     else:
-                        result = min(result_calculus, result)
+                        result = min(result_calculus, sensor_result)
 
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW)
 
@@ -975,6 +979,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"update_value_callback: FINISH under 100%>{ct.target_value}% met:{ct.is_constraint_met(result)} stopped_asking: {is_car_stopped_asked_current}")
                 # force met constraint
                 result = ct.target_value
+
+        _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus} retained result {result}")
 
         if result is not None and ct.is_constraint_met(result):
             do_continue_constraint = False
