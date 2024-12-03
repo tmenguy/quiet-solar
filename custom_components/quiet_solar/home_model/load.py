@@ -244,7 +244,9 @@ class AbstractLoad(AbstractDevice):
 
         if current_constraint is None:
             if self._last_completed_constraint is not None:
-                load_param = self._last_completed_constraint.load_param
+                load_param = "NO"
+                if self._last_completed_constraint.load_param is not None:
+                    load_param = self._last_completed_constraint.load_param
                 new_val = ("COMPLETED:" +
                            self._last_completed_constraint.name +
                            "-" +
