@@ -86,6 +86,7 @@ class AbstractLoad(AbstractDevice):
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
+        self._to_be_notified_completion = None
 
     def support_green_only_switch(self) -> bool:
         return False
@@ -166,13 +167,15 @@ class AbstractLoad(AbstractDevice):
 
         new_hash = self.get_active_state_hash(time)
 
-        if new_hash is not None:
+        if new_hash is not None or self._to_be_notified_completion is not None:
             # do not notify just after a reset (self._last_hash_state None)
-            if self._last_hash_state is not None and self._last_hash_state != new_hash:
+            if (self._last_hash_state is not None and self._last_hash_state != new_hash) or self._to_be_notified_completion is not None:
                 _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
                 await self.on_hash_state_change(time)
 
             self._last_hash_state = new_hash
+
+        self._to_be_notified_completion = None
 
     async def on_hash_state_change(self, time: datetime):
         pass
@@ -193,6 +196,11 @@ class AbstractLoad(AbstractDevice):
         self._constraints = []
         self._last_completed_constraint = None
         self._last_pushed_end_constraint_from_agenda = None
+        self._to_be_notified_completion = None
+
+    def ack_completed_constraint(self, constraint:LoadConstraint|None):
+        self._last_completed_constraint = constraint
+        self._to_be_notified_completion = constraint
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
         for c in self._constraints:
@@ -214,15 +222,19 @@ class AbstractLoad(AbstractDevice):
 
         new_val = None
 
-        if current_constraint is None:
-            if self._last_completed_constraint is not None:
-                new_val = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
-            else:
-                if filter_for_human_notification is False:
-                    new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
 
+        if self._to_be_notified_completion is not None:
+            new_val = "COMPLETED: " + self._to_be_notified_completion.get_readable_name_for_load()
         else:
-            new_val = current_constraint.get_readable_name_for_load()
+            if current_constraint is None:
+                if self._last_completed_constraint is not None:
+                    new_val = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
+                else:
+                    if filter_for_human_notification is False:
+                        new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+
+            else:
+                new_val = current_constraint.get_readable_name_for_load()
 
         return new_val
 
@@ -232,9 +244,7 @@ class AbstractLoad(AbstractDevice):
 
         if current_constraint is None:
             if self._last_completed_constraint is not None:
-                load_param = "NO"
-                if self._last_completed_constraint.load_param is not None:
-                    load_param = self._last_completed_constraint.load_param
+                load_param = self._last_completed_constraint.load_param
                 new_val = ("COMPLETED:" +
                            self._last_completed_constraint.name +
                            "-" +
@@ -452,7 +462,7 @@ class AbstractLoad(AbstractDevice):
                 if c.is_constraint_met():
                     c.skip = True
                     force_solving = True
-                    self._last_completed_constraint = c
+                    self.ack_completed_constraint(c)
                     _LOGGER.info(f"{c.name} skipped because met")
                 elif c.end_of_constraint <= time  and c.is_mandatory is False:
                     _LOGGER.info(f"{c.name} skipped because not mandatory")
@@ -528,7 +538,7 @@ class AbstractLoad(AbstractDevice):
                     do_continue_ct = await c.update(time)
                     if do_continue_ct is False:
                         if c.is_constraint_met():
-                            self._last_completed_constraint = c
+                            self.ack_completed_constraint(c)
                             _LOGGER.info(f"{c.name} skipped because met (just after update)")
                         else:
                             _LOGGER.info(f"{c.name} stopped by callback (just after update)")
