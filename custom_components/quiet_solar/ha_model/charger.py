@@ -17,7 +17,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
-    SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY
+    SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
@@ -274,7 +275,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
 
-    async def on_hash_state_change(self, time: datetime):
+    async def on_device_state_change(self, time: datetime, device_change_type:str):
 
         if self.car:
             load_name = self.car.name
@@ -285,32 +286,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             mobile_app = self.mobile_app
             mobile_app_url = self.mobile_app_url
 
+        await self.on_device_state_change_helper(time, device_change_type, load_name=load_name, mobile_app=mobile_app, mobile_app_url=mobile_app_url)
 
-        if isinstance(self, AbstractLoad):
-            readable_state = self.get_active_readable_name(time, filter_for_human_notification=True)
-        else:
-            readable_state = "WRONG STATE"
-
-        _LOGGER.info(f"Sending notification for Charger, car {load_name} app: {mobile_app} with: {readable_state}")
-
-        if mobile_app is not None and readable_state is not None:
-
-            data={
-                "title": f"What will happen for {load_name}?",
-                "message": f"{readable_state}",
-            }
-            if mobile_app_url is not None:
-                data["data"] = {}
-                data["data"]["url"] = mobile_app_url
-                data["data"]["clickAction"] = mobile_app_url
-
-            _LOGGER.info(f"Full Sending notification for Charger, car {load_name} app: {mobile_app} with: {data}")
-
-            await self.hass.services.async_call(
-                domain=Platform.NOTIFY,
-                service=mobile_app,
-                service_data=data,
-            )
 
 
     def get_best_car(self, time: datetime) -> QSCar | None:
@@ -447,7 +424,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             target_charge = await self.setup_car_charge_target_if_needed()
 
-            car_initial_percent = self.car.get_car_charge_percent(time)
+            car_current_charge_percent = car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None: # for possible percent issue
                 car_initial_percent = 0.0
                 _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
@@ -492,6 +469,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if ct.is_constraint_active_for_time_period(time):
                         if ct.as_fast_as_possible:
                             force_constraint = ct
+                            ct.reset_load_param(self.car.name)
                             if force_constraint.target_value != target_charge:
                                 do_force_solve = True
                             force_constraint.target_value = target_charge
@@ -500,17 +478,40 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if force_constraint is not None:
                 self._do_force_next_charge = False
                 realized_charge_target = target_charge
-
-            start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
-            # only add it if it is "after" the end of the forced constraint
-            if start_time is not None and (force_constraint is None or start_time > force_constraint.end_of_constraint):
-
-                if time > start_time:
-                    # it means .... we are in the middle of the scheduled event, in theory it is passed, do nothing
-                    # if there is a mandatory one unfinished it should have been pushed already to try to complete it
+            else:
+                # if we do have a last completed one it means there was no plug / un plug or reset in between
+                start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
+                is_passed_forced = force_constraint is not None and start_time <= force_constraint.end_of_constraint
+                if time > start_time or is_passed_forced:
+                    # not need at all to push any time constraint
                     _LOGGER.info(
-                        f"plugged car {self.car.name} NOT pushing mandatory constraint as we are in the middle of a scheduled event start:{start_time} end:{end_time} time:{time}")
-                else:
+                        f"plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time} is_passed_forced:{is_passed_forced}")
+                    start_time = None
+
+                if self._last_completed_constraint is not None:
+
+                    do_check_timed_constraint = False
+                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_percent, target_charge=target_charge)
+
+                    if is_car_charged is False:
+                        do_check_timed_constraint = True
+                    elif start_time is not None:
+                        if time - self._last_completed_constraint.end_of_constraint > timedelta(hours=12) or start_time - time < timedelta(hours=8):
+                            # we may want to try to push a time based constraint that may happen sooner just in case ...
+                            do_check_timed_constraint = True
+
+                    if do_check_timed_constraint is False:
+                        if start_time is not None:
+                            _LOGGER.info(
+                                f"plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
+                        start_time = None
+                    else:
+                        #as if there was a running one ... so the last filler is a full eco one
+                        realized_charge_target = target_charge
+
+                # only add it if it is "after" the end of the forced constraint
+                if start_time is not None:
+
                     car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
@@ -535,7 +536,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if realized_charge_target is None or realized_charge_target <= 99.9:
 
                 if realized_charge_target is None:
-                    realized_charge_target = car_initial_percent
                     # make car charging bigger than the battery filling if it is the only car constraint
                     type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                     realized_charge_target = car_initial_percent
@@ -922,8 +922,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         """
         await self._do_update_charger_state(time)
 
-        if self.car is None or self.is_not_plugged(time=time,
-                                                                                   for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # if we reset here it will remove the current constraint list from the load!!!!
             _LOGGER.info(f"update_value_callback: reset because no car or not plugged")
             return (None, False)
@@ -964,23 +963,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     else:
                         result = min(result_calculus, sensor_result)
 
-        is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time, for_duration=CHARGER_ADAPTATION_WINDOW)
 
-        if ct.target_value >= 100:
-            # the only way when at a 100 to stop is that the car will stop asking current
-            if is_car_stopped_asked_current:
-                _LOGGER.info(f"update_value_callback: FINISH 100% target and car stop asking current")
-                # force met constraint
-                result = ct.target_value
-            elif result is not None:
-                # force to not finish until the car stopped asking current
-                result = min(result, 99)
-        elif (result is not None and ct.is_constraint_met(result)) or is_car_stopped_asked_current:
-                _LOGGER.info(f"update_value_callback: FINISH under 100%>{ct.target_value}% met:{ct.is_constraint_met(result)} stopped_asking: {is_car_stopped_asked_current}")
-                # force met constraint
-                result = ct.target_value
+        is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 
-        _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus} retained result {result}")
+        _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus} retained result {result} is_car_charged {is_car_charged}")
 
         if result is not None and ct.is_constraint_met(result):
             do_continue_constraint = False
@@ -989,6 +975,33 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
 
         return (result, do_continue_constraint)
+
+    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int) -> (bool, int|float):
+
+        is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time,
+                                                                          for_duration=CHARGER_ADAPTATION_WINDOW)
+        result = current_charge
+
+        if is_car_stopped_asked_current:
+            # force met constraint: car is charged in all cases
+            result = target_charge
+        elif current_charge is not None:
+            if target_charge >= 100:
+                # for a car to be fully charged it has to have a stopped asking charge at minimum
+                result = min(current_charge, 99)
+            else:
+                ct = LoadConstraint()
+                ct.target_value = target_charge
+                ct.current_value = current_charge
+                if ct.is_constraint_met(current_charge):
+                    # force met constraint
+                    result = ct.target_value
+
+        return result == target_charge, result
+
+
+
+
 
 
     async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, constraint: LoadConstraint | None = None, probe_only: bool = False) -> bool:

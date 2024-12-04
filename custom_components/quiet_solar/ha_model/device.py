@@ -16,7 +16,7 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S
+    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -333,30 +333,48 @@ class HADeviceMixin:
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR
 
+    async def on_device_state_change(self, time: datetime, device_change_type:str):
+        await self.on_device_state_change_helper(time, device_change_type)
 
-    async def on_hash_state_change(self, time: datetime):
+    async def on_device_state_change_helper(self, time: datetime, device_change_type: str, **kwargs):
 
-        if isinstance(self, AbstractLoad):
-            readable_state = self.get_active_readable_name(time, filter_for_human_notification=True)
-        else:
-            readable_state = "WRONG STATE"
+        load_name = kwargs.get("load_name", self.name)
+        mobile_app = kwargs.get("mobile_app", self.mobile_app)
+        mobile_app_url = kwargs.get("mobile_app_url", self.mobile_app_url)
+        title = kwargs.get("title", f"What will happen for {load_name}?")
+        message = kwargs.get("message", None)
 
-        _LOGGER.info(f"Sending notification for load {self.name} app: {self.mobile_app} with: {readable_state}")
 
-        if self.mobile_app is not None and readable_state is not None:
+        if message is None:
+            if device_change_type == DEVICE_CHANGE_CONSTRAINT:
+                if isinstance(self, AbstractLoad):
+                    message = self.get_active_readable_name(time, filter_for_human_notification=True)
+                else:
+                    message = "WRONG STATE"
+            elif device_change_type == DEVICE_CHANGE_CONSTRAINT_COMPLETED:
+                if isinstance(self, AbstractLoad):
+                    if self._last_completed_constraint is not None:
+                        message = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
+
+
+        _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
+
+        if mobile_app is not None and message is not None:
 
             data={
-                "title": f"What will happen for {self.name}?",
-                "message": f"{readable_state}",
+                "title": title,
+                "message": message,
             }
-            if self.mobile_app_url is not None:
+            if mobile_app_url is not None:
                 data["data"] = {}
-                data["data"]["url"] = self.mobile_app_url
-                data["data"]["clickAction"] = self.mobile_app_url
+                data["data"]["url"] = mobile_app_url
+                data["data"]["clickAction"] = mobile_app_url
+
+            _LOGGER.info(f"Full Sending notification for load {load_name} app: {mobile_app} with: {data}")
 
             await self.hass.services.async_call(
                 domain=Platform.NOTIFY,
-                service=self.mobile_app,
+                service=mobile_app,
                 service_data=data,
             )
 

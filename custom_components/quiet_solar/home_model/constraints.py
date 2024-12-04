@@ -23,8 +23,8 @@ _LOGGER = logging.getLogger(__name__)
 class LoadConstraint(object):
 
     def __init__(self,
-                 time: datetime,
-                 load,
+                 time: datetime | None = None,
+                 load = None,
                  load_param: str | None = None,
                  from_user: bool = False,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
