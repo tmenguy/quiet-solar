@@ -271,10 +271,12 @@ class HADeviceMixin:
                     for event in events:
                         # events are sorted by time ... pick the first ok one
                         st_time = datetime.fromisoformat(event["start"])
+                        st_time = st_time.astimezone(tz=pytz.UTC)
                         if st_time <= time:
                             continue
                         start_time = st_time
                         end_time = datetime.fromisoformat(event["end"])
+                        end_time = end_time.astimezone(tz=pytz.UTC)
                         break
             except Exception as err:
                 _LOGGER.error(f"Error reading calendar {self.calendar} {err}")
