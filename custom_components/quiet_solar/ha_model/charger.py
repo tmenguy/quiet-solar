@@ -409,16 +409,32 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._do_force_next_charge = True
 
 
+    def get_and_adapt_existing_constraints(self, time: datetime) -> list[LoadConstraint]:
+        existing_constraints = []
+        for ct in self._constraints:
+
+            if ct.from_user is False or ct.as_fast_as_possible is False:
+                continue
+
+            _LOGGER.info(f"Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+
+            existing_constraints.append(ct)
+
+        return existing_constraints
+
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
 
         do_force_solve = False
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW) and self.car:
-            _LOGGER.info(f"unplugged connected car {self.car.name}: reset")
+            _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
+            existing_constraints = self.get_and_adapt_existing_constraints(time)
             self.reset()
             self._user_attached_car_name = None
             do_force_solve = True
+            for ct in existing_constraints:
+                self.push_live_constraint(time, ct)
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
             existing_constraints = []
@@ -426,7 +442,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             # user forced a "deconnection"
             if best_car is None:
-                _LOGGER.info("plugged car with CHARGER_NO_CAR_CONNECTED selected option")
+                _LOGGER.info("check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option")
                 self.reset()
                 return True
 
@@ -434,7 +450,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # there is already a car connected, check if it is the right one
                 #change car we have a better one ...
                 if best_car.name != self.car.name:
-                    _LOGGER.info("CHANGE CONNECTED CAR!")
+                    _LOGGER.info("check_load_activity_and_constraints: CHANGE CONNECTED CAR!")
                     self.detach_car()
 
             if not self.car:
@@ -442,28 +458,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # so we need to check if they are still valid
 
                 car = best_car
-                _LOGGER.info(f"plugging car {car.name} not connected: reset and attach car")
+                _LOGGER.info(f"check_load_activity_and_constraints: plugging car {car.name} not connected: reset and attach car")
 
-                if self._constraints and self._do_force_next_charge is False:
+                if self._do_force_next_charge is False:
                     # only keep user constraints...well in fact getting the as fast as possible one is enough
-                    for ct in self._constraints:
-
-                        if ct.from_user is False or ct.as_fast_as_possible is False:
-                            continue
-
-                        _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}")
-
-                        if ct.load_param != car.name:
-                            _LOGGER.info(f"Found a stored car constraint with {ct.load_param} for {car.name}, forcing to current car")
-                            ct.reset_load_param(car.name)
-
-                        existing_constraints.append(ct)
+                    existing_constraints = self.get_and_adapt_existing_constraints(time)
 
                 # this reset is key it removes the constraint, the self._last_completed_constraint, etc
                 # it will detach the car, etc
                 self.reset()
 
-                _LOGGER.info(f"plugged and no connected car: reset and attach car {car.name}")
                 # find the best car .... for now
                 self.attach_car(car)
 
@@ -472,17 +476,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             car_current_charge_percent = car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None: # for possible percent issue
                 car_initial_percent = 0.0
-                _LOGGER.info(f"plugged car {self.car.name} as a None car_initial_percent... force init at 0")
+                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} as a None car_initial_percent... force init at 0")
             elif car_initial_percent >= target_charge:
-                _LOGGER.info(f"plugged car {self.car.name} as a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
+                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} as a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
                 car_initial_percent = max(0, target_charge - 5)
 
-            if existing_constraints:
-                for ct in existing_constraints:
-                    if ct.target_value != target_charge:
-                        do_force_solve = True
-                    ct.target_value = target_charge
-                    self.push_live_constraint(time, ct)
+
+            for ct in existing_constraints:
+                if ct.target_value != target_charge:
+                    do_force_solve = True
+                if ct.load_param != self.car.name:
+                    _LOGGER.info(
+                        f"check_load_activity_and_constraints: Found a stored car constraint with {ct.load_param} for {self.car.name}, forcing to current car")
+                    ct.reset_load_param(self.car.name)
+                ct.target_value = target_charge
+                self.push_live_constraint(time, ct)
 
             realized_charge_target = None
             # add a constraint ... for now just fill the car as much as possible
@@ -506,7 +514,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
-                        f"plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
                 # we may have a as fast as possible constraint still active ... if so we need to update it
@@ -530,7 +538,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if time > start_time or is_passed_forced:
                     # not need at all to push any time constraint
                     _LOGGER.info(
-                        f"plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time} is_passed_forced:{is_passed_forced}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time} is_passed_forced:{is_passed_forced}")
                     start_time = None
 
                 if self._last_completed_constraint is not None:
@@ -548,7 +556,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if do_check_timed_constraint is False:
                         if start_time is not None:
                             _LOGGER.info(
-                                f"plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
+                                f"check_load_activity_and_constraints: plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
                         start_time = None
                     else:
                         #as if there was a running one ... so the last filler is a full eco one
@@ -574,7 +582,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
                         do_force_solve = True
                         _LOGGER.info(
-                            f"plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                            f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
 
                     realized_charge_target = target_charge
 
@@ -606,7 +614,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.push_live_constraint(time, car_charge_best_effort):
                     do_force_solve = True
                     _LOGGER.info(
-                        f"plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
@@ -1002,8 +1010,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             result = sensor_result
 
-            _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus}")
-
             if result_calculus is not None:
                 if sensor_result is None:
                     result = result_calculus
@@ -1018,13 +1024,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 
-        _LOGGER.info(f"update_value_callback: sensor {sensor_result} and calculus {result_calculus} retained result {result} is_car_charged {is_car_charged}")
-
         if result is not None and ct.is_constraint_met(result):
             do_continue_constraint = False
         else:
             do_continue_constraint = True
             await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
+
+        _LOGGER.info(f"update_value_callback: continue {do_continue_constraint} sensor {sensor_result} and calculus {result_calculus} retained result {result} is_car_charged {is_car_charged} command {self.current_command}")
 
         return (result, do_continue_constraint)
 

@@ -959,6 +959,11 @@ class QSSolarHistoryVals:
         start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
 
         current_values, current_days = self._get_values(start_idx, end_idx)
+
+        if current_values is None or current_days is None:
+            _LOGGER.debug("get_forecast_and_set_as_current no current_values !!!")
+            return []
+
         current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
 
         best_past_probes_in_days = [
@@ -1066,6 +1071,10 @@ class QSSolarHistoryVals:
 
 
     def _get_values(self, start_idx, end_idx):
+        if self.values is None:
+            _LOGGER.info(f"NO VALUES IN _get_values")
+            return None, None
+
         start_idx = self._sanitize_idx(start_idx)
         end_idx = self._sanitize_idx(end_idx)
 
