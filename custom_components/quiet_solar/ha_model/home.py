@@ -1,5 +1,6 @@
 import logging
 import pickle
+import sys
 from enum import StrEnum
 from operator import itemgetter
 from os.path import join
@@ -514,7 +515,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         try:
             await self.update_loads_constraints(time)
         except Exception as err:
-            _LOGGER.error(f"Error updating loads constraints {err}")
+            _LOGGER.error(f"Error updating loads constraints {err} {sys.exc_info()}")
 
         all_loads = self._all_loads
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:

@@ -4,12 +4,59 @@ from enum import StrEnum
 
 from typing import Any, Callable, Awaitable
 
-import pytz
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
-from homeassistant.components.wallbox.const import ChargerStatus
+
+try:
+    from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+except:
+    class WallboxChargerStatus(StrEnum):
+        """Charger Status Description."""
+
+        CHARGING = "Charging"
+        DISCHARGING = "Discharging"
+        PAUSED = "Paused"
+        SCHEDULED = "Scheduled"
+        WAITING_FOR_CAR = "Waiting for car demand"
+        WAITING = "Waiting"
+        DISCONNECTED = "Disconnected"
+        ERROR = "Error"
+        READY = "Ready"
+        LOCKED = "Locked"
+        LOCKED_CAR_CONNECTED = "Locked, car connected"
+        UPDATING = "Updating"
+        WAITING_IN_QUEUE_POWER_SHARING = "Waiting in queue by Power Sharing"
+        WAITING_IN_QUEUE_POWER_BOOST = "Waiting in queue by Power Boost"
+        WAITING_MID_FAILED = "Waiting MID failed"
+        WAITING_MID_SAFETY = "Waiting MID safety margin exceeded"
+        WAITING_IN_QUEUE_ECO_SMART = "Waiting in queue by Eco-Smart"
+        UNKNOWN = "Unknown"
+
+
+class QSOCPPv16ChargePointStatus(StrEnum):
+    """
+    Status reported in StatusNotification.req. A status can be reported for
+    the Charge Point main controller (connectorId = 0) or for a specific
+    connector. Status for the Charge Point main controller is a subset of the
+    enumeration: Available, Unavailable or Faulted.
+
+    States considered Operative are: Available, Preparing, Charging,
+    SuspendedEVSE, SuspendedEV, Finishing, Reserved.
+    States considered Inoperative are: Unavailable, Faulted.
+    """
+
+    available = "Available"
+    preparing = "Preparing"
+    charging = "Charging"
+    suspended_evse = "SuspendedEVSE"
+    suspended_ev = "SuspendedEV"
+    finishing = "Finishing"
+    reserved = "Reserved"
+    unavailable = "Unavailable"
+    faulted = "Faulted"
+
 
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
     CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_CHARGER_IS_3P, \
@@ -37,15 +84,9 @@ STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE = 60*10
 
-class QSOCPPChargePointStatus(StrEnum):
-    """ OCPP Charger Status Description."""
-    AVAILABLE = "Available"
-    PREPARING = "Preparing"
-    CHARGING = "Charging"
-    SUSPENDED_EVSE = "SuspendedEVSE"
-    SUSPENDED_EV = "SuspendedEV"
-    FINISHING = "Finishing"
-    RESERVED = "Reserved"
+
+
+
 
 class QSChargerStates(StrEnum):
     PLUGGED = "plugged"
@@ -166,8 +207,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_amperage: QSStateCmd | None = None
         self.reset()
 
+
+        self._unknown_state_vals = set()
+        self._unknown_state_vals.update([STATE_UNKNOWN, STATE_UNAVAILABLE])
+        self._unknown_state_vals.update(self.get_car_status_unknown_vals())
+
         self.attach_ha_state_to_probe(self.charger_status_sensor,
-                                      is_numerical=False)
+                                      is_numerical=False,
+                                      state_invalid_values=self._unknown_state_vals)
 
         self.attach_ha_state_to_probe(self._internal_fake_is_plugged_id,
                                       is_numerical=False,
@@ -287,8 +334,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             mobile_app_url = self.mobile_app_url
 
         await self.on_device_state_change_helper(time, device_change_type, load_name=load_name, mobile_app=mobile_app, mobile_app_url=mobile_app_url)
-
-
 
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car ....
@@ -707,16 +752,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 not_ok_value = QSChargerStates.PLUGGED
 
             latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
-            res_car =  self.car.is_car_plugged(time, for_duration)
-            if res_car is None:
-                return latest_charger_valid_state == ok_value
+
+            if latest_charger_valid_state is None:
+                res = None
             else:
-                if latest_charger_valid_state is not None:
+                # only check car if we are very sure of the charger state
+                res_car =  self.car.is_car_plugged(time, for_duration)
+                if res_car is not None:
                     if res_car is check_for_val and latest_charger_valid_state == ok_value:
-                        return True
+                        res = True
                     if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
-                        return False
-            return None
+                        res = False
 
         return res
 
@@ -730,19 +776,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
 
-        state = self.hass.states.get(self.charger_plugged)
-        if state is not None:
-            state_time = state.last_updated
-        else:
-            state_time = time
+        if self.charger_status_sensor:
+            state_wallbox = self.hass.states.get(self.charger_status_sensor)
+            if state_wallbox is None or state_wallbox.state in self._unknown_state_vals:
+                #if other are not available, we can't know if the charger is plugged at all
+                if state_wallbox is not None:
+                    state_time = state_wallbox.last_updated
+                else:
+                    state_time = time
+                return None, state_time
 
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return None, state_time
+            plugged_state_vals = self.get_car_plugged_in_status_vals()
+            if plugged_state_vals:
+                if state_wallbox.state in plugged_state_vals:
+                    return True, state_wallbox.last_updated
+                else:
+                    return False, state_wallbox.last_updated
 
-        return state.state == "on", state_time
 
-    def get_car_charge_enabled_status_vals(self) -> list[str]:
-        return []
+        return self.low_level_plug_check_now(time)
 
     def check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool | None:
 
@@ -756,25 +808,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if result is not None:
                 return result
 
-            state = self.hass.states.get(self.charger_pause_resume_switch)
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                result = None
-            else:
-                result = state.state == "on"
+            if self.charger_status_sensor:
+                state_wallbox = self.hass.states.get(self.charger_status_sensor)
+                if state_wallbox is None or state_wallbox.state in self._unknown_state_vals:
+                    return None
 
-                if not check_for_val:
-                    result = not result
+            result =  self.low_level_charge_check_now(time)
+
+            if result is not None and check_for_val is False:
+                result = not result
 
         return result
+
+
 
     def is_charge_enabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self.check_charge_state(time, for_duration, check_for_val=True)
 
     def is_charge_disabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self.check_charge_state(time, for_duration, check_for_val=False)
-
-    def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return []
 
     def is_car_stopped_asking_current(self, time: datetime,
                                       for_duration: float | None = CHARGER_ADAPTATION_WINDOW) -> bool | None:
@@ -998,10 +1050,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     result = ct.target_value
 
         return result == target_charge, result
-
-
-
-
 
 
     async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, constraint: LoadConstraint | None = None, probe_only: bool = False) -> bool:
@@ -1301,6 +1349,46 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             self._last_charger_state_prob_time = time
 
+    # ============================ INTERFACE TO BE OVERCHARGED ===================================== #
+
+    def low_level_charge_check_now(self, time: datetime) -> bool | None:
+
+        state = self.hass.states.get(self.charger_pause_resume_switch)
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            res_charge_check = None
+        else:
+            res_charge_check = state.state == "on"
+
+        return res_charge_check
+
+    def low_level_plug_check_now(self, time: datetime) -> [bool | None, datetime]:
+
+        state = self.hass.states.get(self.charger_plugged)
+        if state is not None:
+            state_time = state.last_updated
+        else:
+            state_time = time
+
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            res_plugged = None
+        else:
+            res_plugged = state.state == "on"
+
+        return res_plugged, state_time
+
+    def get_car_charge_enabled_status_vals(self) -> list[str]:
+        return []
+
+    def get_car_plugged_in_status_vals(self) -> list[str]:
+        return []
+
+    def get_car_status_unknown_vals(self) -> list[str]:
+        return []
+
+    def get_car_stopped_asking_current_status_vals(self) -> list[str]:
+        return []
+
+
 
 class QSChargerOCPP(QSChargerGeneric):
 
@@ -1352,7 +1440,7 @@ class QSChargerOCPP(QSChargerGeneric):
         val = amps * self.home.voltage
         return val
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> [bool|None, datetime]:
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
@@ -1361,20 +1449,34 @@ class QSChargerOCPP(QSChargerGeneric):
             state_time = time
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            return None, state_time
+            res_plugged = None
+        else:
+            res_plugged = state.state == "off"
 
-        return state.state == "off", state_time
+        return res_plugged, state_time
 
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
-            QSOCPPChargePointStatus.SUSPENDED_EV,
-            QSOCPPChargePointStatus.CHARGING,
-            QSOCPPChargePointStatus.SUSPENDED_EVSE
+            QSOCPPv16ChargePointStatus.suspended_ev,
+            QSOCPPv16ChargePointStatus.charging,
+            QSOCPPv16ChargePointStatus.suspended_evse
         ]
 
+    def get_car_plugged_in_status_vals(self) -> list[str]:
+        return [
+            QSOCPPv16ChargePointStatus.preparing,
+            QSOCPPv16ChargePointStatus.charging,
+            QSOCPPv16ChargePointStatus.suspended_ev,
+            QSOCPPv16ChargePointStatus.suspended_evse,
+            QSOCPPv16ChargePointStatus.finishing
+        ]
+
+    def get_car_status_unknown_vals(self) -> list[str]:
+        return [QSOCPPv16ChargePointStatus.unavailable, QSOCPPv16ChargePointStatus.faulted]
+
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return [QSOCPPChargePointStatus.SUSPENDED_EV]
+        return [QSOCPPv16ChargePointStatus.suspended_ev]
 
 
 class QSChargerWallbox(QSChargerGeneric):
@@ -1405,62 +1507,65 @@ class QSChargerWallbox(QSChargerGeneric):
         self.secondary_power_sensor = self.charger_wallbox_charging_power
         self.attach_power_to_probe(self.secondary_power_sensor)
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> [bool|None, datetime]:
 
-        state_wallbox = self.hass.states.get(self.charger_status_sensor)
-        if state_wallbox is None or state_wallbox.state in [STATE_UNAVAILABLE]:
-            #if other are not available, we can't know if the charger is plugged at all
-            if state_wallbox is not None:
-                state_time = state_wallbox.last_updated
-            else:
-                state_time = time
-            return None, state_time
+        state = self.hass.states.get(self.charger_pause_resume_switch)
+        if state is not None:
+            state_time = state.last_updated
         else:
-            state = self.hass.states.get(self.charger_pause_resume_switch)
-            if state is not None:
-                state_time = state.last_updated
-            else:
-                state_time = time
+            state_time = time
 
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                return False, state_time
-            return True, state_time
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            res_plugged = False
+        else:
+            res_plugged = True
 
-    def check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool | None:
+        return res_plugged, state_time
 
-        result = not check_for_val
-        if self.is_plugged(time=time, for_duration=for_duration):
 
-            status_vals = self.get_car_charge_enabled_status_vals()
+    def low_level_charge_check_now(self, time: datetime) -> bool | None:
 
-            result = self._check_charger_status(status_vals, time, for_duration, invert_prob=not check_for_val)
+        state = self.hass.states.get(self.charger_pause_resume_switch)
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            res_charge_check = False
+        else:
+            res_charge_check = state.state == "on"
 
-            if result is not None:
-                return result
-
-            state_wallbox = self.hass.states.get(self.charger_status_sensor)
-            if state_wallbox is None or state_wallbox.state in [STATE_UNAVAILABLE]:
-                return None
-
-            state = self.hass.states.get(self.charger_pause_resume_switch)
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                result = False
-            else:
-                result = state.state == "on"
-
-                if not check_for_val:
-                    result = not result
-
-        return result
+        return res_charge_check
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
-            ChargerStatus.CHARGING,
-            ChargerStatus.DISCHARGING,
-            ChargerStatus.WAITING_FOR_CAR,
-            ChargerStatus.WAITING
+            WallboxChargerStatus.CHARGING.value,
+            WallboxChargerStatus.DISCHARGING.value,
+            WallboxChargerStatus.WAITING_FOR_CAR.value,
+            WallboxChargerStatus.WAITING.value
         ]
 
+    def get_car_plugged_in_status_vals(self) -> list[str]:
+        return [
+            WallboxChargerStatus.CHARGING.value,
+            WallboxChargerStatus.DISCHARGING.value,
+            WallboxChargerStatus.PAUSED.value,
+            WallboxChargerStatus.SCHEDULED.value,
+            WallboxChargerStatus.WAITING_FOR_CAR.value,
+            WallboxChargerStatus.WAITING.value,
+            WallboxChargerStatus.LOCKED_CAR_CONNECTED.value,
+            WallboxChargerStatus.WAITING_IN_QUEUE_POWER_SHARING.value,
+            WallboxChargerStatus.WAITING_IN_QUEUE_POWER_BOOST.value,
+            WallboxChargerStatus.WAITING_MID_FAILED.value,
+            WallboxChargerStatus.WAITING_MID_SAFETY.value,
+            WallboxChargerStatus.WAITING_IN_QUEUE_ECO_SMART.value]
+
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return [ChargerStatus.WAITING_FOR_CAR]
+        return [
+            WallboxChargerStatus.WAITING_FOR_CAR.value
+        ]
+
+    def get_car_status_unknown_vals(self) -> list[str]:
+        return [
+            WallboxChargerStatus.UNKNOWN.value,
+            WallboxChargerStatus.ERROR.value,
+            WallboxChargerStatus.DISCONNECTED.value,
+            WallboxChargerStatus.UPDATING.value
+        ]
 

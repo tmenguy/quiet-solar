@@ -216,6 +216,10 @@ class HADeviceMixin:
             str, list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]] = {}
         self._entity_probed_last_valid_state: dict[
             str, tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict] | None] = {}
+
+        self._entity_probed_state_invalid_values: dict[
+            str,set[str]] = {}
+
         self._entity_probed_auto = set()
         self._entity_on_change = set()
 
@@ -574,7 +578,8 @@ class HADeviceMixin:
                                  conversion_fn: Callable[[float, dict], float] | None = None,
                                  update_on_change_only: bool = True,
                                  non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
-                                                                                               float | str | None, datetime | None, dict | None] | None] = None):
+                                                                                               float | str | None, datetime | None, dict | None] | None] = None,
+                                 state_invalid_values: set[str]|list[str]|None = None):
         if entity_id is None:
             return
 
@@ -584,6 +589,11 @@ class HADeviceMixin:
         self._entity_probed_state_transform_fn[entity_id] = transform_fn
         self._entity_probed_state_conversion_fn[entity_id] = conversion_fn
         self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
+        self._entity_probed_state_invalid_values[entity_id] = set()
+
+        self._entity_probed_state_invalid_values[entity_id].update([STATE_UNKNOWN, STATE_UNAVAILABLE])
+        if state_invalid_values:
+            self._entity_probed_state_invalid_values[entity_id].update(state_invalid_values)
 
         if non_ha_entity_get_state is not None:
             self._entity_probed_auto.add(entity_id)
@@ -619,7 +629,7 @@ class HADeviceMixin:
             if state is None:
                 state = self.hass.states.get(entity_id)
             state_attr = {}
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            if state is None or state.state in self._entity_probed_state_invalid_values[entity_id]:
                 value = None
                 if state is not None:
                     state_time = state.last_updated
