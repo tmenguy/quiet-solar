@@ -561,14 +561,6 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if load.is_load_active(time):
                 active_loads.append(load)
 
-            if load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
-                # set them back to a kind of "idle" state, many times will be "OFF" CMD
-                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle in update_loads")
-
-            await load.do_probe_state_change(time)
-
-
-
         if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
             do_force_solve = True
 
@@ -610,9 +602,9 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 break
 
         for load in all_loads:
-            if load.is_load_has_a_command_now_or_coming(time) is False:
+            if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
-                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads")
+                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads or not active")
 
             await load.do_probe_state_change(time)
 
