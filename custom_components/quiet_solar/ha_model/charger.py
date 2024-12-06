@@ -428,6 +428,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         #  if there is no more car ... just reset
 
         do_force_solve = False
+        if not self._constraints:
+            self._constraints = []
+
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW) and self.car:
             _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
             existing_constraints = self.get_and_adapt_existing_constraints(time)
@@ -537,8 +540,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 # if we do have a last completed one it means there was no plug / un plug or reset in between
                 start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
-                is_passed_forced = force_constraint is not None and start_time <= force_constraint.end_of_constraint
-                if time > start_time or is_passed_forced:
+                is_passed_forced = force_constraint is not None and start_time is not None and start_time <= force_constraint.end_of_constraint
+                if (start_time is not None and time > start_time) or is_passed_forced:
                     # not need at all to push any time constraint
                     _LOGGER.info(
                         f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time} is_passed_forced:{is_passed_forced}")

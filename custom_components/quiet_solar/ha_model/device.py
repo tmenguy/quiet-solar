@@ -283,7 +283,7 @@ class HADeviceMixin:
                         end_time = end_time.astimezone(tz=pytz.UTC)
                         break
             except Exception as err:
-                _LOGGER.error(f"Error reading calendar {self.calendar} {err}")
+                _LOGGER.error(f"Error reading calendar {self.calendar} {err}", exc_info=err)
 
 
         return start_time, end_time

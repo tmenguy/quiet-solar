@@ -1,6 +1,5 @@
 import logging
 import pickle
-import sys
 from enum import StrEnum
 from operator import itemgetter
 from os.path import join
@@ -484,14 +483,14 @@ class QSHome(HADeviceMixin, AbstractDevice):
             try:
                 await self._solar_plant.update_forecast(time)
             except Exception as err:
-                _LOGGER.error(f"Error updating solar forecast {err}")
+                _LOGGER.error(f"Error updating solar forecast {err}", exc_info=err)
 
         for device in self._all_devices:
             try:
                 await device.update_states(time)
             except Exception as err:
                 if isinstance(device, AbstractDevice):
-                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}")
+                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=err)
 
 
         if await self._consumption_forecast.init_forecasts(time):
@@ -515,7 +514,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         try:
             await self.update_loads_constraints(time)
         except Exception as err:
-            _LOGGER.error(f"Error updating loads constraints {err} {sys.exc_info()}")
+            _LOGGER.error(f"Error updating loads constraints {err}", exc_info=err)
 
         all_loads = self._all_loads
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
@@ -532,7 +531,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                         # we have an issue with this command ....
                         pass
             except Exception as err:
-                _LOGGER.error(f"Error checking load commands {load.name} {err}")
+                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=err)
 
 
         do_force_solve = False
@@ -554,7 +553,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
                     do_force_solve = True
             except Exception as err:
-                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}")
+                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=err)
 
 
         active_loads = []

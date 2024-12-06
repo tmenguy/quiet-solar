@@ -635,8 +635,8 @@ class AbstractLoad(AbstractDevice):
         else:
             try:
                 is_command_set = await self.execute_command(time, command)
-            except Exception as e:
-                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {e}, ctxt: {ctxt}")
+            except Exception as err:
+                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=err)
                 is_command_set = None
 
         if is_command_set is None:
