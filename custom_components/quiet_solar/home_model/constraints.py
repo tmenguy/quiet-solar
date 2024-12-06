@@ -314,31 +314,22 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                  support_auto: bool = False,
                  **kwargs):
 
-        # do this before super as best_duration_to_meet is used in the super call
-        if kwargs.get("type", CONSTRAINT_TYPE_FILLER_AUTO) >= CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE:
-            support_auto = False
-            mx_power = 0.0
-            if power is not None:
-                mx_power = power
-            elif power_steps is not None:
-                sorted_cmds = [c for c in power_steps if c.power_consign > 0.0]
-                sorted_cmds = sorted(sorted_cmds, key=lambda x: x.power_consign)
-                mx_power = sorted_cmds[-1].power_consign
+        if power_steps is None and power is not None:
+            power_steps = [copy_command(CMD_ON, power_consign=power)]
 
-            power_steps = [copy_command(CMD_ON, power_consign=mx_power)]
-        else:
-            if power_steps is None and power is not None:
-                power_steps = [copy_command(CMD_ON, power_consign=power)]
+        self.update_power_steps(power_steps)
 
+        self.support_auto = support_auto
+
+        super().__init__(**kwargs)
+
+    def update_power_steps(self, power_steps: list[LoadCommand]):
         self._power_cmds = power_steps
-        self._power_sorted_cmds = [c for c in power_steps if c.power_consign > 0.0]
+        self._power_sorted_cmds = [c for c in power_steps]
         self._power_sorted_cmds = sorted(self._power_sorted_cmds, key=lambda x: x.power_consign)
         self._power = self._power_sorted_cmds[-1].power_consign
         self._max_power = self._power_sorted_cmds[-1].power_consign
         self._min_power = self._power_sorted_cmds[0].power_consign
-        self.support_auto = support_auto
-
-        super().__init__(**kwargs)
 
     def to_dict(self) -> dict:
         data = super().to_dict()

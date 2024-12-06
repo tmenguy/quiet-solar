@@ -165,11 +165,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         data.update(self._salvable_dampening)
         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
-    def update_dampening_value(self, amperage:int|float, power_value:int|float, for_3p:bool, time:datetime, can_be_saved:bool):
+    def update_dampening_value(self, amperage:int|float, power_value:int|float, for_3p:bool, time:datetime, can_be_saved:bool) -> bool:
 
 
         if amperage < self.car_charger_min_charge or amperage > self.car_charger_max_charge:
-            return
+            return False
 
         amperage = int(amperage)
 
@@ -229,6 +229,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     data.update(self._salvable_dampening)
                     self.hass.config_entries.async_update_entry(self.config_entry, data=data)
                     #self.hass.add_job(self._save_dampening_values())
+
+        return do_update
 
     def interpolate_power_steps(self, do_recompute_min_charge=False, use_conf_values=False):
 

@@ -66,7 +66,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
     DEVICE_CHANGE_CONSTRAINT_COMPLETED
-from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
+from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
+    MultiStepsPowerLoadConstraint
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
@@ -666,18 +667,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if car.calendar is None:
             car.calendar = self.calendar
 
-        power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
-
-        steps = []
-        for a in range(min_charge, max_charge + 1):
-            steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
-
-        self._power_steps = steps
+        self.update_power_steps()
 
     def detach_car(self):
         self.car = None
         self._power_steps = []
 
+    # update in place the power steps
+    def update_power_steps(self):
+        if self.car:
+            power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
+            steps = []
+            for a in range(min_charge, max_charge + 1):
+                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
+            self._power_steps = steps
+
+            for ct in self._constraints:
+                if isinstance(ct, MultiStepsPowerLoadConstraint):
+                    ct.update_power_steps(steps)
 
     async def stop_charge(self, time: datetime):
 
@@ -1060,6 +1067,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result == target_charge, result
 
 
+    def update_car_dampening_value(self, time, amperage, power_value, can_be_saved):
+        if self.car:
+            if self.car.update_dampening_value(amperage=amperage, power_value=power_value, for_3p=self.charger_is_3p, time=time, can_be_saved=can_be_saved):
+                self.update_power_steps()
+
+
     async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, constraint: LoadConstraint | None = None, probe_only: bool = False) -> bool:
 
         if self.car is None:
@@ -1116,11 +1129,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             if constraint is not None:
                                 _LOGGER.info( f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
                                 # this following function can change the power steps of the car
-                                self.car.update_dampening_value(amperage=current_real_max_charging_power,
-                                                                power_value=current_real_car_power,
-                                                                for_3p=self.charger_is_3p,
-                                                                time=time,
-                                                                can_be_saved = (time - self._verified_correct_state_time).total_seconds() > 2*CHARGER_ADAPTATION_WINDOW)
+                                self.update_car_dampening_value(time=time, amperage=current_real_max_charging_power, power_value=current_real_car_power, can_be_saved=((time - self._verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
 
 
                         else:
