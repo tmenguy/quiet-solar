@@ -1152,7 +1152,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
 
                     available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
-                    # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this powe is available to the car
+                    # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this power is available to the car
 
                     # do we need a bit of a PID ? (proportional integral derivative? or keep it simple for now) or a convex hul with min / max?
                     # very rough estimation for now:
