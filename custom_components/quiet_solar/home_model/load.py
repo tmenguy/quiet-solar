@@ -601,6 +601,14 @@ class AbstractLoad(AbstractDevice):
                 self.num_on_off += 1
                 _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
 
+    def is_load_has_a_command_now_or_coming(self, time:datetime) -> bool:
+        if self.current_command is not None:
+            return True
+        if self.running_command is not None:
+            return True
+        if self._stacked_command is not None:
+            return True
+        return False
 
     async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
 

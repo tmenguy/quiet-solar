@@ -609,6 +609,13 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 # only launch one at a time for a given load
                 break
 
+        for load in all_loads:
+            if load.is_load_has_a_command_now_or_coming(time) is False:
+                # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads")
+
+            await load.do_probe_state_change(time)
+
 
     async def reset_forecasts(self, time: datetime = None):
         if time is None:
