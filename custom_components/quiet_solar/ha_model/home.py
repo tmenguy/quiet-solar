@@ -184,6 +184,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
         self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
 
+    def get_best_tariff(self, time: datetime) -> float:
+        if self.price_off_peak == 0:
+            return self.price_peak
+        else:
+            return min(self.price_off_peak, self.price_peak)
 
     def force_next_solve(self):
         self._last_solve_done = None
@@ -214,12 +219,11 @@ class QSHome(HADeviceMixin, AbstractDevice):
                 return self._solar_plant.get_forecast(start_time, end_time)
         return []
 
-    def get_tariffs(self, start_time:datetime, end_time:datetime) -> list[tuple[datetime, float]] | float:
+
+    def _get_today_off_peak_ranges(self, time:datetime) -> list[tuple[datetime, datetime]]:
 
         if self.price_off_peak == 0:
-            return self.price_peak
-
-        start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)  # beware it is utc time
+            return []
 
         to_prob = [
             (self.tariff_start_1, self.tariff_end_1, self.price_off_peak),
@@ -228,6 +232,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         ranges_off_peak = []
 
+        start_time_local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
         for start, end, price in to_prob:
             if start is None or end is None or price is None or price == 0:
                 continue
@@ -235,7 +241,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
             if start == end:
                 continue
 
-            start_time_local = start_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
             start_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {start}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
             end_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {end}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
@@ -244,10 +250,53 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
             ranges_off_peak.append((start_utc, end_utc))
 
+        if len(ranges_off_peak) > 1:
+            ranges_off_peak = sorted(ranges_off_peak, key=lambda x: x[0])
+
+        return ranges_off_peak
+
+
+    def get_tariff(self, start_time: datetime, end_time: datetime) -> float:
+        if self.price_off_peak == 0:
+            return self.price_peak
+
+        ranges_off_peak = self._get_today_off_peak_ranges(start_time)
+
         if not ranges_off_peak:
             return self.price_peak
 
-        ranges_off_peak = sorted(ranges_off_peak, key=lambda x: x[0])
+        price_start = self.price_peak
+        for range_start, range_end in ranges_off_peak:
+            if start_time < range_start:
+                price_start = self.price_peak
+                break
+            if start_time < range_end:
+                price_start =  self.price_off_peak
+                break
+
+        price_end = self.price_peak
+        for range_start, range_end in ranges_off_peak:
+            if end_time < range_start:
+                price_end = self.price_peak
+                break
+            if end_time < range_end:
+                price_end =  self.price_off_peak
+                break
+
+        return max(price_start, price_end)
+
+
+
+
+    def get_tariffs(self, start_time:datetime, end_time:datetime) -> list[tuple[datetime, float]] | float:
+
+        if self.price_off_peak == 0:
+            return self.price_peak
+
+        ranges_off_peak = self._get_today_off_peak_ranges(start_time)
+
+        if not ranges_off_peak:
+            return self.price_peak
 
         span = end_time - start_time
         num_day = span.days + 1

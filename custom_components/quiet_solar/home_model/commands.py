@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 
 CMD_CST_AUTO_GREEN = "auto_green"
 CMD_CST_AUTO_CONSIGN = "auto_consign"
+CMD_CST_AUTO_PRICE = "auto_price"
 @dataclass
 class LoadCommand:
     command: str
@@ -15,7 +16,7 @@ class LoadCommand:
         return asdict(self) #self.__dict_
 
     def is_auto(self) -> bool:
-        return self.command == CMD_CST_AUTO_GREEN or self.command == CMD_CST_AUTO_CONSIGN
+        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE]
 
     def is_like(self, other) -> bool:
         if other is None:
@@ -36,5 +37,6 @@ def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
 CMD_ON = LoadCommand(command="on", power_consign=0.0)
 CMD_AUTO_GREEN_ONLY = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
 CMD_AUTO_FROM_CONSIGN = LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=0.0)
+CMD_AUTO_PRICE = LoadCommand(command=CMD_CST_AUTO_PRICE, power_consign=0.0)
 CMD_OFF = LoadCommand(command="off", power_consign=0.0)
 CMD_IDLE = LoadCommand(command="idle", power_consign=0.0)

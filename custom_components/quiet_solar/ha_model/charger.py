@@ -71,7 +71,7 @@ from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStep
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_IDLE
+    CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE
 from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
@@ -1042,7 +1042,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             do_continue_constraint = True
             await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
 
-        _LOGGER.info(f"update_value_callback: continue {do_continue_constraint} sensor {sensor_result} and calculus {result_calculus} retained result {result} is_car_charged {is_car_charged} command {self.current_command}")
+        _LOGGER.info(f"update_value_callback: {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
 
         return (result, do_continue_constraint)
 
@@ -1166,7 +1166,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if command.is_like(CMD_AUTO_GREEN_ONLY):
                             target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
                         else:
-                            # mode CMD_AUTO_FROM_CONSIGN
+                            # mode CMD_AUTO_FROM_CONSIGN or CMD_AUTO_PRICE
                             target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
 
 
@@ -1218,11 +1218,33 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                             # both can't be None
                             if best_lower is None:
+                                # we are in CMD_AUTO_GREEN_ONLY and CMD_AUTO_PRICE
+                                # best_higher can be -1
+                                if best_higher < len(safe_powers_steps) - 1 and command.is_like(CMD_AUTO_PRICE):
+                                    # we will compute here is the price to take "more" power is better than the best
+                                    # electricity rate we may have
+                                    best_price = self.home.get_best_tariff(time)
+                                    durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
+                                    current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
+                                    new_best_higher = best_higher
+                                    while True:
+                                        added_energy = ((safe_powers_steps[new_best_higher+1] - safe_powers_steps[best_higher])*durations_eval_s)/3600.0
+                                        cost = (((safe_powers_steps[new_best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
+                                        cost_per_watt_h = cost / added_energy
+                                        if cost_per_watt_h > best_price:
+                                            break
+                                        new_best_higher += 1
+                                        if new_best_higher >= len(safe_powers_steps) - 1:
+                                            break
+                                    # ok we have a new best higher
+                                    best_higher = new_best_higher
+
                                 if best_higher < 0:
-                                    # nothing works, case o green only case ... stop charge
+                                    # nothing works, case auto_green or price ... stop charge
                                     new_amp = 0
                                 else:
                                     new_amp = best_higher + self.min_charge
+
                             elif best_higher is None:
                                 new_amp = best_lower + self.min_charge
                             else:
@@ -1236,7 +1258,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     # it means no available power ... force to go down if not done
                                     if current_real_max_charging_power <= new_amp and current_power > 0 and self._expected_charge_state.value:
                                         new_amp = min(current_real_max_charging_power-1, new_amp-1)
-                                        _LOGGER.info(f"Correct new_amp du to negative available power: {new_amp}")
+                                        _LOGGER.info(f"Correct new_amp due to negative available power: {new_amp}")
                                 else:
                                     delta_amp = new_amp - current_real_max_charging_power
                                     if delta_amp > 1:

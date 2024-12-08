@@ -28,7 +28,7 @@ class PeriodSolver(object):
         :param start_time: datetime: The start time of the period to solve.
         :param end_time: datetime: The end time of the day.
         :param tariffs: list of tuples, each tuple contains the following:
-            - float: the price of the period per kWh
+            - float: the price of the period per Wh
             - timedelta: the offset of the start time in a current day
         :param loads: list of AbstractLoad that have some constraint in it and their current states as constraint
         :param pv_forecast: list of time sorted tuples, each tuple contains the following:
@@ -55,7 +55,7 @@ class PeriodSolver(object):
         self._battery = battery
 
         if not tariffs:
-            self._tariffs = [(start_time, 0.2)]
+            self._tariffs = [(start_time, 0.2/1000.0)]
         elif isinstance(tariffs, float):
             self._tariffs = [(start_time, tariffs)]
         elif len(tariffs) == 1:
