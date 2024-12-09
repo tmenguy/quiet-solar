@@ -87,33 +87,54 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def reset(self):
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
 
-    def is_car_plugged(self, time:datetime, for_duration:float|None) -> bool | None:
+    def is_car_plugged(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
         if self.car_plugged is None:
             return None
 
-        contiguous_status = self.get_last_state_value_duration(self.car_plugged,
-                                                               states_vals=["on"],
-                                                               num_seconds_before=2 * for_duration,
-                                                               time=time)
-        if contiguous_status is None:
-            return contiguous_status
+        if for_duration is not None:
 
-        return contiguous_status >= for_duration and contiguous_status > 0
+            contiguous_status = self.get_last_state_value_duration(self.car_plugged,
+                                                                   states_vals=["on"],
+                                                                   num_seconds_before=2 * for_duration,
+                                                                   time=time)
+            if contiguous_status is not None:
+                return contiguous_status >= for_duration and contiguous_status > 0
+            else:
+                return None
 
-    def is_car_home(self, time:datetime, for_duration:float|None) -> bool | None:
+        else:
+            latest_state = self.get_sensor_latest_possible_valid_value(entity_id=self.car_plugged, time=time)
+
+            if latest_state is None:
+                return None
+
+            return latest_state == "on"
+
+
+
+    def is_car_home(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
         if self.car_tracker is None:
             return None
 
-        contiguous_status = self.get_last_state_value_duration(self.car_tracker,
-                                                               states_vals=["home"],
-                                                               num_seconds_before=2 * for_duration,
-                                                               time=time)
-        if contiguous_status is None:
-            return contiguous_status
+        if for_duration is not None:
 
-        return contiguous_status >= for_duration and contiguous_status > 0
+            contiguous_status = self.get_last_state_value_duration(self.car_tracker,
+                                                                   states_vals=["home"],
+                                                                   num_seconds_before=2 * for_duration,
+                                                                   time=time)
+            if contiguous_status is not None:
+                return contiguous_status >= for_duration and contiguous_status > 0
+            else:
+                return None
+        else:
+            latest_state = self.get_sensor_latest_possible_valid_value(entity_id=self.car_tracker, time=time)
+
+            if latest_state is None:
+                return None
+
+            return latest_state == "home"
 
     def get_car_charge_percent(self, time: datetime) -> float | None:
         res = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=600)

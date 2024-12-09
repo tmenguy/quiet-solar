@@ -355,9 +355,28 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         for car in self.home._cars:
 
             score = 0
-            if car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW) and car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+
+            score_plug_bump = 0
+            car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+            if car_plug_res:
+                score_plug_bump = 3
+            elif car_plug_res is None:
+                car_plug_res = car.is_car_plugged(time=time)
+                if car_plug_res:
+                    score_plug_bump = 2
+
+            score_home_bump = 0
+            car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+            if car_home_res:
+                score_home_bump = 3
+            elif car_home_res is None:
+                car_home_res = car.is_car_home(time=time)
+                if car_home_res:
+                    score_home_bump= 2
+
+            if car_plug_res and car_home_res:
                 # only if plugged .... then if home
-                score += 1
+                score = score_plug_bump + score_home_bump
                 if car.car_is_default:
                     score += 1
 

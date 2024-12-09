@@ -647,7 +647,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                                 explore_range = range(first_slot, last_slot + 1)
                                 # if not done : force the first slot to be a consign! if None it will be added below in the explore_range
-                                if out_commands[first_slot] is not None and out_commands[first_slot].is_like(CMD_AUTO_GREEN_ONLY):
+                                if out_commands[first_slot] is not None and out_commands[first_slot].is_auto():
                                     out_commands[first_slot] = price_cmd
                                     # put back the removed energy
                                     nrj_to_be_added += (out_power[first_slot] * power_slots_duration_s[first_slot]) / 3600.0
