@@ -595,8 +595,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             if power_to_add_idx >= len(self._power_sorted_cmds) - 1:
                                 break
 
-
-
                         # if we have a lower cost per watt_hours, than the lowest available price, use this bit of extra solar production
                         if power_to_add_idx > init_power_to_add_idx:
                             power_to_add: float = self._power_sorted_cmds[power_to_add_idx].power_consign
