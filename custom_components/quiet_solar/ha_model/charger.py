@@ -1251,9 +1251,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     else:
                                         auto_green_power_command = safe_powers_steps[best_higher]
                                     while True:
-                                        added_energy = ((safe_powers_steps[new_best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
+                                        additional_added_energy = ((safe_powers_steps[new_best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
                                         cost = (((safe_powers_steps[new_best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
-                                        cost_per_watt_h = cost / added_energy
+                                        cost_per_watt_h = cost / additional_added_energy
                                         if cost_per_watt_h > best_price:
                                             break
                                         new_best_higher += 1
