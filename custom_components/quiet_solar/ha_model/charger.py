@@ -1246,8 +1246,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
                                     current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
                                     new_best_higher = best_higher
+                                    if best_higher < 0:
+                                        auto_green_power_command = 0
+                                    else:
+                                        auto_green_power_command = safe_powers_steps[best_higher]
                                     while True:
-                                        added_energy = ((safe_powers_steps[new_best_higher+1] - safe_powers_steps[best_higher])*durations_eval_s)/3600.0
+                                        added_energy = ((safe_powers_steps[new_best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
                                         cost = (((safe_powers_steps[new_best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
                                         cost_per_watt_h = cost / added_energy
                                         if cost_per_watt_h > best_price:
