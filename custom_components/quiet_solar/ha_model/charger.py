@@ -385,9 +385,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 best_score = score
 
         if best_score == 0:
-            _LOGGER.debug(f"Default best car used: {best_car.name}")
+            _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
-            _LOGGER.debug(f"Best Car: {best_car.name} with score {best_score}")
+            _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
         return best_car
 
     def get_default_car(self):
