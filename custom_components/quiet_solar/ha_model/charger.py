@@ -4,6 +4,8 @@ from enum import StrEnum
 
 from typing import Any, Callable, Awaitable
 
+import pytz
+from datetime import time as dt_time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
@@ -190,6 +192,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charge_state = STATE_UNKNOWN
 
         self._last_charger_state_prob_time = None
+
+        self.default_charge_time : dt_time | None = None
 
         super().__init__(**kwargs)
 
@@ -424,6 +428,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.home.force_next_solve()
 
 
+    async def add_default_charge(self):
+        if self.can_add_default_charge():
+            if self.default_charge_time is not None:
+                # compute the next occurency of the default charge time
+                dt_now = datetime.now(tz=None)
+                next_time = datetime(year=dt_now.year, month=dt_now.month, day=dt_now.day, hour=self.default_charge_time.hour, minute=self.default_charge_time.minute, second=self.default_charge_time.second)
+                if next_time < dt_now:
+                    next_time = next_time + timedelta(days=1)
+
+                next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+                await self.car.add_default_charge(next_time)
+
+    def can_add_default_charge(self) -> bool:
+        if self.car is not None and self.car.calendar is not None:
+            return True
+        return False
 
     async def force_charge_now(self):
         self._do_force_next_charge = True
@@ -671,7 +692,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             parent = set()
         else:
             parent = set(parent)
-        parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON])
+        parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON, Platform.TIME])
         return list(parent)
 
     def attach_car(self, car):

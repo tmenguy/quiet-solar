@@ -54,7 +54,10 @@ class LoadConstraint(object):
         self.from_user = from_user
         self.type = type
 
-        self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
+        self._update_value_callback = None
+
+        if load is not None:
+            self._update_value_callback = load.get_update_value_callback_for_constraint_class(self)
 
         # ok fill form the args
         if end_of_constraint is None:

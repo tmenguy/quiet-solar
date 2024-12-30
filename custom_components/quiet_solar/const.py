@@ -134,6 +134,8 @@ BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
+BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT = "qs_next_car_charge_add_default"
+
 
 BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE = "qs_load_mark_current_constraint_done"
 

@@ -14,6 +14,7 @@ from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome, QSHomeMode
+from .ha_model.on_off_duration import QSOnOffDuration, QSOnOffMode
 from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN, CHARGER_NO_CAR_CONNECTED,
@@ -40,6 +41,22 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
     entities.append(QSChargerCarSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
+
+
+def create_ha_select_for_QSOnOffDuration(device: QSOnOffDuration):
+    entities = []
+
+    on_off_mode_description = QSSelectEntityDescription(
+        key="on_off_mode",
+        translation_key="on_off_mode",
+        options= list(map(str, QSOnOffMode)),
+        qs_default_option=QSOnOffMode.ON_OFF_MODE_AUTO.value
+    )
+    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=on_off_mode_description))
+
+    return entities
+
+
 def create_ha_select_for_QSHome(device: QSHome):
     entities = []
 
@@ -62,6 +79,8 @@ def create_ha_select(device: AbstractDevice):
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_select_for_QSCharger(device))
 
+    if isinstance(device, QSOnOffDuration):
+        ret.extend(create_ha_select_for_QSOnOffDuration(device))
 
     if isinstance(device, QSHome):
         ret.extend(create_ha_select_for_QSHome(device))
@@ -87,7 +106,7 @@ async def async_setup_entry(
 
 
 class QSBaseSelect(QSDeviceEntity, SelectEntity):
-    """Implementation of a Netatmo sensor."""
+    """Implementation of a Qs Select sensor."""
     def __init__(
         self,
         data_handler,
@@ -155,16 +174,20 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         if state is not None and state.state in self.options:
             new_option = state.state
         else:
-            if self.entity_description.qs_default_option:
-                new_option = self.entity_description.qs_default_option.value
-            else:
-                new_option = QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+            new_option = getattr(self.device, self.entity_description.key, None)
+
+
+        if new_option is None and self.entity_description.qs_default_option:
+            new_option = self.entity_description.qs_default_option.value
+
+        if new_option is None:
+            new_option = self.options[0]
 
         await self.async_select_option(new_option)
 
 
 @dataclass
-class QSExtraStoredData(ExtraStoredData):
+class QSExtraStoredDataCarSelect(ExtraStoredData):
     """Object to hold extra stored data."""
     user_selected_car: str | None
 
@@ -201,15 +224,15 @@ class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
         super().__init__(data_handler=data_handler, device=device, description=description)
 
     @property
-    def extra_restore_state_data(self) -> QSExtraStoredData:
+    def extra_restore_state_data(self) -> QSExtraStoredDataCarSelect:
         """Return sensor specific state data to be restored."""
-        return QSExtraStoredData(self.user_selected_car)
+        return QSExtraStoredDataCarSelect(self.user_selected_car)
 
-    async def async_get_last_select_data(self) -> QSExtraStoredData | None:
+    async def async_get_last_select_data(self) -> QSExtraStoredDataCarSelect | None:
         """Restore native_value and native_unit_of_measurement."""
         if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
             return None
-        return QSExtraStoredData.from_dict(restored_last_extra_data.as_dict())
+        return QSExtraStoredDataCarSelect.from_dict(restored_last_extra_data.as_dict())
 
 
     async def async_added_to_hass(self) -> None:

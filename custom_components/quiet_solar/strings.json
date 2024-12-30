@@ -513,6 +513,9 @@
       },
       "qs_next_car_charge_force_now": {
         "name": "Force Charge Now"
+      },
+      "qs_next_car_charge_add_default": {
+        "name": "Add Charge"
       }
     },
     "switch": {
@@ -530,6 +533,14 @@
       "selected_car_for_charger": {
         "name": "Selected Car:"
       },
+      "on_off_mode": {
+        "name": "ON/OFF Load Mode",
+        "state": {
+          "on_off_mode_off": "Force OFF",
+          "on_off_mode_auto": "Auto",
+          "on_off_mode_on": "Force ON"
+        }
+      },
       "home_mode": {
         "name": "Home Quiet Solar Running Mode",
         "state": {
@@ -539,6 +550,11 @@
           "home_mode_on": "Full Quiet Solar",
           "home_mode_reset_sensors": "WARN: reset sensors from HA history"
         }
+      }
+    },
+    "time": {
+      "default_charge_time": {
+        "name": "Next Charge Time"
       }
     }
   },

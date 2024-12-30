@@ -161,7 +161,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
         """Restore ATTR_CHANGED_BY on startup since it is likely no longer in the activity log."""
         await super().async_added_to_hass()
 
-        self._attr_is_on = False
+        self._attr_is_on = None
 
         last_sensor_state = await self.async_get_last_switch_data()
         if (
@@ -172,7 +172,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
             self._attr_is_on = last_sensor_state.native_is_on
 
         if self._attr_is_on is  None:
-            self._attr_is_on = False
+            self._attr_is_on = getattr(self.device, self.entity_description.key, False)
 
 
         if self._attr_is_on:

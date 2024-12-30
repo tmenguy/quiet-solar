@@ -1,13 +1,14 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Coroutine, Any
 
 from homeassistant.components.button import ButtonEntityDescription, ButtonEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
-    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE
+    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT
 from .entity import QSDeviceEntity
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
@@ -41,13 +42,23 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
     entities = []
 
 
-    qs_reset_history = QSButtonEntityDescription(
+    qs_force_next_charge = QSButtonEntityDescription(
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         async_press=lambda x: x.device.force_charge_now(),
     )
 
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_force_next_charge))
+
+
+    qs_add_default_next_charge = QSButtonEntityDescription(
+        key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
+        translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
+        async_press=lambda x: x.device.add_default_charge(),
+        is_available=lambda x: x.device.can_add_default_charge()
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge))
 
     return entities
 
@@ -99,8 +110,9 @@ async def async_setup_entry(
 
 @dataclass(frozen=True, kw_only=True)
 class QSButtonEntityDescription(ButtonEntityDescription):
-    """Class describing Renault button entities."""
+    """Class describing  button entities."""
     async_press: Callable[[Any], Coroutine]
+    is_available: Callable[[Any], bool] | None = None
 
 
 
@@ -116,8 +128,27 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
+        self._attr_available = True
 
     async def async_press(self) -> None:
         """Process the button press."""
         await self.entity_description.async_press(self)
+
+    @property
+    def available(self) -> bool:
+        """Return the availability of the switch."""
+        if self.entity_description.is_available:
+            self._attr_available = self.entity_description.is_available(self)
+        return super().available
+
+    @callback
+    def async_update_callback(self, time:datetime) -> None:
+        """Update the entity's state."""
+        if self.hass is None:
+            return
+
+        if self.entity_description.is_available:
+            self._attr_available = self.entity_description.is_available(self)
+
+        self.async_write_ha_state()
 

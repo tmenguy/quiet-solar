@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Awaitable
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
@@ -312,8 +312,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         break
 
 
-
-
     def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:
         if for_3p:
             return self.amp_to_power_3p, self.car_charger_min_charge, self.car_charger_max_charge
@@ -329,4 +327,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             parent = set(parent)
         parent.update([ Platform.SENSOR, Platform.SELECT ])
         return list(parent)
+
+    async def add_default_charge(self, end_charge:datetime):
+        if self.calendar is None:
+            return
+        start_time = end_charge
+        end_time = end_charge + timedelta(seconds=60*30)
+        await self.set_next_scheduled_event(start_time, end_time, f"Charge {self.name}")
+
 
