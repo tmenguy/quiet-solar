@@ -20,7 +20,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-from quiet_solar.entity import QSDeviceEntity
+from .entity import QSDeviceEntity
 
 @dataclass(frozen=True, kw_only=True)
 class QSTimeEntityDescription(TimeEntityDescription):
