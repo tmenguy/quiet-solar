@@ -353,8 +353,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"NO GOOD CAR BECAUSE: CHARGER_NO_CAR_CONNECTED")
                 return None
 
-        best_car = self.get_default_car()
+
         best_score = 0
+        best_car = None
 
         for car in self.home._cars:
 
@@ -382,13 +383,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only if plugged .... then if home
                 score = score_plug_bump + score_home_bump
                 if car.car_is_default:
-                    score += 1
+                    score += 0.5
 
             if score > best_score:
                 best_car = car
                 best_score = score
 
-        if best_score == 0:
+        if best_car is None:
+            best_car = self.get_default_car()
             _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
             _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
