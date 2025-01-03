@@ -101,7 +101,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                 from_user = True # not sure if it is needed
             elif self.on_off_mode == QSOnOffMode.ON_OFF_MODE_DEFAULT.value:
                 if self.default_on_duration is not None and  self.default_on_finish_time is not None:
-                    dt_now = datetime.now(tz=None)
+                    dt_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
                     next_time = datetime(year=dt_now.year,
                                          month=dt_now.month,
                                          day=dt_now.day,
