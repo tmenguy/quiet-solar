@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from enum import StrEnum
+from datetime import time as dt_time
 
 import pytz
 
@@ -15,6 +16,7 @@ from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STA
 class QSOnOffMode(StrEnum):
     ON_OFF_MODE_OFF = "on_off_mode_off"
     ON_OFF_MODE_AUTO = "on_off_mode_auto"
+    ON_OFF_MODE_DEFAULT = "on_off_mode_default"
     ON_OFF_MODE_ON = "on_off_mode_on"
 
 
@@ -25,6 +27,9 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.on_off_mode = QSOnOffMode.ON_OFF_MODE_AUTO
+
+        self.default_on_duration: float | None = 1.0
+        self.default_on_finish_time: dt_time | None = dt_time(hour=0, minute=0, second=0)
 
     def support_green_only_switch(self) -> bool:
         if self.load_is_auto_to_be_boosted:
@@ -37,7 +42,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             parent = set()
         else:
             parent = set(parent)
-        parent.update([ Platform.SENSOR, Platform.SWITCH, Platform.SELECT ])
+        parent.update([ Platform.SENSOR, Platform.SWITCH, Platform.SELECT, Platform.TIME, Platform.NUMBER ])
         return list(parent)
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
@@ -88,11 +93,29 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             type = CONSTRAINT_TYPE_MANDATORY_END_TIME
             target_value = 0
             from_user = False
+            end_schedule = None
             if self.on_off_mode == QSOnOffMode.ON_OFF_MODE_ON.value:
                 end_schedule = self.get_proper_local_adapted_tomorrow(time)
                 target_value = 25*3600.0 # 25 hours, more than a day will force the load to be on
                 do_add_constraint = True
                 from_user = True # not sure if it is needed
+            elif self.on_off_mode == QSOnOffMode.ON_OFF_MODE_DEFAULT.value:
+                if self.default_on_duration is not None and  self.default_on_finish_time is not None:
+                    dt_now = datetime.now(tz=None)
+                    next_time = datetime(year=dt_now.year,
+                                         month=dt_now.month,
+                                         day=dt_now.day,
+                                         hour=self.default_on_finish_time.hour,
+                                         minute=self.default_on_finish_time.minute,
+                                         second=self.default_on_finish_time.second)
+                    if next_time < dt_now:
+                        next_time = next_time + timedelta(days=1)
+
+                    end_schedule = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+                    target_value = self.default_on_duration*3600.0
+
+                    do_add_constraint = True
             else:
                 start_schedule, end_schedule = await self.get_next_scheduled_event(time)
 

@@ -69,7 +69,7 @@ class QSPool(QSOnOffDuration):
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
-        if self.on_off_mode == QSOnOffMode.ON_OFF_MODE_ON.value or self.on_off_mode == QSOnOffMode.ON_OFF_MODE_OFF.value:
+        if self.on_off_mode != QSOnOffMode.ON_OFF_MODE_AUTO.value:
             return await super().check_load_activity_and_constraints(time)
         else:
             end_schedule = self.get_proper_local_adapted_tomorrow(time)

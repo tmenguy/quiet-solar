@@ -1,10 +1,10 @@
 import logging
 from dataclasses import dataclass
-from datetime import time as dt_time
 
-from homeassistant.components.time import TimeEntity, TimeEntityDescription
+
+from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -23,39 +23,31 @@ _LOGGER = logging.getLogger(__name__)
 from .entity import QSDeviceEntity
 
 @dataclass(frozen=True, kw_only=True)
-class QSTimeEntityDescription(TimeEntityDescription):
+class QSNumberEntityDescription(NumberEntityDescription):
     qs_default_option:str | None  = None
 
 
-def create_ha_time_for_QSCharger(device: QSChargerGeneric):
+def create_ha_number_for_QSOnOffDuration(device: QSOnOffDuration):
     entities = []
 
-    selected_car_description = QSTimeEntityDescription(
-        key="default_charge_time",
-        translation_key="default_charge_time",
+    selected_car_description = QSNumberEntityDescription(
+        key="default_on_duration",
+        translation_key="default_on_duration",
+        native_max_value=24,
+        native_min_value=0,
+        native_step=0.5,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        mode=NumberMode.BOX,
     )
-    entities.append(QSBaseTime(data_handler=device.data_handler, device=device, description=selected_car_description))
-    return entities
-
-def create_ha_time_for_QSOnOffDuration(device: QSOnOffDuration):
-    entities = []
-
-    selected_car_description = QSTimeEntityDescription(
-        key="default_on_finish_time",
-        translation_key="default_on_finish_time",
-    )
-    entities.append(QSBaseTime(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSBaseNumber(data_handler=device.data_handler, device=device, description=selected_car_description))
 
     return entities
 
-def create_ha_time(device: AbstractDevice):
+def create_ha_number(device: AbstractDevice):
     ret = []
 
-    if isinstance(device, QSChargerGeneric):
-        ret.extend(create_ha_time_for_QSCharger(device))
-
     if isinstance(device, QSOnOffDuration):
-        ret.extend(create_ha_time_for_QSOnOffDuration(device))
+        ret.extend(create_ha_number_for_QSOnOffDuration(device))
 
     return ret
 
@@ -69,21 +61,21 @@ async def async_setup_entry(
 
     if device:
 
-        entities = create_ha_time(device)
+        entities = create_ha_number(device)
 
         if entities:
             async_add_entities(entities)
     return
 
 
-class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
+class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
     """Implementation of a Qs DateTime sensor."""
 
     def __init__(
         self,
         data_handler,
         device: AbstractDevice,
-        description: QSTimeEntityDescription,
+        description: QSNumberEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
@@ -98,22 +90,24 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
         if ( last_state is not None
             and last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
         ):
-            val = dt_time.fromisoformat(last_state.state)
+            try:
+                val = float(last_state.state)
+            except:
+                val = None
 
         if val is None:
-            val = getattr(self.device, self.entity_description.key, None)
+            val = float(getattr(self.device, self.entity_description.key, 1.0))
 
         if val is None:
-            val = dt_time(hour=7, minute=0, second=0)
+            val = 1.0
 
-        await self.async_set_value(val)
+        await self.async_set_native_value(val)
 
-    async def async_set_value(self, value: dt_time) -> None:
+    async def async_set_native_value(self, value: float) -> None:
         """Change the value."""
         self._attr_native_value = value
         try:
             setattr(self.device, self.entity_description.key, value)
         except:
-            _LOGGER.info(f"can't set time {value} on {self.device.name} for {self.entity_description.key}")
+            _LOGGER.info(f"can't set number {value} on {self.device.name} for {self.entity_description.key}")
         self.async_write_ha_state()
-
