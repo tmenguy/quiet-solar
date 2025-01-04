@@ -490,8 +490,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if not self._constraints:
             self._constraints = []
 
-        best_car = self.get_best_car(time)
-
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW) and self.car:
             _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
             existing_constraints = self.get_and_adapt_existing_constraints(time)

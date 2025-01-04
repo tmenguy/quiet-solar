@@ -105,6 +105,8 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
                     "charger_max_charging_current_number_qs_reset_selector": "if selected reset to empty the above field",
@@ -127,6 +129,8 @@
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
@@ -144,6 +148,8 @@
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
@@ -258,17 +264,17 @@
             "qs_load_mark_current_constraint_done": {
                 "name": "Force Current Constraint Done"
             },
-            "qs_next_car_charge_force_now": {
-                "name": "Force Charge Now"
-            },
             "qs_next_car_charge_add_default": {
                 "name": "Add Charge"
+            },
+            "qs_next_car_charge_force_now": {
+                "name": "Force Charge Now"
             }
         },
-        "number" : {
-          "default_on_duration": {
-            "name": "default duration ON (hours)"
-          }
+        "number": {
+            "default_on_duration": {
+                "name": "default duration ON (hours)"
+            }
         },
         "select": {
             "home_mode": {
@@ -284,12 +290,12 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "on_off_mode_off": "Force OFF",
                     "on_off_mode_auto": "Auto",
                     "on_off_mode_default": "Use Default",
+                    "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
                 }
-              },
+            },
             "selected_car_for_charger": {
                 "name": "Selected Car:"
             }
@@ -332,12 +338,12 @@
             }
         },
         "time": {
-          "default_charge_time": {
-            "name": "Next Charge Time"
-          },
-          "default_on_finish_time": {
-            "name": "default end time ON"
-          }
+            "default_charge_time": {
+                "name": "Next Charge Time"
+            },
+            "default_on_finish_time": {
+                "name": "default end time ON"
+            }
         }
     },
     "options": {
@@ -437,6 +443,8 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
                     "charger_max_charging_current_number_qs_reset_selector": "if selected reset to empty the above field",
@@ -458,6 +466,8 @@
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
@@ -475,6 +485,8 @@
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
                     "charger_is_3p": "Is the charger 3 phases?",
+                    "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+                    "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",

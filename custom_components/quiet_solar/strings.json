@@ -83,6 +83,8 @@
         "title": "Edit your electrical vehicle charger",
         "data": {
           "name": "Name",
+          "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
+          "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
           "charger_max_charge": "Maximum Current Charge Per Phase (A)",
           "charger_min_charge": "Minimum Current Charge Per Phase (A)",
           "charger_is_3p": "Is the charger 3 phases?",
@@ -105,6 +107,8 @@
         "description": "OCPP based integration is up and running ...",
         "data": {
           "name": "Name",
+          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
+          "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
@@ -122,6 +126,8 @@
         "description": "Wallbox based integration is up and running ...",
         "data": {
           "name": "Name",
+          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
+          "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
@@ -310,6 +316,8 @@
         "title": "[%key:component::quiet_solar::config::step::charger_generic::title%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_generic::data::name%]",
+          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
+          "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
@@ -331,6 +339,8 @@
         "description": "[%key:component::quiet_solar::config::step::charger_ocpp::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_ocpp::data::name%]",
+          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_latitude%]",
+          "charger_longitude": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
@@ -348,6 +358,8 @@
         "description": "[%key:component::quiet_solar::config::step::charger_wallbox::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_wallbox::data::name%]",
+          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_latitude%]",
+          "charger_longitude": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_min_charge%]",
           "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_is_3p%]",
