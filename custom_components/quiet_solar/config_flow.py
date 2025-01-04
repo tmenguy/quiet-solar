@@ -47,7 +47,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
-    CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY
+    CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -282,6 +282,29 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                     add_calendar=True,
                                     add_efficiency_selector=True)
 
+        if self.config_entry.data.get(CONF_CHARGER_LATITUDE, None) is None:
+            sc.update( {
+                vol.Optional(CONF_CHARGER_LATITUDE):
+                    vol.Coerce(float),
+            })
+        else:
+            sc.update( {
+                vol.Optional(CONF_CHARGER_LATITUDE, default=self.config_entry.data.get(CONF_CHARGER_LATITUDE)):
+                    vol.Coerce(float),
+            })
+
+        if self.config_entry.data.get(CONF_CHARGER_LONGITUDE, None) is None:
+
+            sc.update( {
+                vol.Optional(CONF_CHARGER_LONGITUDE):
+                    vol.Coerce(float),
+            })
+        else:
+            sc.update( {
+                vol.Optional(CONF_CHARGER_LONGITUDE, default=self.config_entry.data.get(CONF_CHARGER_LONGITUDE)):
+                    vol.Coerce(float),
+            })
+
         sc.update( {
                     vol.Optional(CONF_CHARGER_MAX_CHARGE, default=self.config_entry.data.get(CONF_CHARGER_MAX_CHARGE, 32)):
                         selector.NumberSelector(
@@ -303,7 +326,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         ),
                     vol.Optional(CONF_CHARGER_IS_3P,
                                  default=self.config_entry.data.get(CONF_CHARGER_IS_3P, False)):
-                        cv.boolean,
+                                cv.boolean,
 
                 })
         return sc

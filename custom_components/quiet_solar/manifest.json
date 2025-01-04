@@ -11,5 +11,6 @@
     "models": []
   },
   "integration_type": "device",
-  "iot_class": "calculated"
+  "iot_class": "calculated",
+  "requirements": ["haversine==2.9.0"]
 }

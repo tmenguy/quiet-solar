@@ -111,7 +111,31 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "on"
 
+    def get_car_coordinates(self, time:datetime) -> tuple[float, float] | tuple[None,None]:
 
+            if self.car_tracker is None:
+                return None, None
+
+            state, state_attr = self.get_sensor_latest_possible_valid_value_and_attr(entity_id=self.car_tracker, time=time)
+            if state is None:
+                return None, None
+
+            if state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                return None, None
+
+            if state_attr is None:
+                return None, None
+
+            latitude: str | None  = state_attr.get("latitude", None)
+            longitude: str | None  = state_attr.get("longitude", None)
+
+            if latitude is None or longitude is None:
+                return None, None
+
+            try:
+                return float(latitude), float(longitude)
+            except ValueError:
+                return None, None
 
     def is_car_home(self, time:datetime, for_duration:float|None = None) -> bool | None:
 

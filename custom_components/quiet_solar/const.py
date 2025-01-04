@@ -43,6 +43,8 @@ CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
 CONF_CHARGER_IS_3P = "charger_is_3p"
 CONF_CHARGER_CONSUMPTION = "charger_consumption"
 CONF_DEFAULT_CAR_CHARGE = "default_car_charge"
+CONF_CHARGER_LATITUDE = "charger_latitude"
+CONF_CHARGER_LONGITUDE = "charger_longitude"
 
 CONF_CHARGER_DEVICE_OCPP = "charger_device_ocpp"
 CONF_CHARGER_DEVICE_WALLBOX = "charger_device_wallbox"

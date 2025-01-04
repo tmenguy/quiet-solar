@@ -451,6 +451,23 @@ class HADeviceMixin:
         return best
 
 
+    def get_sensor_latest_possible_valid_value_and_attr(self, entity_id, time = None) -> tuple[str | float | None, Mapping[str, Any] | None | dict]:
+
+        if entity_id is None:
+            return None, None
+
+        last_valid = self._entity_probed_last_valid_state[entity_id]
+        if last_valid is None:
+            return None, None
+
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+
+        if time >= last_valid[0]:
+            return last_valid[1], last_valid[2]
+
+        return None, None
+
 
     def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None = None,
                                                time = None) -> str | float | None:

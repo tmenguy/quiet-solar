@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
+from haversine import haversine, Unit
 
 try:
     from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
@@ -67,7 +68,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint
 from ..ha_model.car import QSCar
@@ -175,6 +176,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
         self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
         self.charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge, 8))
+
+        self.charger_latitude = kwargs.pop(CONF_CHARGER_LATITUDE, None)
+        self.charger_longitude = kwargs.pop(CONF_CHARGER_LONGITUDE, None)
 
         self.charger_is_3p = kwargs.pop(CONF_CHARGER_IS_3P, False)
         self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
@@ -325,8 +329,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_in_state_reset(self) -> bool:
         return self._inner_expected_charge_state is None or self._inner_amperage is None or self._expected_charge_state.value is None or self._expected_amperage.value is None
 
-
-
     async def on_device_state_change(self, time: datetime, device_change_type:str):
 
         if self.car:
@@ -339,6 +341,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             mobile_app_url = self.mobile_app_url
 
         await self.on_device_state_change_helper(time, device_change_type, load_name=load_name, mobile_app=mobile_app, mobile_app_url=mobile_app_url)
+
 
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car ....
@@ -370,8 +373,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if car_plug_res:
                     score_plug_bump = 2
 
+            score_dist_bump = 0
+            if self.charger_latitude is not None and self.charger_longitude is not None:
+                max_dist = 50.0
+                car_lat, car_long = car.get_car_coordinates(time)
+                if car_lat is not None and car_long is not None:
+                    dist = haversine((self.charger_latitude, self.charger_longitude), (car_lat, car_long), unit=Unit.METERS)
+                    _LOGGER.info(f"Car {car.name} distance to charger {self.name}: {dist}m")
+                    if dist <= max_dist:
+                        score_dist_bump = 0.5*((max_dist - dist)/max_dist)
+
+
             score_home_bump = 0
-            car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+
+            if score_dist_bump > 0:
+                car_home_res = True
+            else:
+                car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+
             if car_home_res:
                 score_home_bump = 3
             elif car_home_res is None:
@@ -381,9 +400,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if car_plug_res and car_home_res:
                 # only if plugged .... then if home
-                score = score_plug_bump + score_home_bump
-                if car.car_is_default:
-                    score += 0.5
+                score = score_plug_bump + score_home_bump + score_dist_bump
 
             if score > best_score:
                 best_car = car
@@ -472,6 +489,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         do_force_solve = False
         if not self._constraints:
             self._constraints = []
+
+        best_car = self.get_best_car(time)
 
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW) and self.car:
             _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
