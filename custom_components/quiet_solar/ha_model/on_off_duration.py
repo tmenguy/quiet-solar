@@ -108,6 +108,7 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                                          hour=self.default_on_finish_time.hour,
                                          minute=self.default_on_finish_time.minute,
                                          second=self.default_on_finish_time.second)
+                    next_time = next_time.astimezone(tz=None)
                     if next_time < dt_now:
                         next_time = next_time + timedelta(days=1)
 
