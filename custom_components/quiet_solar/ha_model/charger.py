@@ -383,20 +383,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if dist <= max_dist:
                         score_dist_bump = 0.5*((max_dist - dist)/max_dist)
 
-
             score_home_bump = 0
 
-            if score_dist_bump > 0:
-                car_home_res = True
-            else:
-                car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
-
+            car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_home_res:
                 score_home_bump = 3
             elif car_home_res is None:
                 car_home_res = car.is_car_home(time=time)
                 if car_home_res:
                     score_home_bump= 2
+
+            if score_dist_bump > 0 and score_home_bump == 0:
+                car_home_res = True
+                score_home_bump = 2
+
 
             if car_plug_res and car_home_res:
                 # only if plugged .... then if home
