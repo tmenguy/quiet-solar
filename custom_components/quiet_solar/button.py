@@ -46,6 +46,7 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         async_press=lambda x: x.device.force_charge_now(),
+        is_available=lambda x: x.device.can_force_a_charge_now()
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_force_next_charge))

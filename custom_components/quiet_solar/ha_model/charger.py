@@ -465,6 +465,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return True
         return False
 
+    def can_force_a_charge_now(self) -> bool:
+        if self.car is not None:
+            return True
+        return False
+
     async def force_charge_now(self):
         self._do_force_next_charge = True
 
