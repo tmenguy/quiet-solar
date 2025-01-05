@@ -71,6 +71,7 @@ class AbstractLoad(AbstractDevice):
         self.running_command_num_relaunch_after_invalid: int = 0
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
+        self.current_constraint_current_percent_completion: float | None = None
         self._externally_initialized_constraints = False
 
         self._ack_command(None, None)
@@ -555,9 +556,12 @@ class AbstractLoad(AbstractDevice):
         if current_constraint is not None:
             self.current_constraint_current_value = current_constraint.current_value
             self.current_constraint_current_energy = current_constraint.convert_target_value_to_energy(current_constraint.current_value)
+            self.current_constraint_current_percent_completion = current_constraint.get_percent_completion(time)
+
         else:
             self.current_constraint_current_value = None
             self.current_constraint_current_energy = None
+            self.current_constraint_current_percent_completion = None
 
         self._last_constraint_update = time
         return force_solving

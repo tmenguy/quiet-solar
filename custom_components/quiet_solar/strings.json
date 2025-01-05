@@ -511,6 +511,9 @@
       },
       "qs_constraint_sensor_energy": {
         "name": "Constraint Current Energy"
+      },
+      "qs_constraint_sensor_completion": {
+        "name": "Constraint % completion"
       }
     },
     "button": {

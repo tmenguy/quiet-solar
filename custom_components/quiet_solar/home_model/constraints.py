@@ -183,6 +183,29 @@ class LoadConstraint(object):
     def convert_energy_to_target_value(self, energy: float) -> float:
         return energy
 
+    def get_percent_completion(self, time) -> float | None:
+
+        if self.current_value is None:
+            return None
+
+        target_val = self.target_value
+
+        if target_val is None:
+            return None
+
+        init_val = self._internal_initial_value
+        if init_val is None:
+            return None
+
+        if init_val == target_val:
+            return None
+
+        if target_val < init_val:
+            return 100.0 * (self.current_value - target_val) / (init_val - target_val)
+        else:
+            return 100.0 * (self.current_value - init_val) / (target_val - init_val)
+
+
     def _get_target_date_string(self) -> str:
         if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
             target = "no limit"

@@ -307,6 +307,9 @@
             "qs_constraint_sensor_charge": {
                 "name": "Next Charge"
             },
+            "qs_constraint_sensor_completion": {
+                "name": "Constraint % completion"
+            },
             "qs_constraint_sensor_energy": {
                 "name": "Constraint Current Energy"
             },

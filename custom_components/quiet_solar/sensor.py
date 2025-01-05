@@ -6,7 +6,7 @@ from typing import Any, Callable
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -21,7 +21,7 @@ from .const import (
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
     QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
-    HA_CONSTRAINT_SENSOR_LOAD_INFO,
+    HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -88,6 +88,17 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
             qs_is_none_unavailable=True
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
+        constraints_sensor = QSSensorEntityDescription(
+            key="current_constraint_current_percent_completion",
+            translation_key=SENSOR_CONSTRAINT_SENSOR_COMPLETION,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=PERCENTAGE,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            qs_is_none_unavailable=True
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
 
     return entities
 
