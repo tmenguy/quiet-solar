@@ -12,6 +12,10 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
+
+from awesomeversion import AwesomeVersion
+from homeassistant.const import __version__ as HAVERSION
+
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, \
     UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime
 
@@ -906,6 +910,11 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
 
 
 
+# Version threshold for config_entry setting in options flow
+# See: https://github.com/home-assistant/core/pull/129562
+
+HA_OPTIONS_FLOW_VERSION_THRESHOLD = "2024.11.99"
+
 class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
 
     VERSION = 1
@@ -914,8 +923,10 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize Quiet Solar options flow."""
         super().__init__()
-        self.config_entry = config_entry
-        self.options = dict(config_entry.options)
+
+        if AwesomeVersion(HAVERSION) < HA_OPTIONS_FLOW_VERSION_THRESHOLD:
+            self.config_entry = config_entry
+
         self._errors = {}
 
 
