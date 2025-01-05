@@ -227,7 +227,7 @@ class AbstractLoad(AbstractDevice):
                 if self._last_completed_constraint is not None:
                     new_val = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
                 else:
-                    new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+                    new_val = "NOTHING PLANNED"
 
         else:
             new_val = current_constraint.get_readable_name_for_load()
@@ -250,7 +250,7 @@ class AbstractLoad(AbstractDevice):
                            "-" +
                            self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
             else:
-                new_val = "NOTHING PLANNED (OR WHAT WAS PLANNED IS DONE)"
+                new_val = "NOTHING PLANNED"
         else:
             load_param = "NO"
             if current_constraint.load_param is not None:
