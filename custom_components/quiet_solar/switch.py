@@ -237,3 +237,10 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
 
         self._attr_is_on = False
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return the availability of the switch."""
+        if isinstance(self.device, QSChargerGeneric):
+            self._attr_available = self.device.car is not None
+        return super().available
