@@ -48,7 +48,7 @@ def create_ha_switch_for_QSPool(device: QSPool):
         translation_key=SWITCH_POOL_FORCE_WINTER_MODE,
     )
 
-    entities.append(QSSwitchEntity(data_handler=device.data_handler, device=device, description=qs_force_winter))
+    entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_force_winter))
 
 
     return entities
@@ -68,7 +68,7 @@ def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
             key=SWITCH_BEST_EFFORT_GREEN_ONLY,
             translation_key=SWITCH_BEST_EFFORT_GREEN_ONLY,
         )
-        entities.append(QSSwitchEntity(data_handler=data_handler, device=device, description=qs_green_only_description))
+        entities.append(QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_green_only_description))
 
 
 
@@ -133,8 +133,7 @@ class QSExtraStoredData(ExtraStoredData):
         except KeyError:
             return None
 
-class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
-    """Mixin for button specific attributes."""
+class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
     entity_description: QSSwitchEntityDescription
     def __init__(
@@ -145,6 +144,28 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
+
+    @callback
+    def async_update_callback(self, time:datetime) -> None:
+        """Update the entity's state."""
+        pass
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+
+        setattr(self.device, self.entity_description.key, True)
+
+        self._attr_is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+
+        setattr(self.device, self.entity_description.key, False)
+
+        self._attr_is_on = False
+        self.async_write_ha_state()
+
+class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
+    """Mixin for button specific attributes."""
 
     @property
     def extra_restore_state_data(self) -> QSExtraStoredData:
@@ -180,38 +201,18 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity, RestoreEntity):
         else:
             await self.async_turn_off()
 
-    @callback
-    def async_update_callback(self, time:datetime) -> None:
-        """Update the entity's state."""
-        pass
-
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-
-        setattr(self.device, self.entity_description.key, True)
-
-        self._attr_is_on = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-
-        setattr(self.device, self.entity_description.key, False)
-
-        self._attr_is_on = False
-        self.async_write_ha_state()
 
 
 class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
 
-    device: QSChargerGeneric
-
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        if self.device.car is not None:
-            if self.device.car.car_default_charge == 100:
-                # force it at on in case the car wants a hundred anyway
-                self._attr_is_on = True
+        if isinstance(self.device, QSChargerGeneric):
+            if self.device.car is not None:
+                if self.device.car.car_default_charge == 100:
+                    # force it at on in case the car wants a hundred anyway
+                    self._attr_is_on = True
 
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -231,9 +232,8 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
                 if self.device.car.car_default_charge == 100:
                     return
 
-        new_value = False
         if isinstance(self.device, QSChargerGeneric):
             await self.device.set_next_charge_full_or_not(False)
 
-        self._attr_is_on = new_value
+        self._attr_is_on = False
         self.async_write_ha_state()
