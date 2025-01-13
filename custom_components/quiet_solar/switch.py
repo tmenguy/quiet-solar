@@ -208,11 +208,11 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        # if self.device.car is not None:
-        #    if self.device.car.car_default_charge == 100:
-        #        # force it at on in case the car wants a hundred anyway
-        #        self._attr_is_on = True
-        pass
+        if self.device.car is not None:
+            if self.device.car.car_default_charge == 100:
+                # force it at on in case the car wants a hundred anyway
+                self._attr_is_on = True
+
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the zone on."""
@@ -226,6 +226,11 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the zone off."""
         #await self.device.async_off()
+        if isinstance(self.device, QSChargerGeneric):
+            if self.device.car is not None:
+                if self.device.car.car_default_charge == 100:
+                    return
+
         new_value = False
         if isinstance(self.device, QSChargerGeneric):
             await self.device.set_next_charge_full_or_not(False)
