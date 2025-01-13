@@ -1271,8 +1271,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                             best_higher = None
                             if higher_do_not_cross_power_boundary:
-                                for i in range(len(safe_powers_steps) -1, -1, -1):
-                                    if safe_powers_steps[i] <= higher_do_not_cross_power_boundary:
+                                for i, p in enumerate(safe_powers_steps):
+                                    if higher_do_not_cross_power_boundary >= p:
                                         best_higher = i
                                     else:
                                         break
@@ -1290,22 +1290,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     best_price = self.home.get_best_tariff(time)
                                     durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
                                     current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
-                                    new_best_higher = best_higher
+
                                     if best_higher < 0:
                                         auto_green_power_command = 0
                                     else:
                                         auto_green_power_command = safe_powers_steps[best_higher]
-                                    while True:
-                                        additional_added_energy = ((safe_powers_steps[new_best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
-                                        cost = (((safe_powers_steps[new_best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
-                                        cost_per_watt_h = cost / additional_added_energy
-                                        if cost_per_watt_h > best_price:
-                                            break
-                                        new_best_higher += 1
-                                        if new_best_higher >= len(safe_powers_steps) - 1:
-                                            break
-                                    # ok we have a new best higher
-                                    best_higher = new_best_higher
+
+                                    additional_added_energy = ((safe_powers_steps[best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
+                                    cost = (((safe_powers_steps[best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
+                                    cost_per_watt_h = cost / additional_added_energy
+                                    if cost_per_watt_h > best_price:
+                                        pass
+                                    else:
+                                        best_higher += 1
 
                                 if best_higher < 0:
                                     # nothing works, case auto_green or price ... stop charge
