@@ -1,4 +1,4 @@
-from ..home_model.load import AbstractLoad
+from ..home_model.load import AbstractDevice
 from .commands import LoadCommand
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT
@@ -6,7 +6,7 @@ from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALU
 CMD_FORCE_CHARGE = LoadCommand(command="charge", power_consign=0.0)
 CMD_FORCE_DISCHARGE = LoadCommand(command="discharge", power_consign=0.0)
 
-class Battery(AbstractLoad):
+class Battery(AbstractDevice):
 
     def __init__(self, **kwargs):
 

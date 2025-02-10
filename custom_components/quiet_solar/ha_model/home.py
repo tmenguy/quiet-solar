@@ -579,15 +579,16 @@ class QSHome(HADeviceMixin, AbstractDevice):
             _LOGGER.error(f"Error updating loads constraints {err}", exc_info=err)
 
         if self._battery is not None:
-            all_loads = [self._battery]
-            all_loads.extend(self._all_loads)
-        else:
             all_loads = self._all_loads
+            all_extended_loads = [self._battery]
+            all_extended_loads.extend(self._all_loads)
+        else:
+            all_loads = all_extended_loads = self._all_loads
 
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
-            all_loads = self._chargers
+            all_loads = all_extended_loads = self._chargers
 
-        for load in all_loads:
+        for load in all_extended_loads:
 
             try:
                 wait_time = await load.check_commands(time=time)
@@ -633,7 +634,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-        if do_force_solve and active_loads:
+        if do_force_solve and (active_loads or self._battery is not None):
 
             _LOGGER.info("DO SOLVE")
 
