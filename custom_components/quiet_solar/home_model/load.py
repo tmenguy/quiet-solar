@@ -469,6 +469,8 @@ class AbstractLoad(AbstractDevice):
 
         current_cluster : list[tuple[int, LoadConstraint]] = []
         clusters : list[list[tuple[int, LoadConstraint]]] = []
+        if self._constraints is None:
+            self._constraints = []
         for i, c in enumerate(self._constraints):
             if c.end_of_constraint == DATETIME_MAX_UTC or c.end_of_constraint == DATETIME_MIN_UTC:
                 continue
