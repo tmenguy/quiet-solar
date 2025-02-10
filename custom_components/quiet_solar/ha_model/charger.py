@@ -1227,10 +1227,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                         all_p_median = get_median_sensor(available_power, last_timing=time)
 
-                        if command.is_like(CMD_AUTO_GREEN_ONLY):
+                        if command.is_like(CMD_AUTO_GREEN_ONLY) or command.is_like(CMD_AUTO_PRICE):
                             target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
                         else:
-                            # mode CMD_AUTO_FROM_CONSIGN or CMD_AUTO_PRICE
+                            # mode CMD_AUTO_FROM_CONSIGN
                             target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
 
 
@@ -1284,7 +1284,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             if best_lower is None:
                                 # we are in CMD_AUTO_GREEN_ONLY and CMD_AUTO_PRICE
                                 # best_higher can be -1
-                                if best_higher < len(safe_powers_steps) - 1 and command.is_like(CMD_AUTO_PRICE):
+                                if best_higher < len(safe_powers_steps) - 1 and command.is_like(CMD_AUTO_PRICE) and self.home.battery_can_discharge() is False:
                                     # we will compute here is the price to take "more" power is better than the best
                                     # electricity rate we may have
                                     best_price = self.home.get_best_tariff(time)

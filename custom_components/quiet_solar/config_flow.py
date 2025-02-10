@@ -51,7 +51,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
-    CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE
+    CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE, \
+    CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -587,6 +588,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if len(percent_entities) > 0 :
             self.add_entity_selector(sc_dict, CONF_BATTERY_CHARGE_PERCENT_SENSOR, False, entity_list=percent_entities)
 
+        self.add_entity_selector(sc_dict, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, False, domain=[SWITCH_DOMAIN])
 
         sc_dict.update(
             {
@@ -599,7 +601,29 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfEnergy.WATT_HOUR,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, default=self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)):
+                vol.Optional(CONF_BATTERY_MIN_CHARGE_PERCENT, default=self.config_entry.data.get(CONF_BATTERY_MIN_CHARGE_PERCENT, 0)):
+                    selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement=PERCENTAGE,
+                        )
+                    ),
+                vol.Optional(CONF_BATTERY_MAX_CHARGE_PERCENT,
+                             default=self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_PERCENT, 100)):
+                    selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement=PERCENTAGE,
+                        )
+                    ),
+                vol.Optional(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+                             default=self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,

@@ -3,8 +3,11 @@ from dataclasses import dataclass, asdict
 
 
 CMD_CST_AUTO_GREEN = "auto_green"
+CMD__CST_GREEN_CHARGE_ONLY = "green_charge-ONLY"
 CMD_CST_AUTO_CONSIGN = "auto_consign"
 CMD_CST_AUTO_PRICE = "auto_price"
+
+CMD_CST_FORCE_CHARGE = "force_charge"
 @dataclass
 class LoadCommand:
     command: str
@@ -23,6 +26,9 @@ class LoadCommand:
             return False
         return self.command == other.command
 
+    def is_like_one_of_cmds(self, cmds) -> bool:
+        return any([self.is_like(cmd) for cmd in cmds])
+
     def is_off_or_idle(self) -> bool:
         return self.command == "off" or self.command == "idle"
 
@@ -40,3 +46,7 @@ CMD_AUTO_FROM_CONSIGN = LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=
 CMD_AUTO_PRICE = LoadCommand(command=CMD_CST_AUTO_PRICE, power_consign=0.0)
 CMD_OFF = LoadCommand(command="off", power_consign=0.0)
 CMD_IDLE = LoadCommand(command="idle", power_consign=0.0)
+
+CMD_GREEN_CHARGE_AND_DISCHARGE = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
+CMD_GREEN_CHARGE_ONLY = LoadCommand(command=CMD__CST_GREEN_CHARGE_ONLY, power_consign=0.0)
+CMD_FORCE_CHARGE = LoadCommand(command=CMD_CST_FORCE_CHARGE, power_consign=0.0) #can be on grid

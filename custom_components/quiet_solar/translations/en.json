@@ -16,14 +16,18 @@
                     "battery_capacity": "Capacity (Wh)",
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
                     "battery_charge_discharge_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid",
+                    "battery_charge_from_grid_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
                     "battery_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "battery_max_charge_percent_value": "Maximum charge percentage (%)",
                     "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
                     "battery_max_charge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_value": "Maximum charge power (W)",
                     "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
                     "battery_max_discharge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
+                    "battery_min_charge_percent_value": "Minimum charge percentage (%)",
                     "name": "Name"
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
@@ -366,14 +370,18 @@
                     "battery_capacity": "Capacity (Wh)",
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
                     "battery_charge_discharge_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid",
+                    "battery_charge_from_grid_switch_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
                     "battery_charge_percent_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "battery_max_charge_percent_value": "Maximum charge percentage (%)",
                     "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
                     "battery_max_charge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_charge_power_value": "Maximum charge power (W)",
                     "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
                     "battery_max_discharge_power_number_qs_reset_selector": "if selected reset to empty the above field",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
+                    "battery_min_charge_percent_value": "Minimum charge percentage (%)",
                     "name": "Name"
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
@@ -579,6 +587,5 @@
                 "title": "Edit your solar panel plant"
             }
         }
-    },
-    "services": {}
+    }
 }

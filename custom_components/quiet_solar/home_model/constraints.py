@@ -587,6 +587,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         else:
 
             # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
+            # but actually we should have depleted the battery on the "non controlled part first, to see what is really possible
             for i in range(first_slot, last_slot + 1):
 
                 if power_available_power[i] + out_power[i] < 0:

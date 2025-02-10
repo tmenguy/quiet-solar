@@ -31,12 +31,14 @@ CONF_SOLAR_FORECAST_PROVIDER = "solar_forecast_provider"
 
 CONF_BATTERY_CHARGE_DISCHARGE_SENSOR = "battery_charge_discharge_sensor"
 CONF_BATTERY_CHARGE_PERCENT_SENSOR = "battery_charge_percent_sensor"
+CONF_BATTERY_CHARGE_FROM_GRID_SWITCH = "battery_charge_from_grid_switch"
 CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE = "battery_max_discharge_power_value"
 CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER = "battery_max_discharge_power_number"
 CONF_BATTERY_MAX_CHARGE_POWER_VALUE = "battery_max_charge_power_value"
 CONF_BATTERY_MAX_CHARGE_POWER_NUMBER = "battery_max_charge_power_number"
-
+CONF_BATTERY_MIN_CHARGE_PERCENT = "battery_min_charge_percent_value"
+CONF_BATTERY_MAX_CHARGE_PERCENT = "battery_max_charge_percent_value"
 
 CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"

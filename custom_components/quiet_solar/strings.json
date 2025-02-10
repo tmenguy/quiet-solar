@@ -56,7 +56,12 @@
           "battery_max_discharge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "battery_max_charge_power_value": "Maximum charge power (W)",
           "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
-          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
+          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "battery_min_charge_percent_value": "Minimum charge percentage (%)",
+          "battery_max_charge_percent_value": "Maximum charge percentage (%)",
+          "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid",
+          "battery_charge_from_grid_switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
+
         }
       },
       "solar": {
@@ -298,7 +303,11 @@
           "battery_max_discharge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number_qs_reset_selector%]",
           "battery_max_charge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_value%]",
           "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]",
-          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number_qs_reset_selector%]"
+          "battery_max_charge_power_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number_qs_reset_selector%]",
+          "battery_min_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_min_charge_percent_value%]",
+          "battery_max_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_percent_value%]",
+          "battery_charge_from_grid_switch": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_from_grid_switch%]",
+          "battery_charge_from_grid_switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_from_grid_switch_qs_reset_selector%]"
         }
       },
       "solar": {

@@ -114,6 +114,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
     _period : timedelta = timedelta(seconds=FLOATING_PERIOD_S)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
+    _battery_commands = list[tuple[datetime, LoadCommand]]
     _solver_step_s : timedelta = timedelta(seconds=900)
     _update_step_s : timedelta = timedelta(seconds=5)
 
@@ -456,6 +457,18 @@ class QSHome(HADeviceMixin, AbstractDevice):
     def get_available_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
+
+
+
+    def battery_can_discharge(self):
+
+        if self._battery is None:
+            return False
+
+        return self._battery.battery_can_discharge()
+
+
+
     def get_battery_charge_values(self, duration_before_s: float, time: datetime) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         if self._battery is None:
             return []
@@ -565,7 +578,12 @@ class QSHome(HADeviceMixin, AbstractDevice):
         except Exception as err:
             _LOGGER.error(f"Error updating loads constraints {err}", exc_info=err)
 
-        all_loads = self._all_loads
+        if self._battery is not None:
+            all_loads = [self._battery]
+            all_loads.extend(self._all_loads)
+        else:
+            all_loads = self._all_loads
+
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
             all_loads = self._chargers
 
@@ -640,7 +658,17 @@ class QSHome(HADeviceMixin, AbstractDevice):
             # use the available power virtual sensor to modify the begining of the PeriodSolver available power
             # computation based on forecasts
 
-            self._commands, _ = solver.solve()
+            self._commands, self._battery_commands = solver.solve()
+
+        if self._battery and self._battery_commands is not None:
+
+            while len(self._battery_commands) > 0 and self._battery_commands[0][0] < time + self._update_step_s:
+                cmd_time, command = self._battery_commands.pop(0)
+                await self._battery.launch_command(time, command, ctxt=f"launch command battery true launch at {cmd_time}")
+                # only launch one at a time for a given load
+                break
+
+
 
 
         for load, commands in self._commands:

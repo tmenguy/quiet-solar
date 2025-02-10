@@ -33,6 +33,23 @@ class AbstractDevice(object):
         self.home = kwargs.pop("home", None)
         self._constraints: list[LoadConstraint | None] = []
 
+        self.current_command : LoadCommand | None = None
+        self.prev_command: LoadCommand | None = None
+        self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
+        self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
+        self.running_command_first_launch: datetime | None = None
+        self.running_command_last_launch: datetime | None = None
+        self.running_command_num_relaunch : int = 0
+        self.running_command_num_relaunch_after_invalid: int = 0
+
+        self._ack_command(None, None)
+
+        self.num_max_on_off = kwargs.pop("num_max_on_off", None)
+        if self.num_max_on_off is not None:
+            if self.num_max_on_off % 2 == 1:
+                self.num_max_on_off += 1
+
+        self.num_on_off = 0
 
 
     @property
@@ -49,6 +66,148 @@ class AbstractDevice(object):
     def efficiency_factor(self):
         return 100.0 / self.efficiency
 
+    def get_to_be_saved_info(self) -> dict:
+        return {"num_on_off": self.num_on_off}
+
+    def reset_daily_load_datas(self, time:datetime):
+        self.num_on_off = 0
+
+    def reset(self):
+        _LOGGER.info(f"Reset device {self.name}")
+        self.current_command = None
+        self._constraints = []
+
+    def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
+
+        if command is not None:
+            _LOGGER.info(f"ack command {command.command} for load {self.name}")
+        else:
+            _LOGGER.info(f"ack command None for load {self.name}")
+
+        self.prev_command = self.current_command
+        self.current_command = command
+        self.running_command = None
+        self.running_command_num_relaunch = 0
+        self.running_command_num_relaunch_after_invalid = 0
+        self.running_command_first_launch = None
+        self.running_command_last_launch = None
+
+        if command is not None and time is not None and self.prev_command is not None:
+            do_count = False
+            if command.is_off_or_idle() and self.prev_command.is_like(CMD_ON):
+                do_count = True
+            elif command.is_like(CMD_ON) and self.prev_command.is_off_or_idle():
+                do_count = True
+
+            if do_count:
+                self.num_on_off += 1
+                _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
+
+    def is_load_has_a_command_now_or_coming(self, time:datetime) -> bool:
+        if self.current_command is not None:
+            return True
+        if self.running_command is not None:
+            return True
+        if self._stacked_command is not None:
+            return True
+        return False
+
+    async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
+
+        command = copy_command(command)
+
+        if self.running_command is not None:
+            # another command has been launched, stack this one (we replace the previous stacked one)
+            self._stacked_command = command
+            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
+            return
+
+        # there is no running : whatever we will not execute the stacked one but only the last one
+        self._stacked_command = None
+
+        if self.current_command is not None and self.current_command == command:
+            # We kill the stacked one and keep the current one like the choice above
+            self.current_command = command # needed as command == may have been overcharged to not test everything
+            return
+
+
+        self.running_command = command
+        self.running_command_first_launch = time
+        self.running_command_last_launch = time
+
+        _LOGGER.info(f"launch_command: {command} for this load {self.name}), ctxt: {ctxt}")
+
+        is_command_set = await self.probe_if_command_set(time, self.running_command)
+        if is_command_set is True:
+            _LOGGER.info(f"launch_command: Command already set {command} for this load {self.name}, ctxt: {ctxt}")
+        else:
+            try:
+                is_command_set = await self.execute_command(time, command)
+            except Exception as err:
+                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=err)
+                is_command_set = None
+
+        if is_command_set is None:
+            # hum we may have an impossibility to launch this command
+            _LOGGER.info(f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}")
+        elif is_command_set is True:
+            _LOGGER.info(f"launch_command: ack command {command} for this load {self.name}), ctxt: {ctxt}")
+            self._ack_command(time, self.running_command)
+
+        return
+
+    def is_load_command_set(self, time:datetime):
+        return self.running_command is None and self.current_command is not None
+
+    async def check_commands(self, time: datetime) -> timedelta:
+
+        res = timedelta(seconds=0)
+
+        if self.running_command is not None:
+            _LOGGER.info(
+                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+
+            is_command_set = await self.probe_if_command_set(time, self.running_command)
+            if is_command_set is None:
+                # impossible to run this command for this load ...
+                self.running_command_num_relaunch_after_invalid += 1
+                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+                if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
+                    # will kill completely the command ....
+                    self._ack_command(time, None)
+
+            if is_command_set is True:
+                self._ack_command(time, self.running_command)
+            elif self.running_command_last_launch is not None:
+                res = time - self.running_command_last_launch
+
+
+        if self.running_command is None and self._stacked_command is not None:
+            await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
+
+        return res
+
+    async def force_relaunch_command(self, time: datetime):
+        if self.running_command is not None:
+            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
+            self.running_command_num_relaunch += 1
+            is_command_set = await self.execute_command(time, self.running_command)
+            self.running_command_last_launch = time
+            if is_command_set is None:
+                _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
+            elif is_command_set is True:
+                self._ack_command(time, self.running_command)
+            else:
+                await self.check_commands(time)
+
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        print(f"Executing command {command}")
+        return False
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        return True
+
+
 
 class AbstractLoad(AbstractDevice):
 
@@ -61,29 +220,14 @@ class AbstractLoad(AbstractDevice):
 
 
         self._last_completed_constraint: LoadConstraint | None = None
-        self.current_command : LoadCommand | None = None
-        self.prev_command: LoadCommand | None = None
-        self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
-        self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
-        self.running_command_first_launch: datetime | None = None
-        self.running_command_last_launch: datetime | None = None
-        self.running_command_num_relaunch : int = 0
-        self.running_command_num_relaunch_after_invalid: int = 0
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
         self.current_constraint_current_percent_completion: float | None = None
         self._externally_initialized_constraints = False
 
-        self._ack_command(None, None)
-
         self.qs_best_effort_green_only = False
 
-        self.num_max_on_off = kwargs.pop("num_max_on_off", None)
-        if self.num_max_on_off is not None:
-            if self.num_max_on_off % 2 == 1:
-                self.num_max_on_off += 1
 
-        self.num_on_off = 0
 
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint_from_agenda = None
@@ -132,8 +276,7 @@ class AbstractLoad(AbstractDevice):
             return False
         return  await self.check_load_activity_and_constraints(time)
 
-    def get_to_be_saved_info(self) -> dict:
-        return {"num_on_off": self.num_on_off}
+
 
     def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_load_info: dict | None):
         self.reset()
@@ -193,8 +336,7 @@ class AbstractLoad(AbstractDevice):
 
     def reset(self):
         _LOGGER.info(f"Reset load {self.name}")
-        self.current_command = None
-        self._constraints = []
+        super().reset()
         self._last_completed_constraint = None
         self._last_pushed_end_constraint_from_agenda = None
 
@@ -414,9 +556,6 @@ class AbstractLoad(AbstractDevice):
             self.set_live_constraints(time, self._constraints)
             return True
 
-    def reset_daily_load_datas(self, time:datetime):
-        self.num_on_off = 0
-
     async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
 
 
@@ -579,139 +718,6 @@ class AbstractLoad(AbstractDevice):
                 await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
 
 
-    def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
-
-        if command is not None:
-            _LOGGER.info(f"ack command {command.command} for load {self.name}")
-        else:
-            _LOGGER.info(f"ack command None for load {self.name}")
-
-        self.prev_command = self.current_command
-        self.current_command = command
-        self.running_command = None
-        self.running_command_num_relaunch = 0
-        self.running_command_num_relaunch_after_invalid = 0
-        self.running_command_first_launch = None
-        self.running_command_last_launch = None
-
-        if command is not None and time is not None and self.prev_command is not None:
-            do_count = False
-            if command.is_off_or_idle() and self.prev_command.is_like(CMD_ON):
-                do_count = True
-            elif command.is_like(CMD_ON) and self.prev_command.is_off_or_idle():
-                do_count = True
-
-            if do_count:
-                self.num_on_off += 1
-                _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
-
-    def is_load_has_a_command_now_or_coming(self, time:datetime) -> bool:
-        if self.current_command is not None:
-            return True
-        if self.running_command is not None:
-            return True
-        if self._stacked_command is not None:
-            return True
-        return False
-
-    async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
-
-        command = copy_command(command)
-
-
-
-        if self.running_command is not None:
-            # another command has been launched, stack this one (we replace the previous stacked one)
-            self._stacked_command = command
-            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
-            return
-
-        # there is no running : whatever we will not execute the stacked one but only the last one
-        self._stacked_command = None
-
-        if self.current_command is not None and self.current_command == command:
-            # We kill the stacked one and keep the current one like the choice above
-            self.current_command = command # needed as command == may have been overcharged to not test everything
-            return
-
-
-        self.running_command = command
-        self.running_command_first_launch = time
-        self.running_command_last_launch = time
-
-        _LOGGER.info(f"launch_command: {command} for this load {self.name}), ctxt: {ctxt}")
-
-        is_command_set = await self.probe_if_command_set(time, self.running_command)
-        if is_command_set is True:
-            _LOGGER.info(f"launch_command: Command already set {command} for this load {self.name}, ctxt: {ctxt}")
-        else:
-            try:
-                is_command_set = await self.execute_command(time, command)
-            except Exception as err:
-                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=err)
-                is_command_set = None
-
-        if is_command_set is None:
-            # hum we may have an impossibility to launch this command
-            _LOGGER.info(f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}")
-        elif is_command_set is True:
-            _LOGGER.info(f"launch_command: ack command {command} for this load {self.name}), ctxt: {ctxt}")
-            self._ack_command(time, self.running_command)
-
-        return
-
-    def is_load_command_set(self, time:datetime):
-        return self.running_command is None and self.current_command is not None
-
-    async def check_commands(self, time: datetime) -> timedelta:
-
-        res = timedelta(seconds=0)
-
-        if self.running_command is not None:
-            _LOGGER.info(
-                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
-
-            is_command_set = await self.probe_if_command_set(time, self.running_command)
-            if is_command_set is None:
-                # impossible to run this command for this load ...
-                self.running_command_num_relaunch_after_invalid += 1
-                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
-                if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
-                    # will kill completely the command ....
-                    self._ack_command(time, None)
-
-            if is_command_set is True:
-                self._ack_command(time, self.running_command)
-            elif self.running_command_last_launch is not None:
-                res = time - self.running_command_last_launch
-
-
-        if self.running_command is None and self._stacked_command is not None:
-            await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
-
-        return res
-
-    async def force_relaunch_command(self, time: datetime):
-        if self.running_command is not None:
-            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
-            self.running_command_num_relaunch += 1
-            is_command_set = await self.execute_command(time, self.running_command)
-            self.running_command_last_launch = time
-            if is_command_set is None:
-                _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
-            elif is_command_set is True:
-                self._ack_command(time, self.running_command)
-            else:
-                await self.check_commands(time)
-
-
-
-    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
-        print(f"Executing command {command}")
-        return False
-
-    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
-        return True
 
 
 

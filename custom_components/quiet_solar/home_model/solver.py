@@ -7,7 +7,8 @@ import pytz
 from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
-from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE
+from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
+    CMD_GREEN_CHARGE_ONLY
 from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
 
@@ -253,48 +254,154 @@ class PeriodSolver(object):
         # now try to do our best with the non mandatory ones and the variables ones (car) .... and battery
 
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
-        battery_commands = np.zeros(len(self._available_power), dtype=np.float64)
+        battery_commands = None
 
         if self._battery is not None:
-            battery_charge = np.zeros(len(self._available_power), dtype=np.float64)
-            prev_battery_charge = self._battery.current_charge
-            if prev_battery_charge is None:
-                prev_battery_charge = 0.0
+
+            # the battery commands are:
+            # - CMD_GREEN_CHARGE_AND_DISCHARGE: charge on solar only (not from grid) discharge when needed
+            # - CMD_GREEN_CHARGE_ONLY: do not discharge the battery, charge at maximum from solar
+            # - CMD_FORCE_CHARGE: charge the battery according to the power consign value
 
 
-            # first try to fill the battery to the max of what is left
-            total_chargeable_energy = 0
-            for i in range(len(self._available_power)):
 
-                charged_energy = 0.0
-                charging_power = self._battery.get_best_charge_power(-self._available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
-                if charging_power > 0:
-                    battery_commands[i] = charging_power
+            init_battery_charge =  self._battery.current_charge
+            if init_battery_charge is None:
+                init_battery_charge = 0.0
+
+            continue_optimizing = True
+            limited_discharge_per_price = {}
+
+
+            while continue_optimizing:
+                # first try to fill the battery to the max of what is left and consume on all slots : if teh battery covers all (ie no grid need) fine, we need to let the battery do its job
+                # in automatic mode, it will discharge when needed, and charge when it can
+                # if it is not teh case : remove battery discharge from "lower prices", as much as we can until teh total price decrease ... do that little by little (well limit the number of steps for computation)
+                # if the battery "not used energy" from this pass is
+                remaining_grid_price  = 0
+                remaining_grid_energy = 0
+                prev_battery_charge = init_battery_charge
+                battery_charge = np.zeros(len(self._available_power), dtype=np.float64)
+                battery_commands = [CMD_GREEN_CHARGE_AND_DISCHARGE] * len(self._available_power)
+                available_power = np.copy(self._available_power)
+                prices_discharged_energy_buckets = {}
+                prices_remaining_grid_energy_buckets = {}
+
+
+                for i in range(len(available_power)):
+
+                    charging_power = 0.0
+
+                    cmd = None
+
+                    if available_power[i] < 0.0:
+
+                        charging_power = self._battery.get_best_charge_power(-available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
+                        if charging_power > 0:
+                            available_power[i] += charging_power
+                        else:
+                            charging_power = 0.0
+
+                    elif available_power[i] > 0.0:
+
+                        # discharge....
+                        charging_power = self._battery.get_best_discharge_power(float(available_power[i]),
+                                                                                float(self._durations_s[i]),
+                                                                                current_charge=float(prev_battery_charge))
+                        if charging_power > 0:
+                            charging_power = -charging_power
+                        else:
+                            charging_power = 0.0
+
                     charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
-                    total_chargeable_energy += charged_energy
-                    self._available_power[i] += charging_power
 
-                battery_charge[i] = prev_battery_charge + charged_energy
-                prev_battery_charge = battery_charge[i]
+                    if charged_energy < 0.0:
+                        # this is a discharge
+                        limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
+                        if limit_discharge is not None:
+                            if limit_discharge <= 0.0:
+                                # we need to .... forbid discharge
+                                charged_energy = 0.0
+                                charging_power = 0.0
+                                cmd = CMD_GREEN_CHARGE_ONLY
+                            else:
+                                limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + charged_energy) # charged_energy is negative here
 
 
-            # now try to discharge the battery to cover the consumption at the best prices
-            total_discharged_energy = 0
+                    if charged_energy < 0.0:
+                        if self._prices[i] not in prices_discharged_energy_buckets:
+                            prices_discharged_energy_buckets[self._prices[i]] = 0.0
+                        prices_discharged_energy_buckets[self._prices[i]] += -charged_energy
 
-            for i in range(len(self._available_power)):
 
-                if battery_commands[i] == 0.0:
+                    available_power[i] += charging_power
 
-                    current_battery_charge = battery_charge[i] - total_discharged_energy
-                    charging_power = self._battery.get_best_discharge_power(float(self._available_power[i]), float(self._durations_s[i]), current_charge=float(current_battery_charge))
+                    if cmd is not None:
+                        battery_commands[i] = cmd
 
-                    if charging_power > 0:
-                        total_discharged_energy += (charging_power*self._durations_s[i]/3600.0)
-                        battery_commands[i] = -charging_power
-                        self._available_power[i] -= charging_power
+                    battery_charge[i] = prev_battery_charge + charged_energy
+                    prev_battery_charge = battery_charge[i]
 
-                battery_charge[i] = battery_charge[i] - total_discharged_energy
+                    if available_power[i] > 0:
+                        # we will ask it from the grid:
+                        grid_nrj = ((available_power[i]*float(self._durations_s[i])) / 3600.0)
+                        remaining_grid_energy += grid_nrj
+                        remaining_grid_price += self._prices[i]*grid_nrj
 
+                        if self._prices[i] not in prices_remaining_grid_energy_buckets:
+                            prices_remaining_grid_energy_buckets[self._prices[i]] = 0.0
+                        prices_remaining_grid_energy_buckets[self._prices[i]] += grid_nrj
+
+
+
+                if len(limited_discharge_per_price) > 0:
+                    # stop after a first pass of optimization
+                    continue_optimizing = False
+
+                #the goal is to lower as much as possible the remaining_grid_price ... by, if possible, discharging mor ein the "high" prices and less in the low prices
+                if remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1: # 100Wh hum or use a bit of a buffer here for uncertainty?
+                    # fantastic we do nothing
+                    continue_optimizing = False
+                elif continue_optimizing:
+                    # will be time now to see if one of the most expensive buckets should be covered my moving discharge for a least expensive one...we may have to do a few tries... well let's be aggressive here and do only one pass
+                    # not optimal but will work pretty well in practice
+                    limited_discharge_per_price = {}
+                    have_an_optim = False
+                    for price_idx in range(len(self._prices_ordered_values) - 1, -1, -1):
+                        price = self._prices_ordered_values[price_idx]
+                        if prices_remaining_grid_energy_buckets.get(price, 0.0) > 0.0:
+                            # we have some energy to cover
+                            energy_to_cover = prices_remaining_grid_energy_buckets[price]
+
+                            # take the least expensive energy to cover first
+                            for sub_price_idx in range(0, price_idx):
+
+                                sub_price = self._prices_ordered_values[sub_price_idx]
+                                energy_can_still_be_discharged = prices_discharged_energy_buckets.get(sub_price, 0.0)
+                                if energy_can_still_be_discharged > 0.0:
+                                    # we have some energy to cover
+                                    if energy_can_still_be_discharged >= energy_to_cover:
+                                        # we can cover it
+                                        energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
+                                        energy_to_cover = 0
+                                    else:
+                                        energy_can_still_be_discharged = 0
+                                        energy_to_cover -= energy_can_still_be_discharged
+
+                                    limited_discharge_per_price[sub_price] = energy_can_still_be_discharged
+                                    have_an_optim = True
+
+                                prices_discharged_energy_buckets[sub_price] = energy_can_still_be_discharged
+
+                                if energy_to_cover <= 0:
+                                    break
+
+                    if have_an_optim is False:
+                        continue_optimizing = False
+
+                if continue_optimizing is False:
+                    # now we have the best battery commands for the period
+                    self._available_power = available_power
 
 
         # we may have charged "too much" and if it covers everything, we could remove some charging
@@ -306,6 +413,7 @@ class PeriodSolver(object):
 
         # for the slots where we still have some surplus production : it means the battery was at full capacity ... we can do now other non mandatory stuffs
         # like surplus to the car or other non mandatory constraints, non mandatory constraint are only consuming free electricity ... if anything is left :)
+        # should ONLY be done if the battery is full and we have free electricity by nature here the battery has been charged as much as it can with solar
 
         constraints = []
         for c in self._active_constraints:
@@ -351,27 +459,17 @@ class PeriodSolver(object):
             output_cmds.append((load, lcmd))
 
         bcmd = []
-        if self._battery is not None:
-            # this would be for battery grid charging commands ... not supported for now
+        if self._battery is not None and battery_commands is not None:
+            # setup battery comands
             current_command = None
-            for s in range(battery_commands.shape[0]):
-
-                charge = float(battery_commands[s])
-                if True:
-                    param = float(charge)
-                    base_cmd = CMD_FORCE_CHARGE #from grid for ex
-                    if param < 0.0:
-                        param = 0.0 - float(charge)
-                        base_cmd = CMD_FORCE_DISCHARGE
-
-                    cmd = copy_command(base_cmd, power_consign=param)
-
-                else:
-                    cmd = copy_command(CMD_AUTO_FROM_CONSIGN)
-
-                if cmd != current_command:
+            for s in range(num_slots):
+                cmd = battery_commands[s]
+                if cmd != current_command or (cmd.power_consign != current_command.power_consign):
                     bcmd.append((self._time_slots[s], cmd))
                     current_command = cmd
+
+        if len(bcmd) == 0:
+            bcmd = [(self._time_slots[0], CMD_GREEN_CHARGE_AND_DISCHARGE)]
 
         # cmds are correctly ordered by time for each load by construction
         return output_cmds, bcmd
