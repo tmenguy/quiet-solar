@@ -82,9 +82,9 @@ class QSSolarProvider:
                 #_LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
                 if orchestrator is not None and self.is_orchestrator(entry_id, orchestrator):
                     self.orchestrators.append(orchestrator)
-                    _LOGGER.info(f"Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
-                else:
-                    _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
+                    # _LOGGER.info(f"YES Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
+                # else:
+                    # _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
 
             if len(self.orchestrators) > 0:
                 self.solar_forecast: list[tuple[datetime | None, float | None]] = []
@@ -99,6 +99,8 @@ class QSSolarProvider:
                         prev_value = self.solar_forecast[i][1]
 
                     self._latest_update_time = time
+            else:
+                _LOGGER.error(f"No solar orchestrator found for domain {self.domain}")
 
 
     async def extract_solar_forecast_from_data(self, start_time: datetime, period: float) -> list[
