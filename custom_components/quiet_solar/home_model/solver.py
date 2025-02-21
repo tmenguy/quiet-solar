@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from datetime import timedelta
 import numpy.typing as npt
@@ -11,6 +12,7 @@ from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE
     CMD_GREEN_CHARGE_ONLY
 from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
+_LOGGER = logging.getLogger(__name__)
 
 class PeriodSolver(object):
 
@@ -381,10 +383,14 @@ class PeriodSolver(object):
                                 if energy_can_still_be_discharged > 0.0:
                                     # we have some energy to cover
                                     if energy_can_still_be_discharged >= energy_to_cover:
+                                        _LOGGER.info(f"==> Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
                                         # we can cover it
                                         energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                         energy_to_cover = 0
+
+                                        
                                     else:
+                                        _LOGGER.info(f"==> Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
                                         energy_can_still_be_discharged = 0
                                         energy_to_cover -= energy_can_still_be_discharged
 
