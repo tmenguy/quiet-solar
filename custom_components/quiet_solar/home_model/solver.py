@@ -318,18 +318,17 @@ class PeriodSolver(object):
                             charging_power = 0.0
 
                     charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
-
-                    if charged_energy < 0.0:
-                        # this is a discharge
-                        limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
-                        if limit_discharge is not None:
-                            if limit_discharge + charged_energy <= 0.0:
-                                # we need to .... forbid discharge
-                                charged_energy = 0.0
-                                charging_power = 0.0
-                                cmd = CMD_GREEN_CHARGE_ONLY
+                    
+                    
+                    limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
+                    if limit_discharge is not None:
+                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
+                            # we need to .... forbid discharge
+                            charged_energy = max(0.0, charged_energy)
+                            charging_power = max(0.0, charging_power)
+                            cmd = CMD_GREEN_CHARGE_ONLY
                                 
-                            limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + charged_energy) # charged_energy is negative here
+                        limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy,0.0))
 
 
                     if charged_energy < 0.0:
