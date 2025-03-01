@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from datetime import timedelta
 import numpy.typing as npt
@@ -11,6 +12,7 @@ from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE
     CMD_GREEN_CHARGE_ONLY
 from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
+_LOGGER = logging.getLogger(__name__)
 
 class PeriodSolver(object):
 
@@ -271,9 +273,13 @@ class PeriodSolver(object):
 
             continue_optimizing = True
             limited_discharge_per_price = {}
+            
+            num_optim_tries = 0
 
 
             while continue_optimizing:
+            
+                num_optim_tries += 1
                 # first try to fill the battery to the max of what is left and consume on all slots : if teh battery covers all (ie no grid need) fine, we need to let the battery do its job
                 # in automatic mode, it will discharge when needed, and charge when it can
                 # if it is not teh case : remove battery discharge from "lower prices", as much as we can until teh total price decrease ... do that little by little (well limit the number of steps for computation)
@@ -296,10 +302,8 @@ class PeriodSolver(object):
 
                     if available_power[i] < 0.0:
 
-                        charging_power = self._battery.get_best_charge_power(-available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
-                        if charging_power > 0:
-                            available_power[i] += charging_power
-                        else:
+                        charging_power = self._battery.get_best_charge_power(0.0 - available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
+                        if charging_power < 0.0:
                             charging_power = 0.0
 
                     elif available_power[i] > 0.0:
@@ -309,30 +313,26 @@ class PeriodSolver(object):
                                                                                 float(self._durations_s[i]),
                                                                                 current_charge=float(prev_battery_charge))
                         if charging_power > 0:
-                            charging_power = -charging_power
+                            charging_power = 0.0 - charging_power
                         else:
                             charging_power = 0.0
 
                     charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
+                    
+                    
+                    limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
+                    if limit_discharge is not None:
+                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
+                            # we need to .... forbid discharge
+                            charged_energy = max(0.0, charged_energy)
+                            charging_power = max(0.0, charging_power)
+                            cmd = CMD_GREEN_CHARGE_ONLY
+                                
+                        limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy,0.0))
+
 
                     if charged_energy < 0.0:
-                        # this is a discharge
-                        limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
-                        if limit_discharge is not None:
-                            if limit_discharge <= 0.0:
-                                # we need to .... forbid discharge
-                                charged_energy = 0.0
-                                charging_power = 0.0
-                                cmd = CMD_GREEN_CHARGE_ONLY
-                            else:
-                                limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + charged_energy) # charged_energy is negative here
-
-
-                    if charged_energy < 0.0:
-                        if self._prices[i] not in prices_discharged_energy_buckets:
-                            prices_discharged_energy_buckets[self._prices[i]] = 0.0
-                        prices_discharged_energy_buckets[self._prices[i]] += -charged_energy
-
+                        prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(self._prices[i], 0.0) - charged_energy 
 
                     available_power[i] += charging_power
 
@@ -342,23 +342,21 @@ class PeriodSolver(object):
                     battery_charge[i] = prev_battery_charge + charged_energy
                     prev_battery_charge = battery_charge[i]
 
+
                     if available_power[i] > 0:
                         # we will ask it from the grid:
                         grid_nrj = ((available_power[i]*float(self._durations_s[i])) / 3600.0)
                         remaining_grid_energy += grid_nrj
                         remaining_grid_price += self._prices[i]*grid_nrj
-
-                        if self._prices[i] not in prices_remaining_grid_energy_buckets:
-                            prices_remaining_grid_energy_buckets[self._prices[i]] = 0.0
-                        prices_remaining_grid_energy_buckets[self._prices[i]] += grid_nrj
+                        prices_remaining_grid_energy_buckets[self._prices[i]] = prices_remaining_grid_energy_buckets.get(self._prices[i], 0.0) + grid_nrj
 
 
 
-                if len(limited_discharge_per_price) > 0:
+                if num_optim_tries > 1:
                     # stop after a first pass of optimization
                     continue_optimizing = False
 
-                #the goal is to lower as much as possible the remaining_grid_price ... by, if possible, discharging mor ein the "high" prices and less in the low prices
+                #the goal is to lower as much as possible the remaining_grid_price ... by, if possible, discharging more in the "high" prices and less in the low prices
                 if remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1: # 100Wh hum or use a bit of a buffer here for uncertainty?
                     # fantastic we do nothing
                     continue_optimizing = False
@@ -367,12 +365,15 @@ class PeriodSolver(object):
                     # not optimal but will work pretty well in practice
                     limited_discharge_per_price = {}
                     have_an_optim = False
-                    for price_idx in range(len(self._prices_ordered_values) - 1, -1, -1):
+                    for price_idx in range(len(self._prices_ordered_values) - 1, 0, -1): # no need to go to the least expensive
+                    
                         price = self._prices_ordered_values[price_idx]
-                        if prices_remaining_grid_energy_buckets.get(price, 0.0) > 0.0:
+                        energy_to_cover = prices_remaining_grid_energy_buckets.get(price, 0.0)
+                        
+                        if energy_to_cover <= 0.0:
+                            continue
+                        else:
                             # we have some energy to cover
-                            energy_to_cover = prices_remaining_grid_energy_buckets[price]
-
                             # take the least expensive energy to cover first
                             for sub_price_idx in range(0, price_idx):
 
@@ -381,16 +382,21 @@ class PeriodSolver(object):
                                 if energy_can_still_be_discharged > 0.0:
                                     # we have some energy to cover
                                     if energy_can_still_be_discharged >= energy_to_cover:
+                                        _LOGGER.info(f"==> Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
                                         # we can cover it
                                         energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                         energy_to_cover = 0
+
+                                        
                                     else:
+                                        _LOGGER.info(f"==> Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
                                         energy_can_still_be_discharged = 0
                                         energy_to_cover -= energy_can_still_be_discharged
 
                                     limited_discharge_per_price[sub_price] = energy_can_still_be_discharged
                                     have_an_optim = True
-
+                                    prices_remaining_grid_energy_buckets[sub_price] = prices_remaining_grid_energy_buckets.get(sub_price, 0.0) + prices_discharged_energy_buckets.get(sub_price, 0.0) - energy_can_still_be_discharged
+                                    
                                 prices_discharged_energy_buckets[sub_price] = energy_can_still_be_discharged
 
                                 if energy_to_cover <= 0:
