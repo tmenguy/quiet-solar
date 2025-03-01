@@ -204,7 +204,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         data = {
             CONF_CAR_CHARGER_MIN_CHARGE: self.charger_min_charge,
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
-            CONF_CAR_BATTERY_CAPACITY: 80000,
+            CONF_CAR_BATTERY_CAPACITY: 100000,
             CONF_CALENDAR: self.calendar,
             CONF_DEVICE_EFFICIENCY: self.efficiency
         }
