@@ -11,6 +11,8 @@ logger:
     custom_components.quiet-solar: debug
     custom_components.quiet-solar.ha_model: debug
     custom_components.quiet-solar.home_model: debug
+    custom_components.hacs: debug
+    aiogithubapi: debug
 # If you need to debug uncommment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
 #debugpy:
   #start: true
