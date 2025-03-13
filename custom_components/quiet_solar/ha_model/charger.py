@@ -823,6 +823,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self.car: QSCar | None = None
         self._user_attached_car_name: str | None = None
+        self.car_attach_time: datetime | None = None
 
         self.charge_state = STATE_UNKNOWN
 
@@ -1061,14 +1062,31 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         await self.on_device_state_change_helper(time, device_change_type, load_name=load_name, mobile_app=mobile_app, mobile_app_url=mobile_app_url)
 
 
+
+
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car ....
+
+
+        cars = {}
+        for charger in self.home._chargers:
+            car = charger.car
+            if car is not None and car != charger._default_generic_car:
+                cars[car]= charger
+
 
         if self._user_attached_car_name is not None:
             if self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
                 car = self.home.get_car_by_name(self._user_attached_car_name)
                 if car is not None:
                     _LOGGER.info(f"Best Car from user selection: {car.name}")
+
+                    existing_charger = cars.get(car)
+
+                    if existing_charger is not None and existing_charger != self:
+                        # will force a reset of everyhting
+                        existing_charger.detach_car()
+
                     return car
             else:
                 _LOGGER.info(f"NO GOOD CAR BECAUSE: CHARGER_NO_CAR_CONNECTED")
@@ -1078,9 +1096,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         best_score = 0
         best_car = None
 
+
         for car in self.home._cars:
 
             score = 0
+
+            existing_charger = cars.get(car)
+
+            if existing_charger and existing_charger != self and existing_charger._user_attached_car_name == car.name:
+                # this car is already attached to another charger, with a manual selection, can't be a candidate here
+                continue
+
+            if (existing_charger and
+                    time - existing_charger.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
+                # this car is already attached to another charger, for a long enough time, it is not a candidate
+                if existing_charger == self:
+                    # the current charger has been connected to this car for a long time, we can keep it ?
+                    best_car = car
+                    best_score = score
+                    break
+                else:
+                    # we will let it on the other charger, this car is not a candidate anymore
+                    continue
+
 
             score_plug_bump = 0
             car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
@@ -1124,11 +1162,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 best_car = car
                 best_score = score
 
+
         if best_car is None:
             best_car = self.get_default_car()
             _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
             _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
+            existing_charger = cars.get(best_car)
+
+            if existing_charger is not None and existing_charger != self:
+                # will force a reset of everyhting
+                _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
+                existing_charger.detach_car()
+                # hoping we won't have back and forth between chargers
         return best_car
 
     def get_default_car(self):
@@ -1257,7 +1303,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.reset()
 
                 # find the best car .... for now
-                self.attach_car(car)
+                self.attach_car(car, time)
 
             target_charge = await self.setup_car_charge_target_if_needed()
 
@@ -1441,7 +1487,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON, Platform.TIME])
         return list(parent)
 
-    def attach_car(self, car):
+    def attach_car(self, car, time: datetime):
 
         if self.car is not None:
             if self.car.name == car.name:
@@ -1457,10 +1503,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             car.calendar = self.calendar
 
         self.update_power_steps()
+        self.car_attach_time = time
 
     def detach_car(self):
         self.car = None
         self._power_steps = []
+        self.car_attach_time = None
 
     # update in place the power steps
     def update_power_steps(self):
