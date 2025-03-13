@@ -21,7 +21,7 @@
           "car": "Add an electrical vehicle",
           "pool": "Add a pool",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
-          "fp_heater": "Add a \"fil pilote\" based heater"
+          "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)"
         }
       },
       "home": {
@@ -37,8 +37,9 @@
           "home_start_off_peak_range_1": "Start of the first off-peak range",
           "home_end_off_peak_range_1": "End of the first off-peak range (set same as start to disable range)",
           "home_start_off_peak_range_2": "Start of the second off-peak range",
-          "home_end_off_peak_range_2": "End of the second off-peak range (set same as start to disable range)"
-
+          "home_end_off_peak_range_2": "End of the second off-peak range (set same as start to disable range)",
+          "device_is_3p": "Is the home 3 phases?",
+          "dyn_group_max_phase_amps": "maximum current per phase (A) for the home"
         }
       },
       "battery": {
@@ -88,11 +89,12 @@
         "title": "Edit your electrical vehicle charger",
         "data": {
           "name": "Name",
+          "dynamic_group_name" : "Add charger to a load group to limit the amps",
           "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
           "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
           "charger_max_charge": "Maximum Current Charge Per Phase (A)",
           "charger_min_charge": "Minimum Current Charge Per Phase (A)",
-          "charger_is_3p": "Is the charger 3 phases?",
+          "device_is_3p": "Is the charger 3 phases?",
           "charger_plugged": "binary sensor to know if a car is plugged to the charger",
           "charger_plugged_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "charger_max_charging_current_number": "Maximum Current Charge Per Phase (A) Number entity",
@@ -112,11 +114,12 @@
         "description": "OCPP based integration is up and running ...",
         "data": {
           "name": "Name",
-          "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
+          "dynamic_group_name" : "[%key:component::quiet_solar::config::step::charger_generic::data::dynamic_group_name%]",
+          "charger_latitude" : "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
           "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
-          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::device_is_3p%]",
           "charger_device_ocpp": "OCPP device",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the OCPP one)",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
@@ -131,11 +134,12 @@
         "description": "Wallbox based integration is up and running ...",
         "data": {
           "name": "Name",
+          "dynamic_group_name" : "[%key:component::quiet_solar::config::step::charger_generic::data::dynamic_group_name%]",
           "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
           "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
-          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::device_is_3p%]",
           "charger_device_wallbox": "Wallbox device",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_generic::data::accurate_power_sensor%] (optional, to overcharge the Wallbox one)",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
@@ -210,6 +214,7 @@
         "description": "This device will compute automatically the needed pump use time to keep the pool clean",
         "data": {
           "name": "Name",
+          "dynamic_group_name" : "Add pool to a load group to limit the amps",
           "pool_temperature_sensor": "Water temperature sensor",
           "pool_temperature_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "switch": "On/Off switch of the pump filter",
@@ -231,6 +236,7 @@
         "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
         "data": {
           "name": "Name",
+          "dynamic_group_name" : "Add to a load group to limit the amps",
           "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
           "switch": "On/Off of the load",
           "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
@@ -242,20 +248,16 @@
 
         }
       },
-      "fp_heater": {
-        "title": "A \"fil pilote\" based heater",
-        "description": "Specific heater used in France",
+      "dynamic_group": {
+        "title": "A power group",
+        "description": "Power group to limit the amps of multiple chargers for ex",
         "data": {
           "name": "Name",
-          "switch": "On/Off of the heater",
-          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "select": "Fil pilote value",
-          "select_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "power": "Power of the eater (W)",
-          "accurate_power_sensor": "Power sensor of the load (W, kW)",
-          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
-          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
-          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
+          "dynamic_group_name" : "Add this group to another load group to limit the amps",
+          "device_is_3p": "Is the power group 3 phases?",
+          "dyn_group_max_phase_amps": "maximum current per phase (A) for the dynamic group",
+          "accurate_power_sensor": "Power sensor of the Power Group (W, kW)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
         }
       }
     }
@@ -285,7 +287,9 @@
           "home_start_off_peak_range_1": "[%key:component::quiet_solar::config::step::home::data::home_start_off_peak_range_1%]",
           "home_end_off_peak_range_1": "[%key:component::quiet_solar::config::step::home::data::home_end_off_peak_range_1%]",
           "home_start_off_peak_range_2": "[%key:component::quiet_solar::config::step::home::data::home_start_off_peak_range_2%]",
-          "home_end_off_peak_range_2": "[%key:component::quiet_solar::config::step::home::data::home_end_off_peak_range_2%]"
+          "home_end_off_peak_range_2": "[%key:component::quiet_solar::config::step::home::data::home_end_off_peak_range_2%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::home::data::device_is_3p%]",
+          "dyn_group_max_phase_amps": "[%key:component::quiet_solar::config::step::home::data::dyn_group_max_phase_amps%]"
         }
       },
       "battery": {
@@ -325,11 +329,12 @@
         "title": "[%key:component::quiet_solar::config::step::charger_generic::title%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_generic::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::charger_generic::data::dynamic_group_name%]",
           "charger_latitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_latitude%]",
           "charger_longitude": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_min_charge%]",
-          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_is_3p%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::charger_generic::data::device_is_3p%]",
           "charger_plugged": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_plugged%]",
           "charger_max_charging_current_number": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number%]",
           "charger_max_charging_current_number_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_generic::data::charger_max_charging_current_number_qs_reset_selector%]",
@@ -348,11 +353,12 @@
         "description": "[%key:component::quiet_solar::config::step::charger_ocpp::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_ocpp::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::charger_ocpp::data::dynamic_group_name%]",
           "charger_latitude": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_latitude%]",
           "charger_longitude": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_min_charge%]",
-          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_is_3p%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::charger_ocpp::data::device_is_3p%]",
           "charger_device_ocpp": "[%key:component::quiet_solar::config::step::charger_ocpp::data::charger_device_ocpp%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor%]",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_ocpp::data::accurate_power_sensor_qs_reset_selector%]",
@@ -367,11 +373,12 @@
         "description": "[%key:component::quiet_solar::config::step::charger_wallbox::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::charger_wallbox::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::charger_wallbox::data::dynamic_group_name%]",
           "charger_latitude": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_latitude%]",
           "charger_longitude": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_longitude%]",
           "charger_max_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_max_charge%]",
           "charger_min_charge": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_min_charge%]",
-          "charger_is_3p": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_is_3p%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::charger_wallbox::data::device_is_3p%]",
           "charger_device_wallbox": "[%key:component::quiet_solar::config::step::charger_wallbox::data::charger_device_wallbox%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::charger_wallbox::data::accurate_power_sensor%]",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::charger_wallbox::data::accurate_power_sensor_qs_reset_selector%]",
@@ -446,6 +453,7 @@
         "description": "[%key:component::quiet_solar::config::step::pool::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::pool::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::pool::data::dynamic_group_name%]",
           "pool_temperature_sensor": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor%]",
           "pool_temperature_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor_qs_reset_selector%]",
           "switch": "[%key:component::quiet_solar::config::step::pool::data::switch%]",
@@ -467,6 +475,7 @@
         "description": "[%key:component::quiet_solar::config::step::on_off_duration::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::on_off_duration::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::on_off_duration::data::dynamic_group_name%]",
           "load_is_boost_only": "[%key:component::quiet_solar::config::step::on_off_duration::data::load_is_boost_only%]",
           "switch": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch%]",
           "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch_qs_reset_selector%]",
@@ -477,20 +486,16 @@
           "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar_qs_reset_selector%]"
         }
       },
-      "fp_heater": {
-        "title": "[%key:component::quiet_solar::config::step::fp_heater::title%]",
-        "description": "[%key:component::quiet_solar::config::step::fp_heater::description%]",
+      "dynamic_group": {
+        "title": "[%key:component::quiet_solar::config::step::dynamic_group::title%]",
+        "description": "[%key:component::quiet_solar::config::step::dynamic_group::description%]",
         "data": {
-          "name": "[%key:component::quiet_solar::config::step::fp_heater::data::name%]",
-          "switch": "[%key:component::quiet_solar::config::step::fp_heater::data::switch%]",
-          "switch_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::switch_qs_reset_selector%]",
-          "select": "[%key:component::quiet_solar::config::step::fp_heater::data::select%]",
-          "select_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::select_qs_reset_selector%]",
-          "power": "[%key:component::quiet_solar::config::step::fp_heater::data::power%]",
-          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::fp_heater::data::accurate_power_sensor%]",
-          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::fp_heater::data::accurate_power_sensor_qs_reset_selector%]",
-          "calendar" :"[%key:component::quiet_solar::config::step::fp_heater::data::calendar%]",
-          "calendar_qs_reset_selector" :"[%key:component::quiet_solar::config::step::fp_heater::data::calendar_qs_reset_selector%]"
+          "name": "[%key:component::quiet_solar::config::step::dynamic_group::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::dynamic_group::data::dynamic_group_name%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::dynamic_group::data::device_is_3p%]",
+          "dyn_group_max_phase_amps": "[%key:component::quiet_solar::config::step::dynamic_group::data::dyn_group_max_phase_amps%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::dynamic_group::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::dynamic_group::data::accurate_power_sensor_qs_reset_selector%]"
         }
       }
     }
