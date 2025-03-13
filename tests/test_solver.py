@@ -14,7 +14,7 @@ from datetime import timedelta
 from quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE
 
 
-def test_constraint_save_dump(time, cs):
+def _util_constraint_save_dump(time, cs):
     dc_dump = cs.to_dict()
     load = cs.load
     cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
@@ -60,7 +60,7 @@ class TestSolver(TestCase):
 
 
 
-        test_constraint_save_dump(dt, car_charge_mandatory)
+        _util_constraint_save_dump(dt, car_charge_mandatory)
 
 
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
@@ -75,7 +75,7 @@ class TestSolver(TestCase):
         )
         car.push_live_constraint(dt, car_charge_best_effort)
 
-        test_constraint_save_dump(dt, car_charge_best_effort)
+        _util_constraint_save_dump(dt, car_charge_best_effort)
 
 
         pool_constraint = TimeBasedSimplePowerLoadConstraint(
@@ -89,7 +89,7 @@ class TestSolver(TestCase):
         )
         pool.push_live_constraint(dt, pool_constraint)
 
-        test_constraint_save_dump(dt, pool_constraint)
+        _util_constraint_save_dump(dt, pool_constraint)
 
         cumulus_parents_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
@@ -102,7 +102,7 @@ class TestSolver(TestCase):
         )
         cumulus_parents.push_live_constraint(dt, cumulus_parents_constraint)
 
-        test_constraint_save_dump(dt, cumulus_parents_constraint)
+        _util_constraint_save_dump(dt, cumulus_parents_constraint)
 
         cumulus_children_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
@@ -115,7 +115,7 @@ class TestSolver(TestCase):
         )
         cumulus_children.push_live_constraint(dt, cumulus_children_constraint)
 
-        test_constraint_save_dump(dt, cumulus_children_constraint)
+        _util_constraint_save_dump(dt, cumulus_children_constraint)
 
         unavoidable_consumption_forecast = [(dt, 300),
                        (dt + timedelta(hours=1) ,  300  ),
@@ -191,7 +191,7 @@ class TestSolver(TestCase):
             charger = TestLoad(name="charger")
             steps = []
             for a in range(7, 32 + 1):
-                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 230 * 3))
+                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 230 * 3, phase_current=a))
 
 
             car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(

@@ -21,7 +21,7 @@ from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, \
 from quiet_solar.home_model.load import TestLoad
 from quiet_solar.home_model.solver import PeriodSolver
 
-def test_constraint_save_dump(time, cs):
+def _util_constraint_save_dump(time, cs):
     dc_dump = cs.to_dict()
     load = cs.load
     cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
@@ -141,11 +141,23 @@ class TestForecast(TestCase):
 
             for j in range(3):
 
-                charger = TestLoad(name="charger")
-                cumulus = TestLoad(name="cumulus")
+
                 steps = []
                 for a in range(7, 32 + 1):
-                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3))
+                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3, phase_current=a))
+
+                charger = TestLoad(name="charger",
+                                   min_a=steps[0].phase_current,
+                                   max_a=steps[-1].phase_current,
+                                   min_p=steps[0].power_consign,
+                                   max_p=steps[-1].power_consign)
+
+                cumulus = TestLoad(name="cumulus",
+                                   min_a=6.5,
+                                   max_a=6.5,
+                                   min_p=1500,
+                                   max_p=1500)
+
 
                 charge_mandatory_end = time + timedelta(hours=11)
                 cumulus_end = time + timedelta(hours=8)
@@ -168,7 +180,7 @@ class TestForecast(TestCase):
                     support_auto=True,
                 )
                 charger.push_live_constraint(time, car_charge_mandatory)
-                test_constraint_save_dump(time, car_charge_mandatory)
+                _util_constraint_save_dump(time, car_charge_mandatory)
                 car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
                     type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -180,7 +192,7 @@ class TestForecast(TestCase):
                     support_auto=True,
                 )
                 charger.push_live_constraint(time, car_charge_as_best)
-                test_constraint_save_dump(time, car_charge_as_best)
+                _util_constraint_save_dump(time, car_charge_as_best)
 
 
 
@@ -198,7 +210,7 @@ class TestForecast(TestCase):
                         support_auto=True,
                     )
                     charger.push_live_constraint(time, car_charge_manual)
-                    test_constraint_save_dump(time, car_charge_manual)
+                    _util_constraint_save_dump(time, car_charge_manual)
                     charge_manual_end = car_charge_manual.end_of_constraint
                 elif j == 2:
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
@@ -212,7 +224,7 @@ class TestForecast(TestCase):
                         target_value=cumulus_target_s,
                     )
                     cumulus.push_live_constraint(time, load_mandatory)
-                    test_constraint_save_dump(time, load_mandatory)
+                    _util_constraint_save_dump(time, load_mandatory)
 
 
 
