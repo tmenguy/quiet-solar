@@ -82,10 +82,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._salvable_dampening = {}
 
+        self._dampening_deltas = {}
+        self._dampening_deltas_graph = {}
+
         self.reset()
 
     def reset(self):
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
+        self._dampening_deltas = {}
+        self._dampening_deltas_graph = {}
 
     def is_car_plugged(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
@@ -210,70 +215,163 @@ class QSCar(HADeviceMixin, AbstractDevice):
         data.update(self._salvable_dampening)
         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
-    def update_dampening_value(self, amperage:int|float, power_value:int|float, for_3p:bool, time:datetime, can_be_saved:bool) -> bool:
+
+    def find_path(self, graph, start, end, path=None):
+        if path is None:
+            path = []
+
+        path = path + [start]
+
+        if start == end:
+            return path
+
+        if start not in graph:
+            return None
+
+        for node in graph[start]:
+            if node not in path:
+                new_path = self.find_path(graph, node, end, path)
+                if new_path:
+                    return new_path
+
+        return None
 
 
-        if amperage < self.car_charger_min_charge or amperage > self.car_charger_max_charge:
-            return False
+    def get_delta_dampened_power(self, from_amp: int | float, to_amp: int | float, for_3p:bool) -> float | None:
 
-        amperage = int(amperage)
+        if from_amp == to_amp:
+            return 0.0
 
-        if power_value < MIN_CHARGE_POWER_W:
-            # we may have a 0 value for a given amperage actually it could change the min and max amperage
-            power_value = 0
+        if to_amp > 0 and (to_amp < self.car_charger_min_charge or to_amp > self.car_charger_max_charge):
+            return None
 
-        if for_3p:
-            old_val = self.amp_to_power_3p[amperage]
-        else:
-            old_val = self.amp_to_power_1p[amperage]
+        if from_amp > 0 and (from_amp < self.car_charger_min_charge or from_amp > self.car_charger_max_charge):
+            return None
 
+        power = None
+
+        if len(self._dampening_deltas) > 0:
+
+            power = self._dampening_deltas.get((from_amp, to_amp))
+
+            if power is None:
+                # not direct try a path:
+                path = self.find_path(self._dampening_deltas_graph, from_amp, to_amp)
+
+                if path:
+                    for i in range(1, len(path)):
+                        power += self._dampening_deltas.get((path[i-1], path[i]))
+
+        return power
+
+
+    def update_dampening_value(self, amperage_transition: int|float|tuple[int,int]|tuple[float,float], power_value_or_delta: int | float, for_3p:bool, time:datetime, can_be_saved:bool) -> bool:
+
+        amperage = None
         do_update = False
-        if (power_value == 0 or old_val == 0):
-            if power_value == old_val:
-                do_update = False
-            else:
-                do_update = True
-        elif abs(old_val - power_value) > 0.1*max(old_val,power_value):
-            do_update = True
+        done_graph = False
 
-        if do_update:
+        if amperage_transition is None:
+            return do_update
 
-            can_be_saved = False
+        if isinstance(amperage_transition, int):
+            amperage = amperage_transition
+        elif isinstance(amperage_transition, float):
+            amperage = int(amperage_transition)
+        else:
+            from_amp = amperage_transition[0]
+            to_amp = amperage_transition[1]
 
-            self.car_is_custom_power_charge_values_3p = for_3p
-            self.car_use_custom_power_charge_values = True
+            if from_amp == to_amp:
+                return do_update
+
+            if from_amp == 0:
+                amperage = to_amp
+            elif to_amp == 0:
+                amperage = from_amp
+
+            self._dampening_deltas[(from_amp, to_amp)] = power_value_or_delta
+            self._dampening_deltas[(to_amp, from_amp)] = -power_value_or_delta
+
+            fs = self._dampening_deltas_graph.setdefault(from_amp, set())
+            fs.add(to_amp)
+            ts = self._dampening_deltas_graph.setdefault(to_amp, set())
+            ts.add(from_amp)
+            done_graph = True
+
+
+        if amperage is not None:
+
+            if amperage < self.car_charger_min_charge or amperage > self.car_charger_max_charge:
+                return False
+
+            amperage = int(amperage)
+
+            if done_graph is False:
+                from_amp = 0
+                to_amp = amperage
+                fs = self._dampening_deltas_graph.setdefault(from_amp, set())
+                fs.add(to_amp)
+                ts = self._dampening_deltas_graph.setdefault(to_amp, set())
+                ts.add(from_amp)
+
+
+
+            if power_value_or_delta < MIN_CHARGE_POWER_W:
+                # we may have a 0 value for a given amperage actually it could change the min and max amperage
+                power_value_or_delta = 0
 
             if for_3p:
-                val_3p = float(power_value)
-                val_1p = float(power_value / 3.0)
+                old_val = self.amp_to_power_3p[amperage]
             else:
-                val_1p = float(power_value)
-                val_3p = float(power_value * 3.0)
+                old_val = self.amp_to_power_1p[amperage]
 
-            self.customized_amp_to_power_3p[amperage] = val_3p
-            self.customized_amp_to_power_1p[amperage] = val_1p
+            do_update = False
+            if (power_value_or_delta == 0 or old_val == 0):
+                if power_value_or_delta == old_val:
+                    do_update = False
+                else:
+                    do_update = True
+            elif abs(old_val - power_value_or_delta) > 0.1*max(old_val, power_value_or_delta):
+                do_update = True
 
+            if do_update:
 
-            do_recompute_min_charge = False
-            if can_be_saved and power_value == 0:
-                do_recompute_min_charge = True
+                can_be_saved = False
 
-            self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
+                self.car_is_custom_power_charge_values_3p = for_3p
+                self.car_use_custom_power_charge_values = True
 
-            car_percent = self.get_car_charge_percent(time)
+                if for_3p:
+                    val_3p = float(power_value_or_delta)
+                    val_1p = float(power_value_or_delta / 3.0)
+                else:
+                    val_1p = float(power_value_or_delta)
+                    val_3p = float(power_value_or_delta * 3.0)
 
-            if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
-                #ok this value can be saved ... we see above for now we force to not save it
-                self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
-                self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
-                self._salvable_dampening[f"charge_{amperage}"] = power_value
+                self.customized_amp_to_power_3p[amperage] = val_3p
+                self.customized_amp_to_power_1p[amperage] = val_1p
 
-                if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
-                    self._last_dampening_update = time
-                    data = dict(self.config_entry.data)
-                    data.update(self._salvable_dampening)
-                    self.hass.config_entries.async_update_entry(self.config_entry, data=data)
-                    #self.hass.add_job(self._save_dampening_values())
+                do_recompute_min_charge = False
+                if can_be_saved and power_value_or_delta == 0:
+                    do_recompute_min_charge = True
+
+                self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
+
+                car_percent = self.get_car_charge_percent(time)
+
+                if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
+                    #ok this value can be saved ... we see above for now we force to not save it
+                    self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
+                    self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
+                    self._salvable_dampening[f"charge_{amperage}"] = power_value_or_delta
+
+                    if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
+                        self._last_dampening_update = time
+                        data = dict(self.config_entry.data)
+                        data.update(self._salvable_dampening)
+                        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                        #self.hass.add_job(self._save_dampening_values())
 
         return do_update
 

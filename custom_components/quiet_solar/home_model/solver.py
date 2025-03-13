@@ -93,6 +93,7 @@ class PeriodSolver(object):
             if tariff[0] >= start_time and tariff[0] <= end_time:
                 anchors.add(tariff[0])
 
+
         active_constraints = []
         for load in self._loads:
             for constraint in load.get_active_constraint_generator(start_time, end_time):
@@ -228,6 +229,14 @@ class PeriodSolver(object):
         # special treatment for "dynamically adaptable load ex : a car with variable power charge, or the battery itself
         # the battery should have a "soft" constraint to cover the computed left unavidable consmuption (ie sum on the
         # positive numbers in available power)
+
+
+
+        home = self._loads[0].home
+        # propagate amps limits to the topology
+        if home:
+            home.allocate_phase_amps_budget(self._start_time)
+
 
         #ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
         constraints = []

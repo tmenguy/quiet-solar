@@ -7,7 +7,7 @@ from abc import abstractmethod
 from typing import Self
 import pytz
 
-from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_OFF, CMD_IDLE, \
+from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, copy_command_and_change_type, CMD_IDLE, \
     CMD_AUTO_PRICE
 import numpy.typing as npt
 import numpy as np
@@ -130,6 +130,23 @@ class LoadConstraint(object):
         if self.from_user:
             score += 100*score_offset
         return score
+
+    def evaluate_needed_mean_power(self, time:datetime) -> float:
+
+        if self.is_constraint_active_for_time_period(time) is False:
+            return 0.0
+
+        min_p, _ = self.load.get_min_max_power()
+
+        if self.end_of_constraint == DATETIME_MAX_UTC:
+            # no timed hard constraint ... no need to have a high importance
+            return min_p
+        else:
+            td = self.end_of_constraint - time
+
+        remaining_energy = self.get_energy_to_be_added()/3600.0
+        return max(min_p, remaining_energy / td.total_seconds())
+
 
     @classmethod
     def new_from_saved_dict(cls, time, load, data: dict) -> Self:
@@ -450,6 +467,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return nrj_to_be_added
 
+    def adapt_power_steps_budgeting(self):
+
+        out_sorted_commands = []
+        min_power = 0
+        for cmd in self._power_sorted_cmds:
+            if self.load.is_cmd_compatible_with_load_budget(cmd):
+                out_sorted_commands.append(copy_command(cmd))
+
+        if len(out_sorted_commands) > 0:
+            min_power = out_sorted_commands[0].power_consign
+
+        return min_power, out_sorted_commands
 
     def compute_best_period_repartition(self,
                                         do_use_available_power_only: bool,
@@ -469,7 +498,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
-        min_power = self._min_power
+        min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
+
+        if len(power_sorted_cmds) == 0:
+            _LOGGER.error(f"compute_best_period_repartition: no power sorted commands {self.name}")
+            return False, out_commands, out_power
 
         first_slot = 0
         last_slot = len(power_available_power) - 1
@@ -490,16 +523,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             as_fast_power = -1
             as_fast_cmd_idx = None
 
-            for i in range(len(self._power_sorted_cmds)):
-                if as_fast_cmd_idx is None or self._power_sorted_cmds[i].power_consign > as_fast_power:
-                    as_fast_power = self._power_sorted_cmds[i].power_consign
+            for i in range(len(power_sorted_cmds)):
+                if as_fast_cmd_idx is None or power_sorted_cmds[i].power_consign > as_fast_power:
+                    as_fast_power = power_sorted_cmds[i].power_consign
                     as_fast_cmd_idx = i
 
             if self.support_auto:
-                as_fast_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                               power_consign=self._power_sorted_cmds[as_fast_cmd_idx].power_consign)
+                as_fast_cmd = copy_command_and_change_type(cmd=power_sorted_cmds [as_fast_cmd_idx],
+                                                           new_type=CMD_AUTO_FROM_CONSIGN.command)
             else:
-                as_fast_cmd = copy_command(self._power_sorted_cmds[as_fast_cmd_idx])
+                as_fast_cmd = copy_command(power_sorted_cmds[as_fast_cmd_idx])
 
             for i in range(first_slot, last_slot + 1):
 
@@ -562,15 +595,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         #for i in range(first_slot, last_slot + 1):
             if power_available_power[i] <= -min_power:
                 j = 0
-                while j < len(self._power_sorted_cmds) - 1 and self._power_sorted_cmds[j + 1].power_consign < - \
+                while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < - \
                         power_available_power[i]:
                     j += 1
 
                 if self.support_auto:
-                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY,
-                                                   power_consign=self._power_sorted_cmds[j].power_consign)
+                    out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                   new_type=CMD_AUTO_GREEN_ONLY.command)
                 else:
-                    out_commands[i] = copy_command(self._power_sorted_cmds[j])
+                    out_commands[i] = copy_command(power_sorted_cmds[j])
 
                 out_power[i] = out_commands[i].power_consign
                 out_power_idxs[i] = j
@@ -599,7 +632,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     if out_commands[i] is None:
                         power_to_add_idx = 0
-                    elif out_power_idxs[i] < len(self._power_sorted_cmds) - 1:
+                    elif out_power_idxs[i] < len(power_sorted_cmds) - 1:
                         power_to_add_idx = out_power_idxs[i] + 1
 
                     if power_to_add_idx > init_power_to_add_idx:
@@ -610,7 +643,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         # check if the price of the extra energy we add is better than the best price we have
 
-                        power_to_add: float = self._power_sorted_cmds[power_to_add_idx].power_consign
+                        power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
                         energy_to_add: float = ((power_to_add -  float(out_power[i]))* float(power_slots_duration_s[i])) / 3600.0
                         cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0
                         cost_per_watt_hour = cost / energy_to_add
@@ -620,11 +653,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         # if we have a lower cost per watt_hours, than the lowest available price, use this bit of extra solar production
                         if power_to_add_idx > init_power_to_add_idx:
-                            power_to_add: float = self._power_sorted_cmds[power_to_add_idx].power_consign
+                            power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
                             if self.support_auto:
-                                new_cmd = copy_command(CMD_AUTO_PRICE, power_consign=power_to_add)
+                                new_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[power_to_add_idx],
+                                                                       new_type=CMD_AUTO_PRICE.command)
                             else:
-                                new_cmd = copy_command(self._power_sorted_cmds[power_to_add_idx])
+                                new_cmd = copy_command(power_sorted_cmds[power_to_add_idx])
 
                             _LOGGER.info(
                                     f"compute_best_period_repartition: price optimizer from {out_commands[i]} to {new_cmd}")
@@ -641,7 +675,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     do_force_first_slot_to_consign = False
                     explore_range = range(last_slot, first_slot - 1, -1)
 
-                    if len(self._power_sorted_cmds) > 1:
+                    if len(power_sorted_cmds) > 1:
 
                         price_span_h = ((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
                                                 where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
@@ -672,20 +706,20 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
                         fill_power_idx = 0
-                        for fill_power_idx in range(len(self._power_sorted_cmds)):
-                            if (nrj_to_be_added + nrj_to_replace) <= price_span_h * self._power_sorted_cmds[fill_power_idx].power_consign:
+                        for fill_power_idx in range(len(power_sorted_cmds)):
+                            if (nrj_to_be_added + nrj_to_replace) <= price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
                                 break
                     else:
                         fill_power_idx = 0
 
                     # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
-                    price_power = self._power_sorted_cmds[fill_power_idx].power_consign
+                    price_power = power_sorted_cmds[fill_power_idx].power_consign
 
                     if self.support_auto:
-                        price_cmd = copy_command(CMD_AUTO_FROM_CONSIGN,
-                                                 power_consign=price_power)
+                        price_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[fill_power_idx],
+                                                                 new_type=CMD_AUTO_FROM_CONSIGN.command)
                     else:
-                        price_cmd = copy_command(self._power_sorted_cmds[fill_power_idx])
+                        price_cmd = copy_command(power_sorted_cmds[fill_power_idx])
 
 
                     if do_force_first_slot_to_consign:
@@ -728,7 +762,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # fill all with green only command, to fill everything with the best power available
             for i in range(first_slot, last_slot + 1):
                 if out_commands[i] is None:
-                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=0.0)
+                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY)
                     out_power[i] = 0.0
 
         return nrj_to_be_added <= 0.0, out_commands, out_power

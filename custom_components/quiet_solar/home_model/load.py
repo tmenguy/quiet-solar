@@ -13,12 +13,12 @@ from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_DEVICE_DYNAMIC_GROUP_NAME
 
 import slugify
 
 if TYPE_CHECKING:
-    pass
+    import QSDynamicGroup
 
 NUM_MAX_INVALID_PROBES_COMMANDS = 3
 
@@ -27,6 +27,9 @@ class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
+        self._device_is_3p = kwargs.pop(CONF_IS_3P, False)
+        self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
+
         self.name = name
         self._device_type = device_type
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
@@ -50,13 +53,28 @@ class AbstractDevice(object):
                 self.num_max_on_off += 1
 
         self.num_on_off = 0
+        self.device_phase_amps_budget = None
 
+        self.father_device : QSDynamicGroup = self.home
+
+
+    def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None):
+        if from_father_budget is None:
+            self.device_phase_amps_budget, _ = self.get_min_max_phase_amps()
+        else:
+            self.device_phase_amps_budget = from_father_budget
+
+        return self.device_phase_amps_budget
 
     @property
     def device_type(self):
         if self._device_type is None:
             return self.__class__.__name__
         return self._device_type
+
+    @property
+    def device_is_3p(self) -> bool:
+        return self._device_is_3p
 
     def __repr__(self):
         return self.device_id
@@ -72,10 +90,53 @@ class AbstractDevice(object):
     def reset_daily_load_datas(self, time:datetime):
         self.num_on_off = 0
 
+
+    def get_min_max_power(self) -> (float, float):
+        return 0.0, 0.0
+
+    def get_min_max_phase_amps(self) -> (float, float):
+        min_p, max_p = self.get_min_max_power()
+        return self.get_phase_amps_from_power(min_p), self.get_phase_amps_from_power(max_p)
+
+    def get_evaluated_needed_phase_amps(self, time: datetime) -> float:
+        return 0.0
+
+    def get_phase_amps_from_power(self, power:float) -> float:
+        if self.device_is_3p:
+            power = power / 3.0
+        return power / self.home.voltage
+
     def reset(self):
         _LOGGER.info(f"Reset device {self.name}")
         self.current_command = None
         self._constraints = []
+
+    def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
+        for c in self._constraints:
+            if c.is_constraint_active_for_time_period(start_time, end_time):
+                yield c
+
+    def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
+        if not self._constraints:
+            self._constraints = []
+        for c in self._constraints:
+            if c.is_constraint_active_for_time_period(time):
+                return c
+        return None
+
+    def is_as_fast_as_possible_constraint_active(self, time:datetime) -> bool:
+        if not self._constraints:
+            self._constraints = []
+        for c in self._constraints:
+            if c.is_constraint_active_for_time_period(time) and c.as_fast_as_possible:
+                return True
+        return False
+
+    def is_consumption_optional(self, time:datetime) -> bool:
+        ct = self.get_current_active_constraint(time)
+        if ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
+            return False
+        return True
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
 
@@ -227,12 +288,34 @@ class AbstractLoad(AbstractDevice):
 
         self.qs_best_effort_green_only = False
 
-
-
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
 
+
+    def is_consumption_optional(self, time:datetime) -> bool:
+        if self.load_is_auto_to_be_boosted or  self.qs_best_effort_green_only:
+            return True
+        return super().is_consumption_optional(time)
+
+    def get_min_max_power(self) -> (float, float):
+        if self.power_use is None:
+            return 0.0, 0.0
+        return self.power_use, self.power_use
+
+    def get_evaluated_needed_phase_amps(self, time: datetime) -> float:
+        device_needed_amp = 0.0
+        ct = self.get_current_active_constraint(time)
+        if ct:
+            load_power = ct.evaluate_needed_mean_power(time)
+            device_needed_amp = self.get_phase_amps_from_power(load_power)
+            min_a, max_a = self.get_min_max_phase_amps()
+            if device_needed_amp < min_a:
+                device_needed_amp = min_a
+            elif device_needed_amp > max_a:
+                device_needed_amp = max_a
+
+        return device_needed_amp
 
     def support_green_only_switch(self) -> bool:
         return False
@@ -325,6 +408,19 @@ class AbstractLoad(AbstractDevice):
         pass
 
 
+    def is_cmd_compatible_with_load_budget(self, cmd : LoadCommand) -> bool:
+        if  self.device_phase_amps_budget is None:
+            return True
+
+        if cmd.phase_current is not None:
+            return cmd.phase_current <= self.device_phase_amps_budget
+
+        if cmd.power_consign is not None and cmd.power_consign > 0:
+            amps = self.get_phase_amps_from_power(cmd.power_consign)
+            return amps <= self.device_phase_amps_budget
+
+        return True
+
 
     def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
         return None
@@ -343,19 +439,6 @@ class AbstractLoad(AbstractDevice):
     async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_CHANGE_CONSTRAINT_COMPLETED)
-
-    def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
-        for c in self._constraints:
-            if c.is_constraint_active_for_time_period(start_time, end_time):
-                yield c
-
-    def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
-        if not self._constraints:
-            self._constraints = []
-        for c in self._constraints:
-            if c.is_constraint_active_for_time_period(time):
-                return c
-        return None
 
 
     def get_active_readable_name(self, time:datetime, filter_for_human_notification=False) -> str | None:
@@ -725,8 +808,18 @@ class AbstractLoad(AbstractDevice):
 
 class TestLoad(AbstractLoad):
 
-    def __init__(self, **kwargs):
+    def __init__(self, min_p=1500, max_p=1500, min_a=7, max_a=7, **kwargs):
         super().__init__(**kwargs)
+        self.min_a = min_a
+        self.max_a = max_a
+        self.min_p = min_p
+        self.max_p = max_p
+
+    def get_min_max_power(self) -> (float, float):
+        return self.min_p, self.max_p
+
+    def get_min_max_phase_amps(self) -> (float, float):
+        return self.min_a, self.max_a
 
 
 def align_time_series_and_values(

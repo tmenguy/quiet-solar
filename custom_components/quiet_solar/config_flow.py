@@ -42,7 +42,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, CONF_HOME_VOLTAGE, \
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
-    CONF_CHARGER_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, \
+    CONF_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, \
     CONF_ACCURATE_POWER_SENSOR, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
@@ -52,7 +52,9 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
     CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE, \
-    CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH
+    CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
+    CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME
+from .ha_model.home import QSHome
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -176,6 +178,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
 
     def get_common_schema(self,
+                          type,
                           add_power_value_selector=None,
                           add_load_power_sensor=False,
                           add_load_power_sensor_mandatory=False,
@@ -183,19 +186,60 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_boost_only=False,
                           add_mobile_app=False,
                           add_efficiency_selector=False,
+                          add_is_3p=False,
+                          add_max_phase_amps_selector=None,
+                          add_power_group_selector=False,
                           ) -> dict:
 
-        default = self.config_entry.data.get(CONF_NAME)
+        default_name = self.config_entry.data.get(CONF_NAME)
 
 
-        if default is None:
+        if default_name is None:
             sc = {
             vol.Required(CONF_NAME): cv.string,
         }
         else:
             sc = {
-                vol.Required(CONF_NAME, default=default): cv.string,
+                vol.Required(CONF_NAME, default=default_name): cv.string,
             }
+
+        if add_power_group_selector:
+            data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+            if len(data_handler.home._all_dynamic_groups) > 1:
+                # ok we can add it there is more than the home in the list
+                # we will allow to select in the list of dynamic groups names
+                default_group : str = "HOME"
+                group_name_list : list[str] = []
+                for group in data_handler.home._all_dynamic_groups:
+                    if isinstance(group, QSHome):
+                        default_group = f"default home root - {group.name}"
+                    else:
+                        if default_name == group.name and type=="dynamic_group":
+                            # do not add yourself...
+                            pass
+                        else:
+                            group_name_list.append(group.name)
+                if len(group_name_list) > 0:
+                    options = [default_group]
+                    options.extend(group_name_list)
+
+                    sc.update({
+                        vol.Required(CONF_DEVICE_DYNAMIC_GROUP_NAME, default=self.config_entry.data.get(CONF_DEVICE_DYNAMIC_GROUP_NAME, default_group)):
+                            SelectSelector(
+                                SelectSelectorConfig(
+                                    options=options,
+                                    mode=SelectSelectorMode.DROPDOWN,
+                                )
+                            )
+                    })
+
+
+        if add_is_3p:
+            sc.update({
+                vol.Optional(CONF_IS_3P,
+                             default=self.config_entry.data.get(CONF_IS_3P, False)):
+                cv.boolean,
+            })
 
         if add_boost_only:
             sc.update({
@@ -213,6 +257,18 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     step=1,
                     mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement=UnitOfPower.WATT,
+                )
+            )})
+
+        if add_max_phase_amps_selector:
+
+            sc.update({vol.Optional(CONF_DYN_GROUP_MAX_PHASE_AMPS, default=self.config_entry.data.get(CONF_DYN_GROUP_MAX_PHASE_AMPS, add_max_phase_amps_selector)):
+            selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                 )
             )})
 
@@ -280,12 +336,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         return sc
 
 
-    def get_all_charger_schema_base(self, add_load_power_sensor_mandatory ):
+    def get_all_charger_schema_base(self, type, add_load_power_sensor_mandatory ):
 
-        sc = self.get_common_schema(add_load_power_sensor=True,
+        sc = self.get_common_schema(type=type,
+                                    add_load_power_sensor=True,
                                     add_load_power_sensor_mandatory=add_load_power_sensor_mandatory,
                                     add_calendar=True,
-                                    add_efficiency_selector=True)
+                                    add_efficiency_selector=True,
+                                    add_is_3p=True,
+                                    add_power_group_selector=True)
 
         if self.config_entry.data.get(CONF_CHARGER_LATITUDE, None) is None:
             sc.update( {
@@ -329,10 +388,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                 unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                             )
                         ),
-                    vol.Optional(CONF_CHARGER_IS_3P,
-                                 default=self.config_entry.data.get(CONF_CHARGER_IS_3P, False)):
-                                cv.boolean,
-
                 })
         return sc
 
@@ -378,7 +433,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema()
+        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=60)
 
         sc_dict.update(  {
 
@@ -393,7 +448,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     )
                 }
         )
-
 
 
         power_entities = selectable_power_entities(self.hass)
@@ -445,7 +499,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema()
+        sc_dict = self.get_common_schema(type=TYPE)
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
@@ -494,7 +548,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=True)
+        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=True)
         self.add_entity_selector(sc_dict, CONF_CHARGER_PLUGGED, True, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, True, domain=[NUMBER_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_PAUSE_RESUME_SWITCH, True, domain=[SWITCH_DOMAIN])
@@ -516,7 +570,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
+        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_OCPP)
         if default is None:
@@ -545,7 +599,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
-        sc_dict = self.get_all_charger_schema_base(add_load_power_sensor_mandatory=False)
+        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_WALLBOX)
         if default is None:
@@ -572,7 +626,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema()
+        sc_dict = self.get_common_schema(type=TYPE)
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
@@ -688,7 +742,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 return r
 
 
-        sc_dict = self.get_common_schema(add_calendar=True, add_mobile_app=True, add_efficiency_selector=True)
+        sc_dict = self.get_common_schema(type=TYPE, add_calendar=True, add_mobile_app=True, add_efficiency_selector=True)
 
         sc_dict.update(
             {
@@ -792,7 +846,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1500, add_load_power_sensor=True, add_calendar=False)
+        sc_dict = self.get_common_schema(type=TYPE,
+                                         add_power_value_selector=1500,
+                                         add_load_power_sensor=True,
+                                         add_calendar=False,
+                                         add_power_group_selector=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
@@ -829,7 +887,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True, add_boost_only=True)
+        sc_dict = self.get_common_schema(type=TYPE,
+                                         add_power_value_selector=1000,
+                                         add_load_power_sensor=True,
+                                         add_calendar=True,
+                                         add_boost_only=True,
+                                         add_power_group_selector=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
@@ -842,19 +905,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             data_schema=schema
         )
 
-    async def async_step_fp_heater(self, user_input=None):
+    async def async_step_dynamic_group(self, user_input=None):
 
-        TYPE = "fp_heater"
+        TYPE = "dynamic_group"
         if user_input is not None:
-            #do sotme stuff to update
+            #do somestuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(add_power_value_selector=1000, add_load_power_sensor=True, add_calendar=True)
-
-        self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
-
-        self.add_entity_selector(sc_dict, CONF_SELECT, True, domain=[SELECT_DOMAIN])
+        sc_dict = self.get_common_schema(type=TYPE,
+                                         add_load_power_sensor=True,
+                                         add_is_3p=True,
+                                         add_max_phase_amps_selector=32,
+                                         add_power_group_selector=True)
 
         schema = vol.Schema(sc_dict)
 

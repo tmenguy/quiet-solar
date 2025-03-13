@@ -90,7 +90,6 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
             return False
         else:
             do_add_constraint = False
-            type = CONSTRAINT_TYPE_MANDATORY_END_TIME
             target_value = 0
             from_user = False
             end_schedule = None
@@ -117,21 +116,22 @@ class QSOnOffDuration(HADeviceMixin, AbstractLoad):
                     target_value = self.default_on_duration*3600.0
 
                     do_add_constraint = True
+
+
             else:
                 start_schedule, end_schedule = await self.get_next_scheduled_event(time)
 
                 if start_schedule is not None and end_schedule is not None:
                     do_add_constraint = True
-                    # schedule the load to be launched
-                    type = CONSTRAINT_TYPE_MANDATORY_END_TIME
-                    if self.load_is_auto_to_be_boosted:
-                        type = CONSTRAINT_TYPE_FILLER
-                    elif self.qs_best_effort_green_only is True:
-                        type = CONSTRAINT_TYPE_FILLER  # will be after battery filling
-
                     target_value = (end_schedule - start_schedule).total_seconds()
 
             if do_add_constraint:
+
+                type = CONSTRAINT_TYPE_MANDATORY_END_TIME
+                if self.load_is_auto_to_be_boosted:
+                    type = CONSTRAINT_TYPE_FILLER
+                elif self.qs_best_effort_green_only is True:
+                    type = CONSTRAINT_TYPE_FILLER  # will be after battery filling
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,

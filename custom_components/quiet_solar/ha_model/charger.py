@@ -1,6 +1,9 @@
+import bisect
 import logging
 from datetime import datetime, timedelta
 from enum import StrEnum
+from functools import total_ordering
+from tokenize import group
 
 from typing import Any, Callable, Awaitable
 
@@ -11,6 +14,9 @@ from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
 from haversine import haversine, Unit
+from sqlalchemy import false
+
+from .dynamic_group import QSDynamicGroup
 
 try:
     from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
@@ -62,7 +68,7 @@ class QSOCPPv16ChargePointStatus(StrEnum):
 
 
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
-    CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_CHARGER_IS_3P, \
+    CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, CONF_IS_3P, \
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
     CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
@@ -165,6 +171,631 @@ class QSStateCmd():
         self.last_time_set = time
 
 
+class QSChargerStatus(object):
+
+    def __init__(self, charger):
+        self.charger = charger
+        self.power_steps = None
+        self.accurate_current_power = None
+        self.secondary_current_power =None
+        self.command = None
+        self.current_real_max_charging_amp = None
+        self.state_change_allowed = None
+        self.possible_amps = None
+        self.best_power_measure = None
+        self._budgeted_amp = None
+        self.budgeted_power = None
+
+    @property
+    def budgeted_amp(self):
+        return self._budgeted_amp
+
+    @budgeted_amp.setter
+    def budgeted_amp(self, value):
+        self._budgeted_amp = value
+        if value == self.current_real_max_charging_amp:
+            self.budgeted_power = self.best_power_measure
+        else:
+            self.budgeted_power = self.power_steps[value]
+
+    def get_diff_power(self, old_amp, new_amp):
+
+        diff_power = self.charger.get_delta_dampened_power(old_amp, new_amp)
+
+        if diff_power is None:
+            # ok we need to use the power_steps or anyother stuff
+            old_power = self.power_steps[old_amp]
+            if old_amp == self.current_real_max_charging_amp:
+                old_power = self.best_power_measure
+            new_power = self.power_steps[new_amp]
+            if new_amp == self.current_real_max_charging_amp:
+                new_power = self.best_power_measure
+
+            diff_power = new_power - old_power
+
+        return diff_power
+
+
+
+
+    def can_increase_budget(self, allow_state_change=True):
+
+        next_amp = None
+        if self.budgeted_amp is None:
+            return self.possible_amps[0]
+
+        if self.budgeted_amp < self.possible_amps[-1] and self.possible_amps[-1] > 0:
+
+            if self.budgeted_amp == 0:
+                if allow_state_change:
+                    if self.possible_amps[0] == 0:
+                        next_amp = self.possible_amps[1]
+                    else:
+                        next_amp = self.possible_amps[0]
+            else:
+                next_amp = self.budgeted_amp + 1
+
+        return next_amp
+
+    def can_decrease_budget(self, allow_state_change=True):
+
+        next_amp = None
+        if self.budgeted_amp is None:
+            return self.possible_amps[0]
+
+        if self.budgeted_amp > self.possible_amps[0]:
+            # self.budgeted_amp is so > 0 here
+            if self.possible_amps[0] == 0:
+                if self.budgeted_amp > self.possible_amps[1]:
+                    next_amp = self.budgeted_amp - 1
+                else:
+                    if allow_state_change:
+                        next_amp = 0
+            else:
+                # here self.budgeted_amp > self.possible_amps[0] and self.possible_amps[0] not 0
+                next_amp = self.budgeted_amp - 1
+
+        return next_amp
+
+
+class QSChargerGroup(object):
+
+    def __init__(self, dynamic_group: QSDynamicGroup ):
+        self.dynamic_group : QSDynamicGroup = dynamic_group
+        self._chargers : list[QSChargerGeneric] = []
+        self.home = dynamic_group.home
+        self.remaining_budget_to_apply = []
+        self.know_reduced_state = None
+        self.know_reduced_state_real_power = None
+
+        self.charger_consumption_W = 0.0
+        for device in dynamic_group._childrens:
+            if isinstance(device, QSChargerGeneric):
+                self._chargers.append(device)
+                self.charger_consumption_W += device.charger_consumption_W
+
+        self.dync_group_chargers_only = False
+        if len(self._chargers) == len(dynamic_group._childrens):
+            self.dync_group_chargers_only = True
+
+    def dampening_power_value_for_car_consumption(self, value: float | None) -> float | None:
+        if value is None:
+            return None
+
+        if value < self.charger_consumption_W:
+            return 0.0
+        else:
+            return value
+
+
+    async def ensure_correct_state(self, time: datetime, probe_only=False) -> (bool, datetime|None):
+
+        verified_correct_state_time = DATETIME_MIN_UTC
+        for charger in self._chargers:
+            res, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
+            if res is False:
+                return False, None
+            if vcst is None:
+                verified_correct_state_time = None
+            else:
+                if verified_correct_state_time is None:
+                    pass
+                elif vcst > verified_correct_state_time:
+                    verified_correct_state_time = vcst
+
+        return True, verified_correct_state_time
+
+    def get_budget_diffs(self, actionable_chargers: list[QSChargerStatus]):
+
+        initial_sum_amps = 0
+        new_sum_amps = 0
+        diff_power = 0
+        for cs in actionable_chargers:
+            initial_sum_amps += cs.current_real_max_charging_amp
+            new_sum_amps += cs.budgeted_amp
+            diff_power += cs.get_diff_power(cs.current_real_max_charging_amp, cs.budgeted_amp)
+
+        return diff_power, new_sum_amps - initial_sum_amps, new_sum_amps
+
+
+
+    async def dyn_handle(self, time: datetime):
+
+        res_state, verified_correct_state_time = await self.ensure_correct_state(time)
+
+        if res_state and self.remaining_budget_to_apply:
+            # in case we would have had increases that could go above the limits because done before the decrease
+            await self.apply_budgets(self.remaining_budget_to_apply, time)
+            self.remaining_budget_to_apply = []
+        # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW, for all active chargers
+        elif res_state and verified_correct_state_time is not None and (time - verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
+
+            # all chargers are now in a correct state, stable enough to do a computation
+
+            # let's compute the current power consummed by all the chargers : we may have it on the group itself ... if it is made of the
+            # chargers only ... or we will have to compute it by asking each chargers
+            current_real_cars_power = self.dynamic_group.get_median_sensor(self.dynamic_group.accurate_power_sensor,
+                                                                            CHARGER_ADAPTATION_WINDOW / 2.0, time)
+            current_real_cars_power = self.dampening_power_value_for_car_consumption(current_real_cars_power)
+
+            # time to update some dampening car values:
+            if current_real_cars_power is not None:
+                # ok we do have a value, can we infer teh dampening of the cars themselves?
+                # we will see in teh "charger by charger" probe below if we can dampen or not
+                # do that when in fact there was only one change versus the previous state to know what was the
+                # incremental change due to the increase ....store this somewhere
+                pass
+
+
+            available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
+            # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this power is available to the car
+
+            if available_power:
+
+
+                last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
+                all_p_mean = get_average_sensor(available_power, last_timing=time)
+                last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
+                all_p_median = get_median_sensor(available_power, last_timing=time)
+
+                full_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+
+                current_sum_amps = 0
+                actionable_chargers = []
+
+                sum_power_from_chargers = 0.0
+
+                for charger in self._chargers:
+                    cs = charger.get_stable_dynamic_charge_status(time)
+                    if cs is not None:
+
+                        if (charger._expected_charge_state.value is True and
+                            cs.current_real_max_charging_amp >= charger.min_charge and
+                            cs.accurate_current_power is not None and
+                            cs.accurate_current_power > 0):
+                            charger.update_car_dampening_value(time=time,
+                                                               amperage_transition=cs.current_real_max_charging_amp,
+                                                               power_value_or_delta=cs.accurate_current_power,
+                                                               can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+
+                        actionable_chargers.append(cs)
+                        current_sum_amps += cs.current_real_max_charging_amp
+                        sum_power_from_chargers += cs.best_power_measure
+
+                if len(actionable_chargers) == 0:
+                    _LOGGER.info(
+                        f"dyn_handle: no actionable chargers")
+                else:
+
+                    mandatory_amps = 0
+                    a_charging_cs = None
+                    num_charging_cs = 0
+
+                    current_reduced_states= {}
+                    for cs in actionable_chargers:
+                        # get all the minimums
+                        mandatory_amps += cs.possible_amps[0]
+
+                        current_reduced_states[cs.charger] = cs.current_real_max_charging_amp
+
+                        if cs.charger._expected_charge_state.value is True and cs.current_real_max_charging_amp >= cs.charger.min_charge:
+                            a_charging_cs = cs
+                            num_charging_cs += 1
+
+                    # we can update a bit the dampening for the only one charging if we do have a global counter for the group
+                    if num_charging_cs == 1 and current_real_cars_power is not None:
+                        a_charging_cs.charger.update_car_dampening_value(time=time,
+                                                                         amperage_transition=a_charging_cs.current_real_max_charging_amp,
+                                                                         power_value_or_delta=current_real_cars_power,
+                                                                         can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+
+
+                    # check the current state of teh chargers to see if we can try to map the delta power properly
+                    if current_real_cars_power is not None and self.know_reduced_state is not None and len(self.know_reduced_state) == len(current_reduced_states):
+                        num_changes = 0
+                        last_changed_charger = None
+                        for c in self.know_reduced_state:
+                            if c not in current_reduced_states:
+                                last_changed_charger = None
+                                break
+                            else:
+                                if self.know_reduced_state[c] != current_reduced_states[c]:
+                                    num_changes += 1
+                                    last_changed_charger = c
+
+                        if last_changed_charger and num_changes == 1:
+                            # great we do have a single change in the chargers, and we do have the previous cars power
+                            # we can save the transition from self.know_reduced_state[c] to  current_reduced_states[c]
+                            delta_power = current_real_cars_power - self.know_reduced_state_real_power
+                            last_changed_charger.charger.update_car_dampening_value(time=time,
+                                                                                    amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
+                                                                                    power_value_or_delta=delta_power,
+                                                                                    can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+
+                    # first bad case of amps too asked by the solver for example
+                    if mandatory_amps > self.dynamic_group.dyn_group_max_phase_current:
+                        # ouch .... we have to lower the charge of some cars
+                        _LOGGER.warning(
+                            f"dyn_handle: need to shave some auto consign")
+                        shaved_amps = 0
+                        # first shave amps as much as we can to get to a proper level
+                        while True:
+                            has_shaved = False
+                            for cs in actionable_chargers:
+                                if cs.possible_amps[0] > cs.charger.min_charge:
+                                    # we can lower the charge
+                                    cs.possible_amps.insert(0, cs.possible_amps[0] - 1)
+                                    shaved_amps += 1
+                                    has_shaved = True
+
+                                if mandatory_amps - shaved_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                                    break
+
+                            if has_shaved is False:
+                                break
+
+                            if mandatory_amps - shaved_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                                break
+                        mandatory_amps -= shaved_amps
+
+                        if mandatory_amps > self.dynamic_group.dyn_group_max_phase_current:
+                            _LOGGER.warning(
+                                f"dyn_handle: need to shave a lot more and force some quick down")
+
+                            for step in ["stop_auto_only", "can_stop_all"]:
+
+                                shaved_amps = 0
+                                for cs in actionable_chargers:
+                                    can_stop = True
+                                    if step == "stop_auto_only":
+                                        can_stop = cs.command.is_auto()
+                                    if cs.possible_amps[0] >= cs.charger.min_charge and can_stop:
+                                        # we can lower the charge
+                                        shaved_amps += cs.possible_amps[0]
+                                        cs.possible_amps.insert(0,0)
+
+                                    if mandatory_amps - shaved_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                                        break
+
+                                mandatory_amps -= shaved_amps
+                                if mandatory_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                                    break
+
+                    # ok now we know we are sure we can allocate
+                    if current_real_cars_power is not None:
+                        current_power = current_real_cars_power
+                    else:
+                        current_power = sum_power_from_chargers
+
+
+
+                    best_global_command = CMD_AUTO_GREEN_ONLY
+                    for cs in actionable_chargers:
+                        if cs.command.is_like(CMD_AUTO_PRICE) or cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
+                            best_global_command = CMD_AUTO_PRICE
+                            break
+
+                    _LOGGER.info(f"full_home_power {full_home_power}, current_power {current_power}, power_budget {full_home_power+current_power}")
+
+                    # await self.budgeting_algorithm_predictive(actionable_chargers, best_global_command, current_power, full_home_power)
+                    await self.budgeting_algorithm_minimize_diffs(actionable_chargers, best_global_command, current_power, full_home_power)
+
+                    diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+
+                    if best_global_command == CMD_AUTO_PRICE:
+                        if self.home.battery_can_discharge() is False and alloted_amps < self.dynamic_group.dyn_group_max_phase_current and full_home_power > 0:
+                            # we will compute here is the price to take "more" power is better than the best
+                            # electricity rate we may have
+
+                            best_price = self.home.get_best_tariff(time)
+                            durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
+                            current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
+
+                            # find the smallest possible increment in power
+                            smallest_power_increment = None
+                            cs_to_update = None
+                            new_amp_budget = None
+                            for cs in actionable_chargers:
+
+                                next_budgeted_amp = cs.can_increase_budget()
+                                if next_budgeted_amp is not None:
+
+                                    diff_power = cs.get_diff_power(cs.budgeted_amp, next_budgeted_amp)
+                                    diff_amp = next_budgeted_amp - cs.budgeted_amp
+
+                                    if alloted_amps + diff_amp <= self.dynamic_group.dyn_group_max_phase_current:
+
+                                        if smallest_power_increment is None or diff_power < smallest_power_increment:
+                                            smallest_power_increment = diff_power
+                                            cs_to_update = cs
+                                            new_amp_budget = next_budgeted_amp
+
+                            if smallest_power_increment is not None:
+
+                                additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
+                                cost = ((diff_power_budget - full_home_power) * durations_eval_s) / 3600.0 * current_price
+                                cost_per_watt_h = cost / additional_added_energy
+
+                                if cost_per_watt_h < best_price:
+                                    cs_to_update.budgeted_amp = new_amp_budget
+
+                    await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
+
+
+
+    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, best_global_command, current_power, full_home_power):
+
+        alloted_amps = 0
+
+        for cs in actionable_chargers:
+            cs.budgeted_amp = max(cs.current_real_max_charging_amp, cs.possible_amps[0])
+            alloted_amps += cs.budgeted_amp
+
+        if alloted_amps > self.dynamic_group.dyn_group_max_phase_current:
+            # ok we know it is possible to shave to reach the max phase current, due to the preparation before
+            for allow_state_change in [False, True]:
+                for cs in actionable_chargers:
+                    next_amp = cs.can_decrease_budget(allow_state_change=allow_state_change)
+                    if next_amp is not None:
+                        alloted_amps += next_amp - cs.budgeted_amp
+                        cs.budgeted_amp = next_amp
+
+                    if alloted_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                        break
+                if alloted_amps <= self.dynamic_group.dyn_group_max_phase_current:
+                    break
+            if alloted_amps > self.dynamic_group.dyn_group_max_phase_current:
+                return False
+
+
+        # ok we do have the "best" possible base for the chargers
+        diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+
+        power_budget = full_home_power - diff_power_budget
+
+        # this algorithm will only try to move "a bit" the chargers to reach the power budget
+        # if power_budget is negative : we need to go down and find the best charger to go down
+        # if power_budget is positive : we need to go up to consume extra solar and find the best charger to go up
+
+        stop_on_first_change = True
+        if power_budget < 0:
+            increase = False
+            if diff_amp_budget > 1:
+                stop_on_first_change = False
+        else:
+            increase = True
+
+        do_stop = False
+        for allow_state_change in [False, True]:
+            for cs in actionable_chargers:
+                if increase:
+                    next_budgeted_amp = cs.can_increase_budget(allow_state_change=allow_state_change)
+                else:
+                    next_budgeted_amp = cs.can_decrease_budget(allow_state_change=allow_state_change)
+
+                if next_budgeted_amp is not None:
+
+                    diff_power = cs.get_diff_power(cs.budgeted_amp, next_budgeted_amp)
+                    diff_amp = next_budgeted_amp - cs.budgeted_amp
+
+                    if increase:
+                        if power_budget - diff_power >= 0:
+                            # ok good change we still have some power to give
+                            pass
+                        else:
+                            next_budgeted_amp = None
+
+                    if alloted_amps + diff_amp > self.dynamic_group.dyn_group_max_phase_current:
+                        next_budgeted_amp = None
+
+                    if next_budgeted_amp is not None:
+                        power_budget -= diff_power
+                        cs.budgeted_amp = next_budgeted_amp
+                        alloted_amps += diff_amp
+
+                        if stop_on_first_change:
+                            do_stop = True
+                            break
+
+                        if increase is False and power_budget >= 0:
+                            do_stop = True
+                            break
+
+                if do_stop:
+                    break
+
+        return True
+
+
+    async def budgeting_algorithm_predictive(self, actionable_chargers, best_global_command, current_power,
+                                             full_home_power):
+        alloted_power = 0.0
+        alloted_amps = 0
+        current_sum_amps = 0
+        for cs in actionable_chargers:
+            cs.budgeted_amp = cs.possible_amps[0]
+            alloted_amps += cs.budgeted_amp
+            alloted_power += cs.budgeted_power
+            current_sum_amps += cs.current_real_max_charging_amp
+        power_budget = full_home_power + current_power
+        if alloted_power < power_budget and alloted_amps < self.dynamic_group.dyn_group_max_phase_current:
+            # there is more power to be given!
+            # to who we can give first ... obviously teh one that are not charging in the current budget now
+
+            for step in ["budgeted_stopped_chargers_that_were_on_already", "already_stopped", "charging"]:
+                for cs in actionable_chargers:
+                    next_budgeted_amp = None
+                    if step == "budgeted_stopped_chargers_that_were_on_already":
+                        # try to stay in a charging state the ones already charging to reduce number or charge/discharge
+                        if cs.budgeted_amp == 0 and cs.current_real_max_charging_amp > 0:
+                            next_budgeted_amp = cs.can_increase_budget()
+                    elif step == "already_stopped":
+                        if cs.budgeted_amp == 0 and cs.current_real_max_charging_amp == 0:
+                            next_budgeted_amp = cs.can_increase_budget()
+                    else:
+                        if cs.budgeted_amp > 0:
+                            next_budgeted_amp = cs.can_increase_budget()
+
+                    if next_budgeted_amp is not None:
+
+                        diff_power = cs.get_diff_power(cs.budgeted_amp, next_budgeted_amp)
+                        diff_amp = next_budgeted_amp - cs.budgeted_amp
+
+                        if (alloted_power + diff_power <= power_budget and
+                                alloted_amps + diff_amp <= self.dynamic_group.dyn_group_max_phase_current):
+
+                            cs.budgeted_amp = next_budgeted_amp
+
+                            alloted_power += diff_power
+                            alloted_amps += diff_amp
+
+                            if alloted_power >= power_budget:
+                                break
+                            if alloted_amps >= self.dynamic_group.dyn_group_max_phase_current:
+                                break
+
+                    if alloted_power >= power_budget:
+                        break
+                    if alloted_amps >= self.dynamic_group.dyn_group_max_phase_current:
+                        break
+                if alloted_power >= power_budget:
+                    break
+                if alloted_amps >= self.dynamic_group.dyn_group_max_phase_current:
+                    break
+
+            # boom we do have a new budget for the chargers ... cs.budgeted_amp
+            # Now try to get a bit more for the AUTO_PRICE if we can (if there is ONE AUTO_PRICE ... do as if we were all auto price
+            # same if only auto_green  if we have a too big up in number of added amps : reduce it, and shave the one that are growing the more
+
+            if best_global_command == CMD_AUTO_GREEN_ONLY:
+                # we do have some solar power to be used, lower up speed a bit if we grew too fast the amps
+                if full_home_power > 0:
+                    delta_amp = alloted_amps - current_sum_amps
+                    if delta_amp > 1:
+                        # shave a bit at least one amp
+                        for cs in actionable_chargers:
+                            if cs.budgeted_amp > 0:
+
+                                next_budgeted_amp = cs.can_decrease_budget(allow_state_change=False)
+                                if next_budgeted_amp is not None:
+                                    diff_power = cs.get_diff_power(cs.budgeted_amp, next_budgeted_amp)
+                                    diff_amp = next_budgeted_amp - cs.budgeted_amp
+
+                                    cs.budgeted_amp = next_budgeted_amp
+
+                                    alloted_power += diff_power
+                                    alloted_amps += diff_amp
+
+                                    _LOGGER.info(f"Lower charge up speed for solar")
+                                    break
+
+        return True
+
+    async def apply_budget_strategy(self, actionable_chargers, current_real_cars_power, time):
+
+
+        if len(actionable_chargers) == 0:
+            return
+
+        if current_real_cars_power is None:
+            self.know_reduced_state = None
+            self.know_reduced_state_real_power = None
+        else:
+            if len(actionable_chargers) > 0:
+                self.know_reduced_state = {}
+                for cs in actionable_chargers:
+                    self.know_reduced_state[cs.charger] = cs.current_real_max_charging_amp
+                self.know_reduced_state_real_power = current_real_cars_power
+
+        max_amps_in_worst_case_scenario = 0
+        for cs in actionable_chargers:
+            max_amps_in_worst_case_scenario += max(cs.current_real_max_charging_amp, cs.budgeted_amp)
+
+        if max_amps_in_worst_case_scenario > self.dynamic_group.dyn_group_max_phase_current:
+            # even if the sum of amps is ok, we may have the sum of charger amps during the change that is too high
+            # we will split the chargers in 2 groups, the one that are decreasing in amps and the one that are increasing
+
+            increasing_cs = []
+            decreasing_cs = []
+
+            for cs in actionable_chargers:
+                if cs.budgeted_amp > cs.current_real_max_charging_amp:
+                    increasing_cs.append(cs)
+                elif cs.budgeted_amp < cs.current_real_max_charging_amp:
+                    decreasing_cs.append(cs)
+
+            cs_to_apply = decreasing_cs
+            self.remaining_budget_to_apply = increasing_cs
+        else:
+            cs_to_apply = actionable_chargers
+            self.remaining_budget_to_apply = []
+
+        if cs_to_apply:
+            await self.apply_budgets(cs_to_apply, time)
+
+    async def apply_budgets(self, actionable_chargers, time: datetime):
+        for cs in actionable_chargers:
+
+            init_state = cs.charger._expected_charge_state.value
+            init_amp = cs.current_real_max_charging_amp
+            new_amp = cs.budgeted_amp
+            if new_amp < cs.charger.min_charge:
+                new_amp = cs.charger.charger_default_idle_charge  # do not use charger min charge so next time we plug ...it may work
+                new_state = False
+            elif new_amp > cs.charger.max_charge:
+                new_amp = cs.charger.max_charge
+                new_state = True
+            else:
+                new_state = True
+
+
+            if init_state != new_state or new_amp != init_amp:
+                _LOGGER.info(
+                    f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
+                _LOGGER.info(f"car: {cs.charger.car.name} min charge {cs.charger.min_charge} max charge {cs.charger.max_charge}")
+
+            if init_state != new_state:
+                # normally the state change has been checked already to allow or not a change of state in the
+                # get_stable_current_charge_status with cs.state_change_allowed, and teh allowed amps
+                # if it is done anyway it is because of too high amps for exp...
+                cs.charger._expected_charge_state.set(new_state, time)
+                cs.charger.num_on_off += 1
+
+                if cs.charger._expected_charge_state.last_change_asked is None:
+                    _LOGGER.info(
+                        f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                else:
+                    _LOGGER.info(
+                        f"Change State: new_state {new_state} delta {(time - cs.charger._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+
+
+            if new_amp is not None:
+                cs.charger._expected_amperage.set(int(new_amp), time)
+
+            await cs.charger._ensure_correct_state(time)
+
+
+
 
 
 class QSChargerGeneric(HADeviceMixin, AbstractLoad):
@@ -175,12 +806,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_pause_resume_switch = kwargs.pop(CONF_CHARGER_PAUSE_RESUME_SWITCH, None)
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
         self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
-        self.charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge, 8))
+        self._charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge, 8))
 
         self.charger_latitude = kwargs.pop(CONF_CHARGER_LATITUDE, None)
         self.charger_longitude = kwargs.pop(CONF_CHARGER_LONGITUDE, None)
 
-        self.charger_is_3p = kwargs.pop(CONF_CHARGER_IS_3P, False)
+
         self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
 
         self.charger_status_sensor = kwargs.pop(CONF_CHARGER_STATUS_SENSOR, None)
@@ -232,6 +863,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         _LOGGER.info(f"Creating Charger: {self.name}")
 
         self._power_steps = []
+
+
+    @property
+    def charger_group(self) -> QSChargerGroup:
+
+        charger_group = self.father_device.charger_group
+
+        if charger_group is None:
+            charger_group = self.father_device.charger_group = QSChargerGroup(self.father_device)
+
+        return charger_group
+
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CHARGE
@@ -309,6 +952,81 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self._inner_amperage is None:
             self._inner_amperage = QSStateCmd()
         return self._inner_amperage
+
+    def get_stable_dynamic_charge_status(self, time: datetime):
+
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+            return None
+
+        handled = self._probe_and_enforce_stopped_charge_command_state(time, command=self.current_command, probe_only=True)
+
+        if handled:
+            # the charger is in a "static" state and is not consumming any current
+            return None
+
+        cs = QSChargerStatus(self)
+
+        cs.power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+        cs.command = self.current_command
+        if cs.command.is_like(CMD_ON):
+            cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=cs.power_steps[self.max_charge],
+                                      phase_current=self.max_charge)
+
+        cs.accurate_current_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW / 2.0,
+                                                           time)
+        cs.accurate_current_power = self.dampening_power_value_for_car_consumption(cs.accurate_current_power)
+
+        cs.secondary_current_power = self.get_median_sensor(self.secondary_power_sensor, CHARGER_ADAPTATION_WINDOW,
+                                                            time)
+        cs.secondary_current_power = self.dampening_power_value_for_car_consumption(cs.secondary_current_power)
+
+        cs.current_real_max_charging_amp = self._expected_amperage.value
+
+        if self._expected_charge_state.value is False:
+            cs.current_real_max_charging_amp = 0
+
+        cs.best_power_measure = 0.0
+        if cs.accurate_current_power is not None:
+            cs.best_power_measure =  cs.accurate_current_power
+        elif cs.secondary_current_power is not None:
+            cs.best_power_measure = cs.secondary_current_power
+        elif self._expected_charge_state.value is True and cs.current_real_max_charging_amp >= self.min_charge:
+            cs.best_power_measure = cs.power_steps[cs.current_real_max_charging_amp]
+
+
+        current_state = True
+        if cs.current_real_max_charging_amp == 0:
+            current_state = False
+
+        if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
+            min_amps = self.min_charge
+            if cs.command.phase_current is not None:
+                min_amps = int(max(min_amps, round(cs.command.phase_current)))
+            elif cs.command.power_consign is not None:
+                min_amps = self.min_charge + bisect.bisect_left(cs.power_steps[self.min_charge:self.max_charge+1], cs.command.power_consign)
+
+            min_amps = int(max(min_amps, self.min_charge))
+            min_amps = int(min(min_amps, self.max_charge))
+
+            possible_amps = [i for i in range(min_amps, self.max_charge + 1)]
+        else:
+            run_list = [i for i in range(self.min_charge, self.max_charge + 1)]
+            # check if it is on or off : can we change from off to on or on to off because of allowed changes
+            # check if we need to wait a bit before changing the state of the charger
+            if self._expected_charge_state.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
+                cs.state_change_allowed = True
+                possible_amps = [0]
+                possible_amps.extend(run_list)
+            else:
+                cs.state_change_allowed = False
+                if current_state is False:
+                    possible_amps = [0]
+                else:
+                    possible_amps = run_list
+
+        cs.possible_amps = possible_amps
+        return cs
+
 
     def reset(self):
         _LOGGER.info(f"Charger reset")
@@ -694,7 +1412,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.car:
             return int(max(self.charger_min_charge, self.car.car_charger_min_charge))
         else:
-            return self.charger_min_charge
+            return int(self.charger_min_charge)
+
+    @property
+    def charger_default_idle_charge(self):
+        return int(max(self._charger_default_idle_charge, self.min_charge))
 
     @property
     def efficiency_factor(self):
@@ -743,15 +1465,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     # update in place the power steps
     def update_power_steps(self):
         if self.car:
-            power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
+            power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.device_is_3p)
             steps = []
             for a in range(min_charge, max_charge + 1):
-                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=power_steps[a]))
+                steps.append(copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=power_steps[a], phase_current=float(a)))
             self._power_steps = steps
 
             for ct in self._constraints:
                 if isinstance(ct, MultiStepsPowerLoadConstraint):
                     ct.update_power_steps(steps)
+
+    def get_min_max_power(self) -> (float, float):
+        if len(self._power_steps) == 0 or self.car is None:
+            return 0.0, 0.0
+
+        return self._power_steps[0].power_consign, self._power_steps[-1].power_consign
+
+    def get_min_max_phase_amps(self) -> (float, float):
+        return self.min_charge, self.max_charge
 
     async def stop_charge(self, time: datetime):
 
@@ -992,6 +1723,26 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def _is_state_set(self, time: datetime) -> bool:
         return self._expected_amperage.value is not None and self._expected_charge_state.value is not None
 
+
+    async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> (bool, datetime | None):
+
+        await self._do_update_charger_state(time)
+
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+            # if we reset here it will remove the current constraint list from the load!!!!
+            _LOGGER.info(f"ensure_correct_state: no car or not plugged")
+            return True, None
+
+        if self.is_not_plugged(time=time):
+            # could be a "short" unplug
+            _LOGGER.info(f"ensure_correct_state: short unplug")
+            return False, None # we don't know if final
+
+        return await self._ensure_correct_state(time, probe_only), self._verified_correct_state_time
+
+
+
+
     async def _ensure_correct_state(self, time, probe_only:bool = False) -> bool:
 
         if self.is_in_state_reset():
@@ -1080,7 +1831,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
                                                     clip_to_zero_under_power=self.charger_consumption_W)
             if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
-                added_nrj = added_nrj/self.efficiency_factor # divide by efficiency factor as her ewe want to know what will be the impact in percent
+                added_nrj = added_nrj/self.efficiency_factor # divide by efficiency factor as here we want to know what will be the impact in percent
                 added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
                 result_calculus = ct.current_value + added_percent
 
@@ -1097,14 +1848,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     else:
                         result = min(result_calculus, sensor_result)
 
-
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 
         if result is not None and ct.is_constraint_met(result):
             do_continue_constraint = False
         else:
             do_continue_constraint = True
-            await self._compute_and_launch_new_charge_state(time, command=self.current_command, constraint=ct)
+            await self.setup_car_charge_target_if_needed(ct.target_value)
+            # await self._dynamic_compute_and_launch_new_charge_state(time)
+            await self.charger_group.dyn_handle(time)
 
         _LOGGER.info(f"update_value_callback: {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
 
@@ -1133,257 +1885,47 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result == target_charge, result
 
-
-    def update_car_dampening_value(self, time, amperage, power_value, can_be_saved):
+    def get_delta_dampened_power(self, from_amp: int | float, to_amp: int | float) -> float | None:
+        power = None
         if self.car:
-            if self.car.update_dampening_value(amperage=amperage, power_value=power_value, for_3p=self.charger_is_3p, time=time, can_be_saved=can_be_saved):
+            power = self.car.get_delta_dampened_power(from_amp=from_amp, to_amp=to_amp, for_3p=self.device_is_3p)
+        return power
+
+    def update_car_dampening_value(self, time : datetime, amperage_transition: int|float|tuple[int,int]|tuple[float,float], power_value_or_delta: float, can_be_saved:bool=False):
+        if self.car:
+            if self.car.update_dampening_value(amperage_transition=amperage_transition, power_value_or_delta=power_value_or_delta, for_3p=self.device_is_3p, time=time, can_be_saved=can_be_saved):
                 self.update_power_steps()
 
-
-    async def _compute_and_launch_new_charge_state(self, time, command: LoadCommand, constraint: LoadConstraint | None = None, probe_only: bool = False) -> bool:
+    def _probe_and_enforce_stopped_charge_command_state(self, time, command: LoadCommand, probe_only: bool = False) -> bool:
 
         if self.car is None:
             return True
 
-        init_amp = self._expected_amperage.value
-        init_state = self._expected_charge_state.value
-
-        if probe_only:
-            constraint = None
-
+        handled = False
         if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
             _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
+            handled = True
             if probe_only is False:
-                self._expected_amperage.set(int(max(self.min_charge, self.charger_default_idle_charge)), time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
+                self._expected_amperage.set(self.charger_default_idle_charge, time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
                 self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command is None or command.is_off_or_idle():
-            self._expected_charge_state.set(False, time)
-            self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not use charger min charge so next time we plug ...it may work
-        elif command.is_like(CMD_ON):
-            self._expected_amperage.set(self.max_charge, time)
-            self._expected_charge_state.set(True, time)
-        elif command.is_auto():
-
-            if constraint is None:
-                # so we are in execution for a command more than for a constraint update : we need stability
-                # if nothing was set properly force it
-
-                if self.is_in_state_reset():
-                    # set default values
-                    self._expected_charge_state.set(False, time)
-                    self._expected_amperage.set(int(self.charger_default_idle_charge), time) # do not use charger min charge so next time we plug ...it may work
-            else:
-
-                res_ensure_state = await self._ensure_correct_state(time)
-
-                # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW
-                if res_ensure_state and self._verified_correct_state_time is not None and (time - self._verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
-
-                    await self.setup_car_charge_target_if_needed(constraint.target_value)
-
-                    # _LOGGER.info(f"update_value_callback compute")
-                    current_power = 0.0
-
-                    current_real_max_charging_power = self._expected_amperage.value
-                    if self._expected_charge_state.value:
-                        current_real_car_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW / 2.0, time)
-                        current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
-
-                        # time to update some dampening car values:
-                        if current_real_car_power is not None:
-                            if constraint is not None:
-                                _LOGGER.info( f"update_value_callback: dampening {current_real_max_charging_power}:{current_real_car_power}")
-                                # this following function can change the power steps of the car
-                                self.update_car_dampening_value(time=time, amperage=current_real_max_charging_power, power_value=current_real_car_power, can_be_saved=((time - self._verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
-
-
-                        else:
-                            current_real_car_power = self.get_median_sensor(self.secondary_power_sensor,
-                                                                            CHARGER_ADAPTATION_WINDOW, time)
-                            current_real_car_power = self.dampening_power_value_for_car_consumption(current_real_car_power)
-
-                        # we will compare now if the current need to be adapted compared to solar production
-                        if current_real_max_charging_power >= self.min_charge:
-                            current_power = current_real_car_power
-                            if current_power is None:
-                                power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
-                                current_power = power_steps[int(current_real_max_charging_power)]
-                        else:
-                            current_power = 0.0
-
-                    power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.charger_is_3p)
-
-                    available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
-                    # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this power is available to the car
-
-                    # do we need a bit of a PID ? (proportional integral derivative? or keep it simple for now) or a convex hul with min / max?
-                    # very rough estimation for now:
-
-                    if available_power:
-                        last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
-                        all_p_mean = get_average_sensor(available_power, last_timing=time)
-                        last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
-                        all_p_median = get_median_sensor(available_power, last_timing=time)
-
-                        if command.is_like(CMD_AUTO_GREEN_ONLY) or command.is_like(CMD_AUTO_PRICE):
-                            target_delta_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median)
-                        else:
-                            # mode CMD_AUTO_FROM_CONSIGN
-                            target_delta_power = max(last_p_mean, all_p_mean, last_p_median, all_p_median)
-
-
-                        auto_target_power = current_power + target_delta_power
-
-                        higher_do_not_cross_power_boundary = auto_target_power
-                        lower_do_not_go_below_power_boundary = None
-
-                        if command.is_like(CMD_AUTO_FROM_CONSIGN):
-                            if command.power_consign is not None and command.power_consign > 0:
-                                # in CMD_AUTO_FROM_CONSIGN mode take always max possible power if available vs the computed consign
-                                target_charge = max(power_steps[self.min_charge], command.power_consign)
-                                lower_do_not_go_below_power_boundary = target_charge
-                                if auto_target_power <= target_charge :
-                                    # we do not have a do not cross boundary at all
-                                    higher_do_not_cross_power_boundary = None
-                                else:
-                                    # we will try to not cross it
-                                    higher_do_not_cross_power_boundary = auto_target_power
-
-
-                        safe_powers_steps = power_steps[self.min_charge:self.max_charge + 1]
-
-                        if higher_do_not_cross_power_boundary is not None and higher_do_not_cross_power_boundary <= 0:
-                            #only relevant in case of CMD_AUTO_GREEN_ONLY
-                            new_amp = 0
-                        else:
-                            #safe_powers_steps are now necessarily ordered,
-                            best_lower = None
-                            if lower_do_not_go_below_power_boundary:
-                                for i, p in enumerate(safe_powers_steps):
-                                    if p >= lower_do_not_go_below_power_boundary:
-                                        best_lower = i
-                                        break
-
-                                if best_lower is None:
-                                    best_lower = len(safe_powers_steps) - 1
-
-                            best_higher = None
-                            if higher_do_not_cross_power_boundary:
-                                for i, p in enumerate(safe_powers_steps):
-                                    if higher_do_not_cross_power_boundary >= p:
-                                        best_higher = i
-                                    else:
-                                        break
-
-                                if best_higher is None:
-                                    best_higher = -1
-
-                            # both can't be None
-                            if best_lower is None:
-                                # we are in CMD_AUTO_GREEN_ONLY and CMD_AUTO_PRICE
-                                # best_higher can be -1
-                                if best_higher < len(safe_powers_steps) - 1 and command.is_like(CMD_AUTO_PRICE) and self.home.battery_can_discharge() is False:
-                                    # we will compute here is the price to take "more" power is better than the best
-                                    # electricity rate we may have
-                                    best_price = self.home.get_best_tariff(time)
-                                    durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
-                                    current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
-
-                                    if best_higher < 0:
-                                        auto_green_power_command = 0
-                                    else:
-                                        auto_green_power_command = safe_powers_steps[best_higher]
-
-                                    additional_added_energy = ((safe_powers_steps[best_higher+1] - auto_green_power_command)*durations_eval_s)/3600.0
-                                    cost = (((safe_powers_steps[best_higher+1] - auto_target_power)*durations_eval_s)/3600.0) * current_price
-                                    cost_per_watt_h = cost / additional_added_energy
-                                    if cost_per_watt_h > best_price:
-                                        pass
-                                    else:
-                                        best_higher += 1
-
-                                if best_higher < 0:
-                                    # nothing works, case auto_green or price ... stop charge
-                                    new_amp = 0
-                                else:
-                                    new_amp = best_higher + self.min_charge
-
-                            elif best_higher is None:
-                                new_amp = best_lower + self.min_charge
-                            else:
-                                # best_lower can't be < 0 and as a good "max" at len(safe_powers_steps) - 1
-                                # best_higher can be < 0
-                                new_amp = max(best_higher, best_lower) + self.min_charge
-
-                            # to smooth a bit going up for nothing
-                            if command.is_like(CMD_AUTO_GREEN_ONLY):
-                                if target_delta_power < 0:
-                                    # it means no available power ... force to go down if not done
-                                    if current_real_max_charging_power <= new_amp and current_power > 0 and self._expected_charge_state.value:
-                                        new_amp = min(current_real_max_charging_power-1, new_amp-1)
-                                        _LOGGER.info(f"Correct new_amp due to negative available power: {new_amp}")
-                                else:
-                                    delta_amp = new_amp - current_real_max_charging_power
-                                    if delta_amp > 1:
-                                        new_amp -= 1
-                                        _LOGGER.info(f"Lower charge up speed: {new_amp}")
-
-
-                        new_state = init_state
-                        if new_amp < self.min_charge:
-                            new_amp = self.charger_default_idle_charge # do not use charger min charge so next time we plug ...it may work
-                            new_state = False
-                        elif new_amp > self.max_charge:
-                            new_amp = self.max_charge
-                            new_state = True
-                        else:
-                            new_state = True
-
-                        if init_state != new_state or new_amp != init_amp:
-                            _LOGGER.info(f"target_delta_power {target_delta_power} target_powers {higher_do_not_cross_power_boundary}/{lower_do_not_go_below_power_boundary}, current_power {current_power} ")
-                            _LOGGER.info(f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state}")
-                            _LOGGER.info(f"car: {self.car.name} min charge {self.min_charge} max charge {self.max_charge}")
-                            _LOGGER.info(f"power steps {safe_powers_steps}")
-
-                        if init_state != new_state:
-                           # we need to wait a bit before changing the state of the charger
-                           if constraint is None or self._expected_charge_state.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
-                                self._expected_charge_state.set(new_state, time)
-                                if constraint:
-                                    self.num_on_off += 1
-
-                                if self._expected_charge_state.last_change_asked is None:
-                                    _LOGGER.info(
-                                        f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
-                                else:
-                                    _LOGGER.info(
-                                        f"Change State: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
-
-                           else:
-                               new_amp = self.min_charge #force to minimum charge
-                               _LOGGER.info(f"Forbid: new_state {new_state} delta {(time - self._expected_charge_state.last_change_asked).total_seconds()}s < {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
-
-                        if new_amp is not None:
-                            self._expected_amperage.set(int(new_amp), time)
-
-                    else:
-                        _LOGGER.info(f"Available power invalid")
-
+            handled = True
+            if probe_only is False:
+                self._expected_charge_state.set(False, time)
+                self._expected_amperage.set(self.charger_default_idle_charge, time) # do not use charger min charge so next time we plug ...it may work
+        elif command.is_auto() or command.is_like(CMD_ON):
+            handled = False
 
         if self.is_in_state_reset():
             _LOGGER.info(f"_compute_and_launch_new_charge_state: in state reset at the end .. force an idle like state")
-            self._expected_charge_state.set(False, time)
-            self._expected_amperage.set(int(self.charger_default_idle_charge), time)
+            handled = True
+            if probe_only is False:
+                self._expected_charge_state.set(False, time)
+                self._expected_amperage.set(self.charger_default_idle_charge, time)
 
-        if init_amp != self._expected_amperage.value or init_state != self._expected_charge_state.value:
-            _LOGGER.info(
-                f"Change inner states values: change state to {int(self._expected_amperage.value)}A - charge:{self._expected_charge_state.value}")
-
-
-        # do it all the time
-        return await self._ensure_correct_state(time, probe_only=probe_only)
+        return handled
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
 
@@ -1399,20 +1941,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if is_plugged and self.car is not None:
 
             do_reset = True
-            if self.current_command is None:
-                do_reset = True
-            elif command.is_auto() and self.current_command.is_auto():
+            if (self.current_command is not None and
+                    ((command.is_like(CMD_ON) or command.is_auto())
+                     and (self.current_command.is_auto() or self.current_command.is_like(CMD_ON)))
+                    and not self.is_in_state_reset()):
                 # well by construction , command and self.current_command are different
-                if self.is_in_state_reset():
-                    do_reset = True
-                else:
-                    # we are in the middle of the execution of probably the same constraint (or another one) but in a continuity of commands
-                    do_reset = False
+                # we are in the middle of the execution of probably the same on or command constraint (or another one) but in a continuity of commands
+                do_reset = False
 
             if do_reset:
                 self._reset_state_machine()
                 _LOGGER.info(f"DO RESET Execute command {command.command}/{command.power_consign} on charger {self.name}")
-                res = await self._compute_and_launch_new_charge_state(time, command=command, constraint=None)
+                self._probe_and_enforce_stopped_charge_command_state(time, command=command)
+                res = await self._ensure_correct_state(time)
             else:
                 # we where already in automatic command ... no need to reset anything : just let the callback plays its role
                 _LOGGER.info(f"Recieved and acknowledged command {command.command}/{command.power_consign} on charger {self.name}")
@@ -1434,7 +1975,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if is_plugged and self.car is not None:
             # need to call again _compute_and_launch_new_charge_state in case the car stopped asking for current in the middle
             _LOGGER.info(f"called again compute_and_launch_new_charge_state command {command}")
-            result = await self._compute_and_launch_new_charge_state(time, command=command, probe_only=True)
+            self._probe_and_enforce_stopped_charge_command_state(time, command=command)
+            result = await self._ensure_correct_state(time, probe_only=True)
         else:
             if command.is_off_or_idle():
                 result = True
