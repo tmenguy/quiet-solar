@@ -259,13 +259,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 path = self.find_path(self._dampening_deltas_graph, from_amp, to_amp)
 
                 if path:
+                    power = 0
                     for i in range(1, len(path)):
                         power += self._dampening_deltas.get((path[i-1], path[i]))
 
         return power
 
 
-    def update_dampening_value(self, amperage_transition: int|float|tuple[int,int]|tuple[float,float], power_value_or_delta: int | float, for_3p:bool, time:datetime, can_be_saved:bool) -> bool:
+    def update_dampening_value(self, amperage_transition: int|float|tuple[int,int]|tuple[float,float], power_value_or_delta: int | float, for_3p:bool, time:datetime, can_be_saved:bool = False) -> bool:
 
         amperage = None
         do_update = False
