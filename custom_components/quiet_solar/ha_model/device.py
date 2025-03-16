@@ -16,7 +16,7 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED
+    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P
 from ..home_model.commands import CMD_OFF, CMD_IDLE
 from ..home_model.load import AbstractLoad
 
@@ -180,7 +180,10 @@ class HADeviceMixin:
         self.calendar = kwargs.pop(CONF_CALENDAR, None)
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
 
+
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
+
+
 
         if self.mobile_app is None or self.mobile_app == CONF_MOBILE_APP_NOTHING:
             self.mobile_app = None
@@ -231,6 +234,7 @@ class HADeviceMixin:
                                    non_ha_entity_get_state=self.command_power_state_getter)
 
         self._unsub = None
+
 
     async def set_next_scheduled_event(self, start_time:datetime, end_time:datetime, description:str):
         if self.calendar is None:
@@ -524,19 +528,19 @@ class HADeviceMixin:
             return None
         return get_average_sensor(entity_id_values, time)
 
-    def get_median_power(self, num_seconds: float | None, time) -> float | None:
-        return self.get_median_sensor(self._get_power_measure(), num_seconds, time)
+    def get_median_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
+        return self.get_median_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)
 
 
 
-    def get_average_power(self, num_seconds: float | None, time) -> float | None:
-        return self.get_average_sensor(self._get_power_measure(), num_seconds, time)
+    def get_average_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
+        return self.get_average_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)
 
 
 
-    def get_device_power_values(self, duration_before_s: float, time: datetime) -> list[
+    def get_device_power_values(self, duration_before_s: float, time: datetime, use_fallback_command=True) -> list[
         tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
-        return self.get_state_history_data(self._get_power_measure(), duration_before_s, time)
+        return self.get_state_history_data(self._get_power_measure(fall_back_on_command=use_fallback_command), duration_before_s, time)
 
 
     def get_device_real_energy(self, start_time: datetime, end_time:datetime, clip_to_zero_under_power: float | None = None) -> float | None:

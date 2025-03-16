@@ -6,6 +6,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity, async_generate_entity_id
 
+from .ha_model.dynamic_group import QSDynamicGroup
 from .ha_model.home import QSHome
 from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
@@ -30,7 +31,7 @@ LOAD_TYPES = {
     "car": QSCar,
     "pool": QSPool,
     "on_off_duration": QSOnOffDuration,
-    "fp_heater": QSFPHeater
+    "dynamic_group": QSDynamicGroup
 }
 
 LOAD_NAMES = {
@@ -44,7 +45,7 @@ LOAD_NAMES = {
     "car" : "car",
     "pool":"pool",
     "on_off_duration": "on/off",
-    "fp_heater":"heater"
+    "dynamic_group":"group"
 }
 
 

@@ -17,8 +17,10 @@ CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
 CONF_SWITCH = "switch"
 CONF_SELECT = "select"
 CONF_CALENDAR = "calendar"
+CONF_IS_3P = "device_is_3p"
 CONF_LOAD_IS_BOOST_ONLY = "load_is_boost_only"
 CONF_DEVICE_EFFICIENCY = "device_efficiency"
+CONF_DEVICE_DYNAMIC_GROUP_NAME = "dynamic_group_name"
 
 CONF_HOME_VOLTAGE = "home_voltage"
 
@@ -40,9 +42,13 @@ CONF_BATTERY_MAX_CHARGE_POWER_NUMBER = "battery_max_charge_power_number"
 CONF_BATTERY_MIN_CHARGE_PERCENT = "battery_min_charge_percent_value"
 CONF_BATTERY_MAX_CHARGE_PERCENT = "battery_max_charge_percent_value"
 
+
+
+CONF_DYN_GROUP_MAX_PHASE_AMPS = "dyn_group_max_phase_amps"
+
 CONF_CHARGER_MAX_CHARGE = "charger_max_charge"
 CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
-CONF_CHARGER_IS_3P = "charger_is_3p"
+
 CONF_CHARGER_CONSUMPTION = "charger_consumption"
 CONF_DEFAULT_CAR_CHARGE = "default_car_charge"
 CONF_CHARGER_LATITUDE = "charger_latitude"
@@ -56,7 +62,6 @@ CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER = "charger_max_charging_current_number"
 CONF_CHARGER_PAUSE_RESUME_SWITCH = "charger_pause_resume_switch"
 
 CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
-
 
 CHARGER_NO_CAR_CONNECTED = "No car connected"
 

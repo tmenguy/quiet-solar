@@ -178,7 +178,7 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
 
 
         if new_option is None and self.entity_description.qs_default_option:
-            new_option = self.entity_description.qs_default_option.value
+            new_option = self.entity_description.qs_default_option
 
         if new_option is None:
             new_option = self.options[0]

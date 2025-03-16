@@ -13,6 +13,7 @@ from homeassistant.components.recorder.models import LazyState
 from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
+from .dynamic_group import QSDynamicGroup
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
@@ -100,7 +101,7 @@ class QSforecastValueSensor:
 
 
 
-class QSHome(HADeviceMixin, AbstractDevice):
+class QSHome(QSDynamicGroup):
 
     _battery: QSBattery = None
     voltage: int = 230
@@ -111,6 +112,8 @@ class QSHome(HADeviceMixin, AbstractDevice):
     _all_devices : list[HADeviceMixin] = []
     _solar_plant: QSSolar | None = None
     _all_loads : list[AbstractLoad] = []
+    _all_dynamic_groups : list[QSDynamicGroup] = []
+    _name_to_groups : dict[str, QSDynamicGroup] = {}
 
     _period : timedelta = timedelta(seconds=FLOATING_PERIOD_S)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
@@ -157,7 +160,7 @@ class QSHome(HADeviceMixin, AbstractDevice):
         super().__init__(**kwargs)
         self.home = self
 
-        self._all_devices.append(self)
+        # self._all_devices.append(self)
 
         self.home_non_controlled_consumption = None
         self.home_consumption = None
@@ -182,8 +185,14 @@ class QSHome(HADeviceMixin, AbstractDevice):
 
 
         self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
-        self.register_all_on_change_states()
+        # self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
+
+        self.add_device(self)
+
+    @property
+    def device_is_3p(self) -> bool:
+        return self._device_is_3p
 
     def get_best_tariff(self, time: datetime) -> float:
         if self.price_off_peak == 0:
@@ -457,17 +466,12 @@ class QSHome(HADeviceMixin, AbstractDevice):
     def get_available_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
-
-
-
     def battery_can_discharge(self):
 
         if self._battery is None:
             return False
 
         return self._battery.battery_can_discharge()
-
-
 
     def get_battery_charge_values(self, duration_before_s: float, time: datetime) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         if self._battery is None:
@@ -483,6 +487,24 @@ class QSHome(HADeviceMixin, AbstractDevice):
         if self._battery is not None:
             await self._battery.set_max_charging_power(power, blocking)
 
+    def _set_amps_topology(self):
+
+        self._name_to_groups = {}
+        for group in self._all_dynamic_groups:
+            self._name_to_groups[group.name] = group
+            self._childrens = []
+
+        for group in self._all_dynamic_groups:
+            if self != group:
+                # it is not home
+                father = self._name_to_groups.get(group.dynamic_group_name, self)
+                father._childrens.append(group)
+                group.father_device = father
+
+        for load in self._all_loads:
+            father = self._name_to_groups.get(load.dynamic_group_name, self)
+            father._childrens.append(load)
+            load.father_device = father
 
     def add_device(self, device):
 
@@ -500,9 +522,16 @@ class QSHome(HADeviceMixin, AbstractDevice):
         if isinstance(device, AbstractLoad):
             self._all_loads.append(device)
 
+        if isinstance(device, QSDynamicGroup):
+            # it can be home....
+            self._all_dynamic_groups.append(device)
+
         if isinstance(device, HADeviceMixin):
             device.register_all_on_change_states()
             self._all_devices.append(device)
+
+        #will redo the whole tooplogy each time
+        self._set_amps_topology()
 
 
     async def update_loads_constraints(self, time: datetime):

@@ -108,7 +108,6 @@
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -121,6 +120,8 @@
                     "charger_plugged_qs_reset_selector": "if selected reset to empty the above field",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -132,13 +133,14 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -151,36 +153,35 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
             },
-            "fp_heater": {
+            "dynamic_group": {
                 "data": {
-                    "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor": "Power sensor of the Power Group (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
-                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
-                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
-                    "name": "Name",
-                    "power": "Power of the eater (W)",
-                    "select": "Fil pilote value",
-                    "select_qs_reset_selector": "if selected reset to empty the above field",
-                    "switch": "On/Off of the heater",
-                    "switch_qs_reset_selector": "if selected reset to empty the above field"
+                    "device_is_3p": "Is the power group 3 phases?",
+                    "dyn_group_max_phase_amps": "maximum current per phase (A) for the dynamic group",
+                    "dynamic_group_name": "Add this group to another load group to limit the amps",
+                    "name": "Name"
                 },
-                "description": "Specific heater used in France",
-                "title": "A \"fil pilote\" based heater"
+                "description": "Power group to limit the amps of multiple chargers for ex",
+                "title": "A power group"
             },
             "home": {
                 "data": {
+                    "device_is_3p": "Is the home 3 phases?",
+                    "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
                     "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
                     "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
@@ -201,6 +202,7 @@
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
                     "power": "Power of the load (W)",
@@ -214,6 +216,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add pool to a load group to limit the amps",
                     "name": "Name",
                     "pool_temperature_sensor": "Water temperature sensor",
                     "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
@@ -247,7 +250,7 @@
                     "battery": "Add a Battery",
                     "car": "Add an electrical vehicle",
                     "charger": "Add an electrical vehicle charger",
-                    "fp_heater": "Add a \"fil pilote\" based heater",
+                    "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
                     "home": "Create a Home",
                     "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
                     "pool": "Add a pool",
@@ -453,7 +456,6 @@
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
@@ -465,6 +467,8 @@
                     "charger_plugged": "binary sensor to know if a car is plugged to the charger",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "title": "Edit your electrical vehicle charger"
@@ -476,13 +480,14 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_ocpp": "OCPP device",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "description": "OCPP based integration is up and running ...",
@@ -495,36 +500,35 @@
                     "calendar": "Add a calendar to define when the cars need to be ready (overcharged if a car has a calendar)",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
                     "charger_device_wallbox": "Wallbox device",
-                    "charger_is_3p": "Is the charger 3 phases?",
                     "charger_latitude": "Latitude of the charger from -90 to 90 degrees",
                     "charger_longitude": "Longitude of the charger from -180 to 180 degrees",
                     "charger_max_charge": "Maximum Current Charge Per Phase (A)",
                     "charger_min_charge": "Minimum Current Charge Per Phase (A)",
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
+                    "device_is_3p": "Is the charger 3 phases?",
+                    "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
             },
-            "fp_heater": {
+            "dynamic_group": {
                 "data": {
-                    "accurate_power_sensor": "Power sensor of the load (W, kW)",
+                    "accurate_power_sensor": "Power sensor of the Power Group (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
-                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the heater being on",
-                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
-                    "name": "Name",
-                    "power": "Power of the eater (W)",
-                    "select": "Fil pilote value",
-                    "select_qs_reset_selector": "if selected reset to empty the above field",
-                    "switch": "On/Off of the heater",
-                    "switch_qs_reset_selector": "if selected reset to empty the above field"
+                    "device_is_3p": "Is the power group 3 phases?",
+                    "dyn_group_max_phase_amps": "maximum current per phase (A) for the dynamic group",
+                    "dynamic_group_name": "Add this group to another load group to limit the amps",
+                    "name": "Name"
                 },
-                "description": "Specific heater used in France",
-                "title": "A \"fil pilote\" based heater"
+                "description": "Power group to limit the amps of multiple chargers for ex",
+                "title": "A power group"
             },
             "home": {
                 "data": {
+                    "device_is_3p": "Is the home 3 phases?",
+                    "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
                     "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
                     "grid_active_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
@@ -545,6 +549,7 @@
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
                     "calendar_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
                     "power": "Power of the load (W)",
@@ -558,6 +563,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
                     "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add pool to a load group to limit the amps",
                     "name": "Name",
                     "pool_temperature_sensor": "Water temperature sensor",
                     "pool_temperature_sensor_qs_reset_selector": "if selected reset to empty the above field",
