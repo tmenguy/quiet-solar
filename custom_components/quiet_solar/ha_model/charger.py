@@ -425,7 +425,7 @@ class QSChargerGroup(object):
                             # great we do have a single change in the chargers, and we do have the previous cars power
                             # we can save the transition from self.know_reduced_state[c] to  current_reduced_states[c]
                             delta_power = current_real_cars_power - self.know_reduced_state_real_power
-                            last_changed_charger.charger.update_car_dampening_value(time=time,
+                            last_changed_charger.update_car_dampening_value(time=time,
                                                                                     amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
                                                                                     power_value_or_delta=delta_power,
                                                                                     can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
