@@ -352,7 +352,7 @@ class QSChargerGroup(object):
                 last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                 all_p_median = get_median_sensor(available_power, last_timing=time)
 
-                full_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+                full_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
 
                 current_sum_amps = 0
                 actionable_chargers = []
@@ -493,17 +493,17 @@ class QSChargerGroup(object):
                             best_global_command = CMD_AUTO_PRICE
                             break
 
-                    _LOGGER.info(f"full_home_power {full_home_power}, current_power {current_power}, power_budget {full_home_power+current_power}")
+                    _LOGGER.info(f"dyn_handle: full_available_home_power {full_available_home_power}, current_power / (real) {current_power}/({current_real_cars_power}), power_budget {full_available_home_power+current_power}")
 
-                    # await self.budgeting_algorithm_predictive(actionable_chargers, best_global_command, current_power, full_home_power)
-                    if await self.budgeting_algorithm_minimize_diffs(actionable_chargers, best_global_command, current_power, full_home_power):
+                    # await self.budgeting_algorithm_predictive(actionable_chargers, best_global_command, current_power, full_available_home_power)
+                    if await self.budgeting_algorithm_minimize_diffs(actionable_chargers, best_global_command, current_power, full_available_home_power):
 
                         diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
                         _LOGGER.info(
                             f"dyn_handle: after budgeting diff_power_budget {diff_power_budget}, diff_amp_budget {diff_amp_budget}, alloted_amps {alloted_amps}")
 
                         if best_global_command == CMD_AUTO_PRICE:
-                            if self.home.battery_can_discharge() is False and alloted_amps < self.dynamic_group.dyn_group_max_phase_current and full_home_power > 0:
+                            if self.home.battery_can_discharge() is False and alloted_amps < self.dynamic_group.dyn_group_max_phase_current and full_available_home_power > 0:
                                 # we will compute here is the price to take "more" power is better than the best
                                 # electricity rate we may have
 
@@ -538,7 +538,7 @@ class QSChargerGroup(object):
                                     _LOGGER.info(
                                         f"dyn_handle: auto-price extended charge {smallest_power_increment}")
                                     additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
-                                    cost = (((diff_power_budget  + smallest_power_increment - full_home_power) * durations_eval_s) / 3600.0) * current_price
+                                    cost = (((diff_power_budget  + smallest_power_increment - full_available_home_power) * durations_eval_s) / 3600.0) * current_price
                                     cost_per_watt_h = cost / additional_added_energy
 
                                     if cost_per_watt_h < best_price:
@@ -548,7 +548,7 @@ class QSChargerGroup(object):
 
 
 
-    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, best_global_command, current_power, full_home_power):
+    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, best_global_command, current_power, full_available_home_power):
 
         alloted_amps = 0
 
@@ -576,7 +576,7 @@ class QSChargerGroup(object):
         # ok we do have the "best" possible base for the chargers
         diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
 
-        power_budget = full_home_power - diff_power_budget
+        power_budget = full_available_home_power - diff_power_budget
 
         # this algorithm will only try to move "a bit" the chargers to reach the power budget
         # if power_budget is negative : we need to go down and find the best charger to go down
@@ -589,6 +589,9 @@ class QSChargerGroup(object):
                 stop_on_first_change = False
         else:
             increase = True
+
+        _LOGGER.info(
+            f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, diff_amp_budget {diff_amp_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
         do_stop = False
         for allow_state_change in [False, True]:
@@ -614,11 +617,15 @@ class QSChargerGroup(object):
                         next_budgeted_amp = None
 
                     if next_budgeted_amp is not None:
-                        _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A, power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, alloted_amps {alloted_amps}")
+
                         power_budget -= diff_power
-                        cs.budgeted_amp = next_budgeted_amp
                         alloted_amps += diff_amp
+
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, new alloted_amps {alloted_amps}")
+                        cs.budgeted_amp = next_budgeted_amp
+
+
 
                         if stop_on_first_change:
                             do_stop = True

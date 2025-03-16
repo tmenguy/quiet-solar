@@ -254,14 +254,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             power = self._dampening_deltas.get((from_amp, to_amp))
 
-            if power is None:
+            if power is None and len(self._dampening_deltas) > 2:
                 # not direct try a path:
                 path = self.find_path(self._dampening_deltas_graph, from_amp, to_amp)
 
-                if path:
+                if path and len(path) > 1:
                     power = 0
                     for i in range(1, len(path)):
-                        power += self._dampening_deltas.get((path[i-1], path[i]))
+                        p = self._dampening_deltas.get((path[i-1], path[i]))
+                        if p is None:
+                            _LOGGER.error(f"Dampening deltas error: Car {self.name} deltas {self._dampening_deltas} from_amp {from_amp} to_amp {to_amp} path[i-1] {path[i-1]} path[i] {path[i]}")
+                            return None
+
+                        power += p
 
         return power
 
