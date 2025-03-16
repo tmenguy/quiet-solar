@@ -615,7 +615,7 @@ class QSChargerGroup(object):
 
                     if next_budgeted_amp is not None:
                         _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A")
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A, power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, alloted_amps {alloted_amps}")
                         power_budget -= diff_power
                         cs.budgeted_amp = next_budgeted_amp
                         alloted_amps += diff_amp
