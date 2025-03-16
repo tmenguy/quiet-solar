@@ -489,6 +489,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         time_slots: list[datetime]) -> tuple[
                                         bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
+        # force to only use solar power for non mandatory constraints
+        if self.is_mandatory is False:
+            do_use_available_power_only = True
 
         nrj_to_be_added = self.get_energy_to_be_added()
 
@@ -613,14 +616,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if nrj_to_be_added <= 0.0:
                     break
 
-        if (nrj_to_be_added <= 0.0 or
-                do_use_available_power_only or
-                self.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN):
+        if (nrj_to_be_added <= 0.0 or do_use_available_power_only):
             pass
         else:
 
             # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
-            # but actually we should have depleted the battery on the "non controlled part first, to see what is really possible
+            # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible
             for i in range(first_slot, last_slot + 1):
 
                 if power_available_power[i] + out_power[i] < 0:
@@ -642,7 +643,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             prev_energy = (out_power[i] * power_slots_duration_s[i]) / 3600.0
 
                         # check if the price of the extra energy we add is better than the best price we have
-
                         power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
                         energy_to_add: float = ((power_to_add -  float(out_power[i]))* float(power_slots_duration_s[i])) / 3600.0
                         cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0

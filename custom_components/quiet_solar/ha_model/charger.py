@@ -2,8 +2,6 @@ import bisect
 import logging
 from datetime import datetime, timedelta
 from enum import StrEnum
-from functools import total_ordering
-from tokenize import group
 
 from typing import Any, Callable, Awaitable
 
@@ -14,7 +12,6 @@ from homeassistant.helpers import entity_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
 from homeassistant.components import number, homeassistant
 from haversine import haversine, Unit
-from sqlalchemy import false
 
 from .dynamic_group import QSDynamicGroup
 
@@ -80,7 +77,7 @@ from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStep
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE, CMD_CST_AUTO_GREEN
+    CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE
 from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
@@ -466,7 +463,7 @@ class QSChargerGroup(object):
                                 for cs in actionable_chargers:
                                     can_stop = True
                                     if step == "stop_auto_only":
-                                        can_stop = cs.command.is_auto(CMD_CST_AUTO_GREEN)
+                                        can_stop = cs.command.is_like(CMD_AUTO_GREEN_ONLY)
                                     if cs.possible_amps[0] >= cs.charger.min_charge and can_stop:
                                         # we can lower the charge
                                         shaved_amps += cs.possible_amps[0]
@@ -1013,6 +1010,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         cs = QSChargerStatus(self)
 
         cs.power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+
         cs.command = self.current_command
         if cs.command.is_like(CMD_ON):
             cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=cs.power_steps[self.max_charge],
@@ -1028,6 +1026,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.current_real_max_charging_amp = self._expected_amperage.value
 
+        # if the car charge is n state "not charging" mark the real charge as 0
         if self._expected_charge_state.value is False:
             cs.current_real_max_charging_amp = 0
 
@@ -1044,16 +1043,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if cs.current_real_max_charging_amp == 0:
             current_state = False
 
-        if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
+        # we need to force a charge here from a given minimum
+        if cs.command.is_like(CMD_AUTO_FROM_CONSIGN) or cs.command.is_like(CMD_AUTO_PRICE):
             min_amps = self.min_charge
-            if cs.command.phase_current is not None:
-                min_amps = int(max(min_amps, round(cs.command.phase_current)))
-            elif cs.command.power_consign is not None:
-                min_amps = self.min_charge + bisect.bisect_left(cs.power_steps[self.min_charge:self.max_charge+1], cs.command.power_consign)
 
-            min_amps = int(max(min_amps, self.min_charge))
-            min_amps = int(min(min_amps, self.max_charge))
+            if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
+                if cs.command.phase_current is not None:
+                    min_amps = int(max(min_amps, round(cs.command.phase_current)))
+                elif cs.command.power_consign is not None:
+                    min_amps = self.max_charge, self.min_charge + bisect.bisect_left(cs.power_steps[self.min_charge:self.max_charge+1], cs.command.power_consign)
+                else:
+                    min_amps = self.min_charge
 
+                min_amps = int(max(min_amps, self.min_charge))
+                min_amps = int(min(min_amps, self.max_charge))
+
+            # 0 is not an option to not allow to stop the charge while we got this consign, in "minimum" consign or "price" consign
             possible_amps = [i for i in range(min_amps, self.max_charge + 1)]
         else:
             run_list = [i for i in range(self.min_charge, self.max_charge + 1)]
@@ -1066,8 +1071,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 cs.state_change_allowed = False
                 if current_state is False:
+                    # force to stay off
                     possible_amps = [0]
                 else:
+                    # force to stay on (by not adding the possibility to go to 0
                     possible_amps = run_list
 
         cs.possible_amps = possible_amps

@@ -250,7 +250,7 @@ class PeriodSolver(object):
 
         for c , _ in constraints:
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
-                do_use_available_power_only=c.type <= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+                do_use_available_power_only= not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
                 power_available_power = self._available_power,
