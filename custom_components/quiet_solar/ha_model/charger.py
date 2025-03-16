@@ -1161,16 +1161,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if (existing_charger and
                     time - existing_charger.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
-                # this car is already attached to another charger, for a long enough time, it is not a candidate
+                # this car is already attached to another charger, for a long enough time,.. it is not a candidate
                 if existing_charger == self:
-                    # the current charger has been connected to this car for a long time, we can keep it ?
+                    # the current charger has been connected to this car for a long time, we can keep it?
                     best_car = car
                     best_score = score
                     break
                 else:
                     # we will let it on the other charger, this car is not a candidate anymore
-                    continue
-
+                    # only if the other charger is plugged in, else the car may be a candidate
+                    if existing_charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+                        continue
 
             score_plug_bump = 0
             car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
@@ -1192,7 +1193,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         score_dist_bump = 0.5*((max_dist - dist)/max_dist)
 
             score_home_bump = 0
-
             car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_home_res:
                 score_home_bump = 3
@@ -1210,6 +1210,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only if plugged .... then if home
                 score = score_plug_bump + score_home_bump + score_dist_bump
 
+                if (existing_charger and existing_charger == self and
+                        time - existing_charger.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
+                    # the current charger has been connected to this car for a long time, we can keep it?
+                    score = score + 2.5 # will max out all scores legs
+
+
             if score > best_score:
                 best_car = car
                 best_score = score
@@ -1221,7 +1227,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
             existing_charger = cars.get(best_car)
-
             if existing_charger is not None and existing_charger != self:
                 # will force a reset of everyhting
                 _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
