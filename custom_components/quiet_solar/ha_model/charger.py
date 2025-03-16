@@ -80,7 +80,7 @@ from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStep
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE
+    CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE, CMD_CST_AUTO_GREEN
 from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
@@ -326,6 +326,8 @@ class QSChargerGroup(object):
 
         if res_state and self.remaining_budget_to_apply:
             # in case we would have had increases that could go above the limits because done before the decrease
+            _LOGGER.info(
+                f"dyn_handle: handling increasing budgets in a second phase")
             await self.apply_budgets(self.remaining_budget_to_apply, time, check_charger_state=True)
             self.remaining_budget_to_apply = []
         # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW, for all active chargers
@@ -396,6 +398,8 @@ class QSChargerGroup(object):
 
                     # we can update a bit the dampening for the only one charging if we do have a global counter for the group
                     if num_charging_cs == 1 and current_real_cars_power is not None:
+                        _LOGGER.info(
+                            f"dyn_handle: dampening simple case")
                         a_charging_cs.charger.update_car_dampening_value(time=time,
                                                                          amperage_transition=a_charging_cs.current_real_max_charging_amp,
                                                                          power_value_or_delta=current_real_cars_power,
@@ -416,6 +420,8 @@ class QSChargerGroup(object):
                                     last_changed_charger = c
 
                         if last_changed_charger and num_changes == 1:
+                            _LOGGER.info(
+                                f"dyn_handle: dampening transition case")
                             # great we do have a single change in the chargers, and we do have the previous cars power
                             # we can save the transition from self.know_reduced_state[c] to  current_reduced_states[c]
                             delta_power = current_real_cars_power - self.know_reduced_state_real_power
@@ -493,11 +499,16 @@ class QSChargerGroup(object):
                     if await self.budgeting_algorithm_minimize_diffs(actionable_chargers, best_global_command, current_power, full_home_power):
 
                         diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+                        _LOGGER.info(
+                            f"dyn_handle: after budgeting diff_power_budget {diff_power_budget}, diff_amp_budget {diff_amp_budget}, alloted_amps {alloted_amps}")
 
                         if best_global_command == CMD_AUTO_PRICE:
                             if self.home.battery_can_discharge() is False and alloted_amps < self.dynamic_group.dyn_group_max_phase_current and full_home_power > 0:
                                 # we will compute here is the price to take "more" power is better than the best
                                 # electricity rate we may have
+
+                                _LOGGER.info(
+                                    f"dyn_handle: auto-price case")
 
                                 best_price = self.home.get_best_tariff(time)
                                 durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
@@ -524,6 +535,8 @@ class QSChargerGroup(object):
 
                                 if smallest_power_increment is not None:
 
+                                    _LOGGER.info(
+                                        f"dyn_handle: auto-price extended charge {smallest_power_increment}")
                                     additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
                                     cost = (((diff_power_budget  + smallest_power_increment - full_home_power) * durations_eval_s) / 3600.0) * current_price
                                     cost_per_watt_h = cost / additional_added_energy
@@ -601,6 +614,8 @@ class QSChargerGroup(object):
                         next_budgeted_amp = None
 
                     if next_budgeted_amp is not None:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A")
                         power_budget -= diff_power
                         cs.budgeted_amp = next_budgeted_amp
                         alloted_amps += diff_amp
