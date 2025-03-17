@@ -146,8 +146,12 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         if current_budget_spend > from_father_budget:
             # ouch bad we are already over budget ....
+            _LOGGER.info(f"QSDynamicGroup {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
             current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
+            if current_budget_spend > from_father_budget:
+                _LOGGER.info(
+                    f"QSDynamicGroup {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
 
         # everyone has its minimum already allocated
         if current_budget_spend < from_father_budget:

@@ -1581,7 +1581,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     ct.update_power_steps(steps)
 
     def get_min_max_power(self) -> (float, float):
-        if len(self._power_steps) == 0 or self.car is None:
+        if self._power_steps is None or len(self._power_steps) == 0 or self.car is None:
             return 0.0, 0.0
 
         return self._power_steps[0].power_consign, self._power_steps[-1].power_consign

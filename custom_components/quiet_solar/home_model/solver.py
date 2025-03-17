@@ -231,12 +231,13 @@ class PeriodSolver(object):
         # positive numbers in available power)
 
 
-
-        home = self._loads[0].home
-        # propagate amps limits to the topology
-        if home:
-            home.allocate_phase_amps_budget(self._start_time)
-
+        if self._loads and len(self._loads) > 0:
+            home = self._loads[0].home
+            # propagate amps limits to the topology
+            if home:
+                home.allocate_phase_amps_budget(self._start_time)
+        else:
+            _LOGGER.info(f"solve: NO LOADS!")
 
         #ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
         constraints = []
