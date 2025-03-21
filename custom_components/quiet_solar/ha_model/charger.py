@@ -1119,7 +1119,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car ....
 
-
         cars = {}
         for charger in self.home._chargers:
             car = charger.car
@@ -1205,6 +1204,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 car_home_res = True
                 score_home_bump = 2
 
+
+            #TODO: we may want to check if in fsct the car plug and the charger plug has been happening around the same time
+            #if so the likeliness that it is the right car is very high, and we may not need the location at all!!!
 
             if car_plug_res and car_home_res:
                 # only if plugged .... then if home
