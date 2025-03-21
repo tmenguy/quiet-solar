@@ -59,10 +59,13 @@ class AbstractDevice(object):
 
 
     def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None):
+
         if from_father_budget is None:
             self.device_phase_amps_budget, _ = self.get_min_max_phase_amps()
         else:
             self.device_phase_amps_budget = from_father_budget
+
+        _LOGGER.info(f"allocate_phase_amps_budget for load {self.name} from_father_budget {from_father_budget} => {self.device_phase_amps_budget}")
 
         return self.device_phase_amps_budget
 

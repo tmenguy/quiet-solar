@@ -136,11 +136,13 @@ class LoadConstraint(object):
         if self.is_constraint_active_for_time_period(time) is False:
             return 0.0
 
-        min_p, _ = self.load.get_min_max_power()
+        min_p, max_p = self.load.get_min_max_power()
 
         if self.end_of_constraint == DATETIME_MAX_UTC:
             # no timed hard constraint ... no need to have a high importance
             return min_p
+        elif self.as_fast_as_possible:
+            return max_p
         else:
             td = self.end_of_constraint - time
 
@@ -475,7 +477,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if self.load.is_cmd_compatible_with_load_budget(cmd):
                 out_sorted_commands.append(copy_command(cmd))
             else:
-                _LOGGER.info(f"adapt_power_steps_budgeting: removed {cmd} for {self.load.name}")
+                _LOGGER.info(f"adapt_power_steps_budgeting: removed {cmd} for {self.load.name} {self.load.device_phase_amps_budget}")
 
         if len(out_sorted_commands) > 0:
             min_power = out_sorted_commands[0].power_consign

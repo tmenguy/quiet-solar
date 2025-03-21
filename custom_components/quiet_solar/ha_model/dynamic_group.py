@@ -83,6 +83,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None = None) -> float:
 
+
+        init_from_father_budget = from_father_budget
         if from_father_budget is None:
             from_father_budget = self.dyn_group_max_phase_current
         else:
@@ -90,6 +92,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         if from_father_budget is None:
             from_father_budget = 1e9 # a lot of amps :)
+
+        _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget}")
 
         self.device_phase_amps_budget = from_father_budget
 
@@ -146,17 +150,19 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         if current_budget_spend > from_father_budget:
             # ouch bad we are already over budget ....
-            _LOGGER.info(f"QSDynamicGroup {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
+            _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
             current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
             if current_budget_spend > from_father_budget:
                 _LOGGER.info(
-                    f"QSDynamicGroup {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
+                    f"allocate_phase_amps_budget for a group: {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
 
         # everyone has its minimum already allocated
         if current_budget_spend < from_father_budget:
             # ok let's put the rest of the budget on the loads if they can get it
             budget_to_allocate = from_father_budget - current_budget_spend
+
+            _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} : budget_to_allocate {budget_to_allocate}")
 
             clusters = [budget_as_fast_cluster, None, budget_to_be_done_cluster, budget_optional_cluster]
 
@@ -171,7 +177,6 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                     continue
 
                 do_spread = True
-
                 while do_spread:
                     one_modif = False
                     for c_budget in cluster_budget["budgets"]:
@@ -180,7 +185,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
                         if c_budget["current_budget"] < c_budget["max_amp"]:
                             # 1 amp per one amp budget adaptation ... but relative to the cluster needs
-                            delta_budget = min(min(c_budget["max_amp"] - c_budget["current_budget"], (1.0*c_budget["needed_amp"])/(cluster_budget["sum_needed"])), budget_to_allocate)
+                            delta_budget = min(min(c_budget["max_amp"] - c_budget["current_budget"], 1), budget_to_allocate)
                             c_budget["current_budget"] += delta_budget
                             budget_to_allocate -= delta_budget
                             current_budget_spend += delta_budget
@@ -232,6 +237,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                             # ok we will need to redo the fast cluster
                             budget_as_fast_cluster["name"] = "as_fast_redone"
                             clusters[1] = budget_as_fast_cluster
+                            _LOGGER.info(f"allocate_phase_amps_budget REDO for fast")
 
                 if budget_to_allocate <= 0.0001:
                     break
@@ -247,13 +253,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
         if allocated_final_budget > from_father_budget:
-            _LOGGER.warning(f"QSDynamicGroup {self.name} allocated more than allowed last resort shaving {allocated_final_budget} > {from_father_budget}")
+            _LOGGER.warning(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed last resort shaving {allocated_final_budget} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
             new_current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
 
             if new_current_budget_spend > from_father_budget:
-                _LOGGER.error(f"QSDynamicGroup {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
-                raise ValueError(f"QSDynamicGroup {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
+                _LOGGER.error(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
+                raise ValueError(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
             else:
                 allocated_final_budget = 0
                 for c_budget in budgets:
@@ -261,6 +267,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
         self.device_phase_amps_budget = allocated_final_budget
+
+        _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget} => {allocated_final_budget}")
+
         return allocated_final_budget
 
     def _shave_phase_amps_clusters(self, cluster_list_to_shave, current_budget_spend, from_father_budget):
