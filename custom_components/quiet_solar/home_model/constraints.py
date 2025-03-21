@@ -474,6 +474,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         for cmd in self._power_sorted_cmds:
             if self.load.is_cmd_compatible_with_load_budget(cmd):
                 out_sorted_commands.append(copy_command(cmd))
+            else:
+                _LOGGER.info(f"adapt_power_steps_budgeting: removed {cmd} for {self.load.name}")
 
         if len(out_sorted_commands) > 0:
             min_power = out_sorted_commands[0].power_consign

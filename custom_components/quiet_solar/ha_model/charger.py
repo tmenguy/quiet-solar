@@ -1270,6 +1270,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def set_user_selected_car_by_name(self, time:datetime, car_name: str):
         self._user_attached_car_name = car_name
         if self._user_attached_car_name != self.get_current_selected_car_option():
+            self.detach_car()
             if await self.check_load_activity_and_constraints(time):
                 self.home.force_next_solve()
 
@@ -1577,6 +1578,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def update_power_steps(self):
         if self.car:
             power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+
+            _LOGGER.info(f"update_power_steps: {self.car.name} {power_steps} {min_charge}/{max_charge}")
+
             steps = []
             for a in range(min_charge, max_charge + 1):
                 steps.append(copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=power_steps[a], phase_current=float(a)))
