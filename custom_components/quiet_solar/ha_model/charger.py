@@ -1578,9 +1578,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def update_power_steps(self):
         if self.car:
             power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.device_is_3p)
-
             _LOGGER.info(f"update_power_steps: {self.car.name} {power_steps} {min_charge}/{max_charge}")
-
             steps = []
             for a in range(min_charge, max_charge + 1):
                 steps.append(copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=power_steps[a], phase_current=float(a)))
