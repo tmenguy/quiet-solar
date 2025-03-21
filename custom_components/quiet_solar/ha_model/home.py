@@ -492,7 +492,7 @@ class QSHome(QSDynamicGroup):
         self._name_to_groups = {}
         for group in self._all_dynamic_groups:
             self._name_to_groups[group.name] = group
-            self._childrens = []
+            group._childrens = []
 
         for group in self._all_dynamic_groups:
             if self != group:
