@@ -261,6 +261,7 @@ class QSChargerGroup(object):
         self.dynamic_group : QSDynamicGroup = dynamic_group
         self._chargers : list[QSChargerGeneric] = []
         self.home = dynamic_group.home
+        self.name = dynamic_group.name
         self.remaining_budget_to_apply = []
         self.know_reduced_state = None
         self.know_reduced_state_real_power = None
@@ -555,10 +556,13 @@ class QSChargerGroup(object):
 
         if alloted_amps > self.dynamic_group.dyn_group_max_phase_current:
             # ok we know it is possible to shave to reach the max phase current, due to the preparation before
+            _LOGGER.info(f"budgeting_algorithm_minimize_diffs:  group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}")
             for allow_state_change in [False, True]:
                 for cs in actionable_chargers:
                     next_amp = cs.can_decrease_budget(allow_state_change=allow_state_change)
                     if next_amp is not None:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs:  shaving {cs.charger.name} from {cs.budgeted_amp} to {next_amp}")
                         alloted_amps += next_amp - cs.budgeted_amp
                         cs.budgeted_amp = next_amp
 

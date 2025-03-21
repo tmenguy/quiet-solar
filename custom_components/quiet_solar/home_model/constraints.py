@@ -521,7 +521,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.as_fast_as_possible:
 
             # fill with the best (more power) possible commands
-            _LOGGER.info(f"compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added} {power_sorted_cmds}")
 
             as_fast_power = -1
             as_fast_cmd_idx = None
@@ -536,6 +535,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                            new_type=CMD_AUTO_FROM_CONSIGN.command)
             else:
                 as_fast_cmd = copy_command(power_sorted_cmds[as_fast_cmd_idx])
+
+            _LOGGER.info(
+                f"compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added} {as_fast_cmd} {power_sorted_cmds}")
 
             for i in range(first_slot, last_slot + 1):
 
