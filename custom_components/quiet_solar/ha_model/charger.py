@@ -86,6 +86,8 @@ CHARGER_STATE_REFRESH_INTERVAL = 3
 CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 12
 
+CAR_CHARGER_LONG_RELATIONSHIP = 60*5
+
 STATE_CMD_RETRY_NUMBER = 3
 STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
 
@@ -1151,6 +1153,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         best_score = 0
         best_car = None
 
+        charger_plugged_duration = None
 
         for car in self.home._cars:
 
@@ -1163,7 +1166,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 continue
 
             if (existing_charger and
-                    time - existing_charger.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
+                    time - existing_charger.car_attach_time > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP)):
                 # this car is already attached to another charger, for a long enough time,.. it is not a candidate
                 if existing_charger == self:
                     # the current charger has been connected to this car for a long time, we can keep it?
@@ -1176,6 +1179,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if existing_charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
                         continue
 
+
             score_plug_bump = 0
             car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_plug_res:
@@ -1184,6 +1188,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 car_plug_res = car.is_car_plugged(time=time)
                 if car_plug_res:
                     score_plug_bump = 2
+
+            compatible_plug_time = None
+            if car_plug_res:
+                if charger_plugged_duration is None:
+                    charger_plugged_duration = self.get_continuous_plug_duration(time)
+
+                car_plugged_duration = car.get_continuous_plug_duration(time)
+
+                if charger_plugged_duration is not None and car_plugged_duration is not None:
+                    # check they have been rougly connected at the same time
+                    if abs(charger_plugged_duration - car_plugged_duration) < CAR_CHARGER_LONG_RELATIONSHIP:
+                        compatible_plug_time = True
+                        score_plug_bump += 2
+                    else:
+                        compatible_plug_time = False
+
 
             score_dist_bump = 0
             if self.charger_latitude is not None and self.charger_longitude is not None:
@@ -1209,11 +1229,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 score_home_bump = 2
 
 
-            #TODO: we may want to check if in fsct the car plug and the charger plug has been happening around the same time
-            #if so the likeliness that it is the right car is very high, and we may not need the location at all!!!
-
-            if car_plug_res and car_home_res:
-                # only if plugged .... then if home
+            if car_plug_res and (car_home_res or compatible_plug_time):
+                # only if plugged .... then if home or a very compatible plug time
                 score = score_plug_bump + score_home_bump + score_dist_bump
 
                 if (existing_charger and existing_charger == self and
@@ -1402,7 +1419,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed forces constraint {force_constraint.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next full {self.is_next_charge_full()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
                 for ct in existing_constraints:
@@ -1650,6 +1667,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return None
         else:
             return contiguous_status >= for_duration and contiguous_status > 0
+
+
+    def get_continuous_plug_duration(self, time: datetime) -> float | None:
+
+        return self.get_last_state_value_duration(self._internal_fake_is_plugged_id,
+                                                  states_vals=[QSChargerStates.PLUGGED],
+                                                  num_seconds_before=None,
+                                                  time=time)
 
     def _check_plugged_val(self,
                            time: datetime,

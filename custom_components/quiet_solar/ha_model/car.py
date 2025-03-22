@@ -92,6 +92,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
 
+    def get_continuous_plug_duration(self, time:datetime) -> float | None:
+
+        if self.car_plugged is None:
+            return None
+
+        return self.get_last_state_value_duration(self.car_plugged,
+                                                  states_vals=["on"],
+                                                  num_seconds_before=None,
+                                                  time=time)
+
     def is_car_plugged(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
         if self.car_plugged is None:

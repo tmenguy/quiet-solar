@@ -565,13 +565,30 @@ class HADeviceMixin:
             # get latest values
             self.add_to_history(entity_id, time)
 
-        values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time,
-                                             keep_invalid_states=True)
+        from_idx = -1
+        if num_seconds_before is None:
+            values = self._entity_probed_state.get(entity_id, [])
 
-        if not values:
+            if values:
+                if time < values[0][0]:
+                    from_idx = -1
+                elif time == values[0][0]:
+                    from_idx = 0
+                else:
+
+                    if time >= values[-1][0]:
+                        from_idx = len(values) - 1
+                    else:
+                        from_idx = bisect_right(values, time, key=itemgetter(0))
+
+        else:
+            values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time, keep_invalid_states=True)
+            if values:
+                from_idx = len(values) - 1
+
+        if not values or from_idx < 0:
             return None
 
-        values.sort(key=itemgetter(0), reverse=True)
 
         state_status_duration = 0
 
@@ -581,9 +598,12 @@ class HADeviceMixin:
 
         all_invalid = True
 
-        for i, (ts, state, attr) in enumerate(values):
-            if i > 0:
-                next_ts = values[i - 1][0]
+        for i in range(from_idx, -1, -1):
+
+            ts, state, attr = values[i]
+
+            if i < from_idx:
+                next_ts = values[i + 1][0]
             else:
                 next_ts = time
 
@@ -603,7 +623,7 @@ class HADeviceMixin:
                 first_is_met = True
             else:
                 if state is not None and first_is_met is False:
-                    # if we have an incompatible non None state (ie not unknown or not availabe) first we do not count anything
+                    # if we have an incompatible non None state (ie not unknown or not available) first we do not count anything
                     # but we could start with a small unavailable hole of a None State
                     break
                 current_hole += delta_t
