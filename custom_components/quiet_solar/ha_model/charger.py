@@ -1155,6 +1155,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         charger_plugged_duration = None
 
+
         for car in self.home._cars:
 
             score = 0
@@ -1183,14 +1184,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             score_plug_bump = 0
             car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_plug_res:
-                score_plug_bump = 3
+                score_plug_bump = 1000
             elif car_plug_res is None:
                 car_plug_res = car.is_car_plugged(time=time)
                 if car_plug_res:
-                    score_plug_bump = 2
+                    score_plug_bump = 1000
 
-            compatible_plug_time = None
-            if car_plug_res:
+            score_plug_time_bump = 0
+            if score_plug_bump > 0:
                 if charger_plugged_duration is None:
                     charger_plugged_duration = self.get_continuous_plug_duration(time)
 
@@ -1199,45 +1200,38 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if charger_plugged_duration is not None and car_plugged_duration is not None:
                     # check they have been rougly connected at the same time
                     if abs(charger_plugged_duration - car_plugged_duration) < CAR_CHARGER_LONG_RELATIONSHIP:
-                        compatible_plug_time = True
-                        score_plug_bump += 2
-                    else:
-                        compatible_plug_time = False
+                        score_plug_time_bump = 100.0 + 100.0*(CAR_CHARGER_LONG_RELATIONSHIP - abs(charger_plugged_duration - car_plugged_duration))/CAR_CHARGER_LONG_RELATIONSHIP
 
+                if (existing_charger and existing_charger == self and
+                        time - self.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
+                    # the current charger has been connected to this car for a long time, we can keep it?
+                    score_plug_time_bump += 100.0
 
             score_dist_bump = 0
             if self.charger_latitude is not None and self.charger_longitude is not None:
-                max_dist = 50.0
+                max_dist = 50.0 # 50 meters
                 car_lat, car_long = car.get_car_coordinates(time)
                 if car_lat is not None and car_long is not None:
                     dist = haversine((self.charger_latitude, self.charger_longitude), (car_lat, car_long), unit=Unit.METERS)
                     _LOGGER.info(f"Car {car.name} distance to charger {self.name}: {dist}m")
                     if dist <= max_dist:
-                        score_dist_bump = 0.5*((max_dist - dist)/max_dist)
+                        score_dist_bump = 1.0 + 1.0*((max_dist - dist)/max_dist)
 
             score_home_bump = 0
             car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_home_res:
-                score_home_bump = 3
+                score_home_bump = 10
             elif car_home_res is None:
                 car_home_res = car.is_car_home(time=time)
                 if car_home_res:
-                    score_home_bump= 2
+                    score_home_bump = 10
 
             if score_dist_bump > 0 and score_home_bump == 0:
-                car_home_res = True
-                score_home_bump = 2
+                score_home_bump = 10
 
-
-            if car_plug_res and (car_home_res or compatible_plug_time):
+            if score_plug_bump > 0 and (score_home_bump > 0 or score_plug_time_bump > 0):
                 # only if plugged .... then if home or a very compatible plug time
-                score = score_plug_bump + score_home_bump + score_dist_bump
-
-                if (existing_charger and existing_charger == self and
-                        time - existing_charger.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
-                    # the current charger has been connected to this car for a long time, we can keep it?
-                    score = score + 2.5 # will max out all scores legs
-
+                score = score_plug_bump + score_plug_time_bump + score_home_bump + score_dist_bump
 
             if score > best_score:
                 best_car = car
