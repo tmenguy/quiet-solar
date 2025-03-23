@@ -39,6 +39,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         super().__init__(**kwargs)
 
+        self._conf_calendar = self.calendar
+
         self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
         self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
 
@@ -91,6 +93,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
+        self.calendar = self._conf_calendar
 
     def get_continuous_plug_duration(self, time:datetime) -> float | None:
 
