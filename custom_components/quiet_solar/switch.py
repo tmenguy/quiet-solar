@@ -208,18 +208,29 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
+        has_set = False
         if isinstance(self.device, QSChargerGeneric):
             if self.device.car is not None:
                 if self.device.car.car_default_charge == 100:
                     # force it at on in case the car wants a hundred anyway
                     self._attr_is_on = True
+                    has_set = True
 
+            if not has_set:
+                self._attr_is_on = self.device.is_next_charge_full()
+
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the zone on."""
         #await self.device.async_on()
         if isinstance(self.device, QSChargerGeneric):
-            await self.device.set_next_charge_full_or_not(True)
+            if self.device.car is not None:
+                if self.device.car.car_default_charge == 100:
+                    # no need to force the state of the charge here
+                    await self.device.set_next_charge_full_or_not(False)
+                else:
+                    await self.device.set_next_charge_full_or_not(True)
 
         self._attr_is_on = True
         self.async_write_ha_state()
@@ -228,14 +239,19 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         """Turn the zone off."""
         #await self.device.async_off()
         if isinstance(self.device, QSChargerGeneric):
-            if self.device.car is not None:
-                if self.device.car.car_default_charge == 100:
-                    return
-
-        if isinstance(self.device, QSChargerGeneric):
             await self.device.set_next_charge_full_or_not(False)
 
-        self._attr_is_on = False
+        has_set = False
+        if isinstance(self.device, QSChargerGeneric):
+            if self.device.car is not None:
+                if self.device.car.car_default_charge == 100:
+                    self._attr_is_on = True
+                    has_set = True
+
+
+        if not has_set:
+            self._attr_is_on = False
+
         self.async_write_ha_state()
 
     @property

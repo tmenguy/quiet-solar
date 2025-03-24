@@ -71,7 +71,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint
 from ..ha_model.car import QSCar
@@ -886,7 +886,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
             CONF_CAR_BATTERY_CAPACITY: 100000,
             CONF_CALENDAR: self.calendar,
-            CONF_DEVICE_EFFICIENCY: self.efficiency
+            CONF_DEVICE_EFFICIENCY: self.efficiency,
+            CONF_DEFAULT_CAR_CHARGE: 80.0
         }
 
         self._default_generic_car = QSCar(hass=self.hass, home=self.home, config_entry=None,
