@@ -263,7 +263,7 @@ class LoadConstraint(object):
         if self.load_param:
             prefix = f"{self.load_param}:"
 
-        return f"{prefix}{target_string} {target_date}{postfix}"
+        return f"{prefix} {target_string} {target_date}{postfix}"
 
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime | None = None) -> bool:
 
