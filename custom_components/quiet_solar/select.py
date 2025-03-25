@@ -11,10 +11,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from .entity import QSDeviceEntity
+from .ha_model.bistate_duration import QSBiStateDuration
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome, QSHomeMode
-from .ha_model.on_off_duration import QSOnOffDuration, QSOnOffMode
+
 from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN, CHARGER_NO_CAR_CONNECTED,
@@ -43,16 +44,16 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
 
 
 
-def create_ha_select_for_QSOnOffDuration(device: QSOnOffDuration):
+def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
     entities = []
 
-    on_off_mode_description = QSSelectEntityDescription(
-        key="on_off_mode",
-        translation_key="on_off_mode",
-        options= list(map(str, QSOnOffMode)),
-        qs_default_option=QSOnOffMode.ON_OFF_MODE_AUTO.value
+    bistate_mode_description = QSSelectEntityDescription(
+        key="bistate_mode",
+        translation_key=device.get_select_translation_key(),
+        options= device.get_bistate_modes(),
+        qs_default_option="bistate_mode_default"
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=on_off_mode_description))
+    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
 
     return entities
 
@@ -64,7 +65,7 @@ def create_ha_select_for_QSHome(device: QSHome):
         key="home_mode",
         translation_key="home_mode",
         options= list(map(str, QSHomeMode)),
-        qs_default_option=QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+        qs_default_option=str(QSHomeMode.HOME_MODE_SENSORS_ONLY.value)
     )
     entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
 
@@ -79,8 +80,8 @@ def create_ha_select(device: AbstractDevice):
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_select_for_QSCharger(device))
 
-    if isinstance(device, QSOnOffDuration):
-        ret.extend(create_ha_select_for_QSOnOffDuration(device))
+    if isinstance(device, QSBiStateDuration):
+        ret.extend(create_ha_select_for_QSBiStateDuration(device))
 
     if isinstance(device, QSHome):
         ret.extend(create_ha_select_for_QSHome(device))

@@ -9,10 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
-
-from .ha_model.charger import QSChargerGeneric
-from .ha_model.on_off_duration import QSOnOffDuration
-
+from .ha_model.bistate_duration import QSBiStateDuration
 from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
@@ -27,7 +24,7 @@ class QSNumberEntityDescription(NumberEntityDescription):
     qs_default_option:str | None  = None
 
 
-def create_ha_number_for_QSOnOffDuration(device: QSOnOffDuration):
+def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
     entities = []
 
     selected_car_description = QSNumberEntityDescription(
@@ -46,8 +43,8 @@ def create_ha_number_for_QSOnOffDuration(device: QSOnOffDuration):
 def create_ha_number(device: AbstractDevice):
     ret = []
 
-    if isinstance(device, QSOnOffDuration):
-        ret.extend(create_ha_number_for_QSOnOffDuration(device))
+    if isinstance(device, QSBiStateDuration):
+        ret.extend(create_ha_number_for_QSBiStateDuration(device))
 
     return ret
 

@@ -166,6 +166,24 @@
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
             },
+            "climate": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the climate (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the climate being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
+                    "climate": "Climate entity",
+                    "climate_hvac_off": "HVAC mode to be used when the climate is off",
+                    "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "climate_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
+                    "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+                    "name": "Name",
+                    "power": "Power of the climate (W)"
+                },
+                "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
+                "title": "A Climate duration based"
+            },
             "dynamic_group": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the Power Group (W, kW)",
@@ -250,6 +268,7 @@
                     "battery": "Add a Battery",
                     "car": "Add an electrical vehicle",
                     "charger": "Add an electrical vehicle charger",
+                    "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
                     "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
                     "home": "Create a Home",
                     "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
@@ -284,6 +303,20 @@
             }
         },
         "select": {
+            "climate_mode": {
+                "name": "Climate Mode",
+                "state": {
+                    "auto": "Force HVAC Mode AUTO",
+                    "bistate_mode_auto": "Auto",
+                    "bistate_mode_default": "Use Default",
+                    "cool": "Force HVAC Mode COOL",
+                    "dry": "Force HVAC Mode DRY",
+                    "fan_only": "Force HVAC Mode FAN ONLY",
+                    "heat": "Force HVAC Mode HEAT",
+                    "heat_cool": "Force HVAC Mode COOL/HEAT",
+                    "off": "Force HVAC Mode OFF"
+                }
+            },
             "home_mode": {
                 "name": "Home Quiet Solar Running Mode",
                 "state": {
@@ -297,8 +330,8 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "on_off_mode_auto": "Auto",
-                    "on_off_mode_default": "Use Default",
+                    "bistate_auto": "Auto",
+                    "bistate_default": "Use Default",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
                 }
@@ -313,6 +346,9 @@
             },
             "qs_constraint_sensor_charge": {
                 "name": "Next Charge"
+            },
+            "qs_constraint_sensor_climate": {
+                "name": "Next climate Change"
             },
             "qs_constraint_sensor_completion": {
                 "name": "Constraint % completion"
@@ -512,6 +548,24 @@
                 },
                 "description": "Wallbox based integration is up and running ...",
                 "title": "Edit your electrical vehicle Wallbox charger"
+            },
+            "climate": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the climate (W, kW)",
+                    "accurate_power_sensor_qs_reset_selector": "if selected reset to empty the above field",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the climate being on",
+                    "calendar_qs_reset_selector": "if selected reset to empty the above field",
+                    "climate": "Climate entity",
+                    "climate_hvac_off": "HVAC mode to be used when the climate is off",
+                    "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "climate_qs_reset_selector": "if selected reset to empty the above field",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
+                    "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+                    "name": "Name",
+                    "power": "Power of the climate (W)"
+                },
+                "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
+                "title": "A Climate duration based"
             },
             "dynamic_group": {
                 "data": {

@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
 )
 
 from awesomeversion import AwesomeVersion
-from homeassistant.const import __version__ as HAVERSION
+from homeassistant.const import __version__ as HAVERSION, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, \
     UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime
@@ -27,7 +27,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN, HVACMode
+
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
@@ -53,7 +54,9 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_DEFAULT, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
     CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
-    CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME
+    CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
+    CONF_CLIMATE_HVAC_MODE_ON
+from .ha_model.climate_controller import get_hvac_modes
 from .ha_model.home import QSHome
 
 _LOGGER = logging.getLogger(__name__)
@@ -895,6 +898,73 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                          add_power_group_selector=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
+
+
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(
+            step_id=TYPE,
+            data_schema=schema
+        )
+
+    async def async_step_climate(self, user_input=None):
+
+        TYPE = "climate"
+
+        orig_climate_entity = self.config_entry.data.get(CONF_CLIMATE)
+
+        if user_input is not None:
+            #do some stuff to update
+            if "force_climate" in user_input:
+                pass
+            else:
+                if (user_input.get(CONF_CLIMATE) != orig_climate_entity or
+                        user_input.get(CONF_CLIMATE_HVAC_MODE_OFF) is None or
+                        user_input.get(CONF_CLIMATE_HVAC_MODE_ON) is None):
+                    # we need to force to come back to reselect the hvac modes
+                    self.config_entry.data = user_input
+                    return await self.async_step_climate({"force_climate": True})
+
+
+                r = await self.async_entry_next(user_input, TYPE)
+                return r
+
+        sc_dict = self.get_common_schema(type=TYPE,
+                                         add_power_value_selector=1000,
+                                         add_load_power_sensor=True,
+                                         add_calendar=True,
+                                         add_boost_only=True,
+                                         add_power_group_selector=True)
+
+        self.add_entity_selector(sc_dict, CONF_CLIMATE, True, domain=[CLIMATE_DOMAIN])
+
+        climate_entity = self.config_entry.data.get(CONF_CLIMATE)
+
+        if climate_entity is not None:
+
+            hvac_modes = get_hvac_modes(self.hass, climate_entity)
+
+            sc_dict.update({
+                vol.Required(CONF_CLIMATE_HVAC_MODE_OFF,
+                             default=self.config_entry.data.get(CONF_CLIMATE_HVAC_MODE_OFF)):
+                    SelectSelector(
+                        SelectSelectorConfig(
+                            options=hvac_modes,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+            })
+            sc_dict.update({
+                vol.Required(CONF_CLIMATE_HVAC_MODE_ON,
+                             default=self.config_entry.data.get(CONF_CLIMATE_HVAC_MODE_ON)):
+                    SelectSelector(
+                        SelectSelectorConfig(
+                            options=hvac_modes,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+            })
 
 
 

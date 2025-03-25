@@ -9,9 +9,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
-
+from .ha_model.bistate_duration import QSBiStateDuration
 from .ha_model.charger import QSChargerGeneric
-from .ha_model.on_off_duration import QSOnOffDuration
+
 
 from .home_model.load import AbstractDevice
 from .const import (
@@ -37,7 +37,7 @@ def create_ha_time_for_QSCharger(device: QSChargerGeneric):
     entities.append(QSBaseTime(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
-def create_ha_time_for_QSOnOffDuration(device: QSOnOffDuration):
+def create_ha_time_for_QSBiStateDuration(device: QSBiStateDuration):
     entities = []
 
     selected_car_description = QSTimeEntityDescription(
@@ -54,8 +54,8 @@ def create_ha_time(device: AbstractDevice):
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_time_for_QSCharger(device))
 
-    if isinstance(device, QSOnOffDuration):
-        ret.extend(create_ha_time_for_QSOnOffDuration(device))
+    if isinstance(device, QSBiStateDuration):
+        ret.extend(create_ha_time_for_QSBiStateDuration(device))
 
     return ret
 

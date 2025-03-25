@@ -6,12 +6,12 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity, async_generate_entity_id
 
+from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.dynamic_group import QSDynamicGroup
 from .ha_model.home import QSHome
 from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
-from .ha_model.fp_heater import QSFPHeater
 from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
@@ -31,6 +31,7 @@ LOAD_TYPES = {
     "car": QSCar,
     "pool": QSPool,
     "on_off_duration": QSOnOffDuration,
+    "climate": QSClimateDuration,
     "dynamic_group": QSDynamicGroup
 }
 
@@ -45,6 +46,7 @@ LOAD_NAMES = {
     "car" : "car",
     "pool":"pool",
     "on_off_duration": "on/off",
+    "climate":"climate",
     "dynamic_group":"group"
 }
 

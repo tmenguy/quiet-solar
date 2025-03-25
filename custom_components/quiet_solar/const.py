@@ -42,7 +42,9 @@ CONF_BATTERY_MAX_CHARGE_POWER_NUMBER = "battery_max_charge_power_number"
 CONF_BATTERY_MIN_CHARGE_PERCENT = "battery_min_charge_percent_value"
 CONF_BATTERY_MAX_CHARGE_PERCENT = "battery_max_charge_percent_value"
 
-
+CONF_CLIMATE = "climate"
+CONF_CLIMATE_HVAC_MODE_ON = "climate_hvac_on"
+CONF_CLIMATE_HVAC_MODE_OFF = "climate_hvac_off"
 
 CONF_DYN_GROUP_MAX_PHASE_AMPS = "dyn_group_max_phase_amps"
 
@@ -113,6 +115,7 @@ SENSOR_CONSTRAINT_SENSOR_ENERGY = "qs_constraint_sensor_energy"
 SENSOR_CONSTRAINT_SENSOR_COMPLETION = "qs_constraint_sensor_completion"
 SENSOR_CONSTRAINT_SENSOR_CHARGE = "qs_constraint_sensor_charge"
 SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
+SENSOR_CONSTRAINT_SENSOR_CLIMATE = "qs_constraint_sensor_climate"
 SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 
 QSForecastHomeNonControlledSensors = {

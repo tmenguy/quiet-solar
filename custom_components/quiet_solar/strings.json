@@ -21,6 +21,7 @@
           "car": "Add an electrical vehicle",
           "pool": "Add a pool",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
+          "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
           "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)"
         }
       },
@@ -244,6 +245,25 @@
           "accurate_power_sensor": "Power sensor of the load (W, kW)",
           "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+          "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
+
+        }
+      },
+      "climate": {
+        "title": "A Climate duration based",
+        "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
+        "data": {
+          "name": "Name",
+          "dynamic_group_name" : "Add to a load group to limit the amps",
+          "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+          "climate": "Climate entity",
+          "climate_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "climate_hvac_on": "HVAC mode to be used when the climate is on",
+          "climate_hvac_off": "HVAC mode to be used when the climate is off",
+          "power": "Power of the climate (W)",
+          "accurate_power_sensor": "Power sensor of the climate (W, kW)",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the climate being on",
           "calendar_qs_reset_selector": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_qs_reset_selector%]"
 
         }
@@ -486,6 +506,24 @@
           "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar_qs_reset_selector%]"
         }
       },
+      "climate": {
+        "title": "[%key:component::quiet_solar::config::step::climate::title%]",
+        "description": "[%key:component::quiet_solar::config::step::climate::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::climate::data::name%]",
+          "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::climate::data::dynamic_group_name%]",
+          "load_is_boost_only": "[%key:component::quiet_solar::config::step::climate::data::load_is_boost_only%]",
+          "climate": "[%key:component::quiet_solar::config::step::climate::data::climate%]",
+          "climate_qs_reset_selector": "[%key:component::quiet_solar::config::step::climate::data::climate_qs_reset_selector%]",
+          "climate_hvac_on": "[%key:component::quiet_solar::config::step::climate::data::climate_hvac_on%]",
+          "climate_hvac_off": "[%key:component::quiet_solar::config::step::climate::data::climate_hvac_off%]",
+          "power": "[%key:component::quiet_solar::config::step::climate::data::power%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::climate::data::accurate_power_sensor%]",
+          "accurate_power_sensor_qs_reset_selector": "[%key:component::quiet_solar::config::step::climate::data::accurate_power_sensor_qs_reset_selector%]",
+          "calendar" : "[%key:component::quiet_solar::config::step::climate::data::calendar%]",
+          "calendar_qs_reset_selector" : "[%key:component::quiet_solar::config::step::climate::data::calendar_qs_reset_selector%]"
+        }
+      },
       "dynamic_group": {
         "title": "[%key:component::quiet_solar::config::step::dynamic_group::title%]",
         "description": "[%key:component::quiet_solar::config::step::dynamic_group::description%]",
@@ -516,6 +554,9 @@
       },
       "qs_constraint_sensor_on_off": {
         "name": "Next ON/OFF"
+      },
+      "qs_constraint_sensor_climate": {
+        "name": "Next climate Change"
       },
       "qs_constraint_sensor_pool": {
         "name": "Next Pool filter"
@@ -566,9 +607,23 @@
         "name": "ON/OFF Load Mode",
         "state": {
           "on_off_mode_off": "Force OFF",
-          "on_off_mode_auto": "Auto",
-          "on_off_mode_default": "Use Default",
+          "bistate_auto": "Auto",
+          "bistate_default": "Use Default",
           "on_off_mode_on": "Force ON"
+        }
+      },
+      "climate_mode": {
+        "name": "Climate Mode",
+        "state": {
+          "bistate_mode_auto": "Auto",
+          "bistate_mode_default": "Use Default",
+          "off": "Force HVAC Mode OFF",
+          "heat": "Force HVAC Mode HEAT",
+          "cool": "Force HVAC Mode COOL",
+          "heat_cool": "Force HVAC Mode COOL/HEAT",
+          "auto": "Force HVAC Mode AUTO",
+          "dry": "Force HVAC Mode DRY",
+          "fan_only": "Force HVAC Mode FAN ONLY"
         }
       },
       "home_mode": {
