@@ -68,7 +68,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         """ check the states of the switch to see if the command is set """
-        state = self.hass.states.get(self.bistate_entity) # may be faster to get the python entity object no?
+        state = self.hass.states.get(self.bistate_entity)
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             return None

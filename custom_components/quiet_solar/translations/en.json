@@ -330,8 +330,8 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "bistate_auto": "Auto",
-                    "bistate_default": "Use Default",
+                    "bistate_mode_auto": "Auto",
+                    "bistate_mode_default": "Use Default",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
                 }
