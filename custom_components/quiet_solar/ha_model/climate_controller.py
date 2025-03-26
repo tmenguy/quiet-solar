@@ -25,6 +25,9 @@ _LOGGER = logging.getLogger(__name__)
 class QSClimateDuration(QSBiStateDuration):
 
     def __init__(self, **kwargs):
+
+        kwargs["num_max_on_off"] = 8
+
         super().__init__(**kwargs)
 
         self.climate_entity = kwargs.pop(CONF_CLIMATE, None)
@@ -36,9 +39,6 @@ class QSClimateDuration(QSBiStateDuration):
         self._bistate_mode_off = self._state_off
         self.bistate_entity = self.climate_entity
 
-    def get_bistate_modes(self) -> list[str]:
-        return bistate_modes + [self._bistate_mode_on, self._bistate_mode_off]
-
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CLIMATE
 
@@ -46,7 +46,7 @@ class QSClimateDuration(QSBiStateDuration):
         """ return the translation key for the select """
         return "climate_mode"
 
-    async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
+    async def execute_command_system(self, time: datetime, command:LoadCommand) -> bool | None:
 
         if command.is_like(CMD_ON):
             hvac_mode = self._bistate_mode_on

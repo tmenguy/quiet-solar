@@ -543,7 +543,6 @@ class QSHome(QSDynamicGroup):
             return
 
         # check for active loads
-        # for now we just check if a charger is plugged in
         for load in self._all_loads:
             if await load.do_run_check_load_activity_and_constraints(time):
                 self.force_next_solve()

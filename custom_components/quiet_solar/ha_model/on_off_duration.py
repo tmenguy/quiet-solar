@@ -28,7 +28,7 @@ class QSOnOffDuration(QSBiStateDuration):
         """ return the translation key for the select """
         return "on_off_mode"
 
-    async def execute_command(self, time: datetime, command:LoadCommand) -> bool | None:
+    async def execute_command_system(self, time: datetime, command:LoadCommand) -> bool | None:
         if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
         elif command.is_off_or_idle():
