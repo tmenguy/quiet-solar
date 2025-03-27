@@ -1500,7 +1500,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if realized_charge_target is None:
                     # make car charging bigger than the battery filling if it is the only car constraint
-                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    # well no rally after battery in fact
+                    type = CONSTRAINT_TYPE_FILLER_AUTO # CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                     realized_charge_target = car_initial_percent
                 else:
                     #there was already a charge before and it is not full ... try solar only
