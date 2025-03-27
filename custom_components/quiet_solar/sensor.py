@@ -21,7 +21,7 @@ from .const import (
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
     QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
-    HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION,
+    HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -42,13 +42,23 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
 def create_ha_sensor_for_Load(device: AbstractLoad):
     entities = []
 
-    home_available_power = QSSensorEntityDescription(
+    load_current_command = QSSensorEntityDescription(
         key="load_current_command",
         translation_key=SENSOR_LOAD_CURRENT_COMMAND,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda device, key: "NO CMD" if device.current_command is None else device.current_command.command,
     )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_available_power))
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    if device.load_is_auto_to_be_boosted:
+        # add hare a sensor to know if the load has been ovreriden externally
+        load_override_state = QSSensorEntityDescription(
+            key="load_override_state",
+            translation_key=SENSOR_LOAD_OVERRIDE_STATE,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key: device.get_override_state(),
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_override_state))
 
 
     if isinstance(device, HADeviceMixin) and isinstance(device, AbstractLoad):

@@ -106,7 +106,7 @@ SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
 SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"
 FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "sensor."+SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
 SENSOR_LOAD_CURRENT_COMMAND = "qs_load_current_command_sensor"
-
+SENSOR_LOAD_OVERRIDE_STATE = "qs_load_override_state_sensor"
 
 SENSOR_LOAD_BEST_POWER_VALUE = "qs_load_best_power_value"
 SENSOR_CONSTRAINT_SENSOR = "qs_constraint_sensor"

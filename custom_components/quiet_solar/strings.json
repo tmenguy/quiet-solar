@@ -543,6 +543,9 @@
       "qs_load_current_command_sensor": {
         "name": "Load Current Command"
       },
+      "qs_load_override_state_sensor": {
+        "name": "Load External Override"
+      },
       "qs_load_best_power_value": {
         "name": "QS Load Power Value"
       },

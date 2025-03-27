@@ -38,10 +38,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self._bistate_mode_off = "bistate_mode_off"
         self.bistate_entity = self.switch_entity
 
-        self.external_user_initiated_state: str | None = None
-        self.external_user_initiated_state_time : datetime | None = None
-
-
 
 
     def get_bistate_modes(self) -> list[str]:
@@ -135,8 +131,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                     # One of the questions here is : should we do that only if the user wanted a state that is not the
                     # OFF state ? or should we do that for any state ?
-                    if expected_state == self._state_off:
+                    if state.state == self._state_off or state.state == 'off':
+                        # back to an "idle" state ...we can say that the override from external is finished
+                        need_reset = True
+                    elif expected_state == self._state_off:
                         # ok we are in the case where the user has changed the state of the load "outside" the system
+                        # to another state than the "off" state we handle
                         need_reset = False
                         if self.external_user_initiated_state is None:
                             # we need to remember the state and the time

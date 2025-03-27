@@ -279,6 +279,8 @@ class AbstractLoad(AbstractDevice):
         self.switch_entity = kwargs.pop(CONF_SWITCH, None)
         self.power_use = kwargs.pop(CONF_POWER, None)
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
+        self.external_user_initiated_state: str | None = None
+        self.external_user_initiated_state_time : datetime | None = None
 
         super().__init__(**kwargs)
 
@@ -294,6 +296,11 @@ class AbstractLoad(AbstractDevice):
         self._last_constraint_update: datetime|None = None
         self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
+
+    def get_override_state(self):
+        if self.external_user_initiated_state is None:
+            return "NO OVERRIDE"
+        return f"Override: {self.external_user_initiated_state}"
 
 
     def is_consumption_optional(self, time:datetime) -> bool:
