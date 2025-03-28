@@ -26,8 +26,6 @@ class QSClimateDuration(QSBiStateDuration):
 
     def __init__(self, **kwargs):
 
-        kwargs["num_max_on_off"] = 8
-
         super().__init__(**kwargs)
 
         self.climate_entity = kwargs.pop(CONF_CLIMATE, None)

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_DEVICE_DYNAMIC_GROUP_NAME
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_NUM_MAX_ON_OFF
 
 import slugify
 
@@ -47,7 +47,7 @@ class AbstractDevice(object):
 
         self._ack_command(None, None)
 
-        self.num_max_on_off = kwargs.pop("num_max_on_off", None)
+        self.num_max_on_off = kwargs.pop(CONF_NUM_MAX_ON_OFF, None)
         if self.num_max_on_off is not None:
             if self.num_max_on_off % 2 == 1:
                 self.num_max_on_off += 1
@@ -158,9 +158,9 @@ class AbstractDevice(object):
 
         if command is not None and time is not None and self.prev_command is not None:
             do_count = False
-            if command.is_off_or_idle() and self.prev_command.is_like(CMD_ON):
+            if command.is_off_or_idle() and not self.prev_command.is_off_or_idle():
                 do_count = True
-            elif command.is_like(CMD_ON) and self.prev_command.is_off_or_idle():
+            elif not command.is_off_or_idle() and self.prev_command.is_off_or_idle():
                 do_count = True
 
             if do_count:

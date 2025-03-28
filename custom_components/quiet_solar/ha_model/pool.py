@@ -23,11 +23,8 @@ class QSPool(QSOnOffDuration):
 
         self.qs_pool_force_winter_mode = False
 
-        kwargs["num_max_on_off"] = 8
 
         super().__init__(**kwargs)
-
-
 
         self.attach_ha_state_to_probe(self.pool_temperature_sensor,
                                       is_numerical=True)

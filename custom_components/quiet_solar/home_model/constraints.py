@@ -409,55 +409,95 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         empty_cmds = []
         current_empty = None
 
+        start_witch_switch = False
+
         if len(out_commands) > 0:
 
-            #do not add the first empty : no merge for first and end
-            #if out_commands[0] is None:
-            #    current_empty = [0,0]
+            if self.load and self.load.current_command and not self.load.current_command.is_off_or_idle():
+                prev_cmd = True
+
+
 
             for i, cmd in enumerate(out_commands):
                 if (cmd is None and prev_cmd is not None) or (cmd is not None and prev_cmd is None):
+                    if i == 0:
+                        start_witch_switch = True
                     num += 1
                     if cmd is None:
                         current_empty = [i,i]
                     else:
                         if current_empty is not None:
-                            current_empty[1] = i
+                            current_empty[1] = i - 1
                             empty_cmds.append(current_empty)
                             current_empty = None
 
                 prev_cmd = cmd
-            # do not add the last empty : no merge for first and end
-            #if current_empty is not None:
-            #    current_empty[1] = len(out_commands)
-            #    empty_cmds.append(current_empty)
 
-        return num, empty_cmds
+            if current_empty is not None:
+                current_empty[1] = len(out_commands) - 1
+                empty_cmds.append(current_empty)
+
+        return num, empty_cmds, start_witch_switch
 
 
     def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, nrj_to_be_added):
 
         if self.load.num_max_on_off is not None and self.support_auto is False:
-            num_command_state_change, inner_empty_cmds = self._num_command_state_change(out_commands)
+            num_command_state_change, inner_empty_cmds, start_witch_switch = self._num_command_state_change(out_commands)
             num_allowed_switch = self.load.num_max_on_off - self.load.num_on_off
+            num_removed = 0
+
+            _LOGGER.info(f"Probe commands for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off}")
+
             if num_command_state_change > num_allowed_switch:
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
 
+                if start_witch_switch:
+                    # we are starting with a switch...can we try to not do it?
+                    if inner_empty_cmds[0] == 0:
+                        # we start by a empty : do we need to stay on?
+                        rge = [0, inner_empty_cmds[0][1]]
+                        cmd_to_push = copy_command(self._power_sorted_cmds[0])
+                    else:
+                        # we start by a true command, do we want to continue to be stopped?
+                        rge = [0, inner_empty_cmds[0][0]]
+                        cmd_to_push = None
+
+                    durations_s = 0
+                    for i in range(rge[0], rge[1]+1):
+                        durations_s += power_slots_duration_s[i]
+
+                    if durations_s < 15*60:
+                        # we can remove the first empty command
+                        num_command_state_change -= 1
+                        num_removed += 1
+
+                        for i in range(rge[0], rge[1]+1):
+                            out_commands[i] = cmd_to_push
+
+                            if cmd_to_push is None:
+                                nrj_to_be_added += (out_power[i] * power_slots_duration_s[i]) / 3600.0
+                                out_power[i] = 0
+                            else:
+                                out_power[i] = cmd_to_push.power_consign
+                                nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
+
+                        if inner_empty_cmds[0] == 0:
+                            # ok done ... we have removed the first empty command
+                            inner_empty_cmds.pop(0)
 
                 for empty_cmd in inner_empty_cmds:
                     empty_cmd.append(0)
-                    for i in range(empty_cmd[0], empty_cmd[1]):
+                    for i in range(empty_cmd[0], empty_cmd[1]+1):
                         empty_cmd[2] += power_slots_duration_s[i]
 
                 #removed the smallest holes first
-                inner_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
+                sorted_inner_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
 
-                num_removed = 0
-
-                for empty_cmd in inner_empty_cmds:
+                for empty_cmd in sorted_inner_empty_cmds:
                     num_removed += 1
-                    for i in range(empty_cmd[0], empty_cmd[1]):
+                    for i in range(empty_cmd[0], empty_cmd[1]+1):
                         out_commands[i] = copy_command(self._power_sorted_cmds[0])
                         out_power[i] = out_commands[i].power_consign
                         nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
@@ -718,7 +758,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     else:
                         fill_power_idx = 0
 
-                    # used to spread the commands : be a bit conservative on teh spanning and use fill_power_aggressive_idx for the commands
+                    # used to spread the commands : be a bit conservative on the spanning and use fill_power_aggressive_idx for the commands
                     price_power = power_sorted_cmds[fill_power_idx].power_consign
 
                     if self.support_auto:

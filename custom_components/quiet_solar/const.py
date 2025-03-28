@@ -21,6 +21,7 @@ CONF_IS_3P = "device_is_3p"
 CONF_LOAD_IS_BOOST_ONLY = "load_is_boost_only"
 CONF_DEVICE_EFFICIENCY = "device_efficiency"
 CONF_DEVICE_DYNAMIC_GROUP_NAME = "dynamic_group_name"
+CONF_NUM_MAX_ON_OFF = "num_max_on_off"
 
 CONF_HOME_VOLTAGE = "home_voltage"
 

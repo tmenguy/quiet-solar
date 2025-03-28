@@ -44,7 +44,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
     CONF_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, \
-    CONF_ACCURATE_POWER_SENSOR, \
+    CONF_ACCURATE_POWER_SENSOR, CONF_NUM_MAX_ON_OFF,\
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
@@ -159,9 +159,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 key_sc = vol.Optional(key)
         else:
             if is_required:
-                key_sc = vol.Required(key, default=default)
+                key_sc = vol.Required(key, description={"suggested_value": default})
             else:
-                key_sc = vol.Optional(key, default=default)
+                key_sc = vol.Optional(key, description={"suggested_value": default})
 
         if entity_list:
             vals_sc = selector.EntitySelector(
@@ -175,9 +175,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict[key_sc] = vals_sc
 
-        if is_required is False:
-            key_sc = vol.Optional(_get_reset_selector_entity_name(key), default=False, msg="Reset the entity selector", description="Reset the entity selector")
-            sc_dict[key_sc] = cv.boolean
+        # no need anymore .... solved by not doing default ... but description={"suggested_value": default}
+        # if is_required is False:
+        #    key_sc = vol.Optional(_get_reset_selector_entity_name(key), default=False, msg="Reset the entity selector", description="Reset the entity selector")
+        #    sc_dict[key_sc] = cv.boolean
 
 
     def get_common_schema(self,
@@ -192,6 +193,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_is_3p=False,
                           add_max_phase_amps_selector=None,
                           add_power_group_selector=False,
+                          add_max_on_off=False
                           ) -> dict:
 
         default_name = self.config_entry.data.get(CONF_NAME)
@@ -251,9 +253,22 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 cv.boolean,
             })
 
+        if add_max_on_off:
+            sc.update({
+                vol.Optional(CONF_NUM_MAX_ON_OFF,
+                             description={"suggested_value":self.config_entry.data.get(CONF_NUM_MAX_ON_OFF)}):
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+            })
+
         if add_power_value_selector:
 
-            sc.update({vol.Required(CONF_POWER, default=self.config_entry.data.get(CONF_POWER, add_power_value_selector)):
+            sc.update({vol.Required(CONF_POWER, description={"suggested_value":self.config_entry.data.get(CONF_POWER, add_power_value_selector)}):
             selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0,
@@ -265,7 +280,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if add_max_phase_amps_selector:
 
-            sc.update({vol.Optional(CONF_DYN_GROUP_MAX_PHASE_AMPS, default=self.config_entry.data.get(CONF_DYN_GROUP_MAX_PHASE_AMPS, add_max_phase_amps_selector)):
+            sc.update({vol.Optional(CONF_DYN_GROUP_MAX_PHASE_AMPS, description={"suggested_value":self.config_entry.data.get(CONF_DYN_GROUP_MAX_PHASE_AMPS, add_max_phase_amps_selector)}):
             selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0,
@@ -283,7 +298,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if add_efficiency_selector:
             sc.update({
-                vol.Optional(CONF_DEVICE_EFFICIENCY, default=self.config_entry.data.get(CONF_DEVICE_EFFICIENCY, 100)):
+                vol.Optional(CONF_DEVICE_EFFICIENCY, description={"suggested_value":self.config_entry.data.get(CONF_DEVICE_EFFICIENCY, 100)}):
             selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=1,
@@ -352,28 +367,28 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if self.config_entry.data.get(CONF_CHARGER_LATITUDE, None) is None:
             sc.update( {
                 vol.Optional(CONF_CHARGER_LATITUDE):
-                    vol.Coerce(float),
+                    vol.Maybe(vol.Coerce(float)),
             })
         else:
             sc.update( {
                 vol.Optional(CONF_CHARGER_LATITUDE, default=self.config_entry.data.get(CONF_CHARGER_LATITUDE)):
-                    vol.Coerce(float),
+                    vol.Maybe(vol.Coerce(float)),
             })
 
         if self.config_entry.data.get(CONF_CHARGER_LONGITUDE, None) is None:
 
             sc.update( {
                 vol.Optional(CONF_CHARGER_LONGITUDE):
-                    vol.Coerce(float),
+                    vol.Maybe(vol.Coerce(float)),
             })
         else:
             sc.update( {
                 vol.Optional(CONF_CHARGER_LONGITUDE, default=self.config_entry.data.get(CONF_CHARGER_LONGITUDE)):
-                    vol.Coerce(float),
+                    vol.Maybe(vol.Coerce(float)),
             })
 
         sc.update( {
-                    vol.Optional(CONF_CHARGER_MAX_CHARGE, default=self.config_entry.data.get(CONF_CHARGER_MAX_CHARGE, 32)):
+                    vol.Optional(CONF_CHARGER_MAX_CHARGE, description={"suggested_value":self.config_entry.data.get(CONF_CHARGER_MAX_CHARGE, 32)}):
                         selector.NumberSelector(
                             selector.NumberSelectorConfig(
                                 min=1,
@@ -382,7 +397,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                 unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                             )
                         ),
-                    vol.Optional(CONF_CHARGER_MIN_CHARGE, default=self.config_entry.data.get(CONF_CHARGER_MIN_CHARGE, 6)):
+                    vol.Optional(CONF_CHARGER_MIN_CHARGE, description={"suggested_value":self.config_entry.data.get(CONF_CHARGER_MIN_CHARGE, 6)}):
                         selector.NumberSelector(
                             selector.NumberSelectorConfig(
                                 min=1,
@@ -410,11 +425,14 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
     def clean_data(self, data):
         to_be_removed = []
         for k, v in data.items():
-            key_to_be_reset = _get_entity_key_from_selector_key(k)
-            if key_to_be_reset:
-                if v:
-                    to_be_removed.append(key_to_be_reset)
-                data[k] = False
+            if v is None:
+                to_be_removed.append(k)
+            else:
+                key_to_be_reset = _get_entity_key_from_selector_key(k)
+                if key_to_be_reset:
+                    if v:
+                        to_be_removed.append(key_to_be_reset)
+                    data[k] = False
         for k in to_be_removed:
             data.pop(k)
 
@@ -440,7 +458,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict.update(  {
 
-                vol.Optional(CONF_HOME_VOLTAGE, default=self.config_entry.data.get(CONF_HOME_VOLTAGE, 230)):
+                vol.Optional(CONF_HOME_VOLTAGE, description={"suggested_value":self.config_entry.data.get(CONF_HOME_VOLTAGE, 230)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -650,7 +668,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         sc_dict.update(
             {
 
-                vol.Optional(CONF_BATTERY_CAPACITY, default=self.config_entry.data.get(CONF_BATTERY_CAPACITY, 0)):
+                vol.Optional(CONF_BATTERY_CAPACITY, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_CAPACITY, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -658,7 +676,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfEnergy.WATT_HOUR,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MIN_CHARGE_PERCENT, default=self.config_entry.data.get(CONF_BATTERY_MIN_CHARGE_PERCENT, 0)):
+                vol.Optional(CONF_BATTERY_MIN_CHARGE_PERCENT, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MIN_CHARGE_PERCENT, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -669,7 +687,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     ),
                 vol.Optional(CONF_BATTERY_MAX_CHARGE_PERCENT,
-                             default=self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_PERCENT, 100)):
+                             description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_PERCENT, 100)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -680,7 +698,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     ),
                 vol.Optional(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
-                             default=self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)):
+                             description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -689,7 +707,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     ),
                 vol.Optional(CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
-                             default=self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)):
+                             description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -736,7 +754,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     #    self.config_entry, data=user_input, options=self.config_entry.options
                     #)
                     # or more simply:
-                    self.config_entry.data = user_input
+                    self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
+                    # self.config_entry.data = user_input
 
                     return await self.async_step_car({"force_dampening": True})
 
@@ -768,7 +787,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict.update(
             {
-                vol.Optional(CONF_CAR_BATTERY_CAPACITY, default=self.config_entry.data.get(CONF_CAR_BATTERY_CAPACITY, 0)):
+                vol.Optional(CONF_CAR_BATTERY_CAPACITY, description={"suggested_value":self.config_entry.data.get(CONF_CAR_BATTERY_CAPACITY, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -776,7 +795,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfEnergy.WATT_HOUR,
                         )
                     ),
-                vol.Optional(CONF_CAR_CHARGER_MIN_CHARGE, default=self.config_entry.data.get(CONF_CAR_CHARGER_MIN_CHARGE, 6)):
+                vol.Optional(CONF_CAR_CHARGER_MIN_CHARGE, description={"suggested_value": self.config_entry.data.get(CONF_CAR_CHARGER_MIN_CHARGE, 6)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -786,7 +805,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     ),
 
-                vol.Optional(CONF_CAR_CHARGER_MAX_CHARGE, default=self.config_entry.data.get(CONF_CAR_CHARGER_MAX_CHARGE, 32)):
+                vol.Optional(CONF_CAR_CHARGER_MAX_CHARGE, description={"suggested_value":self.config_entry.data.get(CONF_CAR_CHARGER_MAX_CHARGE, 32)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -795,7 +814,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                         )
                     ),
-                vol.Optional(CONF_DEFAULT_CAR_CHARGE, default=self.config_entry.data.get(CONF_DEFAULT_CAR_CHARGE, 100)):
+                vol.Optional(CONF_DEFAULT_CAR_CHARGE, description={"suggested_value":self.config_entry.data.get(CONF_DEFAULT_CAR_CHARGE, 100)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -820,9 +839,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             for a in range(int(min_charge), int(max_charge) + 1):
 
                 sc_dict[vol.Optional(f"charge_{a}",
-                     default=self.config_entry.data.get(f"charge_{a}", -1))] = selector.NumberSelector(
+                     description={"suggested_value":self.config_entry.data.get(f"charge_{a}")})] = selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=-1,
+                            min=0,
                             step=1,
                             mode=selector.NumberSelectorMode.BOX,
                             unit_of_measurement=UnitOfPower.WATT,
@@ -853,7 +872,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                          add_power_value_selector=1500,
                                          add_load_power_sensor=True,
                                          add_calendar=False,
-                                         add_power_group_selector=True)
+                                         add_power_group_selector=True,
+                                         add_max_on_off=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
@@ -865,7 +885,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         for min_temp, max_temp, default in POOL_TEMP_STEPS:
             sc_dict[vol.Optional(f"water_temp_{max_temp}",
-                                 default=self.config_entry.data.get(f"water_temp_{max_temp}", default))] = selector.NumberSelector(
+                                 description={"suggested_value":self.config_entry.data.get(f"water_temp_{max_temp}", default)})] = selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=-1,
                     step=1,
@@ -895,7 +915,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                          add_load_power_sensor=True,
                                          add_calendar=True,
                                          add_boost_only=True,
-                                         add_power_group_selector=True)
+                                         add_power_group_selector=True,
+                                         add_max_on_off=True)
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
@@ -935,7 +956,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                          add_load_power_sensor=True,
                                          add_calendar=True,
                                          add_boost_only=True,
-                                         add_power_group_selector=True)
+                                         add_power_group_selector=True,
+                                         add_max_on_off=True)
 
         self.add_entity_selector(sc_dict, CONF_CLIMATE, True, domain=[CLIMATE_DOMAIN])
 
