@@ -49,6 +49,7 @@ class AbstractDevice(object):
 
         self.num_max_on_off = kwargs.pop(CONF_NUM_MAX_ON_OFF, None)
         if self.num_max_on_off is not None:
+            self.num_max_on_off = int(self.num_max_on_off)
             if self.num_max_on_off % 2 == 1:
                 self.num_max_on_off += 1
 
