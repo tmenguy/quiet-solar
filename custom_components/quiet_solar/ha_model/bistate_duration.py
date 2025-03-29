@@ -127,14 +127,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # what were we expecting ?
                 expected_state = self.expected_state_from_command(self.current_command)
 
-                if state.state != expected_state:
+                # in all case if the equipmenet is switched off : reset
+                if state.state == self._state_off or state.state == 'off':
+                    need_reset = True
+                elif state.state != expected_state:
 
                     # One of the questions here is : should we do that only if the user wanted a state that is not the
                     # OFF state ? or should we do that for any state ?
-                    if state.state == self._state_off or state.state == 'off':
-                        # back to an "idle" state ...we can say that the override from external is finished
-                        need_reset = True
-                    elif expected_state == self._state_off:
+                    if expected_state == self._state_off:
                         # ok we are in the case where the user has changed the state of the load "outside" the system
                         # to another state than the "off" state we handle
                         need_reset = False
@@ -143,7 +143,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             self.external_user_initiated_state = state.state
                             self.external_user_initiated_state_time = time
                         elif self.external_user_initiated_state != state.state:
-                            # the state has changed, we need to reset the state
+                            # the state has changed, we need to set the state to the new external one
                             self.external_user_initiated_state = state.state
                             self.external_user_initiated_state_time = time
 
@@ -155,7 +155,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     self.external_user_initiated_state_time = None
 
 
-        if self.external_user_initiated_state_time is not None and time - self.external_user_initiated_state_time > timedelta(hours=4):
+        if self.external_user_initiated_state_time is not None and time - self.external_user_initiated_state_time > timedelta(hours=24):
             _LOGGER.info(f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
             # we need to reset the external user initiated state
             self.external_user_initiated_state = None
