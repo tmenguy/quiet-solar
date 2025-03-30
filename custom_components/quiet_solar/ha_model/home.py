@@ -502,7 +502,14 @@ class QSHome(QSDynamicGroup):
                 group.father_device = father
 
         for load in self._all_loads:
+            if isinstance(load, QSDynamicGroup):
+                continue
             father = self._name_to_groups.get(load.dynamic_group_name, self)
+            if load in father._childrens:
+                # already in the group
+                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in group {father.name}")
+                continue
+
             father._childrens.append(load)
             load.father_device = father
 
