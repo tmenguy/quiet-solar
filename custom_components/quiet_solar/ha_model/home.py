@@ -501,13 +501,22 @@ class QSHome(QSDynamicGroup):
                 father._childrens.append(group)
                 group.father_device = father
 
+
+        for load in self._all_loads:
+            if isinstance(load, QSDynamicGroup):
+                continue
+            load.father_device = None
+
         for load in self._all_loads:
             if isinstance(load, QSDynamicGroup):
                 continue
             father = self._name_to_groups.get(load.dynamic_group_name, self)
-            if load in father._childrens:
+            if load.father_device == father:
                 # already in the group
-                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in group {father.name}")
+                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in its froup {father.name}")
+                continue
+            if load.father_device is not None:
+                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in added elsewhere in {load.father_device} we wanted {father.name}")
                 continue
 
             father._childrens.append(load)
