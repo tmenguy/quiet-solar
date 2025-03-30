@@ -596,39 +596,39 @@ class QSChargerGroup(object):
         _LOGGER.info(
             f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, diff_amp_budget {diff_amp_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
+        # try first to stay on the same states fo the charger (no charge to stop or stop to charge) to adapt the power
+        # take a very incremental, one by one amp when increasing, decrease should be fast
         do_stop = False
-        for allow_state_change in [True]: # [False, True]: TODO NEED TO RESET BETWEEN THE TWO!!!
+        for allow_state_change in [False, True]:
             for cs in actionable_chargers:
                 if increase:
-                    next_budgeted_amp = cs.can_increase_budget(allow_state_change=allow_state_change)
+                    next_possible_budgeted_amp = cs.can_increase_budget(allow_state_change=allow_state_change)
                 else:
-                    next_budgeted_amp = cs.can_decrease_budget(allow_state_change=allow_state_change)
+                    next_possible_budgeted_amp = cs.can_decrease_budget(allow_state_change=allow_state_change)
 
-                if next_budgeted_amp is not None:
+                if next_possible_budgeted_amp is not None:
 
-                    diff_power = cs.get_diff_power(cs.budgeted_amp, next_budgeted_amp)
-                    diff_amp = next_budgeted_amp - cs.budgeted_amp
+                    diff_power = cs.get_diff_power(cs.budgeted_amp, next_possible_budgeted_amp)
+                    diff_amp = next_possible_budgeted_amp - cs.budgeted_amp
 
                     if increase:
                         if power_budget - diff_power >= 0:
                             # ok good change we still have some power to give
                             pass
                         else:
-                            next_budgeted_amp = None
+                            next_possible_budgeted_amp = None
 
                     if alloted_amps + diff_amp > self.dynamic_group.dyn_group_max_phase_current:
-                        next_budgeted_amp = None
+                        next_possible_budgeted_amp = None
 
-                    if next_budgeted_amp is not None:
+                    if next_possible_budgeted_amp is not None:
 
                         power_budget -= diff_power
                         alloted_amps += diff_amp
 
                         _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, new alloted_amps {alloted_amps}")
-                        cs.budgeted_amp = next_budgeted_amp
-
-
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, new alloted_amps {alloted_amps}")
+                        cs.budgeted_amp = next_possible_budgeted_amp
 
                         if stop_on_first_change:
                             do_stop = True
@@ -640,6 +640,9 @@ class QSChargerGroup(object):
 
                 if do_stop:
                     break
+
+            if do_stop:
+                break
 
         return True
 
@@ -1607,7 +1610,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return self._power_steps[0].power_consign, self._power_steps[-1].power_consign
 
-    def get_min_max_phase_amps(self) -> (float, float):
+    def get_min_max_phase_amps_for_budgeting(self) -> (float, float):
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            return self.min_charge/3.0, self.max_charge/3.0
         return self.min_charge, self.max_charge
 
     async def stop_charge(self, time: datetime):

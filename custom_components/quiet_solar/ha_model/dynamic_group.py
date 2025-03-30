@@ -2,6 +2,7 @@ import logging
 
 from datetime import datetime
 
+import math
 
 from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
 from ..ha_model.device import HADeviceMixin
@@ -25,13 +26,16 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self._childrens : list[AbstractDevice] = []
         self.charger_group = None
 
-
     @property
     def device_is_3p(self) -> bool:
+        if super().device_is_3p:
+            return True
+
         for device in self._childrens:
             if device.device_is_3p:
                 return True
         return False
+
 
     def get_min_max_power(self) -> (float, float):
         if len(self._childrens) == 0:
@@ -46,24 +50,31 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         return min_p, max_p
 
-    def get_min_max_phase_amps(self) -> (float, float):
+    def get_min_max_phase_amps_for_budgeting(self) -> (float, float):
         if len(self._childrens) == 0:
-            return super().get_min_max_phase_amps()
+            min_p, max_p =  super().get_min_max_phase_amps_for_budgeting()
+        else:
+            min_p = 1e12
+            max_p = 0
+            for device in self._childrens:
+                min_p_d, max_p_d = device.get_min_max_phase_amps_for_budgeting()
+                min_p = min(min_p, min_p_d)
+                max_p = max(max_p, max_p_d)
 
-        min_p = 1e12
-        max_p = 0
-        for device in self._childrens:
-            min_p_d, max_p_d = device.get_min_max_phase_amps()
-            min_p = min(min_p, min_p_d)
-            max_p = max(max_p, max_p_d)
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            min_p = min_p / 3.0
+            max_p = max_p / 3.0
 
         return min_p, max_p
 
-    def get_evaluated_needed_phase_amps(self, time:datetime) -> float:
+    def get_evaluated_needed_phase_amps_for_budgeting(self, time:datetime) -> float:
 
         device_needed_amp = 0.0
         for device in self._childrens:
-            device_needed_amp += device.get_evaluated_needed_phase_amps(time)
+            device_needed_amp += device.get_evaluated_needed_phase_amps_for_budgeting(time)
+
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            device_needed_amp = device_needed_amp / 3.0
 
         return device_needed_amp
 
@@ -80,7 +91,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 return False
         return True
 
-
+    # the idea is that if we have a 3p home we allocate as if phases were balanced for loads that are not 3p
     def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None = None) -> float:
 
 
@@ -92,6 +103,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         if from_father_budget is None:
             from_father_budget = 1e9 # a lot of amps :)
+
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            # we have been counting in budget only a third of the need for single phase load in a 3 phase father group (or home)
+            from_father_budget = 3*from_father_budget
 
         _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget}")
 
@@ -118,15 +133,18 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         }
 
         for device in self._childrens:
-            device_needed_amp = device.get_evaluated_needed_phase_amps(time)
-            min_a, max_a = device.get_min_max_phase_amps()
+            device_needed_amp = device.get_evaluated_needed_phase_amps_for_budgeting(time)
+            min_a, max_a = device.get_min_max_phase_amps_for_budgeting()
+
+            min_a = math.ceil(min_a)
+            max_a = math.ceil(max_a)
 
             if device_needed_amp == 0:
                 cur_amps = 0.0
             else:
                 cur_amps = min_a
 
-            # allocate first at minumum
+            # allocate first at minimum
             c_budget = {
                 "device": device,
                 "needed_amp": device_needed_amp,
@@ -185,7 +203,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
                         if c_budget["current_budget"] < c_budget["max_amp"]:
                             # 1 amp per one amp budget adaptation ... but relative to the cluster needs
-                            delta_budget = min(min(c_budget["max_amp"] - c_budget["current_budget"], 1), budget_to_allocate)
+                            delta_budget = math.ceil(min(min(c_budget["max_amp"] - c_budget["current_budget"], 1), budget_to_allocate))
                             c_budget["current_budget"] += delta_budget
                             budget_to_allocate -= delta_budget
                             current_budget_spend += delta_budget
@@ -269,6 +287,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self.device_phase_amps_budget = allocated_final_budget
 
         _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget} => {allocated_final_budget}")
+
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            allocated_final_budget = allocated_final_budget / 3.0
 
         return allocated_final_budget
 

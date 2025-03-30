@@ -1,4 +1,5 @@
 import logging
+import math
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from collections.abc import Generator
@@ -61,14 +62,25 @@ class AbstractDevice(object):
 
     def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None):
 
+        allocate_bdget = 0
         if from_father_budget is None:
-            self.device_phase_amps_budget, _ = self.get_min_max_phase_amps()
+            allocate_budget, _ = self.get_min_max_phase_amps_for_budgeting()
+            allocate_budget = math.ceil(allocate_bdget)
         else:
-            self.device_phase_amps_budget = from_father_budget
+            allocate_budget = from_father_budget
+
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            # we have been counting in budget only a third of the need for single phase load in a 3 phase house
+            allocate_budget = 3*allocate_budget
+
+        self.device_phase_amps_budget = math.ceil(allocate_budget)
 
         _LOGGER.info(f"allocate_phase_amps_budget for load {self.name} from_father_budget {from_father_budget} => {self.device_phase_amps_budget}")
 
-        return self.device_phase_amps_budget
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            return self.device_phase_amps_budget / 3.0
+        else:
+            return self.device_phase_amps_budget
 
     @property
     def device_type(self):
@@ -98,12 +110,17 @@ class AbstractDevice(object):
     def get_min_max_power(self) -> (float, float):
         return 0.0, 0.0
 
-    def get_min_max_phase_amps(self) -> (float, float):
+    def get_min_max_phase_amps_for_budgeting(self) -> (float, float):
         min_p, max_p = self.get_min_max_power()
-        return self.get_phase_amps_from_power(min_p), self.get_phase_amps_from_power(max_p)
+        return self.get_phase_amps_from_power_for_budgeting(min_p), self.get_phase_amps_from_power_for_budgeting(max_p)
 
-    def get_evaluated_needed_phase_amps(self, time: datetime) -> float:
+    def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> float:
         return 0.0
+
+    def get_phase_amps_from_power_for_budgeting(self, power:float) -> float:
+        if self.father_device.device_is_3p and not self.device_is_3p:
+            power = power / 3.0
+        return power / self.home.voltage
 
     def get_phase_amps_from_power(self, power:float) -> float:
         if self.device_is_3p:
@@ -314,13 +331,13 @@ class AbstractLoad(AbstractDevice):
             return 0.0, 0.0
         return self.power_use, self.power_use
 
-    def get_evaluated_needed_phase_amps(self, time: datetime) -> float:
+    def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> float:
         device_needed_amp = 0.0
         ct = self.get_current_active_constraint(time)
         if ct:
             load_power = ct.evaluate_needed_mean_power(time)
-            device_needed_amp = self.get_phase_amps_from_power(load_power)
-            min_a, max_a = self.get_min_max_phase_amps()
+            device_needed_amp = self.get_phase_amps_from_power_for_budgeting(load_power)
+            min_a, max_a = self.get_min_max_phase_amps_for_budgeting()
             if device_needed_amp < min_a:
                 device_needed_amp = min_a
             elif device_needed_amp > max_a:
@@ -829,7 +846,7 @@ class TestLoad(AbstractLoad):
     def get_min_max_power(self) -> (float, float):
         return self.min_p, self.max_p
 
-    def get_min_max_phase_amps(self) -> (float, float):
+    def get_min_max_phase_amps_for_budgeting(self) -> (float, float):
         return self.min_a, self.max_a
 
 
