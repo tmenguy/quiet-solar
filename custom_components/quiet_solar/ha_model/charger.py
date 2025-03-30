@@ -597,7 +597,7 @@ class QSChargerGroup(object):
             f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, diff_amp_budget {diff_amp_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
         do_stop = False
-        for allow_state_change in [False, True]:
+        for allow_state_change in [True]: # [False, True]: TODO NEED TO RESET BETWEEN THE TWO!!!
             for cs in actionable_chargers:
                 if increase:
                     next_budgeted_amp = cs.can_increase_budget(allow_state_change=allow_state_change)
