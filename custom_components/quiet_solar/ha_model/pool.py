@@ -26,6 +26,8 @@ class QSPool(QSOnOffDuration):
 
         super().__init__(**kwargs)
 
+        self.is_load_time_sensitive = False
+
         self.attach_ha_state_to_probe(self.pool_temperature_sensor,
                                       is_numerical=True)
 

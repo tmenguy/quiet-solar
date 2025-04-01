@@ -38,6 +38,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self._bistate_mode_off = "bistate_mode_off"
         self.bistate_entity = self.switch_entity
 
+        self.is_load_time_sensitive = True
+
 
 
     def get_bistate_modes(self) -> list[str]:

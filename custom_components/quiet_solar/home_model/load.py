@@ -315,10 +315,21 @@ class AbstractLoad(AbstractDevice):
         self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
 
+        self.is_load_time_sensitive = False
+
     def get_override_state(self):
         if self.external_user_initiated_state is None:
             return "NO OVERRIDE"
         return f"Override: {self.external_user_initiated_state}"
+
+    def is_time_sensitive(self):
+
+        if self.load_is_auto_to_be_boosted:
+            return False
+        elif self.qs_best_effort_green_only:
+            return False
+
+        return self.is_load_time_sensitive
 
 
     def is_consumption_optional(self, time:datetime) -> bool:

@@ -37,6 +37,8 @@ class QSClimateDuration(QSBiStateDuration):
         self._bistate_mode_off = self._state_off
         self.bistate_entity = self.climate_entity
 
+        self.is_load_time_sensitive = True
+
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CLIMATE
 

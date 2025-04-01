@@ -555,7 +555,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         last_slot = len(power_available_power) - 1
 
         # find the constraint last slot
-        if self.end_of_constraint is not None:
+        if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC:
             # by construction the end of the constraints IS ending on a slot
             last_slot = bisect_left(time_slots, self.end_of_constraint)
             last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
@@ -598,6 +598,20 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if self._internal_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
+
+        if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC and self.load.is_time_sensitive():
+            # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
+            # a 6 hours windows
+
+            best_s = max(3600*6, (self.best_duration_to_meet().total_seconds()/self.load.efficiency_factor)*1.5)
+            start_reduction = self.end_of_constraint - timedelta(seconds=best_s)
+
+            _LOGGER.info(
+                f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} {self.end_of_constraint} to {start_reduction}")
+
+
+            new_first_slots = bisect_left(time_slots, start_reduction)
+            first_slot = max(first_slot, new_first_slots)
 
 
         sub_power_available_power = power_available_power[first_slot:last_slot + 1]
