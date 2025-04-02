@@ -403,7 +403,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 self.load.current_command.power_consign / 3600.0) + self.current_value
 
 
-    def _num_command_state_change(self, out_commands: list[LoadCommand | None]):
+    def _num_command_state_change_and_empty_inner_commands(self, out_commands: list[LoadCommand | None]):
         num = 0
         prev_cmd = None
         empty_cmds = []
@@ -415,8 +415,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             if self.load and self.load.current_command and not self.load.current_command.is_off_or_idle():
                 prev_cmd = True
-
-
 
             for i, cmd in enumerate(out_commands):
                 if (cmd is None and prev_cmd is not None) or (cmd is not None and prev_cmd is None):
@@ -433,9 +431,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 prev_cmd = cmd
 
-            if current_empty is not None:
-                current_empty[1] = len(out_commands) - 1
-                empty_cmds.append(current_empty)
+            # do not add the last one as empty : it is only for empty commands
+            # if current_empty is not None:
+            #    current_empty[1] = len(out_commands) - 1
+            #    empty_cmds.append(current_empty)
 
         return num, empty_cmds, start_witch_switch
 
@@ -443,13 +442,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
     def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, nrj_to_be_added):
 
         if self.load.num_max_on_off is not None and self.support_auto is False:
-            num_command_state_change, inner_empty_cmds, start_witch_switch = self._num_command_state_change(out_commands)
+            num_command_state_change, inner_empty_cmds, start_witch_switch = self._num_command_state_change_and_empty_inner_commands(out_commands)
             num_allowed_switch = self.load.num_max_on_off - self.load.num_on_off
             num_removed = 0
 
             _LOGGER.info(f"Probe commands for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off}")
 
-            if num_command_state_change > num_allowed_switch:
+            if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
 
@@ -469,7 +468,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         durations_s += power_slots_duration_s[i]
 
                     if durations_s < 15*60:
-                        # we can remove the first empty command
+                        # we can remove the first empty command, small enough
+
+                        _LOGGER.info(f"_adapt_commands: removed start with switch command for {durations_s}s by {cmd_to_push}")
                         num_command_state_change -= 1
                         num_removed += 1
 
