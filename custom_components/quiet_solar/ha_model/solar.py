@@ -72,19 +72,23 @@ class QSSolarProvider:
     def is_orchestrator(self, entity_id, orchestrator) -> bool:
         return True
 
+    async def fill_orchestrators(self):
+        """ Returns the orchestrators for the domain """
+        self.orchestrators = []
+        for entry_id, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
+            # _LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
+            if orchestrator is not None and self.is_orchestrator(entry_id, orchestrator):
+                self.orchestrators.append(orchestrator)
+                    # _LOGGER.info(f"YES Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
+            # else:
+                    # _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
+
+
     async def update(self, time: datetime) -> None:
 
         if len(self.orchestrators) == 0 or self._latest_update_time is None or (time - self._latest_update_time).total_seconds() > 15*60:
 
-            self.orchestrators = []
-
-            for entry_id, orchestrator in self.solar.hass.data.get(self.domain, {}).items():
-                #_LOGGER.info(f"Adding orchestrator {orchestrator} for {self.domain}")
-                if orchestrator is not None and self.is_orchestrator(entry_id, orchestrator):
-                    self.orchestrators.append(orchestrator)
-                    # _LOGGER.info(f"YES Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
-                # else:
-                    # _LOGGER.info(f"NOT Adding solar orchestrator {orchestrator} for {self.domain} and key {entry_id}")
+            await self.fill_orchestrators()
 
             if len(self.orchestrators) > 0:
                 self.solar_forecast: list[tuple[datetime | None, float | None]] = []
@@ -174,12 +178,22 @@ class QSSolarProviderSolcast(QSSolarProvider):
     def __init__(self, solar: QSSolar, **kwargs) -> None:
         super().__init__(solar=solar, domain=SOLCAST_SOLAR_DOMAIN, **kwargs)
 
-    def is_orchestrator(self, entity_id, orchestrator) -> bool:
-        try:
-            data = orchestrator.solcast._data_forecasts
-        except:
-            return False
-        return True
+
+    async def fill_orchestrators(self):
+        """ Returns the orchestrators for the domain """
+        self.orchestrators = []
+
+        entries = self.hass.config_entries.async_entries(self.domain)
+
+        for entry in entries:
+            try:
+                orchestrator = entry.runtime_data.coordinator
+                # just to check we have what we need
+                data = orchestrator.solcast._data_forecasts
+                self.orchestrators.append(orchestrator)
+            except:
+                pass
+
 
     async def get_power_series_from_orchestrator(self, orchestrator, start_time:datetime, end_time:datetime) -> list[
         tuple[datetime | None, str | float | None]]:
