@@ -170,7 +170,7 @@ class QSHome(QSDynamicGroup):
         self._last_active_load_time = None
         if self.grid_active_power_sensor_inverted:
             self.attach_power_to_probe(self.grid_active_power_sensor,
-                                          transform_fn=lambda x, a: -x)
+                                          transform_fn=lambda x, a: (-x, a))
         else:
             self.attach_power_to_probe(self.grid_active_power_sensor)
 
@@ -423,23 +423,7 @@ class QSHome(QSDynamicGroup):
             else:
                 home_consumption = 0 - grid_consumption
 
-            controlled_consumption = 0
-
-            for load in self._all_loads:
-
-                if not isinstance(load, AbstractLoad):
-                    continue
-
-                if load.load_is_auto_to_be_boosted:
-                    continue
-
-                if not isinstance(load, HADeviceMixin):
-                    continue
-
-                v = load.get_device_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
-
-                if v is not None:
-                    controlled_consumption += v
+            controlled_consumption = self.get_device_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time, ignore_auto_load=True)
 
             val = home_consumption - controlled_consumption
 
@@ -917,22 +901,40 @@ class QSHomeConsumptionHistoryAndForecast:
             controlled_power_values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
             added_controlled = False
 
-            for load in self.home._all_loads:
+            bfs_queue = []
+            bfs_queue.extend(self.home._childrens)
 
-                if not isinstance(load, AbstractLoad):
-                    continue
+            while len(bfs_queue) > 0:
+                device = bfs_queue.pop(0)
+                ha_best_entity_id = None
+                if isinstance(device, QSDynamicGroup):
+                    if device.accurate_power_sensor is None:
+                        # use the children power consumption if there is no group good power sensor
+                        bfs_queue.extend(device._childrens)
+                        continue
+                    else:
+                        ha_best_entity_id = device.accurate_power_sensor
+                else:
 
-                if load.load_is_auto_to_be_boosted:
-                    continue
+                    if not isinstance(device, AbstractLoad):
+                        continue
+                    if device.load_is_auto_to_be_boosted:
+                        continue
 
-                if not isinstance(load, HADeviceMixin):
-                    continue
+                    if not isinstance(device, HADeviceMixin):
+                        continue
 
-                ha_best_entity_id = load.get_best_power_HA_entity()
+                    ha_best_entity_id = device.get_best_power_HA_entity()
+
+                switch_device = None
+                if ha_best_entity_id is None:
+                    if isinstance(device, AbstractLoad) and device.switch_entity:
+                        ha_best_entity_id = device.switch_entity
+                        switch_device = device
 
                 if ha_best_entity_id is not None:
                     load_sensor = QSSolarHistoryVals(entity_id=ha_best_entity_id, forecast=self)
-                    s, e = await load_sensor.init(time, for_reset=True)
+                    s, e = await load_sensor.init(time, for_reset=True, reset_for_switch_device=switch_device)
                     if s is None or e is None:
                         is_one_bad = True
                         break
@@ -943,51 +945,12 @@ class QSHomeConsumptionHistoryAndForecast:
                             end = e
                     controlled_power_values[0] += load_sensor.values[0]
                     added_controlled = True
-                    _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {load.name} {ha_best_entity_id}")
-                else:
-                    if isinstance(load, AbstractLoad):
-                        if load.switch_entity:
-                            end_time = time
-                            start_time = time - timedelta(days=BUFFER_SIZE_DAYS-1)
-                            load_sensor = QSSolarHistoryVals(entity_id=load.switch_entity, forecast=self)
+                    _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {device.name} {ha_best_entity_id}")
 
-                            states : list[LazyState] = await self.load_from_history(load.switch_entity, start_time, end_time)
-
-                            if states:
-                                s = states[0].last_changed
-                                e = states[-1].last_changed
-                                load_sensor._current_idx = None
-                                now_idx, now_days = load_sensor.get_index_from_time(time)
-                                num_add = 0
-                                for s in states:
-                                    if s is  None or s.state is  None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                                        continue
-                                    value = load.get_power_from_switch_state(s.state)
-                                    if value is None:
-                                        continue
-                                    num_add += 1
-                                    await load_sensor.add_value(s.last_changed, float(value), do_save=False)
-
-                                if num_add > 0:
-                                    if load_sensor._current_idx is not None and load_sensor._current_idx != now_idx:
-                                        await load_sensor._store_current_vals(time=None, do_save=False)
-
-                                    if s > strt:
-                                        strt = s
-                                    if e < end:
-                                        end = e
-
-                                    controlled_power_values[0] += load_sensor.values[0]
-                                    added_controlled = True
-
-                                _LOGGER.info(
-                                    f"Resetting home consumption 5: is_one_bad {is_one_bad} load {load.name} HAS A SWITCH")
 
             _LOGGER.info(f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}")
             if is_one_bad is False and added_controlled:
                 home_consumption.values[0] = home_consumption.values[0] - controlled_power_values[0]
-
-
 
         if is_one_bad is False and home_consumption is not None:
             _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
@@ -1300,7 +1263,7 @@ class QSSolarHistoryVals:
 
 
 
-    async def init(self, time:datetime, for_reset:bool = False) -> tuple[datetime | None, datetime | None]:
+    async def init(self, time:datetime, for_reset:bool = False, reset_for_switch_device:AbstractLoad | None = None) -> tuple[datetime | None, datetime | None]:
 
         if self._init_done:
             return None, None
@@ -1390,11 +1353,24 @@ class QSSolarHistoryVals:
                 if s.last_changed > end_time:
                     continue
 
-                power_value = convert_power_to_w(float(s.state), state_attr)
+                try:
+                    if reset_for_switch_device is None:
+                        value = float(s.state)
+                    else:
+                        value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
+                except:
+                    value = None
 
-                await self.add_value(s.last_changed, power_value, do_save=False)
-                # need to save if one value added, only do  it once at the end
-                do_save = True
+                if value is not None:
+                    power_value, _ = convert_power_to_w(value, state_attr)
+                    if power_value is not None:
+                        await self.add_value(s.last_changed, power_value, do_save=False)
+                        # need to save if one value added, only do  it once at the end
+                        do_save = True
+                else:
+                    # possibly a wrong state
+                    _LOGGER.info("Error loading lazy sate value for %s", self.entity_id)
+                    pass
 
             if self._current_idx is not None and self._current_idx != now_idx:
                 await self._store_current_vals(time=None, do_save=False)

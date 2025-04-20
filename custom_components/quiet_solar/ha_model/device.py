@@ -1,5 +1,4 @@
 import logging
-from abc import abstractmethod
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
@@ -66,17 +65,23 @@ def compute_energy_Wh_rieman_sum(
     return energy, duration_h
 
 
-def convert_power_to_w(value: float, attributes: dict | None = None) -> float:
+def convert_power_to_w(value: float, attributes: dict | None = None) -> (float, dict):
     default_unit: str = UnitOfPower.WATT
+    new_attr = attributes
     if attributes is None:
         sensor_unit = default_unit
     else:
         sensor_unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, default_unit)
 
-    if sensor_unit in UnitOfPower:
+    if sensor_unit in UnitOfPower and sensor_unit != default_unit:
         value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=UnitOfPower.WATT)
+        new_attr = {}
+        if attributes is not None:
+            new_attr = dict(attributes)
 
-    return value
+        new_attr[ATTR_UNIT_OF_MEASUREMENT] = default_unit
+
+    return value, new_attr
 
 
 def get_average_power_energy_based(
@@ -509,8 +514,19 @@ class HADeviceMixin:
                 return None
             return vals[-1][1]
 
-    def get_device_power_latest_possible_valid_value(self, tolerance_seconds: float | None, time) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(self._get_power_measure(), tolerance_seconds, time)
+    def get_device_power_latest_possible_valid_value(self,
+                                                     tolerance_seconds: float | None,
+                                                     time:datetime,
+                                                     ignore_auto_load:bool= False) -> float:
+
+        if ignore_auto_load and isinstance(self, AbstractLoad) and self.load_is_auto_to_be_boosted:
+            return 0.0
+
+        p = self.get_sensor_latest_possible_valid_value(self._get_power_measure(), tolerance_seconds, time)
+
+        if p is None:
+            return 0.0
+        return p
 
     def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
@@ -661,7 +677,7 @@ class HADeviceMixin:
         for ha_object in self._exposed_entities:
             ha_object.async_update_callback(time)
 
-    def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], float] | None = None,
+    def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                               non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
                                                                                             float | str | None, datetime | None, dict | None] | None] = None):
         self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
@@ -669,8 +685,8 @@ class HADeviceMixin:
                                       non_ha_entity_get_state=non_ha_entity_get_state)
 
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
-                                 transform_fn: Callable[[float, dict], float] | None = None,
-                                 conversion_fn: Callable[[float, dict], float] | None = None,
+                                 transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+                                 conversion_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                                  update_on_change_only: bool = True,
                                  non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
                                                                                                float | str | None, datetime | None, dict | None] | None] = None,
@@ -762,17 +778,19 @@ class HADeviceMixin:
         if value is not None:
             conversion_fn = self._entity_probed_state_conversion_fn[entity_id]
             if conversion_fn is not None:
-                value = conversion_fn(value, state_attr)
+                value, state_attr = conversion_fn(value, state_attr)
             transform_fn = self._entity_probed_state_transform_fn[entity_id]
             if transform_fn is not None:
-                value = transform_fn(value, state_attr)
+                value, state_attr = transform_fn(value, state_attr)
 
         val_array = self._entity_probed_state[entity_id]
 
         if state is None:
             to_add = (state_time, value, None)
         else:
-            to_add = (state_time, value, state.attributes)
+            if state_attr is not None and len(state_attr) == 0:
+                state_attr = None
+            to_add = (state_time, value, state_attr)
 
         if value is not None:
             prev_valid = self._entity_probed_last_valid_state[entity_id]

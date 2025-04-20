@@ -41,6 +41,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.is_load_time_sensitive = True
 
 
+    def get_power_from_switch_state(self, state : str | None) -> float | None:
+        if state is None:
+            return None
+        if state == self._state_on:
+            return self.power_use
+        else:
+            return 0.0
 
     def get_bistate_modes(self) -> list[str]:
         return bistate_modes + [self._bistate_mode_on, self._bistate_mode_off]

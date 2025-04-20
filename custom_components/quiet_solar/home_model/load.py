@@ -391,7 +391,7 @@ class AbstractLoad(AbstractDevice):
         if state == "on":
             return self.power_use
         else:
-            return 0
+            return 0.0
 
     async def do_run_check_load_activity_and_constraints(self, time: datetime)-> bool:
         if self._externally_initialized_constraints is False:

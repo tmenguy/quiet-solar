@@ -9,7 +9,8 @@ import pytz
 from datetime import time as dt_time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, ATTR_ENTITY_ID
+from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, \
+    ATTR_ENTITY_ID, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower
 from homeassistant.components import number, homeassistant
 from haversine import haversine, Unit
 
@@ -1790,7 +1791,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             result = None
 
-            max_charging_power = self.get_max_charging_power()
+            max_charging_power = self.get_max_charging_amp_per_phase()
             if max_charging_power is None:
                 return None
 
@@ -1826,7 +1827,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._expected_amperage.register_launch(value=current, time=time)
 
-        if self.get_max_charging_power() != current:
+        if self.get_max_charging_amp_per_phase() != current:
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
             service = number.SERVICE_SET_VALUE
@@ -1843,7 +1844,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         #    domain=domain, service=service, service_data={number.ATTR_VALUE:int(min(max_value, max(min_value, range_value)))}, target={ATTR_ENTITY_ID: self.charger_max_charging_current_number}, blocking=blocking
         # )
 
-    def get_max_charging_power(self):
+    def get_max_charging_amp_per_phase(self):
 
         state = self.hass.states.get(self.charger_max_charging_current_number)
 
@@ -1889,15 +1890,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return False
 
         do_success = False
-        max_charging_power = self.get_max_charging_power()
-        if max_charging_power != self._expected_amperage.value:
+        max_charging_current = self.get_max_charging_amp_per_phase()
+        if max_charging_current != self._expected_amperage.value:
             # check first if amperage setting is ok
             if probe_only is False:
                 if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                    _LOGGER.info(f"Ensure State: current {max_charging_power}A expected {self._expected_amperage.value}A")
+                    _LOGGER.info(f"Ensure State: current {max_charging_current}A expected {self._expected_amperage.value}A")
                     await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
                 else:
-                    _LOGGER.debug(f"Ensure State: NOT OK TO LAUNCH current {max_charging_power}A expected {self._expected_amperage.value}A")
+                    _LOGGER.debug(f"Ensure State: NOT OK TO LAUNCH current {max_charging_current}A expected {self._expected_amperage.value}A")
         else:
             is_charge_enabled = self.is_charge_enabled(time)
             is_charge_disabled = self.is_charge_disabled(time)
@@ -2220,12 +2221,19 @@ class QSChargerOCPP(QSChargerGeneric):
         # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
 
 
-    def convert_amps_to_W(self, amps: float, attr:dict) -> float:
-        # mult = 1.0
-        # if self.charger_is_3p:
-        #    mult = 3.0
-        val = amps * self.home.voltage
-        return val
+    def convert_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
+        mult = 1.0
+        if self.device_is_3p:
+            mult = 3.0
+        val = amps * mult * self.home.voltage
+
+        new_attr = {}
+        if attr is not None:
+            new_attr = dict(attr)
+
+        new_attr[ATTR_UNIT_OF_MEASUREMENT] = UnitOfPower.WATT
+
+        return val, new_attr
 
     def low_level_plug_check_now(self, time: datetime) -> [bool|None, datetime]:
 

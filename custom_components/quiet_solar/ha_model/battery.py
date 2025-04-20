@@ -10,7 +10,7 @@ from homeassistant.components import number
 
 from ..const import CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH
-from ..ha_model.device import HADeviceMixin
+from ..ha_model.device import HADeviceMixin, convert_power_to_w
 from ..home_model.battery import Battery
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_IDLE, CMD_AUTO_GREEN_ONLY, CMD_GREEN_CHARGE_AND_DISCHARGE, \
     CMD_FORCE_CHARGE, CMD_GREEN_CHARGE_ONLY
@@ -174,7 +174,12 @@ class QSBattery(HADeviceMixin, Battery):
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             res = None
         else:
-            res =  int(state.state)
+            try:
+                res =  float(state.state)
+                res, _ = convert_power_to_w(value=res, attributes=state.attributes)
+                res = int(res)
+            except:
+                res = None
 
         _LOGGER.info(f"=====> battery get_max_discharging_power {res} {self.max_discharge_number}")
 
@@ -189,7 +194,12 @@ class QSBattery(HADeviceMixin, Battery):
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             res = None
         else:
-            res =  int(state.state)
+            try:
+                res =  float(state.state)
+                res, _ = convert_power_to_w(value=res, attributes=state.attributes)
+                res = int(res)
+            except:
+                res = None
 
         _LOGGER.info(f"=====> battery get_max_charging_power {res}  {self.max_charge_number}")
         self.max_charging_power_current = res

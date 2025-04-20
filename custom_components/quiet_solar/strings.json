@@ -51,9 +51,9 @@
           "battery_charge_percent_sensor": "Charge percentage (%)",
           "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
           "battery_max_discharge_power_value": "Maximum discharge power (W)",
-          "battery_max_discharge_power_number": "Maximum discharge power (W) Number entity",
+          "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
           "battery_max_charge_power_value": "Maximum charge power (W)",
-          "battery_max_charge_power_number": "Maximum charge power (W) Number entity",
+          "battery_max_charge_power_number": "Maximum charge power (W, kW) Number entity",
           "battery_min_charge_percent_value": "Minimum charge percentage (%)",
           "battery_max_charge_percent_value": "Maximum charge percentage (%)",
           "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid"

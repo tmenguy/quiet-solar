@@ -37,6 +37,25 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         return False
 
 
+
+    def get_device_power_latest_possible_valid_value(self,
+                                                     tolerance_seconds: float | None,
+                                                     time:datetime,
+                                                     ignore_auto_load:bool= False) -> float:
+        if self.accurate_power_sensor is not None:
+            p =  self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
+            if p is None:
+                return 0.0
+            return p
+        else:
+            power = 0.0
+            for device in self._childrens:
+                if isinstance(device, HADeviceMixin):
+                    p = device.get_device_power_latest_possible_valid_value(tolerance_seconds, time, ignore_auto_load)
+                    if p is not None:
+                        power += p
+            return power
+
     def get_min_max_power(self) -> (float, float):
         if len(self._childrens) == 0:
             return super().get_min_max_power()
