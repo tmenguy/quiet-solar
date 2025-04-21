@@ -203,6 +203,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 domain, service, data
             )
 
+    def car_can_limit_its_soc(self):
+        if self.car_charge_percent_max_number is None:
+            return False
+        return True
+
     def get_max_charge_limit(self):
 
         result = None

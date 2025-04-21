@@ -6,12 +6,12 @@ from datetime import time as dt_time
 
 import pytz
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, SENSOR_CONSTRAINT_SENSOR_ON_OFF
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
+from ..home_model.commands import LoadCommand, CMD_ON
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
-from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 
 
@@ -214,9 +214,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                 type = CONSTRAINT_TYPE_MANDATORY_END_TIME
                 if self.load_is_auto_to_be_boosted:
-                    type = CONSTRAINT_TYPE_FILLER
+                    type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
                 elif self.qs_best_effort_green_only is True:
-                    type = CONSTRAINT_TYPE_FILLER  # will be after battery filling
+                    type = CONSTRAINT_TYPE_FILLER_AUTO  # will be after battery filling slightly higher priority than auto
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,

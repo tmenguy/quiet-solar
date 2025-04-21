@@ -72,7 +72,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
+    CONSTRAINT_TYPE_FILLER
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint
 from ..ha_model.car import QSCar
@@ -86,6 +87,9 @@ _LOGGER = logging.getLogger(__name__)
 CHARGER_STATE_REFRESH_INTERVAL = 3
 CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 12
+
+CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 2*60
+CHARGER_LONG_CONNECTION = 60*5
 
 CAR_CHARGER_LONG_RELATIONSHIP = 60*15
 
@@ -1208,7 +1212,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         score_plug_time_bump = 100.0 + 100.0*(CAR_CHARGER_LONG_RELATIONSHIP - abs(charger_plugged_duration - car_plugged_duration))/CAR_CHARGER_LONG_RELATIONSHIP
 
                 if (existing_charger and existing_charger == self and
-                        time - self.car_attach_time > timedelta(seconds=4*CHARGER_ADAPTATION_WINDOW)):
+                        time - self.car_attach_time > timedelta(seconds=CHARGER_LONG_CONNECTION)):
                     # the current charger has been connected to this car for a long time, we can keep it?
                     score_plug_time_bump += 100.0
 
@@ -1390,9 +1394,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             car_current_charge_percent = car_initial_percent = self.car.get_car_charge_percent(time)
             if car_initial_percent is None: # for possible percent issue
                 car_initial_percent = 0.0
-                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} as a None car_initial_percent... force init at 0")
-            elif car_initial_percent >= target_charge:
-                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} as a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
+                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} has a None car_initial_percent... force init at 0")
+            elif target_charge >= 99.5 and car_initial_percent >= target_charge:
+                # if we wanted a full charge force to try to charge as much as possible to finish it the car will anyway try to stop asking for more
+                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} has a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
                 car_initial_percent = max(0, target_charge - 5)
 
 
@@ -1443,16 +1448,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             break
 
             if force_constraint is not None:
+                # reset the next charge force state
                 self._do_force_next_charge = False
                 realized_charge_target = target_charge
             else:
                 # if we do have a last completed one it means there was no plug / un plug or reset in between
+                # in case of a car schedule we take the start of the event as the target
                 start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
-                is_passed_forced = force_constraint is not None and start_time is not None and start_time <= force_constraint.end_of_constraint
-                if (start_time is not None and time > start_time) or is_passed_forced:
-                    # not need at all to push any time constraint
+                if start_time is not None and time > start_time:
+                    # not need at all to push any time constraint ... we passed it
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time} is_passed_forced:{is_passed_forced}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time}")
                     start_time = None
 
                 if self._last_completed_constraint is not None:
@@ -1473,8 +1479,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 f"check_load_activity_and_constraints: plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
                         start_time = None
                     else:
-                        #as if there was a running one ... so the last filler is a full eco one
-                        realized_charge_target = target_charge
+                        # we will check for a time constraint here if there is one (ie start_time is not None)
+                        # a time constraint will be created, else we will create a filler one at the end
+                        # in the "if realized_charge_target is None" pass below
+                        pass
 
                 # only add it if it is "after" the end of the forced constraint
                 if start_time is not None:
@@ -1500,18 +1508,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     realized_charge_target = target_charge
 
-            if realized_charge_target is None or realized_charge_target <= 99.9:
+            if realized_charge_target is None:
 
-                if realized_charge_target is None:
-                    # make car charging bigger than the battery filling if it is the only car constraint
-                    # well no rally after battery in fact
-                    type = CONSTRAINT_TYPE_FILLER_AUTO # CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                    realized_charge_target = car_initial_percent
-                else:
-                    #there was already a charge before and it is not full ... try solar only
-                    type = CONSTRAINT_TYPE_FILLER_AUTO
-                    target_charge = 100
-                    realized_charge_target = 0
+                # make car charging after the battery, as it is a bets effort one
+                # well no really after battery in fact
+                type = CONSTRAINT_TYPE_FILLER # slightly higher priority than CONSTRAINT_TYPE_FILLER_AUTO, not CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                realized_charge_target = car_initial_percent
 
                 car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=self.car.car_battery_capacity,
@@ -1784,7 +1786,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self.check_charge_state(time, for_duration, check_for_val=False)
 
     def is_car_stopped_asking_current(self, time: datetime,
-                                      for_duration: float | None = CHARGER_ADAPTATION_WINDOW) -> bool | None:
+                                      for_duration: float | None = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP) -> bool | None:
 
         result = False
         if self.is_plugged(time=time, for_duration=for_duration):
@@ -1981,12 +1983,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if sensor_result is None:
                     result = result_calculus
                 else:
-                    if sensor_result > result_calculus + 10 and sensor_result <= 99:
-                        # in case the initial value was 0 for example because of a bad car % value
-                        # reset the current value if now the result is valid
-                        result = sensor_result
-                    else:
+                    # sensor may all the time be favored except when it is not set as up to date as the calculus?
+                    # another edge case for some cars : when in error it gives a 100 ....
+                    if sensor_result > 99:
+                        # close to the end take the minium of the two ... or sensor is bad
                         result = min(result_calculus, sensor_result)
+                    else:
+                        # if sensor stopped working, continue to increase
+                        result = max(sensor_result, result_calculus)
 
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 
@@ -2004,8 +2008,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int) -> (bool, int|float):
 
-        is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time,
-                                                                          for_duration=CHARGER_ADAPTATION_WINDOW)
+        is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
 
         if is_car_stopped_asked_current:
@@ -2042,7 +2045,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return True
 
         handled = False
-        if self.is_car_stopped_asking_current(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.is_car_stopped_asking_current(time):
             # this is wrong actually : we fix the car for CHARGER_ADAPTATION_WINDOW minimum ...
             # so the battery will adapt itself, let it do its job ... no need to touch its state at all!
             _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")

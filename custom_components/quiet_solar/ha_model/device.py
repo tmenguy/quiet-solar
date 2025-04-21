@@ -610,7 +610,6 @@ class HADeviceMixin:
 
         # check the last states
         current_hole = 0.0
-        first_is_met = False
 
         all_invalid = True
 
@@ -625,7 +624,6 @@ class HADeviceMixin:
 
             delta_t = (next_ts - ts).total_seconds()
 
-            val_prob_ok = False
             if state is not None:
                 all_invalid = False
                 if invert_val_probe:
@@ -633,15 +631,14 @@ class HADeviceMixin:
                 else:
                     val_prob_ok = state in states_vals
 
-            if val_prob_ok:
-                state_status_duration += delta_t
-                current_hole = 0.0
-                first_is_met = True
-            else:
-                if state is not None and first_is_met is False:
-                    # if we have an incompatible non None state (ie not unknown or not available) first we do not count anything
-                    # but we could start with a small unavailable hole of a None State
+                if val_prob_ok:
+                    state_status_duration += delta_t
+                    current_hole = 0.0
+                else:
+                    # it is a bad state: whatever don't count passed it
+                    # if we never had a good state, state_status_duration will be 0, this is what we want
                     break
+            else:
                 current_hole += delta_t
                 if current_hole > allowed_max_holes_s:
                     break
