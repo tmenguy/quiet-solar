@@ -5,7 +5,7 @@ import numpy.typing as npt
 import numpy as np
 import pytz
 
-from .battery import Battery, CMD_FORCE_CHARGE, CMD_FORCE_DISCHARGE
+from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
