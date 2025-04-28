@@ -159,7 +159,7 @@ class QSBattery(HADeviceMixin, Battery):
         data[number.ATTR_VALUE] = val
         domain = number.DOMAIN
 
-        _LOGGER.info(f"=====> battery set_max_discharging_power {val} {self.max_discharge_number}")
+        _LOGGER.info(f"=====> battery set_max_discharging_power {val} {self.max_discharge_number} {domain} {service} {data}")
 
 
         await self.hass.services.async_call(
@@ -225,7 +225,7 @@ class QSBattery(HADeviceMixin, Battery):
         data[number.ATTR_VALUE] = val
         domain = number.DOMAIN
 
-        _LOGGER.info(f"=====> battery set_max_charging_power {val} {self.max_charge_number}")
+        _LOGGER.info(f"=====> battery set_max_charging_power {val} {self.max_charge_number} {domain} {service} {data}")
 
         await self.hass.services.async_call(
             domain, service, data, blocking=blocking
