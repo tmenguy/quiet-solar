@@ -6,8 +6,8 @@ CMD_CST_AUTO_GREEN = "auto_green"
 CMD__CST_GREEN_CHARGE_ONLY = "green_charge-ONLY"
 CMD_CST_AUTO_CONSIGN = "auto_consign"
 CMD_CST_AUTO_PRICE = "auto_price"
-
 CMD_CST_FORCE_CHARGE = "force_charge"
+
 @dataclass
 class LoadCommand:
     command: str
