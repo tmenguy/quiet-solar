@@ -290,9 +290,9 @@ class PeriodSolver(object):
             while continue_optimizing:
             
                 num_optim_tries += 1
-                # first try to fill the battery to the max of what is left and consume on all slots : if teh battery covers all (ie no grid need) fine, we need to let the battery do its job
+                # first try to fill the battery to the max of what is left and consume on all slots : if the battery covers all (ie no grid need) fine, we need to let the battery do its job
                 # in automatic mode, it will discharge when needed, and charge when it can
-                # if it is not teh case : remove battery discharge from "lower prices", as much as we can until teh total price decrease ... do that little by little (well limit the number of steps for computation)
+                # if it is not the case : remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
                 # if the battery "not used energy" from this pass is
                 remaining_grid_price  = 0
                 remaining_grid_energy = 0

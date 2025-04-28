@@ -184,6 +184,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return None
         return res
 
+    def get_car_current_capacity(self, time: datetime) -> float | None:
+        res = self.get_car_charge_percent(time)
+        if res is None:
+            return None
+
+        if self.car_battery_capacity is None or self.car_battery_capacity == 0:
+            return None
+
+        try:
+            return float(res) * self.car_battery_capacity / 100.0
+        except TypeError:
+            return None
+
+        return None
+
     async def set_max_charge_limit(self, percent):
 
         if self.car_charge_percent_max_number is None:

@@ -75,7 +75,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
     CONSTRAINT_TYPE_FILLER
 from ..home_model.constraints import DATETIME_MIN_UTC, LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
-    MultiStepsPowerLoadConstraint
+    MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
@@ -189,6 +189,7 @@ class QSChargerStatus(object):
         self.best_power_measure = None
         self._budgeted_amp = None
         self.budgeted_power = None
+        self.charge_score = 0
 
     @property
     def budgeted_amp(self):
@@ -604,6 +605,11 @@ class QSChargerGroup(object):
         # try first to stay on the same states fo the charger (no charge to stop or stop to charge) to adapt the power
         # take a very incremental, one by one amp when increasing, decrease should be fast
         do_stop = False
+
+        # sort the charger according to their score, if increase put the most important to finish teh charge first
+        # if derease: remove charging from less important first (lower score)
+        actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=increase)
+
         for allow_state_change in [False, True]:
             for cs in actionable_chargers:
                 if increase:
@@ -1011,7 +1017,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._inner_amperage = QSStateCmd()
         return self._inner_amperage
 
-    def get_stable_dynamic_charge_status(self, time: datetime):
+    def get_stable_dynamic_charge_status(self, time: datetime)-> QSChargerStatus | None:
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             return None
@@ -1066,7 +1072,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if cs.command.phase_current is not None:
                     min_amps = int(max(min_amps, round(cs.command.phase_current)))
                 elif cs.command.power_consign is not None:
-                    min_amps = self.max_charge, self.min_charge + bisect.bisect_left(cs.power_steps[self.min_charge:self.max_charge+1], cs.command.power_consign)
+                    min_amps = min(self.max_charge, self.min_charge + bisect.bisect_left(cs.power_steps[self.min_charge:self.max_charge+1], cs.command.power_consign))
                 else:
                     min_amps = self.min_charge
 
@@ -1089,10 +1095,33 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # force to stay off
                     possible_amps = [0]
                 else:
-                    # force to stay on (by not adding the possibility to go to 0
+                    # force to stay on (by not adding the possibility to go to 0)
                     possible_amps = run_list
 
         cs.possible_amps = possible_amps
+
+        ct = self.get_current_active_constraint(time)
+        score = 0
+        # if there is a tinne constraint that is not too far away : score boost
+        # if this constraint is mandatory of as fast as possible : score boost
+        if ct is not None:
+            if ct.as_fast_as_possible:
+                score = 200000
+            elif ct.is_mandatory:
+                score = 100000
+
+            if ct.end_of_constraint < DATETIME_MAX_UTC:
+                # there is a true end constraint, if 12h or more : add 1000 else add something closer
+                score += (13 - min(12, int((ct.end_of_constraint - time).total_seconds()/3600.0))) * 1000
+
+
+        # give more to the ones with the lower soc in kwh
+        capa = self.car.get_car_current_capacity(time)
+        if capa is not None:
+            score += max(0, 999 - int(capa/1000.0)) # capa is in Wh make it kWh
+
+        cs.charge_score = score
+
         return cs
 
 
