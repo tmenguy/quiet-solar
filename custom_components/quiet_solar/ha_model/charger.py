@@ -1255,6 +1255,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if dist <= max_dist:
                         score_dist_bump = 1.0 + 1.0*((max_dist - dist)/max_dist)
 
+                    if dist <= 3.0 and score_plug_bump == 0:
+                        # we are very very close to the charger, we can assume it is plugged
+                        score_plug_bump = 0.1
+
             score_home_bump = 0
             car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
             if car_home_res:
