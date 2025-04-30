@@ -841,6 +841,13 @@ class AbstractLoad(AbstractDevice):
             if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
                 await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
 
+    def reset_override_state(self):
+        self.external_user_initiated_state = None
+        self.external_user_initiated_state_time = None
+
+    async def async_reset_override_state(self):
+        self.reset_override_state()
+
 
 
 

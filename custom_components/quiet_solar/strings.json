@@ -516,6 +516,9 @@
       "qs_load_mark_current_constraint_done": {
         "name": "Force Current Constraint Done"
       },
+      "qs_load_reset_override_state": {
+        "name": "Reset User Override"
+      },
       "qs_home_reset_history": {
         "name": "Reset Quiet Solar History"
       },

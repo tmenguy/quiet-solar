@@ -125,51 +125,28 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
-            # Ex : I,ve an HVAC that I manually open at 8pm and I don't want the system to close it because he thinks
+            # Ex : I have an HVAC that I manually open at 8pm and I don't want the system to close it because he thinks
             # it should be closed because of electricity price or any other stuffs
+
+            if self.external_user_initiated_state_time is not None and time - self.external_user_initiated_state_time > timedelta(hours=8):
+                _LOGGER.info(
+                    f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
+                # we need to reset the external user initiated state
+                self.reset_override_state()
+                has_reset_external_state = True
+
             state = self.hass.states.get(self.bistate_entity)
 
-            need_reset = True
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                need_reset = False
-            else:
-                # what were we expecting ?
+            if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+
                 expected_state = self.expected_state_from_command(self.current_command)
 
-                # in all case if the equipmenet is switched off : reset
-                if state.state == self._state_off or state.state == 'off':
-                    need_reset = True
-                elif state.state != expected_state:
+                # if the user did something different ... just OVERRIDE the automation for a given time
+                if state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
+                    # we need to remember the state and the time
+                    self.external_user_initiated_state = state.state
+                    self.external_user_initiated_state_time = time
 
-                    # One of the questions here is : should we do that only if the user wanted a state that is not the
-                    # OFF state ? or should we do that for any state ?
-                    if expected_state == self._state_off:
-                        # ok we are in the case where the user has changed the state of the load "outside" the system
-                        # to another state than the "off" state we handle
-                        need_reset = False
-                        if self.external_user_initiated_state is None:
-                            # we need to remember the state and the time
-                            self.external_user_initiated_state = state.state
-                            self.external_user_initiated_state_time = time
-                        elif self.external_user_initiated_state != state.state:
-                            # the state has changed, we need to set the state to the new external one
-                            self.external_user_initiated_state = state.state
-                            self.external_user_initiated_state_time = time
-
-            if need_reset:
-                if self.external_user_initiated_state is not None:
-                    has_reset_external_state = True
-                    # the user has changed the state of the load, we need to reset the state
-                    self.external_user_initiated_state = None
-                    self.external_user_initiated_state_time = None
-
-
-        if self.external_user_initiated_state_time is not None and time - self.external_user_initiated_state_time > timedelta(hours=24):
-            _LOGGER.info(f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
-            # we need to reset the external user initiated state
-            self.external_user_initiated_state = None
-            self.external_user_initiated_state_time = None
-            has_reset_external_state = True
 
         res = has_reset_external_state
         if self.bistate_mode == self._bistate_mode_off:

@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
-    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT
+    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE
 from .entity import QSDeviceEntity
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
@@ -73,6 +73,14 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+
+    qs_reset_override = QSButtonEntityDescription(
+        key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
+        translation_key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
+        async_press=lambda x: x.device.async_reset_override_state(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_override))
 
     return entities
 

@@ -260,6 +260,9 @@
             "qs_load_mark_current_constraint_done": {
                 "name": "Force Current Constraint Done"
             },
+            "qs_load_reset_override_state": {
+                "name": "Reset User Override"
+            },
             "qs_next_car_charge_add_default": {
                 "name": "Add Charge"
             },
