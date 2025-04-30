@@ -146,7 +146,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         # we need to remember the state and the time
 
                         _LOGGER.info(
-                            f"OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} ")
+                            f"===> OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} ")
 
                         self.external_user_initiated_state = state.state
                         self.external_user_initiated_state_time = time
