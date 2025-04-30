@@ -452,9 +452,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
 
-                if start_witch_switch:
+                if start_witch_switch and len(inner_empty_cmds) > 0:
                     # we are starting with a switch...can we try to not do it?
-                    if inner_empty_cmds[0] == 0:
+                    if inner_empty_cmds[0][0] == 0:
                         # we start by a empty : do we need to stay on?
                         rge = [0, inner_empty_cmds[0][1]]
                         cmd_to_push = copy_command(self._power_sorted_cmds[0])

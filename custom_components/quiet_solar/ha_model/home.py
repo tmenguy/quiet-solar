@@ -117,7 +117,7 @@ class QSHome(QSDynamicGroup):
 
     _period : timedelta = timedelta(seconds=FLOATING_PERIOD_S)
     _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
-    _battery_commands = list[tuple[datetime, LoadCommand]]
+    _battery_commands: list[tuple[datetime, LoadCommand]] = []
     _solver_step_s : timedelta = timedelta(seconds=900)
     _update_step_s : timedelta = timedelta(seconds=5)
 
