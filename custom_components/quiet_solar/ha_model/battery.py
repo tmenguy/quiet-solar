@@ -159,7 +159,6 @@ class QSBattery(HADeviceMixin, Battery):
 
         _LOGGER.info(f"=====> battery set_max_discharging_power {val} {self.max_discharge_number} {domain} {service} {data}")
 
-
         await self.hass.services.async_call(
             domain, service, data, blocking=blocking
         )
