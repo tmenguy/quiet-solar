@@ -134,18 +134,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # we need to reset the external user initiated state
                 self.reset_override_state()
                 has_reset_external_state = True
+            else:
+                state = self.hass.states.get(self.bistate_entity)
 
-            state = self.hass.states.get(self.bistate_entity)
+                if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
 
-            if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                    expected_state = self.expected_state_from_command(self.current_command)
 
-                expected_state = self.expected_state_from_command(self.current_command)
+                    # if the user did something different ... just OVERRIDE the automation for a given time
+                    if state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
+                        # we need to remember the state and the time
 
-                # if the user did something different ... just OVERRIDE the automation for a given time
-                if state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
-                    # we need to remember the state and the time
-                    self.external_user_initiated_state = state.state
-                    self.external_user_initiated_state_time = time
+                        _LOGGER.info(
+                            f"OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} ")
+
+                        self.external_user_initiated_state = state.state
+                        self.external_user_initiated_state_time = time
 
 
         res = has_reset_external_state
