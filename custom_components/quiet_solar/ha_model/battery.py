@@ -115,9 +115,7 @@ class QSBattery(HADeviceMixin, Battery):
         else :
             action = SERVICE_TURN_OFF
 
-        _LOGGER.info(f"Executing set_charge_from_grid {action} on {self.charge_from_grid_switch}")
-
-        _LOGGER.info(f"=====> battery set_charge_from_grid {charge_from_grid}")
+        _LOGGER.info(f"=====> battery set_charge_from_grid {charge_from_grid} {self.charge_from_grid_switch} {action}")
 
         await self.hass.services.async_call(
             domain=Platform.SWITCH,
