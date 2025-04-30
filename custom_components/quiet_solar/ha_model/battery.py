@@ -85,19 +85,19 @@ class QSBattery(HADeviceMixin, Battery):
         is_charge_from_grid = await self.is_charge_from_grid()
 
         if cmd_to_vals["charge_from_grid"] is not None and is_charge_from_grid is None:
-            _LOGGER.info(f"=====> battery probe_if_command_set ret None!!!! is_charge_from_grid None")
+            _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! is_charge_from_grid None")
             return None
 
         max_discharge_power = await self.get_max_discharging_power()
 
         if cmd_to_vals["max_discharging_power"] is not None and max_discharge_power is None:
-            _LOGGER.info(f"=====> battery probe_if_command_set ret None!!!! max_discharge_power None")
+            _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! max_discharge_power None")
             return None
 
         max_charge_power = await self.get_max_charging_power()
 
         if cmd_to_vals["max_charging_power"] is not None and max_charge_power is None:
-            _LOGGER.info(f"=====> battery probe_if_command_set ret None!!!! max_charge_power None")
+            _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! max_charge_power None")
             return None
 
         return is_charge_from_grid == cmd_to_vals["charge_from_grid"] and max_discharge_power == cmd_to_vals["max_discharging_power"] and max_charge_power == cmd_to_vals["max_charging_power"]
@@ -115,7 +115,7 @@ class QSBattery(HADeviceMixin, Battery):
         else :
             action = SERVICE_TURN_OFF
 
-        _LOGGER.info(f"=====> battery set_charge_from_grid {charge_from_grid} {self.charge_from_grid_switch} {action}")
+        _LOGGER.info(f"==> battery set_charge_from_grid {charge_from_grid} {self.charge_from_grid_switch} {action}")
 
         await self.hass.services.async_call(
             domain=Platform.SWITCH,
@@ -133,7 +133,7 @@ class QSBattery(HADeviceMixin, Battery):
         else:
             res =  state.state == "on"
 
-        _LOGGER.info(f"=====> battery is_charge_from_grid {res}")
+        _LOGGER.info(f"==> battery is_charge_from_grid {res}")
 
         self.is_charge_from_grid_current = res
         return res
@@ -157,7 +157,7 @@ class QSBattery(HADeviceMixin, Battery):
         data[number.ATTR_VALUE] = val
         domain = number.DOMAIN
 
-        _LOGGER.info(f"=====> battery set_max_discharging_power {val} {self.max_discharge_number} {domain} {service} {data}")
+        _LOGGER.info(f"==> battery set_max_discharging_power {val} {self.max_discharge_number} {domain} {service} {data}")
 
         await self.hass.services.async_call(
             domain, service, data, blocking=blocking
@@ -178,7 +178,7 @@ class QSBattery(HADeviceMixin, Battery):
             except:
                 res = None
 
-        _LOGGER.info(f"=====> battery get_max_discharging_power {res} {self.max_discharge_number}")
+        _LOGGER.info(f"==> battery get_max_discharging_power {res} {self.max_discharge_number}")
 
         self.max_discharging_power_current = res
         return res
@@ -198,7 +198,7 @@ class QSBattery(HADeviceMixin, Battery):
             except:
                 res = None
 
-        _LOGGER.info(f"=====> battery get_max_charging_power {res}  {self.max_charge_number}")
+        _LOGGER.info(f"==> battery get_max_charging_power {res}  {self.max_charge_number}")
         self.max_charging_power_current = res
         return res
 
@@ -222,7 +222,7 @@ class QSBattery(HADeviceMixin, Battery):
         data[number.ATTR_VALUE] = val
         domain = number.DOMAIN
 
-        _LOGGER.info(f"=====> battery set_max_charging_power {val} {self.max_charge_number} {domain} {service} {data}")
+        _LOGGER.info(f"==> battery set_max_charging_power {val} {self.max_charge_number} {domain} {service} {data}")
 
         await self.hass.services.async_call(
             domain, service, data, blocking=blocking
