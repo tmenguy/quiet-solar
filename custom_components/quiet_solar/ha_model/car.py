@@ -37,9 +37,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
         self._last_dampening_update = None
 
-        super().__init__(**kwargs)
-
-        self._conf_calendar = self.calendar
 
         self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
         self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
@@ -50,6 +47,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.conf_customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
         self.conf_customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
 
+        super().__init__(**kwargs)
+
+        self._conf_calendar = self.calendar
 
         for a in range(len(self.theoretical_amp_to_power_1p)):
 
@@ -90,6 +90,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.reset()
 
     def reset(self):
+        super().reset()
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
@@ -196,8 +197,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return float(res) * self.car_battery_capacity / 100.0
         except TypeError:
             return None
-
-        return None
 
     async def set_max_charge_limit(self, percent):
 

@@ -116,7 +116,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._attr_available = True
+        self._set_availabiltiy()
         self._do_restore_default = True
 
     async def async_select_option(self, option: str) -> None:
@@ -126,6 +126,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
             setattr(self.device, self.entity_description.key, option)
         except:
             _LOGGER.info(f"can't set select option {option} on {self.device.name} for {self.entity_description.key}")
+        self._set_availabiltiy()
         self.async_write_ha_state()
 
     @callback
@@ -133,6 +134,8 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         """Update the entity's state."""
         if self.hass is None:
             return
+
+        self._set_availabiltiy()
 
         #if self.entity_description.value_fn is None:
         if (option := getattr(self.device, self.entity_description.key)) is None:
@@ -144,7 +147,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
 
-        self._attr_available = True
+        self._set_availabiltiy()
 
         if self._do_restore_default:
             if self.entity_description.qs_default_option:
@@ -162,7 +165,7 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._attr_available = True
+        self._set_availabiltiy()
         self._do_restore_default = False
 
 
@@ -274,6 +277,8 @@ class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
 
         if self._attr_current_option == CHARGER_NO_CAR_CONNECTED:
             self.user_selected_car = None
+
+        self._set_availabiltiy()
 
         self.async_write_ha_state()
 

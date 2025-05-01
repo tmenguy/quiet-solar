@@ -155,6 +155,7 @@ BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE = "qs_load_mark_current_constraint_done
 BUTTON_LOAD_RESET_OVERRIDE_STATE = "qs_load_reset_override_state"
 
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
+SWITCH_ENABLE_DEVICE = "qs_enable_device"
 SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
 
 

@@ -236,6 +236,8 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
         else:
             state = self.entity_description.value_fn(self.device, self.entity_description.key)
 
+        self._set_availabiltiy()
+
         if state is None:
             if self.entity_description.qs_is_none_unavailable:
                 self._attr_available = False
@@ -243,9 +245,11 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
                 self.async_write_ha_state()
                 return
             else:
+                self.async_write_ha_state()
                 return
 
-        self._attr_available = True
+
+
         self._attr_native_value = state
         self.async_write_ha_state()
 
@@ -315,7 +319,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
         do_save = False
-        self._attr_available = True
+        self._set_availabiltiy()
 
         new_val = self.device.get_active_readable_name(time)
 

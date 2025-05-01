@@ -135,18 +135,20 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._attr_available = True
+        self._set_availabiltiy()
+
+    def _set_availabiltiy(self) -> None:
+        if self.device.qs_enable_device is False:
+            self._attr_available = False
+        elif self.entity_description.is_available:
+            self._attr_available = self.entity_description.is_available(self)
+        else:
+            self._attr_available = True
 
     async def async_press(self) -> None:
         """Process the button press."""
         await self.entity_description.async_press(self)
 
-    @property
-    def available(self) -> bool:
-        """Return the availability of the switch."""
-        if self.entity_description.is_available:
-            self._attr_available = self.entity_description.is_available(self)
-        return super().available
 
     @callback
     def async_update_callback(self, time:datetime) -> None:
@@ -154,8 +156,7 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
         if self.hass is None:
             return
 
-        if self.entity_description.is_available:
-            self._attr_available = self.entity_description.is_available(self)
+        self._set_availabiltiy()
 
         self.async_write_ha_state()
 

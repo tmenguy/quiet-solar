@@ -87,7 +87,7 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._attr_available = True
+        self._set_availabiltiy()
 
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
@@ -106,6 +106,8 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
         if val is None:
             val = dt_time(hour=7, minute=0, second=0)
 
+        self._set_availabiltiy()
+
         await self.async_set_value(val)
 
     async def async_set_value(self, value: dt_time) -> None:
@@ -115,5 +117,6 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
             setattr(self.device, self.entity_description.key, value)
         except:
             _LOGGER.info(f"can't set time {value} on {self.device.name} for {self.entity_description.key}")
+        self._set_availabiltiy()
         self.async_write_ha_state()
 

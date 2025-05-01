@@ -27,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
+        self._enabled = True
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self._device_is_3p = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
@@ -35,16 +36,8 @@ class AbstractDevice(object):
         self._device_type = device_type
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
-        self._constraints: list[LoadConstraint | None] = []
 
-        self.current_command : LoadCommand | None = None
-        self.prev_command: LoadCommand | None = None
-        self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
-        self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
-        self.running_command_first_launch: datetime | None = None
-        self.running_command_last_launch: datetime | None = None
-        self.running_command_num_relaunch : int = 0
-        self.running_command_num_relaunch_after_invalid: int = 0
+        self._local_reset()
 
         self._ack_command(None, None)
 
@@ -54,13 +47,49 @@ class AbstractDevice(object):
             if self.num_max_on_off % 2 == 1:
                 self.num_max_on_off += 1
 
-        self.num_on_off = 0
-        self.device_phase_amps_budget = None
-
         self.father_device : QSDynamicGroup = self.home
+
+    def _local_reset(self):
+        _LOGGER.info(f"Reset device {self.name}")
+        self._constraints: list[LoadConstraint | None] = []
+        self.current_command : LoadCommand | None = None
+        self.prev_command: LoadCommand | None = None
+        self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
+        self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
+        self.running_command_first_launch: datetime | None = None
+        self.running_command_last_launch: datetime | None = None
+        self.running_command_num_relaunch : int = 0
+        self.running_command_num_relaunch_after_invalid: int = 0
+        self.num_on_off : int = 0
+        self.device_phase_amps_budget : int | float | None = None
+        self.reset_daily_load_datas()
+
+    # for class overcharging reset
+    def reset(self):
+        self._local_reset()
+
+
+    @property
+    def qs_enable_device(self) -> bool:
+        return self._enabled
+
+    @qs_enable_device.setter
+    def qs_enable_device(self, enabled:bool):
+        if enabled != self._enabled:
+            self._enabled = enabled
+            if enabled:
+                self.reset()
+                self.home.remove_device(self)
+
+            if hasattr(self, "_exposed_entities"):
+                time = datetime.now(pytz.utc)
+                for ha_object in self._exposed_entities:
+                    ha_object.async_update_callback(time)
 
 
     def allocate_phase_amps_budget(self, time:datetime, from_father_budget:float|None):
+        if self.qs_enable_device is False:
+            return 0.0
 
         allocate_bdget = 0
         if from_father_budget is None:
@@ -103,7 +132,7 @@ class AbstractDevice(object):
     def get_to_be_saved_info(self) -> dict:
         return {"num_on_off": self.num_on_off}
 
-    def reset_daily_load_datas(self, time:datetime):
+    def reset_daily_load_datas(self, time:datetime | None = None):
         self.num_on_off = 0
 
 
@@ -127,17 +156,24 @@ class AbstractDevice(object):
             power = power / 3.0
         return power / self.home.voltage
 
-    def reset(self):
-        _LOGGER.info(f"Reset device {self.name}")
-        self.current_command = None
-        self._constraints = []
+
+
+
+
+
 
     def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
+        if self.qs_enable_device is False:
+            self._constraints = []
+
         for c in self._constraints:
             if c.is_constraint_active_for_time_period(start_time, end_time):
                 yield c
 
     def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
+        if self.qs_enable_device is False:
+            self._constraints = []
+
         if not self._constraints:
             self._constraints = []
         for c in self._constraints:
@@ -146,6 +182,9 @@ class AbstractDevice(object):
         return None
 
     def is_as_fast_as_possible_constraint_active(self, time:datetime) -> bool:
+        if self.qs_enable_device is False:
+            self._constraints = []
+
         if not self._constraints:
             self._constraints = []
         for c in self._constraints:
@@ -186,6 +225,9 @@ class AbstractDevice(object):
                 _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
 
     def is_load_has_a_command_now_or_coming(self, time:datetime) -> bool:
+        if self.qs_enable_device is False:
+            return False
+
         if self.current_command is not None:
             return True
         if self.running_command is not None:
@@ -195,6 +237,8 @@ class AbstractDevice(object):
         return False
 
     async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
+        if self.qs_enable_device is False:
+            return
 
         command = copy_command(command)
 
@@ -239,11 +283,17 @@ class AbstractDevice(object):
         return
 
     def is_load_command_set(self, time:datetime):
+        if self.qs_enable_device is False:
+            return True
+
         return self.running_command is None and self.current_command is not None
 
     async def check_commands(self, time: datetime) -> timedelta:
 
         res = timedelta(seconds=0)
+
+        if self.qs_enable_device is False:
+            return res
 
         if self.running_command is not None:
             _LOGGER.info(
@@ -270,6 +320,9 @@ class AbstractDevice(object):
         return res
 
     async def force_relaunch_command(self, time: datetime):
+        if self.qs_enable_device is False:
+            self.running_command = None
+
         if self.running_command is not None:
             _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
             self.running_command_num_relaunch += 1
@@ -283,6 +336,9 @@ class AbstractDevice(object):
                 await self.check_commands(time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        if self.qs_enable_device is False:
+            return True
+
         print(f"Executing command {command}")
         return False
 
@@ -652,6 +708,11 @@ class AbstractLoad(AbstractDevice):
 
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
 
+        if self.qs_enable_device is False:
+            self._constraints = []
+            return True
+
+
         if not self._constraints:
             self._constraints = []
 
@@ -682,6 +743,9 @@ class AbstractLoad(AbstractDevice):
 
     async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
 
+        if self.qs_enable_device is False:
+            self._constraints = []
+            return True
 
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date

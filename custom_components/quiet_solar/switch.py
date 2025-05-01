@@ -10,7 +10,7 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
 from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
-    SWITCH_POOL_FORCE_WINTER_MODE
+    SWITCH_POOL_FORCE_WINTER_MODE, SWITCH_ENABLE_DEVICE
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .entity import QSDeviceEntity
@@ -71,6 +71,11 @@ def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
         entities.append(QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_green_only_description))
 
 
+    qs_load_enabled_description = QSSwitchEntityDescription(
+        key=SWITCH_ENABLE_DEVICE,
+        translation_key=SWITCH_ENABLE_DEVICE,
+    )
+    entities.append(QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_load_enabled_description))
 
 
     return entities
@@ -144,17 +149,25 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
+        self._set_availabiltiy()
+
+    def _set_availabiltiy(self):
+        if self.device.qs_enable_device is False and self.entity_description.key != SWITCH_ENABLE_DEVICE:
+            self._attr_available = False
+        else:
+            self._attr_available = True
 
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        pass
+        self._set_availabiltiy()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
 
         setattr(self.device, self.entity_description.key, True)
 
         self._attr_is_on = True
+        self._set_availabiltiy()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -162,7 +175,9 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         setattr(self.device, self.entity_description.key, False)
 
         self._attr_is_on = False
+        self._set_availabiltiy()
         self.async_write_ha_state()
+
 
 class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
     """Mixin for button specific attributes."""
@@ -205,9 +220,21 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
 
 class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
 
+    def _set_availabiltiy(self):
+
+        if isinstance(self.device, QSChargerGeneric):
+            self._attr_available = self.device.car is not None
+        else:
+            self._attr_available = True
+
+        if self.device.qs_enable_device is False:
+            self._attr_available = False
+
+
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
+        self._set_availabiltiy()
         has_set = False
         if isinstance(self.device, QSChargerGeneric):
             if self.device.car is not None:
@@ -224,6 +251,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the zone on."""
         #await self.device.async_on()
+        self._set_availabiltiy()
         if isinstance(self.device, QSChargerGeneric):
             if self.device.car is not None:
                 if self.device.car.car_default_charge == 100:
@@ -238,6 +266,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the zone off."""
         #await self.device.async_off()
+        self._set_availabiltiy()
         if isinstance(self.device, QSChargerGeneric):
             await self.device.set_next_charge_full_or_not(False)
 
@@ -253,10 +282,3 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
             self._attr_is_on = False
 
         self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return the availability of the switch."""
-        if isinstance(self.device, QSChargerGeneric):
-            self._attr_available = self.device.car is not None
-        return super().available

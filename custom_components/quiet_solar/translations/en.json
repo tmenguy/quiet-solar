@@ -352,6 +352,9 @@
             "qs_best_effort_green_only": {
                 "name": "Best Effort Green Only"
             },
+            "qs_enable_device": {
+                "name": "Enabled for quiet solar"
+            },
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
             },

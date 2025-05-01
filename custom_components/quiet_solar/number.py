@@ -76,7 +76,7 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._attr_available = True
+        self._set_availabiltiy()
 
     async def async_added_to_hass(self) -> None:
         """Restore last state."""
@@ -107,4 +107,5 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
             setattr(self.device, self.entity_description.key, value)
         except:
             _LOGGER.info(f"can't set number {value} on {self.device.name} for {self.entity_description.key}")
+        self._set_availabiltiy()
         self.async_write_ha_state()

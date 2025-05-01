@@ -103,7 +103,7 @@ class QSforecastValueSensor:
 
 class QSHome(QSDynamicGroup):
 
-    _battery: QSBattery = None
+    _battery: QSBattery | None = None
     voltage: int = 230
 
     _chargers : list[QSChargerGeneric] = []
@@ -530,8 +530,50 @@ class QSHome(QSDynamicGroup):
             device.register_all_on_change_states()
             self._all_devices.append(device)
 
-        #will redo the whole tooplogy each time
+        #will redo the whole topology each time
         self._set_amps_topology()
+
+    def remove_device(self, device):
+
+        device.home = self
+
+        if isinstance(device, QSBattery):
+            self._battery = None
+        elif isinstance(device, QSCar):
+            # remove the car from the list
+            try:
+                self._cars.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove car {device.name} that was not in the list of cars")
+        elif isinstance(device, QSChargerGeneric):
+            try:
+                self._chargers.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers")
+        elif isinstance(device, QSSolar):
+            self._solar_plant = None
+
+        if isinstance(device, AbstractLoad):
+            try:
+                self._all_loads.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove load {device.name} that was not in the list of loads")
+
+        if isinstance(device, QSDynamicGroup):
+            try:
+                self._all_dynamic_groups.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups")
+
+        if isinstance(device, HADeviceMixin):
+            try:
+                self._all_devices.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
+
+        #will redo the whole topology each time
+        self._set_amps_topology()
+
 
 
     async def update_loads_constraints(self, time: datetime):

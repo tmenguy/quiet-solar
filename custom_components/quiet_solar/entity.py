@@ -88,10 +88,14 @@ class QSBaseEntity(Entity):
        # if not (self.entity_description.translation_key is UNDEFINED):
        #     _attr_has_entity_name = True
 
+    def _set_availabiltiy(self):
+        self._attr_available = True
+
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        return
+        self._set_availabiltiy()
+
 
 
 
@@ -128,6 +132,15 @@ class QSDeviceEntity(QSBaseEntity):
 
         if isinstance(self.device, HADeviceMixin):
             self.device.attach_exposed_has_entity(self)
+
+        self._set_availabiltiy()
+
+    def _set_availabiltiy(self):
+        if self.device.qs_enable_device is False:
+            self._attr_available = False
+        else:
+            self._attr_available = True
+
 
    # @property
    # def home(self) -> Home:
