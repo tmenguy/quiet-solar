@@ -50,6 +50,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             return 0.0
 
     def get_bistate_modes(self) -> list[str]:
+        if self.load_is_auto_to_be_boosted:
+            # do not allow the user to force the bistate mode
+            return bistate_modes
         return bistate_modes + [self._bistate_mode_on, self._bistate_mode_off]
 
     def support_green_only_switch(self) -> bool:
