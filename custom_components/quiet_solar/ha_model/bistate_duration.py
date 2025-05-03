@@ -142,7 +142,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     expected_state = self.expected_state_from_command(self.current_command)
 
                     # if the user did something different ... just OVERRIDE the automation for a given time
-                    if state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
+                    if expected_state is not None and state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
                         # we need to remember the state and the time
 
                         _LOGGER.info(
