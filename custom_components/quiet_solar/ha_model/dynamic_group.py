@@ -76,7 +76,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if new_amps > self.dyn_group_max_phase_current:
             return False
 
-        if self.father is None or self == self.home:
+        if self.father_device is None or self == self.home:
             return True
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps,
