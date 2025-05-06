@@ -649,14 +649,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
 
-        # for i in range(first_slot, last_slot + 1):
-
         # try to shave first the biggest free slots
         for i_sorted in sorted_available_power:
 
             i = i_sorted + first_slot
 
-        #for i in range(first_slot, last_slot + 1):
             if power_available_power[i] <= -min_power:
                 j = 0
                 while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < - \
@@ -751,11 +748,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     _LOGGER.info(
                                         f"compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
 
+                                    # it will force the first slot to be a consign by construction
                                     explore_range = range(first_slot, last_slot + 1)
-
-                                    # if not done : force the first slot to be a consign! if None it will be added below in the explore_range
-                                    if out_commands[first_slot] is not None and out_commands[first_slot].is_auto():
-                                        do_force_first_slot_to_consign = True
 
                         nrj_to_replace = 0.0
 
@@ -770,6 +764,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         for fill_power_idx in range(len(power_sorted_cmds)):
                             if (nrj_to_be_added + nrj_to_replace) <= price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
                                 break
+                        # boost a bit to speed up a bit the filling
+                        fill_power_idx = min(fill_power_idx + 1, len(power_sorted_cmds) - 1)
                     else:
                         fill_power_idx = 0
 
@@ -782,18 +778,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     else:
                         price_cmd = copy_command(power_sorted_cmds[fill_power_idx])
 
-
-                    if do_force_first_slot_to_consign:
-                        out_commands[first_slot] = price_cmd
-                        # put back the removed energy
-                        nrj_to_be_added += (out_power[first_slot] * power_slots_duration_s[first_slot]) / 3600.0
-                        out_power[first_slot] = price_power
-                        out_power_idxs[first_slot] = fill_power_idx
-                        nrj_to_be_added -= (price_power * power_slots_duration_s[first_slot]) / 3600.0
-
-
-                    if nrj_to_be_added <= 0.0:
-                        break
 
                     # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
                     # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse

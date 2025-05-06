@@ -6,7 +6,7 @@ from typing import Mapping, Any, Callable
 
 import pytz
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform, \
-    ATTR_ENTITY_ID
+    ATTR_ENTITY_ID, UnitOfElectricCurrent
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
@@ -15,9 +15,9 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P
-from ..home_model.commands import CMD_OFF, CMD_IDLE
-from ..home_model.load import AbstractLoad
+    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, \
+    CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR
+from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
 
@@ -74,7 +74,7 @@ def convert_power_to_w(value: float, attributes: dict | None = None) -> (float, 
         sensor_unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, default_unit)
 
     if sensor_unit in UnitOfPower and sensor_unit != default_unit:
-        value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=UnitOfPower.WATT)
+        value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=default_unit)
         new_attr = {}
         if attributes is not None:
             new_attr = dict(attributes)
@@ -83,6 +83,24 @@ def convert_power_to_w(value: float, attributes: dict | None = None) -> (float, 
 
     return value, new_attr
 
+
+def convert_current_to_amps(value: float, attributes: dict | None = None) -> (float, dict):
+    default_unit: str = UnitOfElectricCurrent.AMPERE
+    new_attr = attributes
+    if attributes is None:
+        sensor_unit = default_unit
+    else:
+        sensor_unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, default_unit)
+
+    if sensor_unit in UnitOfElectricCurrent and sensor_unit != default_unit:
+        value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=default_unit)
+        new_attr = {}
+        if attributes is not None:
+            new_attr = dict(attributes)
+
+        new_attr[ATTR_UNIT_OF_MEASUREMENT] = default_unit
+
+    return value, new_attr
 
 def get_average_power_energy_based(
         power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]]):
@@ -185,6 +203,10 @@ class HADeviceMixin:
         self.calendar = kwargs.pop(CONF_CALENDAR, None)
         self.accurate_power_sensor = kwargs.pop(CONF_ACCURATE_POWER_SENSOR, None)
 
+        self.phase_1_amps_sensor = kwargs.pop(CONF_PHASE_1_AMPS_SENSOR, None)
+        self.phase_2_amps_sensor = kwargs.pop(CONF_PHASE_2_AMPS_SENSOR, None)
+        self.phase_3_amps_sensor = kwargs.pop(CONF_PHASE_3_AMPS_SENSOR, None)
+
 
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
 
@@ -234,6 +256,10 @@ class HADeviceMixin:
         self._exposed_entities = set()
 
         self.attach_power_to_probe(self.accurate_power_sensor)
+
+        self.attach_amps_to_probe(self.phase_1_amps_sensor)
+        self.attach_amps_to_probe(self.phase_2_amps_sensor)
+        self.attach_amps_to_probe(self.phase_3_amps_sensor)
 
         self.attach_power_to_probe(self.command_based_power_sensor,
                                    non_ha_entity_get_state=self.command_power_state_getter)
@@ -528,6 +554,30 @@ class HADeviceMixin:
             return 0.0
         return p
 
+
+    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> float:
+        # first check if we do have an amp sensor for the phases
+        p = self.get_device_power_latest_possible_valid_value(tolerance_seconds=tolerance_seconds, time=time)
+        worst_amps = 0
+        if isinstance(self, AbstractDevice):
+            worst_amps =  self.get_phase_amps_from_power(p)
+
+        if self.phase_1_amps_sensor is not None:
+            p1 = self.get_sensor_latest_possible_valid_value(self.phase_1_amps_sensor, tolerance_seconds, time)
+            if p1 is not None:
+                worst_amps = max(worst_amps, p1)
+        if self.phase_2_amps_sensor is not None:
+            p2 = self.get_sensor_latest_possible_valid_value(self.phase_2_amps_sensor, tolerance_seconds, time)
+            if p2 is not None:
+                worst_amps = max(worst_amps, p2)
+        if self.phase_3_amps_sensor is not None:
+            p3 = self.get_sensor_latest_possible_valid_value(self.phase_3_amps_sensor, tolerance_seconds, time)
+            if p3 is not None:
+                worst_amps = max(worst_amps, p3)
+
+        return max(0, worst_amps)
+
+
     def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
         if entity_id is None:
             return None
@@ -679,6 +729,13 @@ class HADeviceMixin:
                                                                                             float | str | None, datetime | None, dict | None] | None] = None):
         self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
                                       conversion_fn=convert_power_to_w, update_on_change_only=True,
+                                      non_ha_entity_get_state=non_ha_entity_get_state)
+
+    def attach_amps_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+                              non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
+                                                                                            float | str | None, datetime | None, dict | None] | None] = None):
+        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
+                                      conversion_fn=convert_current_to_amps, update_on_change_only=True,
                                       non_ha_entity_get_state=non_ha_entity_get_state)
 
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,

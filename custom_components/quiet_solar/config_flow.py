@@ -44,7 +44,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_POOL_TEMPERATURE_SENSOR, CONF_SWITCH, \
     CONF_CAR_PLUGGED, CONF_CHARGER_PLUGGED, CONF_CAR_TRACKER, CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, \
     CONF_IS_3P, DATA_HANDLER, CONF_POOL_IS_PUMP_VARIABLE_SPEED, CONF_POWER, CONF_SELECT, \
-    CONF_ACCURATE_POWER_SENSOR, CONF_NUM_MAX_ON_OFF,\
+    CONF_ACCURATE_POWER_SENSOR, CONF_NUM_MAX_ON_OFF, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
@@ -55,7 +55,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
     CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
-    CONF_CLIMATE_HVAC_MODE_ON
+    CONF_CLIMATE_HVAC_MODE_ON, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR
 from .ha_model.climate_controller import get_hvac_modes
 from .ha_model.home import QSHome
 
@@ -78,6 +78,21 @@ def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
 
     return entities
 
+
+def selectable_amps_entities(hass: HomeAssistant, domains=None) -> list:
+    """Return an entity selector which compatible entities."""
+
+    if domains is None:
+        ALLOWED_DOMAINS = [SENSOR_DOMAIN]
+    else:
+        ALLOWED_DOMAINS = domains
+    entities = [
+        ent.entity_id
+        for ent in hass.states.async_all(ALLOWED_DOMAINS)
+        if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) in UnitOfElectricCurrent
+        and ent.domain in ALLOWED_DOMAINS
+    ]
+    return entities
 
 def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
     """Return an entity selector which compatible entities."""
@@ -193,7 +208,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_is_3p=False,
                           add_max_phase_amps_selector=None,
                           add_power_group_selector=False,
-                          add_max_on_off=False
+                          add_max_on_off=False,
+                          add_amps_sensors=False,
                           ) -> dict:
 
         default_name = self.config_entry.data.get(CONF_NAME)
@@ -278,6 +294,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
             )})
 
+
+
         if add_max_phase_amps_selector:
 
             sc.update({vol.Optional(CONF_DYN_GROUP_MAX_PHASE_AMPS, description={"suggested_value":self.config_entry.data.get(CONF_DYN_GROUP_MAX_PHASE_AMPS, add_max_phase_amps_selector)}):
@@ -295,6 +313,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             power_entities = selectable_power_entities(self.hass)
             if len(power_entities) > 0:
                 self.add_entity_selector(sc, CONF_ACCURATE_POWER_SENSOR, add_load_power_sensor_mandatory, entity_list=power_entities)
+
+        if add_amps_sensors:
+
+            amps_entities = selectable_amps_entities(self.hass)
+
+            if len(amps_entities) > 0:
+                self.add_entity_selector(sc, CONF_PHASE_1_AMPS_SENSOR, False,
+                                         entity_list=amps_entities)
+                self.add_entity_selector(sc, CONF_PHASE_2_AMPS_SENSOR, False,
+                                             entity_list=amps_entities)
+                self.add_entity_selector(sc, CONF_PHASE_3_AMPS_SENSOR, False,
+                                             entity_list=amps_entities)
+
 
         if add_efficiency_selector:
             sc.update({
@@ -454,7 +485,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=60)
+        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=54, add_amps_sensors=True)
 
         sc_dict.update(  {
 
@@ -1009,7 +1040,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                          add_load_power_sensor=True,
                                          add_is_3p=True,
                                          add_max_phase_amps_selector=32,
-                                         add_power_group_selector=True)
+                                         add_power_group_selector=True,
+                                         add_amps_sensors=True
+                                         )
 
         schema = vol.Schema(sc_dict)
 

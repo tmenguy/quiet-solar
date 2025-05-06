@@ -14,6 +14,10 @@ HOME_AVAILABLE_POWER_SENSOR = "home_available_power_sensor"
 
 CONF_POWER = "power"
 CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
+CONF_PHASE_1_AMPS_SENSOR = "phase_1_amps_sensor"
+CONF_PHASE_2_AMPS_SENSOR = "phase_2_amps_sensor"
+CONF_PHASE_3_AMPS_SENSOR = "phase_3_amps_sensor"
+
 CONF_SWITCH = "switch"
 CONF_SELECT = "select"
 CONF_CALENDAR = "calendar"

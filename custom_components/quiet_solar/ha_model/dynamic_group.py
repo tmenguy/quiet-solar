@@ -36,6 +36,52 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 return True
         return False
 
+    def is_delta_current_acceptable(self, delta_amps: float, new_amps_consumption: float | None, time:datetime) -> bool:
+
+        if new_amps_consumption is not None and new_amps_consumption > self.dyn_group_max_phase_current:
+            return False
+
+        worst_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
+
+        if worst_amps + delta_amps > self.dyn_group_max_phase_current:
+            return False
+
+        if self.father is None or self == self.home:
+            return True
+        else:
+            return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps, time=time)
+
+    def is_current_acceptable(self, new_amps: float, estimated_current_amps: float | None, time:datetime) -> bool:
+
+        if new_amps > self.dyn_group_max_phase_current:
+            return False
+
+        if estimated_current_amps is None:
+            estimated_current_amps = 0.0
+
+        measured_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
+
+        if measured_amps == 0.0:
+            current_amps = estimated_current_amps
+        elif estimated_current_amps == 0.0:
+            current_amps = measured_amps
+        else:
+            current_amps = min(measured_amps, estimated_current_amps)
+
+        # maximize the delta
+        delta_amps = new_amps - current_amps
+
+        new_amps = delta_amps + max(estimated_current_amps, measured_amps)
+
+        if new_amps > self.dyn_group_max_phase_current:
+            return False
+
+        if self.father is None or self == self.home:
+            return True
+        else:
+            return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps,
+                                                                  new_amps_consumption=new_amps,
+                                                                  time=time)
 
 
     def get_device_power_latest_possible_valid_value(self,
@@ -121,7 +167,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             from_father_budget = min(from_father_budget, self.dyn_group_max_phase_current)
 
         if from_father_budget is None:
-            from_father_budget = 1e9 # a lot of amps :)
+            from_father_budget = 1e8 # a lot of amps :)
 
         if self.father_device.device_is_3p and not self.device_is_3p:
             # we have been counting in budget only a third of the need for single phase load in a 3 phase father group (or home)
@@ -282,7 +328,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         # now clean a bit the budgets to get to integer for amps
 
-        # ok we do have now good allocation for all budget
+        # ok we do have now good allocation for all budgets
         allocated_final_budget = 0
         for c_budget in budgets:
             allocated_final_budget += c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
