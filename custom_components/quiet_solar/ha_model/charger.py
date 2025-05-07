@@ -450,65 +450,76 @@ class QSChargerGroup(object):
                             # ouch .... we have to lower the charge of some cars
                             _LOGGER.warning(
                                 f"dyn_handle: need to shave some auto consign")
-                            shaved_amps = 0
-                            # first shave amps as much as we can to get to a proper level
+
+
+                            # first try to stop auto only
                             possible_allotment_reached = False
-                            while True:
-                                has_shaved = False
-                                for cs in actionable_chargers:
-                                    if cs.possible_amps[0] > cs.charger.min_charge:
-                                        # we can lower the charge
-                                        cs.possible_amps.insert(0, cs.possible_amps[0] - 1)
-                                        shaved_amps += 1
-                                        has_shaved = True
+
+                            for cs in actionable_chargers:
+                                can_stop = cs.command.is_like(CMD_AUTO_GREEN_ONLY)
+                                if cs.possible_amps[0] >= cs.charger.min_charge and can_stop:
+                                    # we can lower the charge
+                                    mandatory_amps -= cs.possible_amps[0]
+                                    cs.possible_amps.insert(0, 0)
 
                                     if self.dynamic_group.is_current_acceptable(
-                                        new_amps=mandatory_amps - shaved_amps,
-                                        estimated_current_amps=current_amps,
-                                        time=time
+                                            new_amps=mandatory_amps,
+                                            estimated_current_amps=current_amps,
+                                            time=time
                                     ):
                                         possible_allotment_reached = True
                                         break
 
-                                if has_shaved is False:
-                                    break
-
-                                if possible_allotment_reached:
-                                    break
-
-                            mandatory_amps -= shaved_amps
 
                             if possible_allotment_reached is False:
-                                _LOGGER.warning(
-                                    f"dyn_handle: need to shave a lot more and force some quick down")
+                                # first shave amps as much as we can to get to a proper level, starting with
+                                # less important chargers
+                                actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score)
 
-                                for step in ["stop_auto_only", "can_stop_all"]:
-
-                                    shaved_amps = 0
+                                while True:
+                                    has_shaved = False
                                     for cs in actionable_chargers:
-                                        can_stop = True
-                                        if step == "stop_auto_only":
-                                            can_stop = cs.command.is_like(CMD_AUTO_GREEN_ONLY)
-                                        if cs.possible_amps[0] >= cs.charger.min_charge and can_stop:
+                                        if cs.possible_amps[0] > cs.charger.min_charge:
                                             # we can lower the charge
-                                            shaved_amps += cs.possible_amps[0]
-                                            cs.possible_amps.insert(0,0)
+                                            cs.possible_amps.insert(0, cs.possible_amps[0] - 1)
+                                            mandatory_amps -= 1
+                                            has_shaved = True
 
-                                        if self.dynamic_group.is_current_acceptable(
-                                                new_amps=mandatory_amps - shaved_amps,
+                                            if self.dynamic_group.is_current_acceptable(
+                                                new_amps=mandatory_amps,
                                                 estimated_current_amps=current_amps,
                                                 time=time
-                                        ):
-                                            possible_allotment_reached = True
-                                            break
+                                            ):
+                                                possible_allotment_reached = True
+                                                break
 
-                                    mandatory_amps -= shaved_amps
+                                    if has_shaved is False:
+                                        # no more possibilities ...
+                                        break
+
                                     if possible_allotment_reached:
                                         break
 
+                                if possible_allotment_reached is False:
+                                    _LOGGER.warning(
+                                        f"dyn_handle: need to shave a lot more and force some quick down")
 
-                        # ok now we know we are sure we can allocate
+                                    # by construction, this one can go to 0 charge ...so we are good out of it
+                                    for cs in actionable_chargers:
+                                        if cs.possible_amps[0] >= cs.charger.min_charge:
+                                            # we can lower the charge and allows to stop the charge
+                                            mandatory_amps -= cs.possible_amps[0]
+                                            cs.possible_amps.insert(0,0)
 
+                                            if self.dynamic_group.is_current_acceptable(
+                                                    new_amps=mandatory_amps,
+                                                    estimated_current_amps=current_amps,
+                                                    time=time
+                                            ):
+                                                break
+
+
+                        # ok, now we know we are sure we can allocate
                         if current_real_cars_power is not None:
                             current_power = current_real_cars_power
                         else:
@@ -530,7 +541,7 @@ class QSChargerGroup(object):
 
                             if best_global_command == CMD_AUTO_PRICE:
                                 if self.home.battery_can_discharge() is False and full_available_home_power > 0:
-                                    # we will compute here is the price to take "more" power is better than the best
+                                    # we will compute here if the price to take "more" power is better than the best
                                     # electricity rate we may have
 
                                     # check we have room to expand, and allocate amps
@@ -594,13 +605,16 @@ class QSChargerGroup(object):
             alloted_amps += cs.budgeted_amp
             current_amps += cs.current_real_max_charging_amp
 
+        # check first if we are not already in a bad amps situation
         if self.dynamic_group.is_current_acceptable(
                 new_amps=alloted_amps,
                 estimated_current_amps=current_amps,
                 time=time
         ) is False:
             # ok we know it is possible to shave to reach the max phase current, due to the preparation before
-            _LOGGER.info(f"budgeting_algorithm_minimize_diffs:  group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}")
+            _LOGGER.info(f"budgeting_algorithm_minimize_diffs: group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}")
+            # start decrease the lower scores
+            actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score)
             current_ok = False
             for allow_state_change in [False, True]:
                 for cs in actionable_chargers:
@@ -649,8 +663,8 @@ class QSChargerGroup(object):
         # take a very incremental, one by one amp when increasing, decrease should be fast
         do_stop = False
 
-        # sort the charger according to their score, if increase put the most important to finish teh charge first
-        # if derease: remove charging from less important first (lower score)
+        # sort the charger according to their score, if increase put the most important to finish the charge first
+        # if decrease: remove charging from less important first (lower score)
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=increase)
 
         for allow_state_change in [False, True]:
@@ -667,7 +681,7 @@ class QSChargerGroup(object):
 
                     if increase:
                         if power_budget - diff_power >= 0:
-                            # ok good change we still have some power to give
+                            # ok good change, we still have some power to give
                             pass
                         else:
                             next_possible_budgeted_amp = None
@@ -1020,7 +1034,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.current_real_max_charging_amp = self._expected_amperage.value
 
-        # if the car charge is n state "not charging" mark the real charge as 0
+        # if the car charge is in state "not charging" mark the real charge as 0
         if self._expected_charge_state.value is False:
             cs.current_real_max_charging_amp = 0
         elif cs.current_real_max_charging_amp < self.min_charge:
@@ -1739,24 +1753,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_not_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self._check_plugged_val(time, for_duration, check_for_val=False)
 
-    def is_charger_plugged_now(self, time: datetime) -> [bool|None, datetime]:
+    def is_charger_plugged_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime] :
 
         if self.charger_status_sensor:
             state_wallbox = self.hass.states.get(self.charger_status_sensor)
             if state_wallbox is None or state_wallbox.state in self._unknown_state_vals:
                 #if other are not available, we can't know if the charger is plugged at all
                 if state_wallbox is not None:
-                    state_time = state_wallbox.last_updated
+                    state_time : datetime = state_wallbox.last_updated
                 else:
                     state_time = time
                 return None, state_time
 
             plugged_state_vals = self.get_car_plugged_in_status_vals()
             if plugged_state_vals:
+                state_time: datetime = state_wallbox.last_updated
                 if state_wallbox.state in plugged_state_vals:
-                    return True, state_wallbox.last_updated
+                    return True, state_time
                 else:
-                    return False, state_wallbox.last_updated
+                    return False, state_time
 
 
         return self.low_level_plug_check_now(time)
@@ -2160,7 +2175,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return res_charge_check
 
-    def low_level_plug_check_now(self, time: datetime) -> [bool | None, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime]:
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
