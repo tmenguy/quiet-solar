@@ -503,8 +503,45 @@ class HADeviceMixin:
 
         return None, None
 
+    def is_sensor_growing(self,
+                          entity_id,
+                          num_seconds: float | None = None,
+                          time = None) -> bool | None:
 
-    def get_sensor_latest_possible_valid_value(self, entity_id, tolerance_seconds: float | None = None,
+        if entity_id is None:
+            return None
+
+        entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
+
+        if not entity_id_values or len(entity_id_values) < 2:
+            return None
+
+        vals = []
+        min_v = None
+        max_v = None
+        for v in entity_id_values:
+            if v[1] is None:
+                continue
+            vals.append(v[1])
+            if min_v is None or v[1] < min_v:
+                min_v = v[1]
+            if max_v is None or v[1] > max_v:
+                max_v = v[1]
+
+
+        return vals[-1] >= max_v and max_v > min_v and len(vals) > 1
+
+
+
+
+
+
+
+
+
+    def get_sensor_latest_possible_valid_value(self,
+                                               entity_id,
+                                               tolerance_seconds: float | None = None,
                                                time = None) -> str | float | None:
         if entity_id is None:
             return None

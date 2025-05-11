@@ -179,8 +179,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "home"
 
-    def get_car_charge_percent(self, time: datetime) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=4*3600)
+    def get_car_charge_percent(self, time: datetime, tolerance_seconds: float=4*3600 ) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
+
+    def is_car_charge_growing(self,
+                              num_seconds: float,
+                              time: datetime) -> bool | None:
+
+        return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor,
+                               num_seconds=num_seconds,
+                              time=time)
 
     def get_car_current_capacity(self, time: datetime) -> float | None:
         res = self.get_car_charge_percent(time)

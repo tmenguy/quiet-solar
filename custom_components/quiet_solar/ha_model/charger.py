@@ -1555,7 +1555,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.push_live_constraint(time, car_charge_best_effort):
                     do_force_solve = True
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} car max: {self.car.car_default_charge}%/{target_charge}% pushed filler constraint {car_charge_best_effort.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} default charge: {self.car.car_default_charge}% pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
@@ -1970,6 +1970,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return False
 
+
+    def _compute_added_percent_charge_update(self, start_time: datetime, end_time: datetime) -> float | None:
+        """ compute the percent charge update for a given time period
+        """
+        if self.car is None or self.car.car_battery_capacity is None:
+            return None
+
+        added_percent = None
+
+        added_nrj = self.get_device_real_energy(start_time=start_time,
+                                                end_time=end_time,
+                                                clip_to_zero_under_power=self.charger_consumption_W)
+
+        if added_nrj is not None and self.car.car_battery_capacity > 0:
+            added_nrj = added_nrj/self.efficiency_factor
+            added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
+
+        return added_percent
+
     async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> tuple[float | None, bool]:
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
@@ -1993,29 +2012,50 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"update_value_callback:no command or idle/off")
             result = None
         else:
-            sensor_result = self.car.get_car_charge_percent(time)
 
-            added_nrj = self.get_device_real_energy(start_time=ct.last_value_update, end_time=time,
-                                                    clip_to_zero_under_power=self.charger_consumption_W)
-            if added_nrj is not None and self.car.car_battery_capacity is not None and self.car.car_battery_capacity > 0:
-                added_nrj = added_nrj/self.efficiency_factor # divide by efficiency factor as here we want to know what will be the impact in percent
-                added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
-                result_calculus = ct.current_value + added_percent
+            probe_charge_window = 30*60
+            sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+
+            total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
+
+            computed_percent_added_last = self._compute_added_percent_charge_update(start_time=ct.last_value_change_update, end_time=time)
+            if computed_percent_added_last is not None:
+                result_calculus = ct.current_value + int(computed_percent_added_last) # round it to int ... so stay the same for small updates
 
             result = sensor_result
 
-            if result_calculus is not None:
-                if sensor_result is None:
-                    result = result_calculus
-                else:
-                    # sensor may all the time be favored except when it is not set as up to date as the calculus?
-                    # another edge case for some cars : when in error it gives a 100 ....
-                    if sensor_result > 99:
-                        # close to the end take the minium of the two ... or sensor is bad
-                        result = min(result_calculus, sensor_result)
-                    else:
-                        # if sensor stopped working, continue to increase
-                        result = max(sensor_result, result_calculus)
+            if sensor_result is None:
+                if self.car.car_charge_percent_sensor:
+                    _LOGGER.info(
+                        f"update_value_callback:use calculus because sensor None {result_calculus}")
+                result = result_calculus
+            else:
+                if sensor_result > 99:
+                    if computed_percent_added_last is not None:
+                        result = min(sensor_result, ct.current_value + computed_percent_added_last)
+                elif total_charge_duration >= probe_charge_window:
+                    # keep the sensor result we are at the begining
+                    computed_percent_added_begin = self._compute_added_percent_charge_update(
+                        start_time=ct.first_value_update, end_time=time)
+
+                    if computed_percent_added_begin is None or computed_percent_added_begin >= 1:
+                        # we should have a growing one probe the last probe_window
+                        computed_percent_probe_window = self._compute_added_percent_charge_update(start_time=time - timedelta(seconds=probe_charge_window), end_time=time)
+
+                        if computed_percent_probe_window is not None and computed_percent_probe_window >= 1:
+                            # we are growing in the last probe window
+                            is_growing = self.car.is_car_charge_growing(num_seconds=computed_percent_probe_window, time=time)
+                            if is_growing is None:
+                                _LOGGER.info(
+                                    f"update_value_callback:use calculus because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
+                                result = result_calculus
+                            elif is_growing is False:
+                                # we are not growing and we should ...
+                                if computed_percent_probe_window > 5:
+                                    _LOGGER.info(f"update_value_callback:use calculus because sensor not growing (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
+                                    result = result_calculus
+                            # else : the sensor is growing ... keep it
+
 
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 

@@ -91,8 +91,10 @@ class LoadConstraint(object):
             dt_to_finish = self.best_duration_to_meet()
             self.end_of_constraint = time + dt_to_finish
 
-        self.last_value_update = time
-        self.last_state_update = time
+        self.last_value_update = None
+        self.last_value_change_update = None
+        self.first_value_update = None
+
         self.skip = False
         self.pushed_count = 0
 
@@ -308,7 +310,17 @@ class LoadConstraint(object):
     async def update(self, time: datetime) -> bool:
         """ Update the constraint with the new value. to be called by a load that
             can compute the value based or sensors or external data"""
-        if time >= self.last_value_update:
+        if self.last_value_update is None or time >= self.last_value_update:
+
+            if self.last_value_update is None:
+                self.last_value_update = time
+
+            if self.first_value_update is None:
+                self.first_value_update = time
+
+            if self.last_value_change_update is None:
+                self.last_value_change_update = time
+
             do_continue_constraint = True
             if self._update_value_callback is not None:
                 value, do_continue_constraint = await self._update_value_callback(self, time)
@@ -321,6 +333,10 @@ class LoadConstraint(object):
                 value = self.current_value
 
             self.last_value_update = time
+
+            if self.current_value != value:
+                self.last_value_change_update = time
+
             self.current_value = value
             if do_continue_constraint is False or self.is_constraint_met():
                 return False
