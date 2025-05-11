@@ -1555,7 +1555,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.push_live_constraint(time, car_charge_best_effort):
                     do_force_solve = True
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} car max : {self.car.car_default_charge}/{target_charge} % pushed filler constraint {car_charge_best_effort.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} car max: {self.car.car_default_charge}%/{target_charge}% pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
