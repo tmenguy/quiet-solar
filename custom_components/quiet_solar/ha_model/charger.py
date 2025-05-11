@@ -950,6 +950,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 if self.car:
                     target_charge = self.car.car_default_charge
+                else:
+                    target_charge = 80
 
             if self.car and target_charge is not None:
                 await self.car.set_max_charge_limit(target_charge)
@@ -1553,7 +1555,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self.push_live_constraint(time, car_charge_best_effort):
                     do_force_solve = True
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed filler constraint {car_charge_best_effort.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} car max : {self.car.car_default_charge}/{target_charge} % pushed filler constraint {car_charge_best_effort.name}")
 
 
         return do_force_solve
