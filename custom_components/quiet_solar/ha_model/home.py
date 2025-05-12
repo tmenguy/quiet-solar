@@ -574,7 +574,7 @@ class QSHome(QSDynamicGroup):
 
     def remove_device(self, device):
 
-        if device.home == self:
+        if device == self:
             # we can't remove home....
             return 
 

@@ -34,6 +34,7 @@ from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOM
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
 
+from . import async_reload_quiet_solar
 from .entity import LOAD_TYPES, LOAD_NAMES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
@@ -1147,6 +1148,10 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
         self.hass.config_entries.async_update_entry(
             self.config_entry, data=data, options=self.config_entry.options, title=self.get_entry_title(data)
         )
+
+        # always reset everything to be sure all is well set
+        await async_reload_quiet_solar(self.hass)
+
         return self.async_create_entry(title=None, data={})
 
     async def async_step_init(self, user_input=None) -> ConfigFlowResult:
