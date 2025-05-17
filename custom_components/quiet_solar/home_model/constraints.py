@@ -560,273 +560,271 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
         out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
 
-
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
-
-        if len(power_sorted_cmds) == 0:
-            _LOGGER.error(f"compute_best_period_repartition: no power sorted commands {self.name}")
-            return False, out_commands, out_power
 
         first_slot = 0
         last_slot = len(power_available_power) - 1
 
-        # find the constraint last slot
-        if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC:
-            # by construction the end of the constraints IS ending on a slot
-            last_slot = bisect_left(time_slots, self.end_of_constraint)
-            last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
-            if last_slot >= len(power_available_power):
-                last_slot = len(power_available_power) - 1
-
-        if self.as_fast_as_possible:
-
-            # fill with the best (more power) possible commands
-
-            as_fast_power = -1
-            as_fast_cmd_idx = None
-
-            for i in range(len(power_sorted_cmds)):
-                if as_fast_cmd_idx is None or power_sorted_cmds[i].power_consign > as_fast_power:
-                    as_fast_power = power_sorted_cmds[i].power_consign
-                    as_fast_cmd_idx = i
-
-            if self.support_auto:
-                as_fast_cmd = copy_command_and_change_type(cmd=power_sorted_cmds [as_fast_cmd_idx],
-                                                           new_type=CMD_AUTO_FROM_CONSIGN.command)
-            else:
-                as_fast_cmd = copy_command(power_sorted_cmds[as_fast_cmd_idx])
-
-            _LOGGER.info(
-                f"compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added} {as_fast_cmd} {power_sorted_cmds}")
-
-            for i in range(first_slot, last_slot + 1):
-
-                    current_energy: float = (as_fast_power * float(power_slots_duration_s[i])) / 3600.0
-                    out_commands[i] = as_fast_cmd
-                    out_power[i] = as_fast_power
-                    nrj_to_be_added -= current_energy
-
-                    if nrj_to_be_added <= 0.0:
-                        break
-
-            return nrj_to_be_added <= 0.0, out_commands, out_power
-
-
-        if self._internal_start_of_constraint != DATETIME_MIN_UTC:
-            first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
-
-        if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC and self.load.is_time_sensitive():
-            # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
-            # a 6 hours windows
-
-            best_s = max(3600*6, (self.best_duration_to_meet().total_seconds()/self.load.efficiency_factor)*1.5)
-            start_reduction = self.end_of_constraint - timedelta(seconds=best_s)
-
-            _LOGGER.info(
-                f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} {self.end_of_constraint} to {start_reduction}")
-
-
-            new_first_slots = bisect_left(time_slots, start_reduction)
-            first_slot = max(first_slot, new_first_slots)
-
-
-        sub_power_available_power = power_available_power[first_slot:last_slot + 1]
-        min_power_idx = np.argmin(sub_power_available_power)
-        left = min_power_idx
-        right = min_power_idx
-        sorted_available_power = [min_power_idx]
-        for i in range(len(sub_power_available_power) - 1):
-            if left == 0:
-                right = right + 1
-                if right >= len(sub_power_available_power):
-                    # should never happen
-                    break
-                sorted_available_power.append(right)
-            elif right == len(sub_power_available_power) - 1:
-                left = left - 1
-                if left < 0:
-                    # should never happen
-                    break
-                sorted_available_power.append(left)
-            else:
-                left_val = sub_power_available_power[left - 1]
-                right_val = sub_power_available_power[right + 1]
-
-                if left_val < right_val:
-                    left = left - 1
-                    sorted_available_power.append(left)
-                else:
-                    right = right + 1
-                    sorted_available_power.append(right)
-
-        if len(sorted_available_power) != len(sub_power_available_power):
-            _LOGGER.error(f"ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
-            sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
-
-
-        # try to shave first the biggest free slots
-        for i_sorted in sorted_available_power:
-
-            i = i_sorted + first_slot
-
-            if power_available_power[i] <= -min_power:
-                j = 0
-                while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < - \
-                        power_available_power[i]:
-                    j += 1
-
-                if self.support_auto:
-                    out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
-                                                                   new_type=CMD_AUTO_GREEN_ONLY.command)
-                else:
-                    out_commands[i] = copy_command(power_sorted_cmds[j])
-
-                out_power[i] = out_commands[i].power_consign
-                out_power_idxs[i] = j
-
-                nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
-
-                if nrj_to_be_added <= 0.0:
-                    break
-
-        if (nrj_to_be_added <= 0.0 or do_use_available_power_only):
-            pass
+        if len(power_sorted_cmds) == 0:
+            _LOGGER.error(f"compute_best_period_repartition: no power sorted commands {self.name}")
+            final_ret = False
         else:
 
-            # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
-            # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible
-            for i in range(first_slot, last_slot + 1):
+            # find the constraint last slot
+            if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC:
+                # by construction the end of the constraints IS ending on a slot
+                last_slot = bisect_left(time_slots, self.end_of_constraint)
+                last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
+                if last_slot >= len(power_available_power):
+                    last_slot = len(power_available_power) - 1
 
-                if power_available_power[i] + out_power[i] < 0:
-                    # there is still some solar to get
-                    power_to_add_idx = -1
-                    init_power_to_add_idx = out_power_idxs[i]
-                    if init_power_to_add_idx is None:
-                        init_power_to_add_idx = -1
+            if self.as_fast_as_possible:
 
-                    if out_commands[i] is None:
-                        power_to_add_idx = 0
-                    elif out_power_idxs[i] < len(power_sorted_cmds) - 1:
-                        power_to_add_idx = out_power_idxs[i] + 1
+                # fill with the best (more power) possible commands
+                as_fast_power = -1
+                as_fast_cmd_idx = None
 
-                    if power_to_add_idx > init_power_to_add_idx:
-                        # all command in ECO mode now....
-                        prev_energy = 0
-                        if out_commands[i] is not None:
-                            prev_energy = (out_power[i] * power_slots_duration_s[i]) / 3600.0
+                for i in range(len(power_sorted_cmds)):
+                    if as_fast_cmd_idx is None or power_sorted_cmds[i].power_consign > as_fast_power:
+                        as_fast_power = power_sorted_cmds[i].power_consign
+                        as_fast_cmd_idx = i
 
-                        # check if the price of the extra energy we add is better than the best price we have
-                        power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
-                        energy_to_add: float = ((power_to_add -  float(out_power[i]))* float(power_slots_duration_s[i])) / 3600.0
-                        cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0
-                        cost_per_watt_hour = cost / energy_to_add
-                        if cost_per_watt_hour > prices_ordered_values[0]:
-                            # not interesting to add this energy
-                            power_to_add_idx = -1
+                if self.support_auto:
+                    as_fast_cmd = copy_command_and_change_type(cmd=power_sorted_cmds [as_fast_cmd_idx],
+                                                               new_type=CMD_AUTO_FROM_CONSIGN.command)
+                else:
+                    as_fast_cmd = copy_command(power_sorted_cmds[as_fast_cmd_idx])
 
-                        # if we have a lower cost per watt_hours, than the lowest available price, use this bit of extra solar production
-                        if power_to_add_idx > init_power_to_add_idx:
-                            power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
-                            if self.support_auto:
-                                new_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[power_to_add_idx],
-                                                                       new_type=CMD_AUTO_PRICE.command)
-                            else:
-                                new_cmd = copy_command(power_sorted_cmds[power_to_add_idx])
+                _LOGGER.info(
+                    f"compute_best_period_repartition: as fast as possible constraint {self.name} {nrj_to_be_added} {as_fast_cmd} {power_sorted_cmds}")
 
-                            _LOGGER.info(
-                                    f"compute_best_period_repartition: price optimizer from {out_commands[i]} to {new_cmd}")
+                for i in range(first_slot, last_slot + 1):
 
-                            out_commands[i] = new_cmd
-                            out_power[i] = power_to_add
-                            out_power_idxs[i] = power_to_add_idx
-                            nrj_to_be_added += prev_energy - energy_to_add
+                        current_energy: float = (as_fast_power * float(power_slots_duration_s[i])) / 3600.0
+                        out_commands[i] = as_fast_cmd
+                        out_power[i] = as_fast_power
+                        nrj_to_be_added -= current_energy
 
-            if nrj_to_be_added > 0.0:
+                        if nrj_to_be_added <= 0.0:
+                            break
+                final_ret = nrj_to_be_added <= 0.0
+            else:
 
-                for price in prices_ordered_values:
+                if self._internal_start_of_constraint != DATETIME_MIN_UTC:
+                    first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
-                    do_force_first_slot_to_consign = False
-                    explore_range = range(last_slot, first_slot - 1, -1)
+                if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC and self.load.is_time_sensitive():
+                    # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
+                    # a 6 hours windows
 
-                    if len(power_sorted_cmds) > 1:
+                    best_s = max(3600*6, (self.best_duration_to_meet().total_seconds()/self.load.efficiency_factor)*1.5)
+                    start_reduction = self.end_of_constraint - timedelta(seconds=best_s)
 
-                        price_span_h = ((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
-                                                where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
+                    _LOGGER.info(
+                        f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} {self.end_of_constraint} to {start_reduction}")
+
+
+                    new_first_slots = bisect_left(time_slots, start_reduction)
+                    first_slot = max(first_slot, new_first_slots)
+
+
+                sub_power_available_power = power_available_power[first_slot:last_slot + 1]
+                min_power_idx = np.argmin(sub_power_available_power)
+                left = min_power_idx
+                right = min_power_idx
+                sorted_available_power = [min_power_idx]
+                for i in range(len(sub_power_available_power) - 1):
+                    if left == 0:
+                        right = right + 1
+                        if right >= len(sub_power_available_power):
+                            # should never happen
+                            break
+                        sorted_available_power.append(right)
+                    elif right == len(sub_power_available_power) - 1:
+                        left = left - 1
+                        if left < 0:
+                            # should never happen
+                            break
+                        sorted_available_power.append(left)
+                    else:
+                        left_val = sub_power_available_power[left - 1]
+                        right_val = sub_power_available_power[right + 1]
+
+                        if left_val < right_val:
+                            left = left - 1
+                            sorted_available_power.append(left)
+                        else:
+                            right = right + 1
+                            sorted_available_power.append(right)
+
+                if len(sorted_available_power) != len(sub_power_available_power):
+                    _LOGGER.error(f"ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
+
+
+                # try to shave first the biggest free slots
+                for i_sorted in sorted_available_power:
+
+                    i = i_sorted + first_slot
+
+                    if power_available_power[i] <= -min_power:
+                        j = 0
+                        while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < - \
+                                power_available_power[i]:
+                            j += 1
 
                         if self.support_auto:
+                            out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                           new_type=CMD_AUTO_GREEN_ONLY.command)
+                        else:
+                            out_commands[i] = copy_command(power_sorted_cmds[j])
 
-                            if self.load and self.load.current_command and self.load.current_command.is_like(
-                                    CMD_AUTO_FROM_CONSIGN):
-                                # we are already in auto consign mode for this load : we want to keep the continuity of the command
-                                if first_slot == 0 and prices[first_slot] == price:
-                                    # in this particular case : we will go from now to end to keep the continuity with the current command
+                        out_power[i] = out_commands[i].power_consign
+                        out_power_idxs[i] = j
+
+                        nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
+
+                        if nrj_to_be_added <= 0.0:
+                            break
+
+                if (nrj_to_be_added <= 0.0 or do_use_available_power_only):
+                    pass
+                else:
+
+                    # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
+                    # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible
+                    for i in range(first_slot, last_slot + 1):
+
+                        if power_available_power[i] + out_power[i] < 0:
+                            # there is still some solar to get
+                            power_to_add_idx = -1
+                            init_power_to_add_idx = out_power_idxs[i]
+                            if init_power_to_add_idx is None:
+                                init_power_to_add_idx = -1
+
+                            if out_commands[i] is None:
+                                power_to_add_idx = 0
+                            elif out_power_idxs[i] < len(power_sorted_cmds) - 1:
+                                power_to_add_idx = out_power_idxs[i] + 1
+
+                            if power_to_add_idx > init_power_to_add_idx:
+                                # all command in ECO mode now....
+                                prev_energy = 0
+                                if out_commands[i] is not None:
+                                    prev_energy = (out_power[i] * power_slots_duration_s[i]) / 3600.0
+
+                                # check if the price of the extra energy we add is better than the best price we have
+                                power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
+                                energy_to_add: float = ((power_to_add -  float(out_power[i]))* float(power_slots_duration_s[i])) / 3600.0
+                                cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0
+                                cost_per_watt_hour = cost / energy_to_add
+                                if cost_per_watt_hour > prices_ordered_values[0]:
+                                    # not interesting to add this energy
+                                    power_to_add_idx = -1
+
+                                # if we have a lower cost per watt_hours, than the lowest available price, use this bit of extra solar production
+                                if power_to_add_idx > init_power_to_add_idx:
+                                    power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign
+                                    if self.support_auto:
+                                        new_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[power_to_add_idx],
+                                                                               new_type=CMD_AUTO_PRICE.command)
+                                    else:
+                                        new_cmd = copy_command(power_sorted_cmds[power_to_add_idx])
+
                                     _LOGGER.info(
-                                        f"compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
+                                            f"compute_best_period_repartition: price optimizer from {out_commands[i]} to {new_cmd}")
 
-                                    # it will force the first slot to be a consign by construction
-                                    explore_range = range(first_slot, last_slot + 1)
+                                    out_commands[i] = new_cmd
+                                    out_power[i] = power_to_add
+                                    out_power_idxs[i] = power_to_add_idx
+                                    nrj_to_be_added += prev_energy - energy_to_add
 
-                        nrj_to_replace = 0.0
+                    if nrj_to_be_added > 0.0:
 
-                        for i in explore_range:
+                        for price in prices_ordered_values:
 
-                            if prices[i] == price and out_commands[i] is not None:
-                                nrj_to_replace += (out_power[i] * power_slots_duration_s[i]) / 3600.0
+                            explore_range = range(last_slot, first_slot - 1, -1)
+
+                            if len(power_sorted_cmds) > 1:
+
+                                price_span_h = ((np.sum(power_slots_duration_s[first_slot:last_slot + 1],
+                                                        where=prices[first_slot:last_slot + 1] == price)) / 3600.0)
+
+                                if self.support_auto:
+
+                                    if self.load and self.load.current_command and self.load.current_command.is_like(
+                                            CMD_AUTO_FROM_CONSIGN):
+                                        # we are already in auto consign mode for this load : we want to keep the continuity of the command
+                                        if first_slot == 0 and prices[first_slot] == price:
+                                            # in this particular case : we will go from now to end to keep the continuity with the current command
+                                            _LOGGER.info(
+                                                f"compute_best_period_repartition:adapt constraint {self.name} to match current command {self.load.current_command}")
+
+                                            # it will force the first slot to be a consign by construction
+                                            explore_range = range(first_slot, last_slot + 1)
+
+                                nrj_to_replace = 0.0
+
+                                for i in explore_range:
+
+                                    if prices[i] == price and out_commands[i] is not None:
+                                        nrj_to_replace += (out_power[i] * power_slots_duration_s[i]) / 3600.0
 
 
-                        # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
-                        fill_power_idx = 0
-                        for fill_power_idx in range(len(power_sorted_cmds)):
-                            if (nrj_to_be_added + nrj_to_replace) <= price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
-                                break
-                        # boost a bit to speed up a bit the filling
-                        fill_power_idx = min(fill_power_idx + 1, len(power_sorted_cmds) - 1)
-                    else:
-                        fill_power_idx = 0
+                                # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
+                                fill_power_idx = 0
+                                for fill_power_idx in range(len(power_sorted_cmds)):
+                                    if (nrj_to_be_added + nrj_to_replace) <= price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
+                                        break
+                                # boost a bit to speed up a bit the filling
+                                fill_power_idx = min(fill_power_idx + 1, len(power_sorted_cmds) - 1)
+                            else:
+                                fill_power_idx = 0
 
-                    # used to spread the commands : be a bit conservative on the spanning and use fill_power_aggressive_idx for the commands
-                    price_power = power_sorted_cmds[fill_power_idx].power_consign
+                            # used to spread the commands : be a bit conservative on the spanning and use fill_power_aggressive_idx for the commands
+                            price_power = power_sorted_cmds[fill_power_idx].power_consign
 
-                    if self.support_auto:
-                        price_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[fill_power_idx],
-                                                                 new_type=CMD_AUTO_FROM_CONSIGN.command)
-                    else:
-                        price_cmd = copy_command(power_sorted_cmds[fill_power_idx])
+                            if self.support_auto:
+                                price_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[fill_power_idx],
+                                                                         new_type=CMD_AUTO_FROM_CONSIGN.command)
+                            else:
+                                price_cmd = copy_command(power_sorted_cmds[fill_power_idx])
 
 
-                    # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
-                    # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
+                            # go reverse to respect the end constraint the best we can? or at the contrary fill it as soon as possible?
+                            # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
 
-                    for i in explore_range:
+                            for i in explore_range:
 
-                        if prices[i] == price:
+                                if prices[i] == price:
 
-                            if out_commands[i] is not None:
-                                # add back the previously removed energy
-                                nrj_to_be_added += (out_power[i] * power_slots_duration_s[i]) / 3600.0
+                                    if out_commands[i] is not None:
+                                        # add back the previously removed energy
+                                        nrj_to_be_added += (out_power[i] * power_slots_duration_s[i]) / 3600.0
 
-                            current_energy: float = (price_power * float(power_slots_duration_s[i])) / 3600.0
-                            out_commands[i] = price_cmd
-                            out_power[i] = price_power
-                            nrj_to_be_added -= current_energy
+                                    current_energy: float = (price_power * float(power_slots_duration_s[i])) / 3600.0
+                                    out_commands[i] = price_cmd
+                                    out_power[i] = price_power
+                                    nrj_to_be_added -= current_energy
+
+                                    if nrj_to_be_added <= 0.0:
+                                        break
 
                             if nrj_to_be_added <= 0.0:
                                 break
 
-                    if nrj_to_be_added <= 0.0:
-                        break
-
-        nrj_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, nrj_to_be_added)
+                nrj_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, nrj_to_be_added)
+                final_ret = nrj_to_be_added <= 0.0
 
         if self.support_auto:
             # fill all with green only command, to fill everything with the best power available
-            for i in range(first_slot, last_slot + 1):
+            for i in range(0, len(power_available_power)):
                 if out_commands[i] is None:
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY)
                     out_power[i] = 0.0
 
-        return nrj_to_be_added <= 0.0, out_commands, out_power
+        return final_ret, out_commands, out_power
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
