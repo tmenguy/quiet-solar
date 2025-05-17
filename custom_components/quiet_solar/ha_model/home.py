@@ -786,6 +786,10 @@ class QSHome(QSDynamicGroup):
 
 
         for load, commands in self._commands:
+
+
+            _LOGGER.info(f"---> Set load commands {load.name} {len(commands)}")
+
             while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                 cmd_time, command = commands.pop(0)
                 await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
@@ -795,6 +799,7 @@ class QSHome(QSDynamicGroup):
         for load in all_loads:
             if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
                 # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
                 await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads or not active")
 
             await load.do_probe_state_change(time)

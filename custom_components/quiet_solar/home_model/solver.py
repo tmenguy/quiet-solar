@@ -250,6 +250,7 @@ class PeriodSolver(object):
         actions = {}
 
         for c , _ in constraints:
+            _LOGGER.info(f"---> solve before battery: {c.load.name} {c.name}")
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only= not c.is_mandatory,
                 prices = self._prices,
@@ -439,6 +440,7 @@ class PeriodSolver(object):
         constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
         for c , _ in constraints:
+            _LOGGER.info(f"---> solve after battery: {c.load.name} {c.name}")
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
@@ -468,9 +470,13 @@ class PeriodSolver(object):
                         s_cmd = cmd
                         break
 
+
+
                 if s_cmd != current_command or (s_cmd.power_consign != current_command.power_consign):
                     lcmd.append((self._time_slots[s], s_cmd))
                     current_command = s_cmd
+                    if s_cmd.is_like(CMD_IDLE):
+                        _LOGGER.info(f"---> solve IDLE set in the middle {load.name}")
 
             output_cmds.append((load, lcmd))
 

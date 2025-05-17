@@ -522,7 +522,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         if num_command_state_change <= num_allowed_switch:
                             break
 
-                _LOGGER.info(f"Adapted command for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off} Removed empty segments {num_removed}")
+                _LOGGER.info(f"Adapted command for on_off num/max:{self.load.name} {self.load.num_on_off}/{self.load.num_max_on_off} Removed empty segments {num_removed}")
 
         return nrj_to_be_added
 
@@ -819,7 +819,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if self.support_auto:
             # fill all with green only command, to fill everything with the best power available
-            for i in range(0, len(power_available_power)):
+            for i in range(first_slot, last_slot + 1):
                 if out_commands[i] is None:
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY)
                     out_power[i] = 0.0
