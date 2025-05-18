@@ -34,6 +34,7 @@ class LoadConstraint(object):
                  initial_value: float | None = 0.0,
                  current_value: float | None = None,
                  target_value: float = 0.0,
+                 support_auto: bool = False,
                  **kwargs
                  ):
 
@@ -53,6 +54,7 @@ class LoadConstraint(object):
         self.load_param = load_param
         self.from_user = from_user
         self.type = type
+        self.support_auto = support_auto
 
         self._update_value_callback = None
 
@@ -275,14 +277,23 @@ class LoadConstraint(object):
         if end_time is None:
             end_time = DATETIME_MAX_UTC
 
+        if self._internal_start_of_constraint > end_time:
+            return False
+
         if self.end_of_constraint == DATETIME_MAX_UTC:
-            if self._internal_start_of_constraint > end_time:
-                return False
-            else:
-                return True
+            return True
 
         # only active if the constraint finish before the end of the given time period
-        return start_time <= self.end_of_constraint <= end_time
+        ret = start_time <= self.end_of_constraint <= end_time
+
+        if ret is False and end_time != DATETIME_MAX_UTC:
+            # it wil be active in the period anyway as it supports automatic consumtpion, and is not time sensitive
+            if self.load.is_time_sensitive() is False and self.support_auto:
+                ret = self.is_constraint_active_for_time_period(start_time)
+
+        return ret
+
+
 
     def is_constraint_met(self, current_value=None) -> bool:
         """ is the constraint met in its current form? """
@@ -373,15 +384,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
     def __init__(self,
                  power_steps: list[LoadCommand] = None,
                  power: float | None = None,
-                 support_auto: bool = False,
                  **kwargs):
 
         if power_steps is None and power is not None:
             power_steps = [copy_command(CMD_ON, power_consign=power)]
 
         self.update_power_steps(power_steps)
-
-        self.support_auto = support_auto
 
         super().__init__(**kwargs)
 
