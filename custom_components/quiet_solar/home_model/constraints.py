@@ -554,6 +554,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if self.is_mandatory is False:
             do_use_available_power_only = True
 
+        has_a_proper_end_time = False
+        if self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC:
+            if self.end_of_constraint <= time_slots[-1]:
+                has_a_proper_end_time = True
+            else:
+                do_use_available_power_only = True
+
         nrj_to_be_added = self.get_energy_to_be_added()
 
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
@@ -572,7 +579,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         else:
 
             # find the constraint last slot
-            if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC:
+            if has_a_proper_end_time:
                 # by construction the end of the constraints IS ending on a slot
                 last_slot = bisect_left(time_slots, self.end_of_constraint)
                 last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
@@ -614,7 +621,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if self._internal_start_of_constraint != DATETIME_MIN_UTC:
                     first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
-                if self.end_of_constraint is not None and self.end_of_constraint !=  DATETIME_MAX_UTC and self.load.is_time_sensitive():
+                if has_a_proper_end_time and self.load.is_time_sensitive():
                     # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
                     # a 6 hours windows
 
@@ -689,7 +696,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             break
 
                 if (nrj_to_be_added <= 0.0 or do_use_available_power_only):
-                    pass
+                    final_ret = nrj_to_be_added <= 0.0
                 else:
 
                     # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better

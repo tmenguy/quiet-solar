@@ -96,8 +96,10 @@ class PeriodSolver(object):
 
         active_constraints = []
         for load in self._loads:
-            for constraint in load.get_active_constraint_generator(start_time, end_time):
-                if constraint.end_of_constraint != DATETIME_MAX_UTC:
+
+            constraints = load.get_for_solver_constraints(start_time, end_time)
+            for constraint in constraints:
+                if constraint.end_of_constraint != DATETIME_MAX_UTC and constraint.end_of_constraint <= end_time:
                     anchors.add(constraint.end_of_constraint)
                 active_constraints.append(constraint)
 
@@ -250,7 +252,6 @@ class PeriodSolver(object):
         actions = {}
 
         for c , _ in constraints:
-            _LOGGER.info(f"---> solve before battery: {c.load.name} {c.name}")
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only= not c.is_mandatory,
                 prices = self._prices,
@@ -440,7 +441,6 @@ class PeriodSolver(object):
         constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
         for c , _ in constraints:
-            _LOGGER.info(f"---> solve after battery: {c.load.name} {c.name}")
             is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
@@ -475,8 +475,6 @@ class PeriodSolver(object):
                 if s_cmd != current_command or (s_cmd.power_consign != current_command.power_consign):
                     lcmd.append((self._time_slots[s], s_cmd))
                     current_command = s_cmd
-                    if s_cmd.is_like(CMD_IDLE):
-                        _LOGGER.info(f"---> solve IDLE set in the middle {load.name}")
 
             output_cmds.append((load, lcmd))
 

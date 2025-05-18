@@ -882,6 +882,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         super().__init__(**kwargs)
 
+        self.support_auto = True
+
         data = {
             CONF_CAR_CHARGER_MIN_CHARGE: self.charger_min_charge,
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
@@ -1443,7 +1445,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     initial_value=car_initial_percent,
                     target_value=target_charge,
                     power_steps=self._power_steps,
-                    support_auto=True,
+                    support_auto=self.support_auto,
                 )
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
@@ -1522,7 +1524,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         initial_value=car_initial_percent,
                         target_value=target_charge,
                         power_steps=self._power_steps,
-                        support_auto=True
+                        support_auto=self.support_auto
                     )
 
                     if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
@@ -1549,7 +1551,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     initial_value=realized_charge_target,
                     target_value=target_charge,
                     power_steps=self._power_steps,
-                    support_auto=True
+                    support_auto=self.support_auto
                 )
 
                 if self.push_live_constraint(time, car_charge_best_effort):

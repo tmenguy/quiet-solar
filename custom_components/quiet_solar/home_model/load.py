@@ -160,16 +160,6 @@ class AbstractDevice(object):
 
 
 
-
-
-    def get_active_constraint_generator(self, start_time:datetime, end_time) -> Generator[Any, None, None]:
-        if self.qs_enable_device is False:
-            self._constraints = []
-
-        for c in self._constraints:
-            if c.is_constraint_active_for_time_period(start_time, end_time):
-                yield c
-
     def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
         if self.qs_enable_device is False:
             self._constraints = []
@@ -372,6 +362,7 @@ class AbstractLoad(AbstractDevice):
         self._last_hash_state = None
 
         self.is_load_time_sensitive = False
+        self.support_auto = False
 
     def get_override_state(self):
         if self.external_user_initiated_state is None:
@@ -386,6 +377,24 @@ class AbstractLoad(AbstractDevice):
             return False
 
         return self.is_load_time_sensitive
+
+    def get_for_solver_constraints(self, start_time:datetime, end_time:datetime) -> list[Any]:
+        if self.qs_enable_device is False:
+            self._constraints = []
+
+        res = []
+
+        for c in self._constraints:
+            if c.is_constraint_active_for_time_period(start_time, end_time):
+                res.append(c)
+
+        if len(res) == 0 and len(self._constraints) > 0 and self.is_time_sensitive() is False and self.support_auto:
+            for c in self._constraints:
+                if c.is_constraint_active_for_time_period(start_time):
+                    res.append(c)
+                    break
+
+        return res
 
 
     def is_consumption_optional(self, time:datetime) -> bool:
