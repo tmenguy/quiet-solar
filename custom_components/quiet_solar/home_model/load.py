@@ -370,9 +370,7 @@ class AbstractLoad(AbstractDevice):
 
     def is_time_sensitive(self):
 
-        if self.load_is_auto_to_be_boosted:
-            return False
-        elif self.qs_best_effort_green_only:
+        if self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only:
             return False
 
         return self.is_load_time_sensitive
@@ -415,6 +413,9 @@ class AbstractLoad(AbstractDevice):
         return device_needed_amp
 
     def support_green_only_switch(self) -> bool:
+        return False
+
+    def support_user_override(self) -> bool:
         return False
 
     def push_unique_and_current_end_of_constraint_from_agenda(self, time: datetime, new_ct: LoadConstraint):

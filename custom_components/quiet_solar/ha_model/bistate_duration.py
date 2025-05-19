@@ -8,7 +8,7 @@ import pytz
 
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_ON
+from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
@@ -50,12 +50,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             return 0.0
 
     def get_bistate_modes(self) -> list[str]:
-        if self.load_is_auto_to_be_boosted:
-            # do not allow the user to force the bistate mode
+        if not self.support_user_override():
+            # do not allow the user to force the bistate mode in any case
             return bistate_modes
         return bistate_modes + [self._bistate_mode_on, self._bistate_mode_off]
 
     def support_green_only_switch(self) -> bool:
+        if self.load_is_auto_to_be_boosted:
+            return False
+        return True
+
+    def support_user_override(self) -> bool:
         if self.load_is_auto_to_be_boosted:
             return False
         return True
@@ -121,10 +126,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
 
-        has_reset_external_state = False
+        do_force_next_solve = False
+
+        bistate_mode = self.bistate_mode
 
         # we want to check that the load hasn't been changed externally from the system:
-        if self.load_is_auto_to_be_boosted and self.is_load_command_set(time):
+        if self.is_load_command_set(time) and self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -136,7 +143,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
                 # we need to reset the external user initiated state
                 self.reset_override_state()
-                has_reset_external_state = True
+                do_force_next_solve = True
             else:
                 state = self.hass.states.get(self.bistate_entity)
 
@@ -154,22 +161,38 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self.external_user_initiated_state = state.state
                         self.external_user_initiated_state_time = time
 
+                        # remove all constraints if any, will be added again below
+                        self.reset()
+                        do_force_next_solve = True
 
-        res = has_reset_external_state
-        if self.bistate_mode == self._bistate_mode_off:
+
+                if self.external_user_initiated_state is not None:
+
+                    # we do have forced "from the outside" a constraint that may be "infinite" so we way want to
+                    # change the current constraint to expand it if needed to infinity (at minimum for the override
+                    # time) or on the contrary: remove any constraint that may be set to put the bistate on if the
+                    # user has set it to off, it is as if the user put the bistate_mode in a state
+                    # execute_command and probe_if_command set has been "shunted" to do touch the state of the load
+                    if self.external_user_initiated_state == self.expected_state_from_command_or_user(CMD_OFF):
+                        bistate_mode = self._bistate_mode_off
+                    else:
+                        bistate_mode = self._bistate_mode_on
+
+
+        if bistate_mode == self._bistate_mode_off:
             # remove all constraints if any
             self.reset()
         else:
             do_add_constraint = False
             target_value = 0
-            from_user = False
             end_schedule = None
-            if self.bistate_mode == self._bistate_mode_on:
+            has_user_forced_constraint = False
+            if bistate_mode == self._bistate_mode_on:
+                has_user_forced_constraint = True
                 end_schedule = self.get_proper_local_adapted_tomorrow(time)
                 target_value = 25*3600.0 # 25 hours, more than a day will force the load to be on
                 do_add_constraint = True
-                from_user = True # not sure if it is needed
-            elif self.bistate_mode == "bistate_mode_default":
+            elif bistate_mode == "bistate_mode_default":
                 if self.default_on_duration is not None and  self.default_on_finish_time is not None:
                     dt_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
                     next_time = datetime(year=dt_now.year,
@@ -197,22 +220,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             if do_add_constraint:
 
                 type = CONSTRAINT_TYPE_MANDATORY_END_TIME
-                if self.load_is_auto_to_be_boosted:
+                if has_user_forced_constraint is False and (self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only is True):
                     type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
-                elif self.qs_best_effort_green_only is True:
-                    type = CONSTRAINT_TYPE_FILLER_AUTO  # will be after battery filling slightly higher priority than auto
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
                         time=time,
                         load=self,
-                        from_user=from_user,
+                        from_user=has_user_forced_constraint,
                         end_of_constraint=end_schedule,
                         power=self.power_use,
                         initial_value=0,
                         target_value=target_value
                 )
 
-                res = self.push_unique_and_current_end_of_constraint_from_agenda(time, load_mandatory) or res
+                do_force_next_solve = self.push_unique_and_current_end_of_constraint_from_agenda(time, load_mandatory) or do_force_next_solve
 
-        return res
+        return do_force_next_solve

@@ -50,7 +50,8 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-    if device.load_is_auto_to_be_boosted:
+
+    if device.support_user_override():
         # add hare a sensor to know if the load has been ovreriden externally
         load_override_state = QSSensorEntityDescription(
             key="load_override_state",

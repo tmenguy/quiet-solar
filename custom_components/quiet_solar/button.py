@@ -74,13 +74,15 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
 
-    qs_reset_override = QSButtonEntityDescription(
-        key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
-        translation_key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
-        async_press=lambda x: x.device.async_reset_override_state(),
-    )
 
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_override))
+    if device.support_user_override():
+        qs_reset_override = QSButtonEntityDescription(
+            key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
+            translation_key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
+            async_press=lambda x: x.device.async_reset_override_state(),
+        )
+
+        entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_override))
 
     return entities
 
