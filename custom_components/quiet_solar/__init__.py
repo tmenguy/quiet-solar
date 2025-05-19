@@ -30,10 +30,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def async_reload_quiet_solar(hass: HomeAssistant):
+async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None):
     # Then reload the entire integration by getting all entries and reloading them
     entries = hass.config_entries.async_entries(DOMAIN)
     for entry in entries:
+        if except_for_entry_id is not None and except_for_entry_id == entry.entry_id:
+            continue
         await hass.config_entries.async_unload(entry.entry_id)
 
     hass.data[DOMAIN] = {}

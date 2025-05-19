@@ -1150,7 +1150,7 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
         )
 
         # always reset everything to be sure all is well set
-        await async_reload_quiet_solar(self.hass)
+        await async_reload_quiet_solar(self.hass, except_for_entry_id=self.config_entry.entry_id)
 
         return self.async_create_entry(title=None, data={})
 
