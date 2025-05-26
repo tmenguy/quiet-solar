@@ -68,6 +68,8 @@ CONF_CHARGER_PLUGGED = "charger_plugged"
 CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER = "charger_max_charging_current_number"
 CONF_CHARGER_PAUSE_RESUME_SWITCH = "charger_pause_resume_switch"
 
+CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH = "charger_three_to_one_phase_switch"
+
 CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
 CHARGER_NO_CAR_CONNECTED = "No car connected"

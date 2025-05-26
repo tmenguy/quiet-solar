@@ -121,6 +121,12 @@ class AbstractDevice(object):
     def device_is_3p(self) -> bool:
         return self._device_is_3p
 
+    @property
+    def device_default_num_phases(self) -> int:
+        if self.device_is_3p:
+            return 3
+        return 1
+
     def __repr__(self):
         return self.device_id
 
