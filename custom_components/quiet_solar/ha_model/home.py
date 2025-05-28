@@ -451,43 +451,25 @@ class QSHome(QSDynamicGroup):
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
 
-    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> float:
+    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
         # first check if we do have an amp sensor for the phases
-        worst_amps = 0
-
         multiplier = 1
         if self.grid_active_power_sensor_inverted is False:
             # if not inverted it should be -1 as consumption are reversed
             multiplier = -1
 
-
+        pM = None
         if self.grid_active_power_sensor is not None:
+            # this one has been inverted at the moment it was attached to prob
+            # so just multiply it by -1
             p = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=tolerance_seconds, time=time)
             if p is not None:
-                p = multiplier*p
+                p = -1.0*p
                 if p > 0 and isinstance(self, AbstractDevice):
-                    worst_amps =  self.get_phase_amps_from_power(p)
+                    pM =  self.get_phase_amps_from_power_for_budgeting(p)
 
-        if self.phase_1_amps_sensor is not None:
-            p1 = self.get_sensor_latest_possible_valid_value(self.phase_1_amps_sensor, tolerance_seconds, time)
-            if p1 is not None:
-                p1 = multiplier*p1
-                if p1 > 0:
-                    worst_amps = max(worst_amps, p1)
-        if self.phase_2_amps_sensor is not None:
-            p2 = self.get_sensor_latest_possible_valid_value(self.phase_2_amps_sensor, tolerance_seconds, time)
-            if p2 is not None:
-                p2 = multiplier*p2
-                if p2 > 0:
-                    worst_amps = max(worst_amps, p2)
-        if self.phase_3_amps_sensor is not None:
-            p3 = self.get_sensor_latest_possible_valid_value(self.phase_3_amps_sensor, tolerance_seconds, time)
-            if p3 is not None:
-                p3 = multiplier*p3
-                if p3 > 0:
-                    worst_amps = max(worst_amps, p3)
+        return self._get_device_worst_phase_amp_consumption(pM, tolerance_seconds, time, multiplier=multiplier)
 
-        return max(0, worst_amps)
 
     def battery_can_discharge(self):
 

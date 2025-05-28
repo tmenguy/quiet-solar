@@ -1,3 +1,4 @@
+from ..ha_model.battery import QSBattery
 from ..home_model.load import AbstractDevice
 from .commands import LoadCommand
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, \
@@ -33,6 +34,10 @@ class Battery(AbstractDevice):
 
         if current_charge is None:
             return False
+
+        if isinstance(self, QSBattery):
+            if self.max_discharging_power_current == 0:
+                return False
 
         if current_charge > max(self.min_soc * self.capacity, 500): # 500Wh is a threshold
             return True

@@ -12,7 +12,6 @@ CMD_CST_FORCE_CHARGE = "force_charge"
 class LoadCommand:
     command: str
     power_consign: float
-    phase_current: float | None = None
 
     def __eq__(self, other):
         return other is not None and self.command == other.command and self.power_consign == other.power_consign
@@ -35,15 +34,13 @@ class LoadCommand:
         return self.command == "off" or self.command == "idle"
 
 
-def copy_command(cmd:LoadCommand, power_consign=None, phase_current=None) -> LoadCommand:
+def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
     if power_consign is None:
         power_consign=cmd.power_consign
-    if phase_current is None:
-        phase_current=cmd.phase_current
-    return LoadCommand(command=cmd.command, power_consign=power_consign, phase_current=phase_current)
+    return LoadCommand(command=cmd.command, power_consign=power_consign)
 
 def copy_command_and_change_type(cmd:LoadCommand, new_type:str) -> LoadCommand:
-    return LoadCommand(command=new_type, power_consign=cmd.power_consign, phase_current=cmd.phase_current)
+    return LoadCommand(command=new_type, power_consign=cmd.power_consign)
 
 CMD_ON = LoadCommand(command="on", power_consign=0.0)
 CMD_AUTO_GREEN_ONLY = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)

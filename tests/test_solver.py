@@ -191,7 +191,7 @@ class TestSolver(TestCase):
             charger = TestLoad(name="charger")
             steps = []
             for a in range(7, 32 + 1):
-                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 230 * 3, phase_current=a))
+                steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 230 * 3))
 
 
             car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(

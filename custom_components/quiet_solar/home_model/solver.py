@@ -335,7 +335,7 @@ class PeriodSolver(object):
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
                     if limit_discharge is not None:
                         if limit_discharge + min(0.0, charged_energy) <= 0.0:
-                            # we need to .... forbid discharge
+                            # we need to .... forbid discharge to keep it when we will need it for bigger prices
                             charged_energy = max(0.0, charged_energy)
                             charging_power = max(0.0, charging_power)
                             cmd = CMD_GREEN_CHARGE_ONLY

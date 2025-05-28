@@ -1,3 +1,4 @@
+import copy
 import logging
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
@@ -531,14 +532,6 @@ class HADeviceMixin:
 
         return vals[-1] >= max_v and max_v > min_v and len(vals) > 1
 
-
-
-
-
-
-
-
-
     def get_sensor_latest_possible_valid_value(self,
                                                entity_id,
                                                tolerance_seconds: float | None = None,
@@ -592,27 +585,61 @@ class HADeviceMixin:
         return p
 
 
-    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> float:
+    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+
         # first check if we do have an amp sensor for the phases
         p = self.get_device_power_latest_possible_valid_value(tolerance_seconds=tolerance_seconds, time=time)
-        worst_amps = 0
+        pM = None
+
+        if p is not None and isinstance(self, AbstractDevice):
+            pM =  self.get_phase_amps_from_power_for_budgeting(p)
+
+        return self._get_device_worst_phase_amp_consumption(pM, tolerance_seconds, time, multiplier=1)
+
+    def _get_device_worst_phase_amp_consumption(self, pM:list[float|int]|None, tolerance_seconds: float | None, time: datetime, multiplier=1) -> list[float|int] | None:
+
+        ret: list[float | int | None]  = [None, None, None]
+
+        is_3p = False
+        mono_phase = 0
+        good_mono_p = None
         if isinstance(self, AbstractDevice):
-            worst_amps =  self.get_phase_amps_from_power(p)
+            if self.device_is_3p:
+                is_3p = True
+            mono_phase = self.get_mono_phase()
 
-        if self.phase_1_amps_sensor is not None:
-            p1 = self.get_sensor_latest_possible_valid_value(self.phase_1_amps_sensor, tolerance_seconds, time)
-            if p1 is not None:
-                worst_amps = max(worst_amps, p1)
-        if self.phase_2_amps_sensor is not None:
-            p2 = self.get_sensor_latest_possible_valid_value(self.phase_2_amps_sensor, tolerance_seconds, time)
-            if p2 is not None:
-                worst_amps = max(worst_amps, p2)
-        if self.phase_3_amps_sensor is not None:
-            p3 = self.get_sensor_latest_possible_valid_value(self.phase_3_amps_sensor, tolerance_seconds, time)
-            if p3 is not None:
-                worst_amps = max(worst_amps, p3)
+        for i, sensor in enumerate([self.phase_1_amps_sensor, self.phase_2_amps_sensor, self.phase_3_amps_sensor]):
+            if sensor is None:
+                continue
+            p_val = self.get_sensor_latest_possible_valid_value(sensor, tolerance_seconds, time)
+            if p_val is not None:
+                if mono_phase == i:
+                    good_mono_p = p_val*multiplier
+                elif good_mono_p is None:
+                    # in case of mismatch between sensors and the selected phase
+                    good_mono_p = p_val * multiplier
+                ret[i] = p_val*multiplier
 
-        return max(0, worst_amps)
+        if is_3p:
+            if pM is not None and None in ret:
+                ok_phases = [a for a in ret if a is not None]
+                p_comp = (sum(pM) - sum(ok_phases)) / (3 - len(ok_phases))
+                for i, p_val in enumerate(ret):
+                    if p_val is None:
+                        ret[i] = p_comp
+        else:
+            ret = [0.0, 0.0, 0.0]
+            if good_mono_p is not None:
+                ret[mono_phase] = good_mono_p
+            elif pM is not None:
+                ret[mono_phase] = sum(pM)
+            else:
+                ret = [None, None, None]
+
+        if None in ret:
+            return None
+        else:
+            return ret
 
 
     def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:

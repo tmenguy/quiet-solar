@@ -144,11 +144,11 @@ class TestForecast(TestCase):
 
                 steps = []
                 for a in range(7, 32 + 1):
-                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3, phase_current=a))
+                    steps.append(copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a*230*3))
 
                 charger = TestLoad(name="charger",
-                                   min_a=steps[0].phase_current,
-                                   max_a=steps[-1].phase_current,
+                                   min_a=7,
+                                   max_a=32,
                                    min_p=steps[0].power_consign,
                                    max_p=steps[-1].power_consign)
 
