@@ -87,6 +87,24 @@ class AbstractDevice(object):
 
         return one_bigger
 
+    def add_amps(self, left_amps:list[float|int], right_amps:list[float|int]) -> list[float|int]:
+        if left_amps is None and right_amps is None:
+            return [0.0, 0.0, 0.0]
+        elif left_amps is None:
+            return copy.copy(right_amps)
+        elif right_amps is None:
+            return copy.copy(left_amps)
+
+        diff = [left_amps[i] + right_amps[i] for i in range(3)]
+        return diff
+
+    def diff_amps(self, left_amps:list[float|int], right_amps:list[float|int]) -> list[float|int]:
+        if left_amps is None or right_amps is None:
+            return [0.0, 0.0, 0.0]
+
+        diff = [left_amps[i] - right_amps[i] for i in range(3)]
+        return diff
+
     @property
     def qs_enable_device(self) -> bool:
         return self._enabled

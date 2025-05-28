@@ -52,10 +52,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
 
-    def is_delta_current_acceptable(self, delta_amps: list[float|int], new_amps_consumption: list[float|int] | None, time:datetime) -> bool:
+    def is_delta_current_acceptable(self, delta_amps: list[float|int], new_amps_consumption: list[float|int] | None, time:datetime) -> (bool, list[float|int]):
 
         if new_amps_consumption is not None and self.is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
-            return False
+            return False, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
 
         phases_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
 
@@ -65,18 +65,20 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
         if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False
+            return False, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True
+            return True, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps, time=time)
 
-
     def is_current_acceptable(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> bool:
+        return self.is_current_acceptable_and_diff(new_amps, estimated_current_amps, time)[0]
+
+    def is_current_acceptable_and_diff(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> (bool, list[float|int]):
 
         if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False
+            return False, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
 
         if estimated_current_amps is None:
             estimated_current_amps = 0.0
@@ -110,10 +112,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             new_amps[i] = delta_amps[i] + current_phases[i]
 
         if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False
+            return False, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True
+            return True, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps,
                                                                   new_amps_consumption=new_amps,

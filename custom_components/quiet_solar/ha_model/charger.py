@@ -1,4 +1,5 @@
 import bisect
+import copy
 import logging
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -210,13 +211,15 @@ class QSChargerStatus(object):
     def get_budget_amps(self) -> list[float|int]:
         return self.get_amps_from_values(self.budgeted_amp, self.budgeted_num_phases)
 
-    def update_amps_with_delta(self, amps:list[float|int],  num_phases:int, delta:int|float):
+    def update_amps_with_delta(self, from_amps:list[float|int],  num_phases:int, delta:int|float) -> list[float|int]:
+        amps = copy.copy(from_amps)
         if num_phases == 1:
             amps[self.charger.get_mono_phase()] += delta
         else:
             amps[0] += delta
             amps[1] += delta
             amps[2] += delta
+        return amps
 
 
     def get_diff_power(self, old_amp, old_num_phases, new_amp, new_num_phases):
@@ -236,7 +239,7 @@ class QSChargerStatus(object):
         return diff_power
 
 
-    def get_amps_phase_switch(self, from_amp:int | float, from_num_phase:int, delta_for_borders=0) -> tuple[float|int, int]:
+    def get_amps_phase_switch(self, from_amp:int | float, from_num_phase:int, delta_for_borders=0) -> tuple[float|int, int, list[float|int]]:
 
 
         if from_num_phase == 1:
@@ -255,15 +258,15 @@ class QSChargerStatus(object):
                 try_amps = max(try_amps,
                                self.possible_amps[0] + delta_for_borders)  # will be decreased/increased later
 
-        return try_amps, to_phase
+        return try_amps, to_phase, self.get_amps_from_values(try_amps, to_phase)
 
 
     # it will try to get to the smallest consumption increase possible, in number of amps in the circuit
     # by juggling between phase switch if needed
-    def _can_change_budget(self, allow_state_change=True, allow_phase_change=False, increase=True) -> tuple[float, float]:
+    def can_change_budget(self, allow_state_change=True, allow_phase_change=False, increase=True) -> tuple[float|None, int]:
 
         if self.budgeted_amp is None:
-            return self.possible_amps[0], self.possible_num_phases[-1]
+            return None, self.possible_num_phases[-1]
 
 
         def _try_amp_decrease(self, amp, allow_state_change):
@@ -279,7 +282,7 @@ class QSChargerStatus(object):
                     next_amp = amp - 1
             return next_amp
 
-        def _try_amp_increment(self, amp, allow_state_change):
+        def _try_amp_increase(self, amp, allow_state_change):
             next_amp = None
             if self.possible_amps[-1] > 0:
                 if amp == 0:
@@ -293,7 +296,7 @@ class QSChargerStatus(object):
             return next_amp
 
         if increase:
-            probe_amp_cb = _try_amp_increment
+            probe_amp_cb = _try_amp_increase
             delta_first_adaptive_amp = -1
         else:
             probe_amp_cb = _try_amp_decrease
@@ -313,11 +316,11 @@ class QSChargerStatus(object):
         if allow_phase_change and len(self.possible_num_phases) > 1:
             # we can go up or down in phase change to get the minimum increment/decrease
 
-            try_amps, next_num_phases_with_phase_change = self.get_amps_phase_switch(from_amp=self.budgeted_amp,
+            try_amp, next_num_phases_with_phase_change, _ = self.get_amps_phase_switch(from_amp=self.budgeted_amp,
                                                                                      from_num_phase=self.budgeted_num_phases,
                                                                                      delta_for_borders=delta_first_adaptive_amp)
 
-            next_amp_with_phase_change = probe_amp_cb(self, try_amps, allow_state_change)
+            next_amp_with_phase_change = probe_amp_cb(self, try_amp, allow_state_change)
 
             if next_amp_with_phase_change is not None:
 
@@ -332,14 +335,6 @@ class QSChargerStatus(object):
                         next_num_phases = next_num_phases_with_phase_change
 
         return next_amp, next_num_phases
-
-    def can_decrease_budget(self, allow_state_change=True, allow_phase_change=True):
-        return self._can_change_budget(allow_state_change=allow_state_change,
-                                       allow_phase_change=allow_phase_change, increase=False)
-
-    def can_increase_budget(self, allow_state_change=True, allow_phase_change=True):
-        return self._can_change_budget(allow_state_change=allow_state_change,
-                                       allow_phase_change=allow_phase_change, increase=True)
 
 class QSChargerGroup(object):
 
@@ -390,15 +385,14 @@ class QSChargerGroup(object):
 
     def get_budget_diffs(self, actionable_chargers: list[QSChargerStatus]):
 
-        initial_sum_amps = 0
-        new_sum_amps = 0
+
+        new_sum_amps = [0.0, 0.0, 0.0]
         diff_power = 0
         for cs in actionable_chargers:
-            initial_sum_amps += cs.current_real_max_charging_amp
-            new_sum_amps += cs.budgeted_amp
+            new_sum_amps = self.dynamic_group.add_amps(new_sum_amps, cs.get_budget_amps())
             diff_power += cs.get_diff_power(cs.current_real_max_charging_amp, cs.current_active_phase_number, cs.budgeted_amp, cs.budgeted_num_phases)
 
-        return diff_power, new_sum_amps - initial_sum_amps, new_sum_amps
+        return diff_power, new_sum_amps
 
 
 
@@ -518,18 +512,31 @@ class QSChargerGroup(object):
                             await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
 
 
-    def _update_and_prob_for_amps_change(self, cs, new_amps, num_phases, estimated_current_amps, delta, time):
+    def _update_and_prob_for_amps_change(self, cs, new_amps, num_phases, estimated_current_amps, delta, time) -> (bool, list[float|int] | None):
 
-        cs.update_amps_with_delta(new_amps, num_phases=num_phases, delta=delta)
+        old_res, prev_diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+            new_amps=new_amps,
+            estimated_current_amps=estimated_current_amps,
+            time=time
+        )
 
-        if self.dynamic_group.is_current_acceptable(
-                new_amps=new_amps,
-                estimated_current_amps=estimated_current_amps,
-                time=time
-        ):
-            return True
+        if old_res:
+            return True, None
 
-        return False
+
+        updated_amps = cs.update_amps_with_delta(new_amps, num_phases=num_phases, delta=delta)
+
+        new_res, diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+                                                                                new_amps=updated_amps,
+                                                                                estimated_current_amps=estimated_current_amps,
+                                                                                time=time
+                                                                               )
+        if max(diff_amps) < max(prev_diff_amps) or new_res:
+            return new_res, updated_amps
+        else:
+            return False, None
+
+
 
 
     async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, time:datetime):
@@ -590,15 +597,18 @@ class QSChargerGroup(object):
                                 insert_front = cs.possible_amps[0] - 1
                                 delta_remove = 1
 
-                            cs.possible_amps.insert(0, insert_front)
-                            has_shaved = True
+                            res_probe, new_amps = self._update_and_prob_for_amps_change(cs=cs,
+                                                                                        new_amps=mandatory_amps,
+                                                                                        num_phases=cs.budgeted_num_phases,
+                                                                                        estimated_current_amps=current_amps,
+                                                                                        delta=-delta_remove,
+                                                                                        time=time)
+                            if new_amps is not None:
+                                cs.possible_amps.insert(0, insert_front)
+                                has_shaved = True
+                                mandatory_amps = new_amps
 
-                            if self._update_and_prob_for_amps_change(cs=cs,
-                                                                     new_amps=mandatory_amps,
-                                                                     num_phases=cs.budgeted_num_phases,
-                                                                     estimated_current_amps=current_amps,
-                                                                     delta=-delta_remove,
-                                                                     time=time):
+                            if res_probe:
                                 possible_allotment_reached = True
                                 break
 
@@ -624,42 +634,54 @@ class QSChargerGroup(object):
 
             for cs in actionable_chargers:
                 if cs.budgeted_num_phases == 1 and len(cs.possible_num_phases) > 1:
-                    # TODO_1P3P : completely wrong here ......we must see per circuit
+
                     # we can lower the circuit amps by going 3 phases
-                    # but we need to check if the phase of teh current charger is at problem or not : else we will lower the wrong phase and increases the others
+                    # but we need to check if the phase of the current charger is at problem or not : else we will lower the wrong phase and increases the others
+
+                    old_res, prev_diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+                        new_amps=alloted_amps,
+                        estimated_current_amps=current_amps,
+                        time=time
+                    )
+
+                    if old_res:
+                        current_ok = True
+                        break
 
                     budget = cs.get_budget_amps()
+                    new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, budget)
 
-                    en fait self.dynamic_group.is_current_acceptable doit donner quelle phase(s) merdent! pour pouvoir baisser celles qui font du sens et pas les autres
+                    try_amp, _ , try_amps= cs.get_amps_phase_switch(from_amp=cs.budgeted_amp, from_num_phase=1)
+                    new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps, try_amps)
 
+                    new_res, new_diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+                        new_amps=new_alloted_amps,
+                        estimated_current_amps=current_amps,
+                        time=time
+                    )
 
-                    try_amps, _ = cs.get_amps_phase_switch(from_amp=cs.budgeted_amp, from_num_phase=1)
-                    if try_amps < cs.budgeted_amp:
-                        _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs:  shaving {cs.charger.name} from {cs.budgeted_amp} to {try_amps} by going to 3 phases")
-                        alloted_amps += try_amps - cs.budgeted_amp
-                        cs.budgeted_amp = try_amps
+                    if max(new_diff_amps) < max(prev_diff_amps) or new_res:
+                        alloted_amps = new_alloted_amps
+                        cs.budgeted_amp = try_amp
                         cs.budgeted_num_phases = 3
 
-                        if self.dynamic_group.is_current_acceptable(
-                                new_amps=alloted_amps,
-                                estimated_current_amps=current_amps,
-                                time=time
-                        ):
-                            current_ok = True
-                            break
+                    if new_res:
+                        current_ok = True
+                        break
 
             if current_ok is False:
                 for allow_state_change in [False, True]:
                     for cs in actionable_chargers:
-                        next_amp, next_num_phases = cs.can_decrease_budget(allow_state_change=allow_state_change,
-                                                                           allow_phase_change=False)
+                        next_amp, next_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
+                                                                           allow_phase_change=False,
+                                                                         increase=False)
                         if next_amp is not None:
                             _LOGGER.info(
                                 f"budgeting_algorithm_minimize_diffs:  shaving {cs.charger.name} from {cs.budgeted_amp} to {next_amp}")
-                            alloted_amps += next_amp - cs.budgeted_amp
+                            alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
                             cs.budgeted_amp = next_amp
                             cs.budgeted_num_phases = next_num_phases
+                            alloted_amps = self.dynamic_group.add_amps(alloted_amps, cs.get_budget_amps())
 
                         if self.dynamic_group.is_current_acceptable(
                                 new_amps=alloted_amps,
@@ -677,7 +699,7 @@ class QSChargerGroup(object):
 
 
         # ok we do have the "best" possible base for the chargers
-        diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+        diff_power_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
 
         power_budget = full_available_home_power - diff_power_budget
 
@@ -694,7 +716,7 @@ class QSChargerGroup(object):
             stop_on_first_change = True
 
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, diff_amp_budget {diff_amp_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
+            f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
         # try first to stay on the same states fo the charger (no charge to stop or stop to charge) to adapt the power
         # take a very incremental, one by one amp when increasing, decrease should be fast
@@ -711,15 +733,16 @@ class QSChargerGroup(object):
                 # (may not work due to amp limiting! beacsue going from 3 amps to 1 amp can multiply by 3 the circuit load)
                 for allow_phase_change in [True, False]:
 
-                    if increase:
-                        next_possible_budgeted_amp, next_possible_num_phases = cs.can_increase_budget(allow_state_change=allow_state_change, allow_phase_change=allow_phase_change)
-                    else:
-                        next_possible_budgeted_amp, next_possible_num_phases = cs.can_decrease_budget(allow_state_change=allow_state_change, allow_phase_change=allow_phase_change)
+                    next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
+                                                                                                allow_phase_change=allow_phase_change,
+                                                                                                increase=increase)
 
                     if next_possible_budgeted_amp is not None:
 
                         diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
-                        diff_amp = next_possible_budgeted_amp - cs.budgeted_amp
+
+                        new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
+                        new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
                         if increase:
                             if power_budget - diff_power >= 0:
@@ -728,8 +751,9 @@ class QSChargerGroup(object):
                             else:
                                 next_possible_budgeted_amp = None
 
+
                         if self.dynamic_group.is_current_acceptable(
-                                    new_amps=alloted_amps + diff_amp,
+                                    new_amps=new_alloted_amps,
                                     estimated_current_amps=current_amps,
                                     time=time
                         ) is False:
@@ -738,10 +762,10 @@ class QSChargerGroup(object):
                         if next_possible_budgeted_amp is not None:
 
                             power_budget -= diff_power
-                            alloted_amps += diff_amp
+                            alloted_amps = new_alloted_amps
 
                             _LOGGER.info(
-                                f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, diff_amp {diff_amp}, increase {increase}, new alloted_amps {alloted_amps}")
+                                f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
                             cs.budgeted_amp = next_possible_budgeted_amp
                             cs.budgeted_num_phases = next_possible_num_phases
 
@@ -764,7 +788,7 @@ class QSChargerGroup(object):
 
         if self.home.battery_can_discharge() is False and full_available_home_power > 0:
 
-            diff_power_budget, diff_amp_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+            diff_power_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
 
             best_global_command = CMD_AUTO_GREEN_ONLY
             for cs in actionable_chargers:
@@ -778,7 +802,7 @@ class QSChargerGroup(object):
 
                 # check we have room to expand, and allocate amps
                 if self.dynamic_group.is_current_acceptable(
-                        new_amps=alloted_amps + 1,
+                        new_amps=self.dynamic_group.add_amps(alloted_amps, [1,1,1]),
                         estimated_current_amps=current_amps,
                         time=time
                 ):
@@ -806,16 +830,24 @@ class QSChargerGroup(object):
                                 # no need to try to augment on the green only : reserve it to the price ones
                                 continue
 
-                            next_budgeted_amp, next_budgeted_num_phases = cs.can_increase_budget(
-                                allow_phase_change=allow_phase_change)
+                            next_budgeted_amp, next_budgeted_num_phases = cs.can_change_budget(
+                                allow_phase_change=allow_phase_change, increase=True)
+
                             if next_budgeted_amp is not None:
 
                                 diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases,
                                                                next_budgeted_amp, next_budgeted_num_phases)
-                                diff_amp = next_budgeted_amp - cs.budgeted_amp
+
+                                new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
+                                new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps,
+                                                                               cs.get_amps_from_values(
+                                                                                   next_budgeted_amp,
+                                                                                   next_budgeted_num_phases))
+
+
 
                                 if self.dynamic_group.is_current_acceptable(
-                                        new_amps=alloted_amps + diff_amp,
+                                        new_amps=new_alloted_amps,
                                         estimated_current_amps=current_amps,
                                         time=time
                                 ) and diff_power > 0:
@@ -830,8 +862,7 @@ class QSChargerGroup(object):
                         _LOGGER.info(
                             f"dyn_handle: auto-price extended charge {smallest_power_increment}")
                         additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
-                        cost = (((
-                                             diff_power_budget + smallest_power_increment - full_available_home_power) * durations_eval_s) / 3600.0) * current_price
+                        cost = (((diff_power_budget + smallest_power_increment - full_available_home_power) * durations_eval_s) / 3600.0) * current_price
                         cost_per_watt_h = cost / additional_added_energy
 
                         if cost_per_watt_h < best_price:
