@@ -95,8 +95,8 @@ class AbstractDevice(object):
         elif right_amps is None:
             return copy.copy(left_amps)
 
-        diff = [left_amps[i] + right_amps[i] for i in range(3)]
-        return diff
+        adds = [left_amps[i] + right_amps[i] for i in range(3)]
+        return adds
 
     def diff_amps(self, left_amps:list[float|int], right_amps:list[float|int]) -> list[float|int]:
         if left_amps is None or right_amps is None:

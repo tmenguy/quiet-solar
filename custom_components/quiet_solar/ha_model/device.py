@@ -22,6 +22,8 @@ from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
 
+UNAVAILABLE_STATE_VALUES = [STATE_UNKNOWN, STATE_UNAVAILABLE]
+
 _LOGGER = logging.getLogger(__name__)
 
 def compute_energy_Wh_rieman_sum(
@@ -239,6 +241,7 @@ class HADeviceMixin:
         self.config_entry = config_entry
 
         self._entity_probed_state_is_numerical: dict[str, bool] = {}
+        self._entity_probed_state_invalid_state_overcharge: dict[str, set|None] = {}
         self._entity_probed_state_conversion_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_transform_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_non_ha_entity_get_state: dict[str, Callable[[str, datetime | None], tuple[
@@ -329,7 +332,7 @@ class HADeviceMixin:
 
         state = self.hass.states.get(self.calendar)
         state_attr = {}
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+        if state is None or state.state in UNAVAILABLE_STATE_VALUES:
             state = None
 
         if state is not None:
@@ -532,6 +535,14 @@ class HADeviceMixin:
 
         return vals[-1] >= max_v and max_v > min_v and len(vals) > 1
 
+
+
+
+
+
+
+
+
     def get_sensor_latest_possible_valid_value(self,
                                                entity_id,
                                                tolerance_seconds: float | None = None,
@@ -687,8 +698,14 @@ class HADeviceMixin:
             return None
         return compute_energy_Wh_rieman_sum(val)[0]
 
-    def get_last_state_value_duration(self, entity_id: str, states_vals: list[str], num_seconds_before: float | None,
-                                      time: datetime, invert_val_probe=False, allowed_max_holes_s: float = 3) -> float | None:
+    def get_last_state_value_duration(self,
+                                      entity_id: str,
+                                      states_vals: list[str],
+                                      num_seconds_before: float | None,
+                                      time: datetime,
+                                      invert_val_probe=False,
+                                      allowed_max_holes_s: float = 3,
+                                      count_only_duration=False) -> float | None:
 
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
@@ -751,10 +768,11 @@ class HADeviceMixin:
                 else:
                     # it is a bad state: whatever don't count passed it
                     # if we never had a good state, state_status_duration will be 0, this is what we want
-                    break
+                    if count_only_duration is False:
+                        break
             else:
                 current_hole += delta_t
-                if current_hole > allowed_max_holes_s:
+                if count_only_duration is False and current_hole > allowed_max_holes_s:
                     break
 
         if all_invalid:
@@ -802,11 +820,22 @@ class HADeviceMixin:
                                       conversion_fn=convert_current_to_amps, update_on_change_only=True,
                                       non_ha_entity_get_state=non_ha_entity_get_state)
 
+    def get_unfiltered_entity_name(self, entity_id: str | None, strict : bool =False) -> str| None:
+        if entity_id is None:
+            return None
+        invalid_states = self._entity_probed_state_invalid_state_overcharge.get(entity_id)
+        if invalid_states is None or len(invalid_states) == 0 or self._entity_probed_state_non_ha_entity_get_state.get(entity_id) is not None:
+            if strict:
+                return None
+            else:
+                return entity_id
+        return f"{entity_id}_no_filter_on_{invalid_states}"
+
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
                                  transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                                  conversion_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                                  update_on_change_only: bool = True,
-                                 non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
+                                 non_ha_entity_get_state: str | None | Callable[[str, datetime | None], tuple[
                                                                                                float | str | None, datetime | None, dict | None] | None] = None,
                                  state_invalid_values: set[str]|list[str]|None = None):
         if entity_id is None:
@@ -819,9 +848,11 @@ class HADeviceMixin:
         self._entity_probed_state_conversion_fn[entity_id] = conversion_fn
         self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
         self._entity_probed_state_invalid_values[entity_id] = set()
+        self._entity_probed_state_invalid_state_overcharge[entity_id] = None
 
-        self._entity_probed_state_invalid_values[entity_id].update([STATE_UNKNOWN, STATE_UNAVAILABLE])
+        self._entity_probed_state_invalid_values[entity_id].update(UNAVAILABLE_STATE_VALUES)
         if state_invalid_values:
+            self._entity_probed_state_invalid_state_overcharge[entity_id] = set(state_invalid_values)
             self._entity_probed_state_invalid_values[entity_id].update(state_invalid_values)
 
         if non_ha_entity_get_state is not None:
@@ -832,6 +863,19 @@ class HADeviceMixin:
             else:
                 self._entity_on_change.add(entity_id)
                 self._entity_probed_auto.add(entity_id)
+
+
+
+        unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
+        if unfiltered_internal is not None:
+            self.attach_ha_state_to_probe(entity_id=unfiltered_internal,
+                                          is_numerical=is_numerical,
+                                          transform_fn=transform_fn,
+                                          conversion_fn=conversion_fn,
+                                          update_on_change_only=update_on_change_only,
+                                          non_ha_entity_get_state="FAKE_GETTER",
+                                          state_invalid_values=None
+            )
 
         # store a first version
         if self.hass:
@@ -852,22 +896,40 @@ class HADeviceMixin:
     def add_to_history(self, entity_id: str, time: datetime = None, state: State = None):
 
         state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
+
+        if isinstance(state_getter, str) and state_getter == "FAKE_GETTER":
+            return
+
         state_time: datetime | None = None
 
         if state is not None or state_getter is None:
             if state is None:
                 state = self.hass.states.get(entity_id)
             state_attr = {}
-            if state is None or state.state in self._entity_probed_state_invalid_values[entity_id]:
-                value = None
-                if state is not None:
-                    state_time = state.last_updated
-            else:
-                value = state.state
-                state_time = state.last_updated
 
-            if state is not None:
-                state_attr = state.attributes
+            unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
+
+            if unfiltered_internal is not None:
+                to_fill = [(self._entity_probed_state_invalid_values[entity_id], entity_id) , ([] , unfiltered_internal) ]
+            else:
+                to_fill = [(self._entity_probed_state_invalid_values[entity_id], entity_id)]
+
+
+            for tf in to_fill:
+                invalid_vals, local_entity_id = tf
+
+                if state is None or state.state in invalid_vals:
+                    value = None
+                    if state is not None:
+                        state_time = state.last_updated
+                else:
+                    value = state.state
+                    state_time = state.last_updated
+
+                if state is not None:
+                    state_attr = state.attributes
+
+                self._add_state_history(local_entity_id, value, state_time, state, state_attr, time)
         else:
             fake_state = state_getter(entity_id, time)
             if fake_state is not None:
@@ -876,6 +938,9 @@ class HADeviceMixin:
                 value = None
                 state_attr = {}
 
+            self._add_state_history(entity_id, value, state_time , state, state_attr, time)
+
+    def _add_state_history(self, entity_id, value, state_time, state, state_attr, time):
         if state_attr is None:
             state_attr = {}
 

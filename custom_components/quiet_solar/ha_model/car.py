@@ -274,9 +274,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return None
 
-
-    def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> tuple[float | None, float | None, float | None]:
-
+    def _get_power_from_stored_amps(self, from_amp: int | float, from_num_phase: int ) -> None|float:
         from_power = None
         if from_amp == 0:
             from_power = 0.0
@@ -285,15 +283,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 from_power = self.amp_to_power_1p[from_amp]
             else:
                 from_power = self.amp_to_power_3p[from_amp]
+        return from_power
 
-        to_power = None
-        if to_amp == 0:
-            to_power = 0.0
-        elif to_amp >= self.car_charger_min_charge and to_amp <= self.car_charger_max_charge:
-            if to_num_phase == 1:
-                to_power = self.amp_to_power_1p[to_amp]
-            else:
-                to_power = self.amp_to_power_3p[to_amp]
+
+
+    def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> tuple[float | None, float | None, float | None]:
+
+        from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
+        to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
+
 
         if from_amp*from_num_phase == to_amp*to_num_phase:
             return 0.0, from_power, to_power
@@ -330,6 +328,25 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return power, from_power, to_power
 
 
+    def _add_to_amps_power_graph(self, from_a: tuple[float,int], to_a:tuple[float,int], power_delta: int | float) -> bool:
+        from_amp = int(from_a[0] * from_a[1])
+        to_amp = int(to_a[0] * to_a[1])
+
+        if from_amp == to_amp:
+            return False
+
+        self._dampening_deltas[(from_amp, to_amp)] = power_delta
+        self._dampening_deltas[(to_amp, from_amp)] = -power_delta
+
+        fs = self._dampening_deltas_graph.setdefault(from_amp, set())
+        fs.add(to_amp)
+        ts = self._dampening_deltas_graph.setdefault(to_amp, set())
+        ts.add(from_amp)
+
+        return True
+
+
+
     def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
 
         do_update = False
@@ -339,25 +356,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return do_update
 
         if amperage_transition is not None:
-            from_amp = int(amperage_transition[0][0]*amperage_transition[0][1])
-            to_amp = int(amperage_transition[1][0]*amperage_transition[1][1])
 
-            if from_amp == to_amp:
+            if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
                 return do_update
 
-            self._dampening_deltas[(from_amp, to_amp)] = power_value_or_delta
-            self._dampening_deltas[(to_amp, from_amp)] = -power_value_or_delta
-
-            fs = self._dampening_deltas_graph.setdefault(from_amp, set())
-            fs.add(to_amp)
-            ts = self._dampening_deltas_graph.setdefault(to_amp, set())
-            ts.add(from_amp)
             done_graph = True
 
             if amperage is None:
-                if from_amp == 0:
+                if amperage_transition[0][0] == 0:
                     amperage = amperage_transition[1]
-                elif to_amp == 0:
+                elif amperage_transition[1][0] == 0:
                     amperage = amperage_transition[0]
                     power_value_or_delta = -power_value_or_delta
 
@@ -375,14 +383,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             amps_val = int(amperage[0])
 
             if done_graph is False:
-                from_amp = 0
-                to_amp = amps_val*amperage[1]
-                self._dampening_deltas[(from_amp, to_amp)] = power_value_or_delta
-                self._dampening_deltas[(to_amp, from_amp)] = -power_value_or_delta
-                fs = self._dampening_deltas_graph.setdefault(from_amp, set())
-                fs.add(to_amp)
-                ts = self._dampening_deltas_graph.setdefault(to_amp, set())
-                ts.add(from_amp)
+                if self._add_to_amps_power_graph([0.0, amperage_transition[1][0]], amperage_transition[1], power_value_or_delta) is False:
+                    return do_update
+
+
 
             if power_value_or_delta < MIN_CHARGE_POWER_W:
                 # we may have a 0 value for a given amperage actually it could change the min and max amperage
@@ -446,75 +450,80 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return do_update
 
-    def interpolate_power_steps(self, do_recompute_min_charge=False, use_conf_values=False):
+    def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power):
 
-        new_3p : list[float] = [0.0] * (len(self.theoretical_amp_to_power_3p))
-        new_1p: list[float] = [0.0] * (len(self.theoretical_amp_to_power_1p))
 
-        if use_conf_values:
-            min_charge = self._conf_car_charger_min_charge
-            prev_measured_val_3p = self.conf_customized_amp_to_power_3p[min_charge]
-            prev_measured_val_1p = self.conf_customized_amp_to_power_1p[min_charge]
-        else:
-            min_charge = self.car_charger_min_charge
-            prev_measured_val_3p = self.customized_amp_to_power_3p[min_charge]
-            prev_measured_val_1p = self.customized_amp_to_power_1p[min_charge]
+        min_charge = self._conf_car_charger_min_charge
 
-        prev_measured_a_3p = min_charge
-        prev_measured_a_1p = min_charge
+        prev_measured_val = customized_amp_to_power[min_charge]
 
-        if prev_measured_val_1p <= 0:
-            prev_measured_val_1p = self.theoretical_amp_to_power_1p[min_charge]
+        new_vals: list[float] = [0.0] * (len(theoretical_amp_to_power))
 
-        if prev_measured_val_3p <= 0:
-            prev_measured_val_3p = self.theoretical_amp_to_power_3p[min_charge]
+        prev_measured_a = min_charge
 
-        for a in range(min_charge):
-            new_3p[a] = 0.0
+        if prev_measured_val <= 0:
+            # compute a best possible first
+            prev_measured_val = theoretical_amp_to_power[min_charge]
+            first = None
+            second = None
+            for a in range(min_charge+1, self.car_charger_max_charge + 1):
+                if customized_amp_to_power[a] > 0:
+                    if first is None:
+                        first = a
+                    elif second is None:
+                        second = a
+                    else:
+                        break
 
-        new_3p[min_charge] = prev_measured_val_3p
-        new_1p[min_charge] = prev_measured_val_1p
+            if first is not None and second is not None:
+                first_possible_val = (min_charge - first) * ((customized_amp_to_power[second] -  customized_amp_to_power[first])/(second - first)) + customized_amp_to_power[first]
+                if first_possible_val > 0:
+                    prev_measured_val = min(first_possible_val, prev_measured_val)
+
+
+        new_vals[min_charge] = prev_measured_val
 
         for a in range(min_charge+1, self.car_charger_max_charge + 1):
 
-            if use_conf_values:
-                measured_3p =  self.conf_customized_amp_to_power_3p[a]
-                measured_1p = self.conf_customized_amp_to_power_1p[a]
-            else:
-                measured_3p =  self.customized_amp_to_power_3p[a]
-                measured_1p = self.customized_amp_to_power_1p[a]
+            measured = customized_amp_to_power[a]
 
             if a == self.car_charger_max_charge:
-                if measured_3p <= 0 or (prev_measured_val_3p > 0 and measured_3p > 0 and measured_3p < prev_measured_val_3p):
-                    measured_3p = max(prev_measured_val_3p, self.theoretical_amp_to_power_3p[self.car_charger_max_charge])
-                if measured_1p <= 0 or (prev_measured_val_1p > 0 and measured_1p > 0 and measured_1p < prev_measured_val_1p):
-                    measured_1p = max(prev_measured_val_1p, self.theoretical_amp_to_power_1p[self.car_charger_max_charge])
+                if measured <= 0 or (prev_measured_val > 0 and measured > 0 and measured < prev_measured_val):
+                    measured = max(prev_measured_val, theoretical_amp_to_power[self.car_charger_max_charge])
 
-            if measured_3p > prev_measured_val_3p or a == self.car_charger_max_charge:
+
+            if measured > prev_measured_val or a == self.car_charger_max_charge:
                 # only increasing values allowed
-                new_3p[a] = measured_3p
-                if a > prev_measured_a_3p + 1:
-                    for ap in range(prev_measured_a_3p+1, a):
-                        new_3p[ap] = prev_measured_val_3p + ((measured_3p - prev_measured_val_3p) * (ap - prev_measured_a_3p) / (a - prev_measured_a_3p))
-                prev_measured_a_3p = a
-                prev_measured_val_3p = measured_3p
-
-            if measured_1p > prev_measured_val_1p or a == self.car_charger_max_charge:
-                # only increasing values allowed
-                new_1p[a] = measured_1p
-                if a > prev_measured_a_1p + 1:
-                    for ap in range(prev_measured_a_1p+1, a):
-                        new_1p[ap] = prev_measured_val_1p + ((measured_1p - prev_measured_val_1p) * (ap - prev_measured_a_1p) / (a - prev_measured_a_1p))
-                prev_measured_a_1p = a
-                prev_measured_val_1p = measured_1p
+                new_vals[a] = measured
+                if a > prev_measured_a + 1:
+                    for ap in range(prev_measured_a+1, a):
+                        new_vals[ap] = prev_measured_val + ((measured - prev_measured_val) * (ap - prev_measured_a) / (a - prev_measured_a))
+                prev_measured_a = a
+                prev_measured_val = measured
 
 
-        for a in range(0, len(self.theoretical_amp_to_power_3p)):
-            self.amp_to_power_3p[a] = new_3p[a]
 
-        for a in range(0, len(self.theoretical_amp_to_power_1p)):
-            self.amp_to_power_1p[a] = new_1p[a]
+        for a in range(0, len(theoretical_amp_to_power)):
+            amp_to_power[a] = new_vals[a]
 
+
+
+
+    def interpolate_power_steps(self, do_recompute_min_charge=False, use_conf_values=False):
+
+        if use_conf_values:
+            customized_amp_to_power_3p = self.conf_customized_amp_to_power_3p
+            customized_amp_to_power_1p = self.conf_customized_amp_to_power_1p
+        else:
+            customized_amp_to_power_3p = self.customized_amp_to_power_3p
+            customized_amp_to_power_1p = self.customized_amp_to_power_1p
+
+        self._interpolate_power_steps(customized_amp_to_power_3p,
+                                      self.theoretical_amp_to_power_3p,
+                                      self.amp_to_power_3p)
+        self._interpolate_power_steps(customized_amp_to_power_1p,
+                                      self.theoretical_amp_to_power_1p,
+                                      self.amp_to_power_1p)
 
         if do_recompute_min_charge or use_conf_values:
             self.car_charger_min_charge = self._conf_car_charger_min_charge
@@ -522,7 +531,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 for i, val in enumerate(self.amp_to_power_3p):
                     if i < self._conf_car_charger_min_charge:
                         continue
-                    if val < MIN_CHARGE_POWER_W:
+                    if 0 <= val < MIN_CHARGE_POWER_W:
                         self.car_charger_min_charge = i + 1
                     else:
                         break
@@ -530,7 +539,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 for i, val in enumerate(self.amp_to_power_1p):
                     if i < self.car_charger_min_charge: # use self.car_charger_min_charge instead of self._conf_car_charger_min_charge as it has been updated by the loop above
                         continue
-                    if val < MIN_CHARGE_POWER_W:
+                    if 0 <= val < MIN_CHARGE_POWER_W:
                         self.car_charger_min_charge = i + 1
                     else:
                         break

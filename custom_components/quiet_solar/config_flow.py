@@ -57,7 +57,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
     CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
     CONF_CLIMATE_HVAC_MODE_ON, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, \
-    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH
+    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE
 from .ha_model.climate_controller import get_hvac_modes
 from .ha_model.home import QSHome
 
@@ -212,6 +212,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_power_group_selector=False,
                           add_max_on_off=False,
                           add_amps_sensors=False,
+                          add_phase_number=False
                           ) -> dict:
 
         default_name = self.config_entry.data.get(CONF_NAME)
@@ -262,6 +263,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 vol.Optional(CONF_IS_3P,
                              default=self.config_entry.data.get(CONF_IS_3P, False)):
                 cv.boolean,
+            })
+
+        if add_phase_number:
+            sc.update({vol.Optional(CONF_MONO_PHASE,
+                                 description={"suggested_value": self.config_entry.data.get(CONF_MONO_PHASE)}) :
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        max=3,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX
+                    )
+                )
             })
 
         if add_boost_only:
@@ -395,7 +409,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                     add_calendar=True,
                                     add_efficiency_selector=True,
                                     add_is_3p=True,
-                                    add_power_group_selector=True)
+                                    add_power_group_selector=True,
+                                    add_phase_number=True)
 
         if self.config_entry.data.get(CONF_CHARGER_LATITUDE, None) is None:
             sc.update( {

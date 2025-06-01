@@ -228,7 +228,20 @@ class QSBattery(HADeviceMixin, Battery):
             domain, service, data, blocking=blocking
         )
 
+    def battery_can_discharge(self):
 
+        current_charge = self.current_charge
+
+        if current_charge is None:
+            return False
+
+        if self.max_discharging_power_current == 0:
+            return False
+
+        if current_charge > max(self.min_soc * self.capacity, 500): # 500Wh is a threshold
+            return True
+
+        return False
 
 
     def get_platforms(self):

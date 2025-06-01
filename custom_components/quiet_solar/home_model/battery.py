@@ -1,6 +1,4 @@
-from ..ha_model.battery import QSBattery
 from ..home_model.load import AbstractDevice
-from .commands import LoadCommand
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT
 
@@ -26,23 +24,6 @@ class Battery(AbstractDevice):
     @property
     def current_charge(self) -> float | None:
         return self._current_charge_value
-
-
-    def battery_can_discharge(self):
-
-        current_charge = self.current_charge
-
-        if current_charge is None:
-            return False
-
-        if isinstance(self, QSBattery):
-            if self.max_discharging_power_current == 0:
-                return False
-
-        if current_charge > max(self.min_soc * self.capacity, 500): # 500Wh is a threshold
-            return True
-
-        return False
 
 
     def get_best_charge_power(self, power_in: float, duration_s: float, current_charge: float | None = None):

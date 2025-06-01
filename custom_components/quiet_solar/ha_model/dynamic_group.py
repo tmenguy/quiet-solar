@@ -251,11 +251,11 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 current_budget_spend[i] += cur_amps[i]
 
             budget_type = None
-            if cur_amps > 0 and device.is_as_fast_as_possible_constraint_active(time):
+            if sum(cur_amps) > 0 and device.is_as_fast_as_possible_constraint_active(time):
                 budget_type = budget_as_fast_cluster
-            elif cur_amps > 0 and device.is_consumption_optional(time) is False:
+            elif sum(cur_amps) > 0 and device.is_consumption_optional(time) is False:
                 budget_type = budget_to_be_done_cluster
-            elif cur_amps > 0:
+            elif sum(cur_amps) > 0:
                 budget_type = budget_optional_cluster
 
             if budget_type is not None:

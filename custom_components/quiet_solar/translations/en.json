@@ -106,6 +106,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -123,6 +124,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -141,6 +143,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -167,6 +170,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the Power Group (W, kW)",
                     "device_is_3p": "Is the power group 3 phases?",
+                    "device_mono_phase": "if mono phase, this is the phase index",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the dynamic group",
                     "dynamic_group_name": "Add this group to another load group to limit the amps",
                     "name": "Name",
@@ -476,6 +480,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -493,6 +498,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -511,6 +517,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },

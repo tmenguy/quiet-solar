@@ -178,8 +178,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     else:
                         bistate_mode = self._bistate_mode_on
 
-                    _LOGGER.info(
-                        f"===> continue OVERRIDE BY USER {self.external_user_initiated_state} for load {self.name} force to {bistate_mode} ")
 
         if bistate_mode == self._bistate_mode_off:
             # remove all constraints if any
