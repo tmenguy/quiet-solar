@@ -25,7 +25,42 @@ if TYPE_CHECKING:
 
 NUM_MAX_INVALID_PROBES_COMMANDS = 3
 
+
 _LOGGER = logging.getLogger(__name__)
+
+
+def is_amps_greater(left_amps: list[float | int], right_amps: list[float | int]):
+    one_bigger = False
+    for i in range(3):
+        if left_amps[i] < right_amps[i]:
+            return False
+        if left_amps[i] > right_amps[i]:
+            one_bigger = True
+
+    return one_bigger
+
+
+def add_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
+    if left_amps is None and right_amps is None:
+        return [0.0, 0.0, 0.0]
+    elif left_amps is None:
+        return copy.copy(right_amps)
+    elif right_amps is None:
+        return copy.copy(left_amps)
+
+    adds = [left_amps[i] + right_amps[i] for i in range(3)]
+    return adds
+
+
+def diff_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
+    if left_amps is None or right_amps is None:
+        return [0.0, 0.0, 0.0]
+
+    diff = [left_amps[i] - right_amps[i] for i in range(3)]
+    return diff
+
+
+
 class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
@@ -75,35 +110,6 @@ class AbstractDevice(object):
     # for class overcharging reset
     def reset(self):
         self._local_reset()
-
-    def is_amps_greater(self, left_amps:list[float|int], right_amps:list[float|int]):
-
-        one_bigger = False
-        for i in range(3):
-            if  left_amps[i] < right_amps[i]:
-                return False
-            if left_amps[i] > right_amps[i]:
-                one_bigger = True
-
-        return one_bigger
-
-    def add_amps(self, left_amps:list[float|int], right_amps:list[float|int]) -> list[float|int]:
-        if left_amps is None and right_amps is None:
-            return [0.0, 0.0, 0.0]
-        elif left_amps is None:
-            return copy.copy(right_amps)
-        elif right_amps is None:
-            return copy.copy(left_amps)
-
-        adds = [left_amps[i] + right_amps[i] for i in range(3)]
-        return adds
-
-    def diff_amps(self, left_amps:list[float|int], right_amps:list[float|int]) -> list[float|int]:
-        if left_amps is None or right_amps is None:
-            return [0.0, 0.0, 0.0]
-
-        diff = [left_amps[i] - right_amps[i] for i in range(3)]
-        return diff
 
     @property
     def qs_enable_device(self) -> bool:
@@ -566,7 +572,7 @@ class AbstractLoad(AbstractDevice):
 
         if cmd.power_consign is not None and cmd.power_consign > 0:
             amps = self.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
-            return not self.is_amps_greater(amps, self.device_phase_amps_budget)
+            return not is_amps_greater(amps, self.device_phase_amps_budget)
 
         return True
 

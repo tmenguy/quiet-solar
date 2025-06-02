@@ -1,4 +1,3 @@
-import copy
 import logging
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
@@ -13,6 +12,7 @@ from homeassistant.core import HomeAssistant, State, callback, Event, EventState
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 from homeassistant.components import calendar
+from pyroute2.netns import attach
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
@@ -241,7 +241,7 @@ class HADeviceMixin:
         self.config_entry = config_entry
 
         self._entity_probed_state_is_numerical: dict[str, bool] = {}
-        self._entity_probed_state_invalid_state_overcharge: dict[str, set|None] = {}
+        self._entity_probed_state_attached_unfiltered: dict[str, bool] = {}
         self._entity_probed_state_conversion_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_transform_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_non_ha_entity_get_state: dict[str, Callable[[str, datetime | None], tuple[
@@ -823,13 +823,13 @@ class HADeviceMixin:
     def get_unfiltered_entity_name(self, entity_id: str | None, strict : bool =False) -> str| None:
         if entity_id is None:
             return None
-        invalid_states = self._entity_probed_state_invalid_state_overcharge.get(entity_id)
-        if invalid_states is None or len(invalid_states) == 0 or self._entity_probed_state_non_ha_entity_get_state.get(entity_id) is not None:
+
+        if self._entity_probed_state_attached_unfiltered.get(entity_id):
             if strict:
                 return None
             else:
                 return entity_id
-        return f"{entity_id}_no_filter_on_{invalid_states}"
+        return f"{entity_id}_no_filters"
 
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
                                  transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
@@ -837,7 +837,8 @@ class HADeviceMixin:
                                  update_on_change_only: bool = True,
                                  non_ha_entity_get_state: str | None | Callable[[str, datetime | None], tuple[
                                                                                                float | str | None, datetime | None, dict | None] | None] = None,
-                                 state_invalid_values: set[str]|list[str]|None = None):
+                                 state_invalid_values: set[str]|list[str]|None = None,
+                                 attach_unfiltered:bool = False):
         if entity_id is None:
             return
 
@@ -848,11 +849,10 @@ class HADeviceMixin:
         self._entity_probed_state_conversion_fn[entity_id] = conversion_fn
         self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
         self._entity_probed_state_invalid_values[entity_id] = set()
-        self._entity_probed_state_invalid_state_overcharge[entity_id] = None
+        self._entity_probed_state_attached_unfiltered[entity_id] = attach_unfiltered
 
         self._entity_probed_state_invalid_values[entity_id].update(UNAVAILABLE_STATE_VALUES)
         if state_invalid_values:
-            self._entity_probed_state_invalid_state_overcharge[entity_id] = set(state_invalid_values)
             self._entity_probed_state_invalid_values[entity_id].update(state_invalid_values)
 
         if non_ha_entity_get_state is not None:

@@ -7,7 +7,7 @@ import math
 
 from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice
+from ..home_model.load import AbstractDevice, is_amps_greater, diff_amps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self.dyn_group_max_phase_current_conf = kwargs.pop(CONF_DYN_GROUP_MAX_PHASE_AMPS, 32)
         self._childrens : list[AbstractDevice] = []
         self.charger_group = None
-
         self._dyn_group_max_phase_current: list[float|int] | None = None
 
     @property
@@ -44,9 +43,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if self._dyn_group_max_phase_current is None:
             # we have not been set yet
             if self.device_is_3p:
-                self._dyn_group_max_phase_current = (self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf)
+                self._dyn_group_max_phase_current = [self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf]
             else:
-                self._dyn_group_max_phase_current = (self.dyn_group_max_phase_current_conf,0, 0)
+                self._dyn_group_max_phase_current = [0, 0, 0]
+                self._dyn_group_max_phase_current[self.get_mono_phase()] = self.dyn_group_max_phase_current_conf
 
         return self._dyn_group_max_phase_current
 
@@ -54,8 +54,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     def is_delta_current_acceptable(self, delta_amps: list[float|int], new_amps_consumption: list[float|int] | None, time:datetime) -> (bool, list[float|int]):
 
-        if new_amps_consumption is not None and self.is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
-            return False, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+        if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
+            return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
 
         phases_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
 
@@ -64,11 +64,11 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             new_amps[i] = delta_amps[i] + phases_amps[i]
 
 
-        if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+            return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True, self.diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+            return True, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps, time=time)
 
@@ -77,8 +77,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     def is_current_acceptable_and_diff(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> (bool, list[float|int]):
 
-        if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
+        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+            return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
 
         if estimated_current_amps is None:
             estimated_current_amps = 0.0
@@ -111,11 +111,11 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         for i in range(3):
             new_amps[i] = delta_amps[i] + current_phases[i]
 
-        if self.is_amps_greater(new_amps, self.dyn_group_max_phase_current):
-            return False, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
+        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+            return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True, self.diff_amps(new_amps, self.dyn_group_max_phase_current)
+            return True, diff_amps(new_amps, self.dyn_group_max_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps,
                                                                   new_amps_consumption=new_amps,
@@ -265,19 +265,19 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
             budgets.append(c_budget)
 
-        if self.is_amps_greater(current_budget_spend, from_father_budget):
+        if is_amps_greater(current_budget_spend, from_father_budget):
             # ouch bad we are already over budget ....
             _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
 
             current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
 
-            if self.is_amps_greater(current_budget_spend,from_father_budget):
+            if is_amps_greater(current_budget_spend,from_father_budget):
                 _LOGGER.info(
                     f"allocate_phase_amps_budget for a group: {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
 
         # everyone has its minimum already allocated
-        if self.is_amps_greater(from_father_budget, current_budget_spend):
+        if is_amps_greater(from_father_budget, current_budget_spend):
             # ok let's put the rest of the budget on the loads if they can get it
             budget_to_allocate = [from_father_budget[i] - current_budget_spend[i] for i in range(3)]
 
@@ -302,7 +302,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                         if sum(c_budget["current_budget"]) == 0:
                             continue
 
-                        if self.is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
+                        if is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
                             # 1 amp per one amp budget adaptation ... but relative to the cluster needs
                             delta_budget = 1
                             c_cop = copy.deepcopy(c_budget["current_budget"])
@@ -342,12 +342,12 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
 
-        if self.is_amps_greater(allocated_final_budget, from_father_budget):
+        if is_amps_greater(allocated_final_budget, from_father_budget):
             _LOGGER.warning(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed last resort shaving {allocated_final_budget} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
             new_current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
 
-            if self.is_amps_greater(new_current_budget_spend, from_father_budget):
+            if is_amps_greater(new_current_budget_spend, from_father_budget):
                 _LOGGER.error(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
                 raise ValueError(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
             else:
@@ -379,10 +379,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 c_budget["current_budget"] = [0,0,0]
 
 
-                if not self.is_amps_greater(current_budget_spend, from_father_budget):
+                if not is_amps_greater(current_budget_spend, from_father_budget):
                     break
 
-            if not self.is_amps_greater(current_budget_spend, from_father_budget):
+            if not is_amps_greater(current_budget_spend, from_father_budget):
                 break
 
         return current_budget_spend

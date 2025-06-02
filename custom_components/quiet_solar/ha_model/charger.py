@@ -81,7 +81,7 @@ from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, CMD_OFF, copy_command, \
     CMD_AUTO_FROM_CONSIGN, CMD_IDLE, CMD_AUTO_PRICE
-from ..home_model.load import AbstractLoad
+from ..home_model.load import AbstractLoad, diff_amps, add_amps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -432,7 +432,7 @@ class QSChargerGroup(object):
         new_sum_amps = [0.0, 0.0, 0.0]
         diff_power = 0
         for cs in actionable_chargers:
-            new_sum_amps = self.dynamic_group.add_amps(new_sum_amps, cs.get_budget_amps())
+            new_sum_amps = add_amps(new_sum_amps, cs.get_budget_amps())
             diff_power += cs.get_diff_power(cs.current_real_max_charging_amp, cs.current_active_phase_number, cs.budgeted_amp, cs.budgeted_num_phases)
 
         return diff_power, new_sum_amps
@@ -551,7 +551,8 @@ class QSChargerGroup(object):
                                                                                 can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
 
 
-                        if await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, time):
+                        actionable_chargers = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, time)
+                        if actionable_chargers is not None and len(actionable_chargers) > 0:
                             await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
 
 
@@ -580,7 +581,7 @@ class QSChargerGroup(object):
 
 
 
-    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, time:datetime):
+    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, time:datetime) -> list | None:
 
         alloted_amps   = [0.0, 0.0, 0.0]
         current_amps   = [0.0, 0.0, 0.0]
@@ -593,9 +594,9 @@ class QSChargerGroup(object):
             else:
                 cs.budgeted_num_phases = min(cs.possible_num_phases) # get to one phase if unknown
 
-            alloted_amps   = cs.charger.add_amps(alloted_amps  , cs.get_budget_amps())
-            current_amps   = cs.charger.add_amps(current_amps  , cs.get_current_charging_amps())
-            mandatory_amps = cs.charger.add_amps(mandatory_amps, cs.get_amps_from_values(cs.possible_amps[0], cs.budgeted_num_phases))
+            alloted_amps   = add_amps(alloted_amps  , cs.get_budget_amps())
+            current_amps   = add_amps(current_amps  , cs.get_current_charging_amps())
+            mandatory_amps = add_amps(mandatory_amps, cs.get_amps_from_values(cs.possible_amps[0], cs.budgeted_num_phases))
 
         # first bad case of amps overly booked by the solver for example...
         if self.dynamic_group.is_current_acceptable(
@@ -682,9 +683,9 @@ class QSChargerGroup(object):
                     # but we need to check if the phase of the current charger is at problem or not : else we will lower the wrong phase and increases the others
 
                     budget = cs.get_budget_amps()
-                    new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, budget)
+                    new_alloted_amps = diff_amps(alloted_amps, budget)
                     try_amp, _ , try_amps= cs.get_amps_phase_switch(from_amp=cs.budgeted_amp, from_num_phase=1)
-                    new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps, try_amps)
+                    new_alloted_amps = add_amps(new_alloted_amps, try_amps)
 
 
                     res_probe, do_update = self._update_and_prob_for_amps_reduction(cs=cs,
@@ -711,10 +712,10 @@ class QSChargerGroup(object):
                             if next_amp is not None:
                                 _LOGGER.info(
                                     f"budgeting_algorithm_minimize_diffs:  shaving {cs.charger.name} from {cs.budgeted_amp} to {next_amp}")
-                                alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
+                                alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
                                 cs.budgeted_amp = next_amp
                                 cs.budgeted_num_phases = next_num_phases
-                                alloted_amps = self.dynamic_group.add_amps(alloted_amps, cs.get_budget_amps())
+                                alloted_amps = add_amps(alloted_amps, cs.get_budget_amps())
                                 has_shaved = True
 
                             if self.dynamic_group.is_current_acceptable(
@@ -736,7 +737,7 @@ class QSChargerGroup(object):
                 if current_ok is False:
                     _LOGGER.error(
                         f"budgeting_algorithm_minimize_diffs: CAN'T SHAVE BUDGETS !!!!")
-                    return False
+                    return None
 
 
         # ok we do have the "best" possible base for the chargers
@@ -778,8 +779,8 @@ class QSChargerGroup(object):
 
                         diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
 
-                        new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
-                        new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
+                        new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
+                        new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
                         if increase:
                             if power_budget - diff_power >= 0:
@@ -841,7 +842,7 @@ class QSChargerGroup(object):
 
                 # check we have room to expand, and allocate amps
                 if self.dynamic_group.is_current_acceptable(
-                        new_amps=self.dynamic_group.add_amps(alloted_amps, [1,1,1]),
+                        new_amps=add_amps(alloted_amps, [1,1,1]),
                         estimated_current_amps=current_amps,
                         time=time
                 ):
@@ -878,8 +879,8 @@ class QSChargerGroup(object):
                             diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases,
                                                            next_budgeted_amp, next_budgeted_num_phases)
 
-                            new_alloted_amps = self.dynamic_group.diff_amps(alloted_amps, cs.get_budget_amps())
-                            new_alloted_amps = self.dynamic_group.add_amps(new_alloted_amps,
+                            new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
+                            new_alloted_amps = add_amps(new_alloted_amps,
                                                                            cs.get_amps_from_values(
                                                                                next_budgeted_amp,
                                                                                next_budgeted_num_phases))
@@ -907,7 +908,7 @@ class QSChargerGroup(object):
                             cs_to_update.budgeted_amp = new_amp_budget
                             cs_to_update.budgeted_num_phases = next_num_phases_budget
 
-        return True
+        return actionable_chargers
 
     async def apply_budget_strategy(self, actionable_chargers, current_real_cars_power,time):
 
@@ -931,10 +932,10 @@ class QSChargerGroup(object):
         for cs in actionable_chargers:
             curr_amps = cs.get_current_charging_amps()
             budget_amps = cs.get_budget_amps()
-            current_amps = cs.charger.add_amps(current_amps, curr_amps)
+            current_amps = add_amps(current_amps, curr_amps)
             # it is really pessimistic here: was the worse of the worse when switching phase, it may add up
             max_curr_amps = [ max(curr_amps[i], budget_amps[i]) for i in range(3) ]
-            max_amps_in_worst_case_scenario = cs.charger.add_amps(max_amps_in_worst_case_scenario, max_curr_amps)
+            max_amps_in_worst_case_scenario = add_amps(max_amps_in_worst_case_scenario, max_curr_amps)
 
         if self.dynamic_group.is_current_acceptable(
                     new_amps=max_amps_in_worst_case_scenario,
@@ -1029,14 +1030,14 @@ class QSChargerGroup(object):
                 cs = charger.get_stable_dynamic_charge_status(time)
                 if cs is not None:
                     curr_amps = cs.get_current_charging_amps()
-                    current_amps = cs.charger.add_amps(current_amps, curr_amps)
+                    current_amps = add_amps(current_amps, curr_amps)
 
                     if cs.charger in chargers:
-                        new_amps = cs.charger.add_amps(new_amps,  chargers[cs.charger].get_current_charging_amps())
+                        new_amps = add_amps(new_amps,  chargers[cs.charger].get_current_charging_amps())
                         num_ok += 1
                         do_apply = True
                     else:
-                        new_amps = cs.charger.add_amps(new_amps, curr_amps)
+                        new_amps = add_amps(new_amps, curr_amps)
 
             if num_ok != len(actionable_chargers):
                 do_apply = False
@@ -1164,7 +1165,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self.attach_ha_state_to_probe(self.charger_status_sensor,
                                       is_numerical=False,
-                                      state_invalid_values=self._unknown_state_vals)
+                                      state_invalid_values=self._unknown_state_vals,
+                                      attach_unfiltered=True)
 
         self.charger_status_sensor_unfiltered = self.get_unfiltered_entity_name(self.charger_status_sensor)
 
@@ -2157,7 +2159,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_not_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self._check_plugged_val(time, for_duration, check_for_val=False)
 
-    def is_charger_plugged_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime] :
+    def is_charger_plugged_now(self, time: datetime) -> tuple[bool|None, datetime]:
 
         if self.charger_status_sensor:
             state_wallbox = self.hass.states.get(self.charger_status_sensor)
@@ -2320,10 +2322,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 has_done_change = await self.low_level_set_charging_num_phases(num_phases, time)
 
-                if for_default_when_unplugged is False and self.do_reboot_on_phase_switch and has_done_change and self.is_charger_plugged_now(time)[0] is True:
-                    # we will need a restart of the charger to take the new phase switch into account
-                    # we need to launch the rebbot only when the _expected_num_active_phases is met
-                    self._expected_num_active_phases.register_success_cb(self.reboot, None)
+                if for_default_when_unplugged is False and self.do_reboot_on_phase_switch and has_done_change:
+
+                    is_plugged = self.is_plugged(time=time)
+                    if is_plugged is None:
+                        is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+
+                    if is_plugged is True:
+                        # we will need a restart of the charger to take the new phase switch into account
+                        # we need to launch the rebbot only when the _expected_num_active_phases is met
+                        self._expected_num_active_phases.register_success_cb(self.reboot, None)
         else:
             # success, direct
             self._expected_num_active_phases.register_launch(value=self.device_default_num_phases, time=time)
@@ -2953,9 +2961,6 @@ class QSChargerWallbox(QSChargerGeneric):
 
         return res_charge_check
 
-    async def reboot_low_level(self, time):
-        return
-
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
             WallboxChargerStatus.CHARGING.value,
@@ -2996,7 +3001,3 @@ class QSChargerWallbox(QSChargerGeneric):
         return [
             WallboxChargerStatus.DISCONNECTED.value,
         ]
-
-
-
-
