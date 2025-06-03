@@ -8,7 +8,7 @@ import pytz
 
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF
+from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
@@ -19,6 +19,9 @@ bistate_modes = [
 "bistate_mode_auto",
 "bistate_mode_default",
 ]
+
+MAX_USER_OVERRIDE_DURATION_S = 8*3600
+USER_OVERRIDE_STATE_BACK_DURATION_S = 90
 
 _LOGGER = logging.getLogger(__name__)
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
@@ -138,23 +141,56 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # Ex : I have an HVAC that I manually open at 8pm and I don't want the system to close it because he thinks
             # it should be closed because of electricity price or any other stuffs
 
-            if self.external_user_initiated_state_time is not None and time - self.external_user_initiated_state_time > timedelta(hours=8):
+            if self.external_user_initiated_state_time is not None and (time - self.external_user_initiated_state_time).total_seconds() > MAX_USER_OVERRIDE_DURATION_S:
                 _LOGGER.info(
                     f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
                 # we need to reset the external user initiated state
-                self.reset_override_state()
+                await self.async_reset_override_state()
                 do_force_next_solve = True
             else:
                 state = self.hass.states.get(self.bistate_entity)
 
                 if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
 
-                    expected_state = self.expected_state_from_command(self.current_command)
+                    expected_state_running = expected_state = None
+                    if self.current_command is None and self.running_command is None:
+                        expected_state_running = expected_state = self.expected_state_from_command(CMD_IDLE)
+                    else:
+                        if self.current_command is not None:
+                           expected_state = self.expected_state_from_command(self.current_command)
+
+                        if self.running_command is not None:
+                            expected_state_running = self.expected_state_from_command(self.running_command)
+
+                        if expected_state is None:
+                            expected_state = expected_state_running
+
+                        if expected_state_running is None:
+                            expected_state_running = expected_state
+
+                    do_override_set = False
+                    if (expected_state is not None and state.state == expected_state) or (expected_state_running is not None and state.state == expected_state_running):
+                        do_override_set = False
+                    elif self.external_user_initiated_state is None or self.external_user_initiated_state != state.state:
+                        do_override_set = True
+
+
+                    if self.asked_for_reset_user_initiated_state_time is not None:
+                        if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < USER_OVERRIDE_STATE_BACK_DURATION_S:
+
+                            if do_override_set is False:
+                                # great no more override already after the last ask to stop override, reset the timer
+                                self.asked_for_reset_user_initiated_state_time = None
+
+                            # in all case still in a "short window" to ask for an override anyway
+                            do_override_set = False
+                        else:
+                            self.asked_for_reset_user_initiated_state_time = None
+
 
                     # if the user did something different ... just OVERRIDE the automation for a given time
-                    if expected_state is not None and state.state != expected_state and (self.external_user_initiated_state is None or self.external_user_initiated_state != state.state):
+                    if do_override_set:
                         # we need to remember the state and the time
-
                         _LOGGER.info(
                             f"===> OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} ")
 

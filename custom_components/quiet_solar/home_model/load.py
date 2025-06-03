@@ -282,6 +282,17 @@ class AbstractDevice(object):
             return True
         return False
 
+    async def launch_qs_command_back(self, time: datetime, ctxt="NO CTXT"):
+        current = self.running_command
+        if current is None:
+            current = self.current_command
+        if current is None:
+            current = CMD_IDLE
+
+        self.current_command = None
+        self.running_command = None
+        await self.launch_command(time=time, command=current, ctxt=ctxt)
+
     async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
         if self.qs_enable_device is False:
             return
@@ -382,9 +393,6 @@ class AbstractDevice(object):
                 await self.check_commands(time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
-        if self.qs_enable_device is False:
-            return True
-
         print(f"Executing command {command}")
         return False
 
@@ -401,6 +409,8 @@ class AbstractLoad(AbstractDevice):
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
         self.external_user_initiated_state: str | None = None
         self.external_user_initiated_state_time : datetime | None = None
+        self.asked_for_reset_user_initiated_state_time : datetime | None = None
+
 
         super().__init__(**kwargs)
 
@@ -420,6 +430,8 @@ class AbstractLoad(AbstractDevice):
         self.is_load_time_sensitive = False
 
     def get_override_state(self):
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            return "ASKED FOR RESET OVERRIDE"
         if self.external_user_initiated_state is None:
             return "NO OVERRIDE"
         return f"Override: {self.external_user_initiated_state}"
@@ -965,15 +977,15 @@ class AbstractLoad(AbstractDevice):
             if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
                 await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
 
-    def reset_override_state(self):
+    async def async_reset_override_state(self):
+
         self.external_user_initiated_state = None
         self.external_user_initiated_state_time = None
 
-    async def async_reset_override_state(self):
-        self.reset_override_state()
-
-
-
+        if self.asked_for_reset_user_initiated_state_time is None:
+            # set the ask to now
+            self.asked_for_reset_user_initiated_state_time = datetime.now(tz=pytz.UTC)
+            await self.launch_qs_command_back(time=self.asked_for_reset_user_initiated_state_time, ctxt="async_reset_override_state get back to current command")
 
 
 class TestLoad(AbstractLoad):
