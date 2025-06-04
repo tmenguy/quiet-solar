@@ -12,7 +12,6 @@ from homeassistant.core import HomeAssistant, State, callback, Event, EventState
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.unit_conversion import PowerConverter
 from homeassistant.components import calendar
-from pyroute2.netns import attach
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
@@ -596,40 +595,42 @@ class HADeviceMixin:
         return p
 
 
-    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+    def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
 
         # first check if we do have an amp sensor for the phases
         p = self.get_device_power_latest_possible_valid_value(tolerance_seconds=tolerance_seconds, time=time)
         pM = None
 
-        if p is not None and isinstance(self, AbstractDevice):
-            pM =  self.get_phase_amps_from_power_for_budgeting(p)
+        is_3p = False
+        if isinstance(self, AbstractDevice):
+            is_3p = self.current_3p
 
-        return self._get_device_worst_phase_amp_consumption(pM, tolerance_seconds, time, multiplier=1)
+            if p is not None:
+                pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
 
-    def _get_device_worst_phase_amp_consumption(self, pM:list[float|int]|None, tolerance_seconds: float | None, time: datetime, multiplier=1) -> list[float|int] | None:
+        return self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=1, is_3p=is_3p)
+
+    def _get_device_amps_consumption(self, pM:list[float|int]|None, tolerance_seconds: float | None, time: datetime, multiplier=1, is_3p=False) -> list[float|int] | None:
 
         ret: list[float | int | None]  = [None, None, None]
 
-        is_3p = False
-        mono_phase = 0
         good_mono_p = None
+        mono_phase = 0
         if isinstance(self, AbstractDevice):
-            if self.device_is_3p:
-                is_3p = True
-            mono_phase = self.get_mono_phase()
+            mono_phase = self.mono_phase_index
 
         for i, sensor in enumerate([self.phase_1_amps_sensor, self.phase_2_amps_sensor, self.phase_3_amps_sensor]):
             if sensor is None:
                 continue
             p_val = self.get_sensor_latest_possible_valid_value(sensor, tolerance_seconds, time)
             if p_val is not None:
+                p_val = p_val*multiplier
                 if mono_phase == i:
-                    good_mono_p = p_val*multiplier
+                    good_mono_p = p_val
                 elif good_mono_p is None:
                     # in case of mismatch between sensors and the selected phase
-                    good_mono_p = p_val * multiplier
-                ret[i] = p_val*multiplier
+                    good_mono_p = p_val
+                ret[i] = p_val
 
         if is_3p:
             if pM is not None and None in ret:
@@ -865,19 +866,20 @@ class HADeviceMixin:
                 self._entity_probed_auto.add(entity_id)
 
 
+        if attach_unfiltered:
+            unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
+            if unfiltered_internal is not None:
+                self.attach_ha_state_to_probe(entity_id=unfiltered_internal,
+                                              is_numerical=is_numerical,
+                                              transform_fn=transform_fn,
+                                              conversion_fn=conversion_fn,
+                                              update_on_change_only=update_on_change_only,
+                                              non_ha_entity_get_state="FAKE_GETTER",
+                                              state_invalid_values=None,
+                                              attach_unfiltered=False
+                )
 
-        unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
-        if unfiltered_internal is not None:
-            self.attach_ha_state_to_probe(entity_id=unfiltered_internal,
-                                          is_numerical=is_numerical,
-                                          transform_fn=transform_fn,
-                                          conversion_fn=conversion_fn,
-                                          update_on_change_only=update_on_change_only,
-                                          non_ha_entity_get_state="FAKE_GETTER",
-                                          state_invalid_values=None
-            )
-
-        # store a first version
+            # store a first version
         if self.hass:
             self.add_to_history(entity_id)
 

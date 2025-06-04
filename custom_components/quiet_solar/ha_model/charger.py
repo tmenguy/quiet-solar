@@ -202,7 +202,7 @@ class QSChargerStatus(object):
     def __init__(self, charger):
         self.charger : QSChargerGeneric = charger
         self.accurate_current_power = None
-        self.secondary_current_power =None
+        self.secondary_current_power = None
         self.command = None
         self.current_real_max_charging_amp = None
         self.current_active_phase_number = None
@@ -232,7 +232,7 @@ class QSChargerStatus(object):
 
         if num_phases == 1:
             ret = [0.0, 0.0, 0.0]
-            ret[self.charger.get_mono_phase()] = amp
+            ret[self.charger.mono_phase_index] = amp
         else:
             ret = [amp, amp, amp]
 
@@ -246,15 +246,7 @@ class QSChargerStatus(object):
         return self.get_amps_from_values(self.budgeted_amp, self.budgeted_num_phases)
 
     def update_amps_with_delta(self, from_amps:list[float|int],  num_phases:int, delta:int|float) -> list[float|int]:
-        amps = copy.copy(from_amps)
-        if num_phases == 1:
-            amps[self.charger.get_mono_phase()] += delta
-        else:
-            amps[0] += delta
-            amps[1] += delta
-            amps[2] += delta
-        return amps
-
+        return self.charger.update_amps_with_delta(from_amps=from_amps, delta=delta, is_3p=num_phases==3)
 
     def get_diff_power(self, old_amp, old_num_phases, new_amp, new_num_phases):
 
@@ -1189,21 +1181,43 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return charger_group
 
+    @property
+    def current_num_phases(self) -> int:
+        return self.get_charging_num_phases()
 
-    def get_phase_amps_from_power_for_budgeting(self, power:float) -> list[float | int]:
+    def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
-        steps = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+        steps = self.car.get_charge_power_per_phase_A(is_3p)
         resp = self._get_amps_from_power_steps(steps, power, safe_border=True)
 
-        if self.device_is_3p:
+        if is_3p:
             return [resp,resp,resp]
         else:
             ret = [0,0,0]
-            ret[self.get_mono_phase()] = resp
+            ret[self.mono_phase_index] = resp
             return ret
+
+    def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+
+        if self.is_charge_enabled(time=time):
+            current_amp = self.get_max_charging_amp_per_phase()
+            if current_amp is not None and current_amp >= self.min_charge and current_amp <= self.max_charge:
+                if self.current_3p:
+                    return [current_amp, current_amp, current_amp]
+                else:
+                    ret = [0, 0, 0]
+                    ret[self.mono_phase_index] = current_amp
+                    return ret
+
+        return super().get_device_amps_consumption(tolerance_seconds, time)
 
 
     def _get_amps_from_power_steps(self, steps, power, safe_border=False) -> int|float|None:
+
+        power = self.charger_group.dampening_power_value_for_car_consumption(power)
+
+        if power is None or power == 0.0:
+            return 0.0
 
         amp = self.min_charge + bisect.bisect_left(steps[self.min_charge:self.max_charge + 1], power)
         if amp <= self.min_charge:
@@ -1231,7 +1245,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.can_do_3_to_1_phase_switch():
             steps_3p = self.car.get_charge_power_per_phase_A(True)
             steps_1p = self.car.get_charge_power_per_phase_A(False)
-        elif self.device_is_3p:
+        elif self.physical_3p:
             steps_3p = self.car.get_charge_power_per_phase_A(True)
         else:
             steps_1p = self.car.get_charge_power_per_phase_A(False)
@@ -1356,11 +1370,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.current_active_phase_number = self._expected_num_active_phases.value
 
-        native_power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+        native_power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.physical_3p)
 
         cs.command = self.current_command
         if cs.command.is_like(CMD_ON):
-            cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=native_power_steps[self.max_charge])
+            cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=native_power_steps[self.min_charge])
 
 
         # if the car charge is in state "not charging" mark the real charge as 0
@@ -2009,7 +2023,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 s = set(power_steps_3p[min_charge: max_charge + 1])
                 s.update(power_steps_1p[min_charge_1p: max_charge_1p + 1])
             else:
-                power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.device_is_3p)
+                power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.physical_3p)
                 s = set(power_steps[self.min_charge: self.max_charge + 1])
 
             if 0 in s:
@@ -2036,13 +2050,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self._power_steps[0].power_consign, self._power_steps[-1].power_consign
 
     def get_min_max_phase_amps_for_budgeting(self) -> ( list[float|int],  list[float|int]):
-        if self.device_is_3p:
+        if self.physical_3p:
             return [self.min_charge, self.min_charge, self.min_charge], [self.max_charge, self.max_charge, self.max_charge]
         else:
             min_c = [0.0, 0.0, 0.0]
             max_c = [0.0, 0.0, 0.0]
-            min_c[self.get_mono_phase()] = self.min_charge
-            max_c[self.get_mono_phase()] = self.max_charge
+            min_c[self.mono_phase_index] = self.min_charge
+            max_c[self.mono_phase_index] = self.max_charge
 
             return min_c, max_c
 
@@ -2287,17 +2301,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result
 
     def can_do_3_to_1_phase_switch(self):
-        if self.charger_three_to_one_phase_switch and self.device_is_3p:
+        if self.charger_three_to_one_phase_switch and self.physical_3p:
             return True
         return False
 
 
     def get_charging_num_phases(self) -> int | None:
-        if self.can_do_3_to_1_phase_switch() and self.device_is_3p:
+        if self.can_do_3_to_1_phase_switch() and self.physical_3p:
             state = self.hass.states.get(self.charger_three_to_one_phase_switch)
 
             if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                res = None
+                res = 3
             else:
                 if state.state == "on":
                     res = 1
@@ -2305,20 +2319,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     res = 3
             return res
         else:
-            res = self.device_default_num_phases
+            res = self.physical_num_phases
 
         return res
 
     async def set_charging_num_phases(self, num_phases:int, time: datetime, for_default_when_unplugged=False) -> bool:
 
         has_done_change = False
-        if self.can_do_3_to_1_phase_switch() and self.device_is_3p:
+        if self.can_do_3_to_1_phase_switch() and self.physical_3p:
             if for_default_when_unplugged is False:
                 self._expected_num_active_phases.register_launch(value=num_phases, time=time)
 
-            current_num_phases = self.get_charging_num_phases()
-
-            if current_num_phases != num_phases:
+            if self.current_num_phases != num_phases:
 
                 has_done_change = await self.low_level_set_charging_num_phases(num_phases, time)
 
@@ -2334,7 +2346,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         self._expected_num_active_phases.register_success_cb(self.reboot, None)
         else:
             # success, direct
-            self._expected_num_active_phases.register_launch(value=self.device_default_num_phases, time=time)
+            self._expected_num_active_phases.register_launch(value=self.physical_num_phases, time=time)
             await self._expected_num_active_phases.success(time=time)
 
         return has_done_change
@@ -2415,7 +2427,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     one_bad = True
 
         if one_bad is False:
-            current_active_phases = self.get_charging_num_phases()
+            current_active_phases = self.current_num_phases
             if current_active_phases != self._expected_num_active_phases.value:
                 one_bad = True
                 # check first if amperage setting is ok
@@ -2628,14 +2640,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             handled = True
             if probe_only is False:
                 self._expected_amperage.set(self.charger_default_idle_charge, time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
-                self._expected_num_active_phases.set(self.get_charging_num_phases(), time)
+                self._expected_num_active_phases.set(self.current_num_phases, time)
                 self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command is None or command.is_off_or_idle():
             handled = True
             if probe_only is False:
                 self._expected_charge_state.set(False, time)
                 self._expected_amperage.set(self.charger_default_idle_charge, time) # do not use charger min charge so next time we plug ...it may work
-                self._expected_num_active_phases.set(self.get_charging_num_phases(), time)
+                self._expected_num_active_phases.set(self.current_num_phases, time)
         elif command.is_auto() or command.is_like(CMD_ON):
             handled = False
 
@@ -2645,7 +2657,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if probe_only is False:
                 self._expected_charge_state.set(False, time)
                 self._expected_amperage.set(self.charger_default_idle_charge, time)
-                self._expected_num_active_phases.set(self.get_charging_num_phases(), time)
+                self._expected_num_active_phases.set(self.current_num_phases, time)
 
         return handled
 
@@ -2848,7 +2860,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
     def convert_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
         mult = 1.0
-        if self.device_is_3p:
+        if self.current_3p:
             mult = 3.0
         val = amps * mult * self.home.voltage
 

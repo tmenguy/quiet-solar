@@ -4,10 +4,11 @@ import logging
 from datetime import datetime
 
 import math
+from typing import AnyStr, Any
 
 from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice, is_amps_greater, diff_amps
+from ..home_model.load import AbstractDevice, is_amps_greater, diff_amps, add_amps, max_amps, min_amps, is_amps_zero
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,24 +30,24 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self._dyn_group_max_phase_current: list[float|int] | None = None
 
     @property
-    def device_is_3p(self) -> bool:
-        if super().device_is_3p:
-            return True
+    def physical_num_phases(self) -> int:
+        if super().physical_num_phases == 3:
+            return 3
 
         for device in self._childrens:
-            if device.device_is_3p:
-                return True
-        return False
+            if device.physical_num_phases == 3:
+                return 3
+        return 1
 
     @property
     def dyn_group_max_phase_current(self) -> list[float|int]:
         if self._dyn_group_max_phase_current is None:
             # we have not been set yet
-            if self.device_is_3p:
+            if self.physical_3p:
                 self._dyn_group_max_phase_current = [self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf]
             else:
                 self._dyn_group_max_phase_current = [0, 0, 0]
-                self._dyn_group_max_phase_current[self.get_mono_phase()] = self.dyn_group_max_phase_current_conf
+                self._dyn_group_max_phase_current[self.mono_phase_index] = self.dyn_group_max_phase_current_conf
 
         return self._dyn_group_max_phase_current
 
@@ -57,12 +58,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
             return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
 
-        phases_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
+        phases_amps = self.get_device_amps_consumption(tolerance_seconds=None, time=time)
 
-        new_amps = [0.0, 0.0, 0.0]
-        for i in range(3):
-            new_amps[i] = delta_amps[i] + phases_amps[i]
-
+        new_amps = add_amps(delta_amps, phases_amps)
 
         if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
             return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
@@ -83,14 +81,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if estimated_current_amps is None:
             estimated_current_amps = 0.0
 
-        phases_amps = self.get_device_worst_phase_amp_consumption(tolerance_seconds=None, time=time)
+        phases_amps = self.get_device_amps_consumption(tolerance_seconds=None, time=time)
 
         current_phases = [0.0, 0.0, 0.0]
         phases_for_delta = [0.0, 0.0, 0.0]
         if phases_amps is not None and estimated_current_amps is not None:
             phases_for_delta = estimated_current_amps
-            for i in range(3):
-                current_phases[i] = max(phases_amps[i], estimated_current_amps[i])
+            current_phases = max_amps(phases_amps, estimated_current_amps)
         elif estimated_current_amps is not None:
             phases_for_delta = estimated_current_amps
             current_phases = copy.copy(estimated_current_amps)
@@ -100,16 +97,11 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
         # get the best possible delta amps as it is a computation coming from outside that is done vs an estimated one
-        delta_amps = [0.0, 0.0, 0.0]
-        for i in range(3):
-            if new_amps[i] is not None:
-                delta_amps[i] = new_amps[i] - phases_for_delta[i]
+        delta_amps = diff_amps(new_amps, phases_for_delta)
 
 
         # recompute the new amps based on the delta and the "worst" current
-        new_amps:list[float|int] = [0.0, 0.0, 0.0]
-        for i in range(3):
-            new_amps[i] = delta_amps[i] + current_phases[i]
+        new_amps = add_amps(delta_amps, current_phases)
 
         if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
             return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
@@ -161,9 +153,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             max_p = [0, 0, 0]
             for device in self._childrens:
                 min_p_d, max_p_d = device.get_min_max_phase_amps_for_budgeting()
-                for i in range(3):
-                    min_p[i] = min(min_p[i], min_p_d[i])
-                    max_p[i] = max(max_p[i], max_p_d[i])
+                min_p = min_amps(min_p, min_p_d)
+                max_p = max_amps(max_p, max_p_d)
 
         return min_p, max_p
 
@@ -172,8 +163,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         device_needed_amp = [0,0,0]
         for device in self._childrens:
             dn = device.get_evaluated_needed_phase_amps_for_budgeting(time)
-            for i in range(3):
-                device_needed_amp[i] += dn[i]
+            device_needed_amp = add_amps(device_needed_amp, dn)
+
 
         return device_needed_amp
 
@@ -197,11 +188,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if from_father_budget is None:
             from_father_budget = self.dyn_group_max_phase_current
         else:
-            from_father_budget = [ min(from_father_budget[i], self.dyn_group_max_phase_current[i]) for i in range(3) ]
+            from_father_budget = min_amps(from_father_budget, self.dyn_group_max_phase_current)
 
         if from_father_budget is None:
             from_father_budget = [1e8, 1e8, 1e8] # a lot of amps :)
-
 
         _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget}")
 
@@ -231,36 +221,34 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             device_needed_amps = device.get_evaluated_needed_phase_amps_for_budgeting(time)
             min_a, max_a = device.get_min_max_phase_amps_for_budgeting()
 
-
-            if device_needed_amps is None or sum(device_needed_amps) == 0:
-                cur_amps = (0.0, 0.0, 0.0)
+            if device_needed_amps is None or is_amps_zero(device_needed_amps):
+                cur_amps = [0.0, 0.0, 0.0]
             else:
                 cur_amps = min_a
 
             # allocate first at minimum
-            c_budget = {
+            c_budget: dict[str, Any] = {
                 "device": device,
-                "3p":device.device_is_3p,
                 "needed_amp": device_needed_amps,
                 "min_amp": min_a,
                 "max_amp": max_a,
                 "current_budget":cur_amps
             }
 
-            for i in range(3):
-                current_budget_spend[i] += cur_amps[i]
+            current_budget_spend = add_amps(current_budget_spend, cur_amps)
 
             budget_type = None
-            if sum(cur_amps) > 0 and device.is_as_fast_as_possible_constraint_active(time):
-                budget_type = budget_as_fast_cluster
-            elif sum(cur_amps) > 0 and device.is_consumption_optional(time) is False:
-                budget_type = budget_to_be_done_cluster
-            elif sum(cur_amps) > 0:
-                budget_type = budget_optional_cluster
+            if not is_amps_zero(cur_amps):
+                if device.is_as_fast_as_possible_constraint_active(time):
+                    budget_type = budget_as_fast_cluster
+                elif device.is_consumption_optional(time) is False:
+                    budget_type = budget_to_be_done_cluster
+                else:
+                    budget_type = budget_optional_cluster
+
 
             if budget_type is not None:
-                for i in range(3):
-                    budget_type["sum_needed"][i] += device_needed_amps[i]
+                budget_type["sum_needed"] = add_amps(budget_type["sum_needed"], device_needed_amps)
                 budget_type["budgets"].append(c_budget)
 
             budgets.append(c_budget)
@@ -269,9 +257,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             # ouch bad we are already over budget ....
             _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
             cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
-
             current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
-
             if is_amps_greater(current_budget_spend,from_father_budget):
                 _LOGGER.info(
                     f"allocate_phase_amps_budget for a group: {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
@@ -279,56 +265,49 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         # everyone has its minimum already allocated
         if is_amps_greater(from_father_budget, current_budget_spend):
             # ok let's put the rest of the budget on the loads if they can get it
-            budget_to_allocate = [from_father_budget[i] - current_budget_spend[i] for i in range(3)]
+            budget_to_allocate = diff_amps(from_father_budget, current_budget_spend)
 
             _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} : budget_to_allocate {budget_to_allocate}")
 
-            clusters = [budget_as_fast_cluster, None, budget_to_be_done_cluster, budget_optional_cluster]
+            clusters = [budget_as_fast_cluster, budget_to_be_done_cluster, budget_optional_cluster]
 
-            for i in range(len(clusters)):
-
-                cluster_budget = clusters[i]
+            for cluster_budget in clusters:
 
                 if cluster_budget is None:
                     continue
 
-                if sum(cluster_budget["sum_needed"]) == 0:
+                if is_amps_zero(cluster_budget["sum_needed"]):
                     continue
 
                 do_spread = True
                 while do_spread:
                     one_modif = False
                     for c_budget in cluster_budget["budgets"]:
-                        if sum(c_budget["current_budget"]) == 0:
+                        if is_amps_zero(c_budget["current_budget"]):
                             continue
 
                         if is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
-                            # 1 amp per one amp budget adaptation ... but relative to the cluster needs
-                            delta_budget = 1
-                            c_cop = copy.deepcopy(c_budget["current_budget"])
-                            if c_budget["3p"]:
-                                phase_range = [0,1,2]
-                            else:
-                                good_phase = c_budget["current_budget"].index(max(c_budget["current_budget"]))
-                                phase_range = [good_phase]
 
-                            c_budget["current_budget"] = [
-                                min(c_budget["max_amp"][i], c_budget["current_budget"][i] + delta_budget) for i in
-                                phase_range]
+                            budget_to_allocate = add_amps(budget_to_allocate, c_budget["current_budget"])
+                            current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
 
-                            budget_to_allocate = [budget_to_allocate[i] - (c_budget["current_budget"][i] - c_cop[i]) for i in phase_range]
-                            current_budget_spend = [current_budget_spend[i] + (c_budget["current_budget"][i] - c_cop[i]) for i in phase_range]
+                            device = c_budget["device"]
+                            c_budget["current_budget"] = device.update_amps_with_delta(from_amps=c_budget["current_budget"], delta=1, is_3p=device.physical_3p)
+                            c_budget["current_budget"] = min_amps(c_budget["current_budget"], c_budget["max_amp"])
+
+                            budget_to_allocate = diff_amps(budget_to_allocate, c_budget["current_budget"])
+                            current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
 
                             one_modif = True
 
-                        if max(budget_to_allocate) <= 0.0001:
+                        if max(budget_to_allocate) <= 0.01:
                             do_spread = False
                             break
 
                     if one_modif is False or do_spread is False:
                         break
 
-                if max(budget_to_allocate) <= 0.0001:
+                if max(budget_to_allocate) <= 0.01:
                     break
 
 
@@ -338,8 +317,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         allocated_final_budget = [0.0,0.0,0.0]
         for c_budget in budgets:
             added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
-            allocated_final_budget = [allocated_final_budget[i] + added_b[i] for i in range(3)]
-
+            allocated_final_budget = add_amps(allocated_final_budget, added_b)
 
 
         if is_amps_greater(allocated_final_budget, from_father_budget):
@@ -354,7 +332,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 allocated_final_budget = [0.0, 0.0, 0.0]
                 for c_budget in budgets:
                     added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
-                    allocated_final_budget = [allocated_final_budget[i] + added_b[i] for i in range(3)]
+                    allocated_final_budget = add_amps(allocated_final_budget, added_b)
 
 
         self.device_phase_amps_budget = allocated_final_budget
@@ -365,17 +343,17 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     def  _shave_phase_amps_clusters(self, cluster_list_to_shave, current_budget_spend:list[float|int], from_father_budget:list[float|int]) -> list[float|int]:
         for shaved_cluster in cluster_list_to_shave:
-            if sum(shaved_cluster["sum_needed"]) == 0:
+            if is_amps_zero(shaved_cluster["sum_needed"]):
                 continue
 
             for c_budget in shaved_cluster["budgets"]:
-                if sum(c_budget["current_budget"]) == 0:
+                if is_amps_zero(c_budget["current_budget"]):
                     continue
 
                 # by construction all are set at their minimum
-                shaved_cluster["sum_needed"] = [shaved_cluster["sum_needed"][i] - c_budget["needed_amp"][i] for i in range(3)]
+                shaved_cluster["sum_needed"] = diff_amps(shaved_cluster["sum_needed"], c_budget["needed_amp"])
                 c_budget["needed_amp"] = [0,0,0]
-                current_budget_spend = [current_budget_spend[i] - c_budget["current_budget"][i] for i in range(3)]
+                current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
                 c_budget["current_budget"] = [0,0,0]
 
 

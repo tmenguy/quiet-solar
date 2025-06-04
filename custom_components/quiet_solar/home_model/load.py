@@ -28,6 +28,15 @@ NUM_MAX_INVALID_PROBES_COMMANDS = 3
 
 _LOGGER = logging.getLogger(__name__)
 
+def is_amps_zero(amps: list[float | int]) -> bool:
+    if amps is None:
+        return True
+
+    for a in amps:
+        if a != 0.0:
+            return False
+
+    return True
 
 def is_amps_greater(left_amps: list[float | int], right_amps: list[float | int]):
     one_bigger = False
@@ -59,6 +68,27 @@ def diff_amps(left_amps: list[float | int], right_amps: list[float | int]) -> li
     diff = [left_amps[i] - right_amps[i] for i in range(3)]
     return diff
 
+def min_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
+    if left_amps is None and right_amps is None:
+        return [0.0, 0.0, 0.0]
+    elif left_amps is None:
+        return copy.copy(right_amps)
+    elif right_amps is None:
+        return copy.copy(left_amps)
+
+    mins = [min(left_amps[i], right_amps[i]) for i in range(3)]
+    return mins
+
+def max_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
+    if left_amps is None and right_amps is None:
+        return [0.0, 0.0, 0.0]
+    elif left_amps is None:
+        return copy.copy(right_amps)
+    elif right_amps is None:
+        return copy.copy(left_amps)
+
+    maxs = [max(left_amps[i], right_amps[i]) for i in range(3)]
+    return maxs
 
 
 class AbstractDevice(object):
@@ -66,7 +96,7 @@ class AbstractDevice(object):
         super().__init__()
         self._enabled = True
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
-        self._device_is_3p = kwargs.pop(CONF_IS_3P, False)
+        self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
         self._mono_phase_conf = kwargs.pop(CONF_MONO_PHASE, None)
         if self._mono_phase_conf is None:
@@ -151,29 +181,49 @@ class AbstractDevice(object):
             return self.__class__.__name__
         return self._device_type
 
-    @property
-    def device_is_3p(self) -> bool:
-        return self._device_is_3p
+
 
     @property
-    def device_default_num_phases(self) -> int:
-        if self.device_is_3p:
+    def physical_num_phases(self) -> int:
+        if self._device_is_3p_conf:
             return 3
         return 1
+
+    @property
+    def physical_3p(self) -> bool:
+        return self.physical_num_phases == 3
+
+    @property
+    def current_num_phases(self) -> int:
+        return self.physical_num_phases
+
+    @property
+    def current_3p(self) -> bool:
+        return self.current_num_phases == 3
 
     def can_do_3_to_1_phase_switch(self):
         return False
 
-    def get_mono_phase(self) -> int:
+    @property
+    def mono_phase_index(self) -> int:
 
         if self._mono_phase_conf is not None:
             return self._mono_phase_default
 
-        if self.father_device is not None and self.father_device != self.home:
-            return self.father_device.get_mono_phase()
+        if self.father_device is not None and self.father_device != self.home and not self.father_device.physical_3p:
+            return self.father_device.mono_phase_index
 
         return self._mono_phase_default
 
+    def update_amps_with_delta(self, from_amps:list[float|int], delta:int|float, is_3p:bool) -> list[float|int]:
+        amps = copy.copy(from_amps)
+        if is_3p:
+            amps[self.mono_phase_index] += delta
+        else:
+            amps[0] += delta
+            amps[1] += delta
+            amps[2] += delta
+        return amps
 
     def __repr__(self):
         return self.device_id
@@ -200,20 +250,21 @@ class AbstractDevice(object):
     def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> list[float|int]:
         return [0.0, 0.0, 0.0]
 
+
     def get_phase_amps_from_power_for_budgeting(self, power:float) -> list[float | int]:
-        if self.device_is_3p:
+        return self.get_phase_amps_from_power(power, is_3p=self.physical_3p)
+
+    def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
+
+        if is_3p:
             power = power / 3.0
         p = power / self.home.voltage
-        if self.device_is_3p:
-            return [p,p,p]
+        if is_3p:
+            return [p, p, p]
         else:
-            ret = [0,0,0]
-            ret[self.get_mono_phase()] = p
+            ret = [0, 0, 0]
+            ret[self.mono_phase_index] = p
             return ret
-
-
-
-
 
 
     def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
@@ -583,7 +634,11 @@ class AbstractLoad(AbstractDevice):
             return True
 
         if cmd.power_consign is not None and cmd.power_consign > 0:
+            # it is for budgeting device_phase_amps_budget has been comouted with "static" 3p devices
+            # compare only budgeting value together
             amps = self.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
+            # shave by one amp to allow a bit more commands
+            amps = [ max(0, a-1) for a in amps]
             return not is_amps_greater(amps, self.device_phase_amps_budget)
 
         return True

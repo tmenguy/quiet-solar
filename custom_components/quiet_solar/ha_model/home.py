@@ -190,10 +190,6 @@ class QSHome(QSDynamicGroup):
 
         self.add_device(self)
 
-    @property
-    def device_is_3p(self) -> bool:
-        return self._device_is_3p
-
     def get_best_tariff(self, time: datetime) -> float:
         if self.price_off_peak == 0:
             return self.price_peak
@@ -451,7 +447,7 @@ class QSHome(QSDynamicGroup):
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
 
-    def get_device_worst_phase_amp_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+    def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
         # first check if we do have an amp sensor for the phases
         multiplier = 1
         if self.grid_active_power_sensor_inverted is False:
@@ -459,6 +455,11 @@ class QSHome(QSDynamicGroup):
             multiplier = -1
 
         pM = None
+        is_3p = False
+        if isinstance(self, AbstractDevice):
+            is_3p = self.current_3p
+
+
         if self.grid_active_power_sensor is not None:
             # this one has been inverted at the moment it was attached to prob
             # so just multiply it by -1
@@ -466,9 +467,9 @@ class QSHome(QSDynamicGroup):
             if p is not None:
                 p = -1.0*p
                 if p > 0 and isinstance(self, AbstractDevice):
-                    pM =  self.get_phase_amps_from_power_for_budgeting(p)
+                    pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
 
-        return self._get_device_worst_phase_amp_consumption(pM, tolerance_seconds, time, multiplier=multiplier)
+        return self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
 
 
     def battery_can_discharge(self):
