@@ -2303,7 +2303,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
         return val, new_attr
 
-    def low_level_plug_check_now(self, time: datetime) -> [bool|None, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> (bool|None, datetime):
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
