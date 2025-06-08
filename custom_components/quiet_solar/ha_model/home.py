@@ -688,7 +688,7 @@ class QSHome(QSDynamicGroup):
 
             try:
                 wait_time = await load.check_commands(time=time)
-                if wait_time > timedelta(seconds=30):
+                if wait_time > timedelta(seconds=45):
                     if load.running_command_num_relaunch < 3:
                         await load.force_relaunch_command(time)
                     else:
@@ -705,7 +705,7 @@ class QSHome(QSDynamicGroup):
                 continue
 
             # dangerous : won't be moving some constraints where they should! remove it ... and let the launch command
-            # with stacked command and other do th ejob of running the right command when it should
+            # with stacked command and other do the job of running the right command when it should
             # if load.is_load_command_set(time) is False:
             #     continue
 
