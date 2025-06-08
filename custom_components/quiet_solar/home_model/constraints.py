@@ -631,7 +631,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 if has_a_proper_end_time and self.load.is_time_sensitive():
                     # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
-                    # a 6 hours windows, of of course if the constrait is timed we get bigger
+                    # a 6 hours windows, of of course if the constraint is timed we get bigger
 
                     best_s = max(3600*6, (self.best_duration_to_meet().total_seconds()/self.load.efficiency_factor)*1.5)
                     start_reduction = self.end_of_constraint - timedelta(seconds=best_s)

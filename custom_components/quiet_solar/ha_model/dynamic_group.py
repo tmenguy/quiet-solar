@@ -3,8 +3,8 @@ import logging
 
 from datetime import datetime
 
-import math
-from typing import AnyStr, Any
+
+from typing import Any
 
 from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
 from ..ha_model.device import HADeviceMixin

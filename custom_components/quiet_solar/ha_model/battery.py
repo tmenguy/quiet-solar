@@ -34,8 +34,6 @@ class QSBattery(HADeviceMixin, Battery):
         self.attach_ha_state_to_probe(self.charge_percent_sensor,
                                       is_numerical=True)
 
-        self.max_discharging_power_current = None
-        self.max_charging_power_current = None
         self.is_charge_from_grid_current = None
 
     @property
@@ -88,13 +86,13 @@ class QSBattery(HADeviceMixin, Battery):
             _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! is_charge_from_grid None")
             return None
 
-        max_discharge_power = await self.get_max_discharging_power()
+        max_discharge_power = self.get_max_discharging_power()
 
         if cmd_to_vals["max_discharging_power"] is not None and max_discharge_power is None:
             _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! max_discharge_power None")
             return None
 
-        max_charge_power = await self.get_max_charging_power()
+        max_charge_power = self.get_max_charging_power()
 
         if cmd_to_vals["max_charging_power"] is not None and max_charge_power is None:
             _LOGGER.info(f"==> battery probe_if_command_set ret None!!!! max_charge_power None")
@@ -151,7 +149,7 @@ class QSBattery(HADeviceMixin, Battery):
 
         val = int(min(max_value, max(min_value, range_value)))
 
-        if val == self.max_discharging_power_current:
+        if val == self.get_max_discharging_power():
             return
 
         data[number.ATTR_VALUE] = val
@@ -163,43 +161,42 @@ class QSBattery(HADeviceMixin, Battery):
             domain, service, data, blocking=blocking
         )
 
-    async def get_max_discharging_power(self):
-        if self.max_discharge_number is None:
-            return None
+    def get_max_discharging_power(self):
+        res = None
+        if self.max_discharge_number is not None:
 
-        state = self.hass.states.get(self.max_discharge_number)
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            res = None
-        else:
-            try:
-                res =  float(state.state)
-                res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                res = int(res)
-            except:
+            state = self.hass.states.get(self.max_discharge_number)
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
                 res = None
+            else:
+                try:
+                    res =  float(state.state)
+                    res, _ = convert_power_to_w(value=res, attributes=state.attributes)
+                    res = int(res)
+                except:
+                    res = None
 
-        _LOGGER.info(f"==> battery get_max_discharging_power {res} {self.max_discharge_number}")
+            _LOGGER.info(f"==> battery get_max_discharging_power {res} {self.max_discharge_number}")
 
-        self.max_discharging_power_current = res
         return res
 
-    async def get_max_charging_power(self):
-        if self.max_charge_number is None:
-            return None
+    def get_max_charging_power(self):
 
-        state = self.hass.states.get(self.max_charge_number)
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            res = None
-        else:
-            try:
-                res =  float(state.state)
-                res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                res = int(res)
-            except:
+        res = None
+        if self.max_charge_number is not None:
+            state = self.hass.states.get(self.max_charge_number)
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
                 res = None
+            else:
+                try:
+                    res =  float(state.state)
+                    res, _ = convert_power_to_w(value=res, attributes=state.attributes)
+                    res = int(res)
+                except:
+                    res = None
 
-        _LOGGER.info(f"==> battery get_max_charging_power {res}  {self.max_charge_number}")
-        self.max_charging_power_current = res
+            _LOGGER.info(f"==> battery get_max_charging_power {res}  {self.max_charge_number}")
+
         return res
 
 
@@ -216,7 +213,7 @@ class QSBattery(HADeviceMixin, Battery):
 
         val = int(min(max_value, max(min_value, range_value)))
 
-        if val == self.max_charging_power_current:
+        if val == self.get_max_charging_power():
             return
 
         data[number.ATTR_VALUE] = val
@@ -235,7 +232,7 @@ class QSBattery(HADeviceMixin, Battery):
         if current_charge is None:
             return False
 
-        if self.max_discharging_power_current == 0:
+        if self.get_max_charging_power() == 0:
             return False
 
         if current_charge > max(self.min_soc * self.capacity, 500): # 500Wh is a threshold

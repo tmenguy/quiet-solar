@@ -582,12 +582,17 @@ class QSChargerGroup(object):
         current_amps   = [0.0, 0.0, 0.0]
         mandatory_amps = [0.0, 0.0, 0.0]
 
+        has_phase_changes = False
+
         for cs in actionable_chargers:
             cs.budgeted_amp = max(cs.current_real_max_charging_amp, cs.possible_amps[0])
             if cs.current_active_phase_number in cs.possible_num_phases:
                 cs.budgeted_num_phases = cs.current_active_phase_number
             else:
                 cs.budgeted_num_phases = min(cs.possible_num_phases) # get to one phase if unknown
+
+            if len(cs.possible_num_phases) > 1:
+                has_phase_changes = True
 
             alloted_amps   = add_amps(alloted_amps  , cs.get_budget_amps())
             current_amps   = add_amps(current_amps  , cs.get_current_charging_amps())
@@ -763,8 +768,13 @@ class QSChargerGroup(object):
         # if decrease: remove charging from less important first (lower score)
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=increase)
 
+        if has_phase_changes:
+            check_phase_change = [False, True]
+        else:
+            check_phase_change = [False]
+
         for allow_state_change in [False, True]:
-            for allow_phase_change in [False, True]:
+            for allow_phase_change in check_phase_change:
                 for cs in actionable_chargers:
 
                     next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
@@ -821,9 +831,7 @@ class QSChargerGroup(object):
                 break
 
         # optimize cost usage in case battery won't be used
-        if self.home.battery_can_discharge() is False and full_available_home_power > 0:
-
-            diff_power_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+        if full_available_home_power > 0:
 
             best_global_command = CMD_AUTO_GREEN_ONLY
             for cs in actionable_chargers:
@@ -831,7 +839,10 @@ class QSChargerGroup(object):
                     best_global_command = CMD_AUTO_PRICE
                     break
 
-            if best_global_command == CMD_AUTO_PRICE:
+            if best_global_command == CMD_AUTO_PRICE and self.home.battery_can_discharge() is False:
+
+                diff_power_budget, alloted_amps = self.get_budget_diffs(actionable_chargers)
+
                 # we will compute here if the price to take "more" power is better than the best
                 # electricity rate we may have
 
@@ -1089,7 +1100,7 @@ class QSChargerGroup(object):
             if new_amp is not None:
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
-            if new_num_phases is not None and new_num_phases != init_phase_num:
+            if new_num_phases is not None:
                 cs.charger._expected_num_active_phases.set(new_num_phases, time)
 
             await cs.charger._ensure_correct_state(time)
@@ -1240,28 +1251,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 amp = amp + 1
 
         return amp
-
-
-    def get_charger_phase_amps_possibilities_for_power(self, power: float, safe_border=False) -> tuple[float|int|None, float|int|None]:
-
-        steps_3p = steps_1p = None
-        if self.can_do_3_to_1_phase_switch():
-            steps_3p = self.car.get_charge_power_per_phase_A(True)
-            steps_1p = self.car.get_charge_power_per_phase_A(False)
-        elif self.physical_3p:
-            steps_3p = self.car.get_charge_power_per_phase_A(True)
-        else:
-            steps_1p = self.car.get_charge_power_per_phase_A(False)
-
-        res_1p = res_3p = None
-
-        if steps_3p is not None:
-            res_3p = self._get_amps_from_power_steps(steps_3p, power, safe_border)
-
-        if steps_1p is not None:
-            res_1p = self._get_amps_from_power_steps(steps_1p, power, safe_border)
-
-        return (res_1p, res_3p)
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CHARGE
@@ -2948,7 +2937,7 @@ class QSChargerWallbox(QSChargerGeneric):
 
         self.secondary_power_sensor = self.charger_wallbox_charging_power
         self.attach_power_to_probe(self.secondary_power_sensor)
-        self.do_reboot_on_phase_switch = True
+        # self.do_reboot_on_phase_switch = True
 
     def low_level_plug_check_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime]:
 
