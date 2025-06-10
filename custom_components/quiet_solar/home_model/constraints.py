@@ -538,14 +538,24 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         out_sorted_commands = []
         min_power = 0
+
         for cmd in self._power_sorted_cmds:
-            if self.load.is_cmd_compatible_with_load_budget(cmd):
+            if True or len(self._power_sorted_cmds) == 1 or self.load.is_cmd_compatible_with_load_budget(cmd):
                 out_sorted_commands.append(copy_command(cmd))
+                if  not self.load.is_cmd_compatible_with_load_budget(cmd):
+                    _LOGGER.warning(
+                        f"adapt_power_steps_budgeting: force added incompatible {cmd} for {self.load.name} {self.load.device_phase_amps_budget}")
             else:
                 _LOGGER.info(f"adapt_power_steps_budgeting: removed {cmd} for {self.load.name} {self.load.device_phase_amps_budget}")
 
+        if  len(out_sorted_commands) == 0 and len(self._power_sorted_cmds) > 0:
+            out_sorted_commands.append(copy_command(self._power_sorted_cmds[0]))
+            _LOGGER.warning(
+                f"adapt_power_steps_budgeting: forces adding {self._power_sorted_cmds[0]} for {self.load.name} {self.load.device_phase_amps_budget}")
+
         if len(out_sorted_commands) > 0:
             min_power = out_sorted_commands[0].power_consign
+
 
         return min_power, out_sorted_commands
 
