@@ -135,6 +135,7 @@ class AbstractDevice(object):
         self.running_command_num_relaunch_after_invalid: int = 0
         self.num_on_off : int = 0
         self.device_phase_amps_budget : list[float|int] | None = None
+        self.to_budget: bool = False
         self.reset_daily_load_datas()
 
     # for class overcharging reset
@@ -278,9 +279,12 @@ class AbstractDevice(object):
                 return c
         return None
 
-    def is_as_fast_as_possible_constraint_active(self, time:datetime) -> bool:
+    def is_as_fast_as_possible_constraint_active_for_budgeting(self, time:datetime) -> bool:
         if self.qs_enable_device is False:
             self._constraints = []
+
+        if self.to_budget is False:
+            return False
 
         if not self._constraints:
             self._constraints = []
@@ -289,7 +293,7 @@ class AbstractDevice(object):
                 return True
         return False
 
-    def is_consumption_optional(self, time:datetime) -> bool:
+    def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
         ct = self.get_current_active_constraint(time)
         if ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
             return False
@@ -507,10 +511,10 @@ class AbstractLoad(AbstractDevice):
         return res
 
 
-    def is_consumption_optional(self, time:datetime) -> bool:
+    def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
         if self.load_is_auto_to_be_boosted or  self.qs_best_effort_green_only:
             return True
-        return super().is_consumption_optional(time)
+        return super().is_consumption_optional_for_budgeting(time)
 
     def get_min_max_power(self) -> (float, float):
         if self.power_use is None:
@@ -519,18 +523,21 @@ class AbstractLoad(AbstractDevice):
 
     def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> list[float|int]:
         device_needed_amp = [0.0, 0.0, 0.0]
-        ct = self.get_current_active_constraint(time)
-        if ct:
-            load_power = ct.evaluate_needed_mean_power(time)
-            device_needed_amp = self.get_phase_amps_from_power_for_budgeting(load_power)
+        if self.to_budget:
+            ct = self.get_current_active_constraint(time)
             min_a, max_a = self.get_min_max_phase_amps_for_budgeting()
-            ret = copy.copy(device_needed_amp)
-            for i in range(3):
-                if ret[i] < min_a[i]:
-                    ret[i] = min_a[i]
-                elif ret[i] > max_a[i]:
-                    ret[i] = max_a[i]
-            device_needed_amp = ret
+            if ct:
+                load_power = ct.evaluate_needed_mean_power(time)
+                device_needed_amp = self.get_phase_amps_from_power_for_budgeting(load_power)
+                ret = copy.copy(device_needed_amp)
+                for i in range(3):
+                    if ret[i] < min_a[i]:
+                        ret[i] = min_a[i]
+                    elif ret[i] > max_a[i]:
+                        ret[i] = max_a[i]
+                device_needed_amp = ret
+            else:
+                device_needed_amp = copy.copy(max_a)
 
         return device_needed_amp
 

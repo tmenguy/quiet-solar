@@ -152,9 +152,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             min_p = [1e12, 1e12, 1e12]
             max_p = [0, 0, 0]
             for device in self._childrens:
-                min_p_d, max_p_d = device.get_min_max_phase_amps_for_budgeting()
-                min_p = min_amps(min_p, min_p_d)
-                max_p = max_amps(max_p, max_p_d)
+                if device.to_budget:
+                    min_p_d, max_p_d = device.get_min_max_phase_amps_for_budgeting()
+                    min_p = min_amps(min_p, min_p_d)
+                    max_p = max_amps(max_p, max_p_d)
 
         return min_p, max_p
 
@@ -162,23 +163,26 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         device_needed_amp = [0,0,0]
         for device in self._childrens:
-            dn = device.get_evaluated_needed_phase_amps_for_budgeting(time)
-            device_needed_amp = add_amps(device_needed_amp, dn)
+            if device.to_budget:
+                dn = device.get_evaluated_needed_phase_amps_for_budgeting(time)
+                device_needed_amp = add_amps(device_needed_amp, dn)
 
 
         return device_needed_amp
 
 
-    def is_as_fast_as_possible_constraint_active(self, time:datetime) -> bool:
+    def is_as_fast_as_possible_constraint_active_for_budgeting(self, time:datetime) -> bool:
         for device in self._childrens:
-            if device.is_as_fast_as_possible_constraint_active(time):
-                return True
+            if device.to_budget:
+                if device.is_as_fast_as_possible_constraint_active_for_budgeting(time):
+                    return True
         return False
 
-    def is_consumption_optional(self, time:datetime) -> bool:
+    def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
         for device in self._childrens:
-            if device.is_consumption_optional(time) is False:
-                return False
+            if device.to_budget:
+                if device.is_consumption_optional_for_budgeting(time) is False:
+                    return False
         return True
 
     # the idea is that if we have a 3p home we allocate as if phases were balanced for loads that are not 3p
@@ -217,7 +221,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             "name": "optional"
         }
 
+        num_devices = 0
+
         for device in self._childrens:
+
+            if device.to_budget is False:
+                continue
+
             device_needed_amps = device.get_evaluated_needed_phase_amps_for_budgeting(time)
             min_a, max_a = device.get_min_max_phase_amps_for_budgeting()
 
@@ -239,9 +249,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
             budget_type = None
             if not is_amps_zero(cur_amps):
-                if device.is_as_fast_as_possible_constraint_active(time):
+                if device.is_as_fast_as_possible_constraint_active_for_budgeting(time):
                     budget_type = budget_as_fast_cluster
-                elif device.is_consumption_optional(time) is False:
+                elif device.is_consumption_optional_for_budgeting(time) is False:
                     budget_type = budget_to_be_done_cluster
                 else:
                     budget_type = budget_optional_cluster
@@ -250,89 +260,94 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             if budget_type is not None:
                 budget_type["sum_needed"] = add_amps(budget_type["sum_needed"], device_needed_amps)
                 budget_type["budgets"].append(c_budget)
+                num_devices += 1
 
             budgets.append(c_budget)
 
-        if is_amps_greater(current_budget_spend, from_father_budget):
-            # ouch bad we are already over budget ....
-            _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
-            cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
-            current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
-            if is_amps_greater(current_budget_spend,from_father_budget):
-                _LOGGER.info(
-                    f"allocate_phase_amps_budget for a group: {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
+        allocated_final_budget = [0.0, 0.0, 0.0]
 
-        # everyone has its minimum already allocated
-        if is_amps_greater(from_father_budget, current_budget_spend):
-            # ok let's put the rest of the budget on the loads if they can get it
-            budget_to_allocate = diff_amps(from_father_budget, current_budget_spend)
+        if num_devices > 0:
 
-            _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} : budget_to_allocate {budget_to_allocate}")
+            if is_amps_greater(current_budget_spend, from_father_budget):
+                # ouch bad we are already over budget ....
+                _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name}: initial over amp budget! {current_budget_spend} > {from_father_budget}")
+                cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
+                current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
+                if is_amps_greater(current_budget_spend,from_father_budget):
+                    _LOGGER.info(
+                        f"allocate_phase_amps_budget for a group: {self.name} : initial over amp budget even after shaving {current_budget_spend} > {from_father_budget}")
 
-            clusters = [budget_as_fast_cluster, budget_to_be_done_cluster, budget_optional_cluster]
+            # everyone has its minimum already allocated
+            if is_amps_greater(from_father_budget, current_budget_spend):
+                # ok let's put the rest of the budget on the loads if they can get it
+                budget_to_allocate = diff_amps(from_father_budget, current_budget_spend)
 
-            for cluster_budget in clusters:
+                _LOGGER.info(f"allocate_phase_amps_budget for a group: {self.name} : budget_to_allocate {budget_to_allocate}")
 
-                if cluster_budget is None:
-                    continue
+                clusters = [budget_as_fast_cluster, budget_to_be_done_cluster, budget_optional_cluster]
 
-                if is_amps_zero(cluster_budget["sum_needed"]):
-                    continue
+                for cluster_budget in clusters:
 
-                do_spread = True
-                while do_spread:
-                    one_modif = False
-                    for c_budget in cluster_budget["budgets"]:
-                        if is_amps_zero(c_budget["current_budget"]):
-                            continue
+                    if cluster_budget is None:
+                        continue
 
-                        if is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
+                    if is_amps_zero(cluster_budget["sum_needed"]):
+                        continue
 
-                            budget_to_allocate = add_amps(budget_to_allocate, c_budget["current_budget"])
-                            current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
+                    do_spread = True
+                    while do_spread:
+                        one_modif = False
+                        for c_budget in cluster_budget["budgets"]:
+                            if is_amps_zero(c_budget["current_budget"]):
+                                continue
 
-                            device = c_budget["device"]
-                            c_budget["current_budget"] = device.update_amps_with_delta(from_amps=c_budget["current_budget"], delta=1, is_3p=device.physical_3p)
-                            c_budget["current_budget"] = min_amps(c_budget["current_budget"], c_budget["max_amp"])
+                            if is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
 
-                            budget_to_allocate = diff_amps(budget_to_allocate, c_budget["current_budget"])
-                            current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
+                                budget_to_allocate = add_amps(budget_to_allocate, c_budget["current_budget"])
+                                current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
 
-                            one_modif = True
+                                device = c_budget["device"]
+                                c_budget["current_budget"] = device.update_amps_with_delta(from_amps=c_budget["current_budget"], delta=1, is_3p=device.physical_3p)
+                                c_budget["current_budget"] = min_amps(c_budget["current_budget"], c_budget["max_amp"])
 
-                        if max(budget_to_allocate) <= 0.01:
-                            do_spread = False
+                                budget_to_allocate = diff_amps(budget_to_allocate, c_budget["current_budget"])
+                                current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
+
+                                one_modif = True
+
+                            if max(budget_to_allocate) <= 0.01:
+                                do_spread = False
+                                break
+
+                        if one_modif is False or do_spread is False:
                             break
 
-                    if one_modif is False or do_spread is False:
+                    if max(budget_to_allocate) <= 0.01:
                         break
 
-                if max(budget_to_allocate) <= 0.01:
-                    break
+
+            # now clean a bit the budgets to get to integer for amps
+
+            # ok we do have now good allocation for all budgets
+
+            for c_budget in budgets:
+                added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
+                allocated_final_budget = add_amps(allocated_final_budget, added_b)
 
 
-        # now clean a bit the budgets to get to integer for amps
+            if is_amps_greater(allocated_final_budget, from_father_budget):
+                _LOGGER.warning(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed last resort shaving {allocated_final_budget} > {from_father_budget}")
+                cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
+                new_current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
 
-        # ok we do have now good allocation for all budgets
-        allocated_final_budget = [0.0,0.0,0.0]
-        for c_budget in budgets:
-            added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
-            allocated_final_budget = add_amps(allocated_final_budget, added_b)
-
-
-        if is_amps_greater(allocated_final_budget, from_father_budget):
-            _LOGGER.warning(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed last resort shaving {allocated_final_budget} > {from_father_budget}")
-            cluster_list_to_shave = [budget_optional_cluster, budget_to_be_done_cluster, budget_as_fast_cluster]
-            new_current_budget_spend = self._shave_phase_amps_clusters(cluster_list_to_shave, current_budget_spend, from_father_budget)
-
-            if is_amps_greater(new_current_budget_spend, from_father_budget):
-                _LOGGER.error(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
-                raise ValueError(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
-            else:
-                allocated_final_budget = [0.0, 0.0, 0.0]
-                for c_budget in budgets:
-                    added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
-                    allocated_final_budget = add_amps(allocated_final_budget, added_b)
+                if is_amps_greater(new_current_budget_spend, from_father_budget):
+                    _LOGGER.error(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
+                    raise ValueError(f"allocate_phase_amps_budget for a group: {self.name} allocated more than allowed!! {new_current_budget_spend} > {from_father_budget}")
+                else:
+                    allocated_final_budget = [0.0, 0.0, 0.0]
+                    for c_budget in budgets:
+                        added_b = c_budget["device"].allocate_phase_amps_budget(time, c_budget["current_budget"])
+                        allocated_final_budget = add_amps(allocated_final_budget, added_b)
 
 
         self.device_phase_amps_budget = allocated_final_budget

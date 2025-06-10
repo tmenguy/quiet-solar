@@ -236,8 +236,13 @@ class PeriodSolver(object):
         if self._loads and len(self._loads) > 0:
             home = self._loads[0].home
             # propagate amps limits to the topology
+
             if home:
-                home.allocate_phase_amps_budget(self._start_time)
+                load_set = set()
+                for c in self._active_constraints:
+                    load_set.add(c.load)
+
+                home.budget_for_loads(self._start_time, list(load_set))
         else:
             _LOGGER.info(f"solve: NO LOADS!")
 
