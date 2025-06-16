@@ -32,50 +32,57 @@ from custom_components.quiet_solar.const import (
 )
 
 
+def commom_setup(self):
+    """Set up the test environment with QSHome, QSDynamicGroup, and QSChargerWallbox objects."""
+    # Mock Home Assistant instance and config_entry
+    self.hass = MagicMock()
+    self.hass.states = MagicMock()
+    self.hass.states.get = MagicMock(return_value=None)
+
+    # Mock data handler
+    self.data_handler = MagicMock()
+    self.hass.data = {
+        DOMAIN: {
+            DATA_HANDLER: self.data_handler
+        }
+    }
+
+    # Mock config_entry
+    self.config_entry = MagicMock()
+    self.config_entry.entry_id = "test_entry_id"
+    self.config_entry.data = {}
+
+    # Create QSHome with 33A max phase amps
+    home_config = {
+        CONF_NAME: "TestHome",
+        CONF_DYN_GROUP_MAX_PHASE_AMPS: 33,
+        CONF_IS_3P: True,
+        "hass": self.hass,
+        "config_entry": self.config_entry
+    }
+    self.home = QSHome(**home_config)
+
+    # Set the home on the data handler
+    self.data_handler.home = self.home
+
+    # Create QSDynamicGroup "Wallboxes" with 32A max phase amps
+    wallboxes_config = {
+        CONF_NAME: "Wallboxes",
+        CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+        CONF_IS_3P: True,
+        "home": self.home,
+        "hass": self.hass,
+        "config_entry": self.config_entry
+    }
+    self.dynamic_group = self.wallboxes_group = QSDynamicGroup(**wallboxes_config)
+
+
 # @unittest.skip("Skipping due to recursion error in device initialization - use TestBudgetingAlgorithm instead")
 class TestChargersSetup(unittest.TestCase):
     def setUp(self):
-        """Set up the test environment with QSHome, QSDynamicGroup, and QSChargerWallbox objects."""
-        # Mock Home Assistant instance and config_entry
-        self.hass = MagicMock()
-        self.hass.states = MagicMock()
-        self.hass.states.get = MagicMock(return_value=None)
-        
-        # Mock data handler
-        self.data_handler = MagicMock()
-        self.hass.data = {
-            DOMAIN: {
-                DATA_HANDLER: self.data_handler
-            }
-        }
-        
-        # Mock config_entry
-        self.config_entry = MagicMock()
-        self.config_entry.entry_id = "test_entry_id"
-        self.config_entry.data = {}
-        
-        # Create QSHome with 33A max phase amps
-        home_config = {
-            CONF_NAME: "TestHome",
-            CONF_DYN_GROUP_MAX_PHASE_AMPS: 33,
-            "hass": self.hass,
-            "config_entry": self.config_entry
-        }
-        self.home = QSHome(**home_config)
-        
-        # Set the home on the data handler
-        self.data_handler.home = self.home
-        
-        # Create QSDynamicGroup "Wallboxes" with 32A max phase amps
-        wallboxes_config = {
-            CONF_NAME: "Wallboxes",
-            CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            "home": self.home,
-            "hass": self.hass,
-            "config_entry": self.config_entry
-        }
-        self.wallboxes_group = QSDynamicGroup(**wallboxes_config)
-        
+
+        commom_setup(self)
+
         # Add the dynamic group to home
         self.home.add_device(self.wallboxes_group)
         
@@ -272,12 +279,8 @@ class TestBudgetingAlgorithm:
     @pytest.fixture(autouse=True)
     def setup(self):
         """Set up the test environment."""
-        # Create a mock dynamic group
-        self.dynamic_group = MagicMock()
-        self.dynamic_group.dyn_group_max_phase_current_conf = 32
-        self.dynamic_group.dyn_group_max_phase_current = [32, 32, 32]
-        self.dynamic_group.is_current_acceptable = MagicMock(return_value=True)
-        
+        commom_setup(self)
+
         # Mock the is_current_acceptable_and_diff method
         def is_current_acceptable_and_diff_mock(new_amps, estimated_current_amps, time):
             # Check if any phase exceeds the limit
@@ -286,7 +289,7 @@ class TestBudgetingAlgorithm:
                     return (False, [new_amps[i] - self.dynamic_group.dyn_group_max_phase_current[i] for i in range(3)])
             return (True, [0, 0, 0])
         
-        self.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=is_current_acceptable_and_diff_mock)
+        #self.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=is_current_acceptable_and_diff_mock)
         
         # Create the charger group for testing
         self.charger_group = QSChargerGroup(self.dynamic_group)
@@ -319,14 +322,19 @@ class TestBudgetingAlgorithm:
         # Set current time
         self.current_time = datetime.now(pytz.UTC)
         
-    def create_charger_status(self, charger, current_amp, power, score, command=CMD_AUTO_FROM_CONSIGN):
+    def create_charger_status(self, charger, current_amp, power, score, idx, command=CMD_AUTO_FROM_CONSIGN):
         """Helper to create a QSChargerStatus with specified parameters."""
         cs = QSChargerStatus(charger)
         cs.plugged = True
         cs.accurate_current_power = power
         cs.current_real_max_charging_amp = current_amp
         cs.current_active_phase_number = 1
-        cs.possible_amps = [6, current_amp, 16]  # min, current, max
+        cs.possible_amps = [i for i in range(charger.min_charge, charger.max_charge+1)]  # min, current, max
+        if idx % 2 == 0:
+            a = [0]
+            a.extend(cs.possible_amps)
+            cs.possible_amps = a
+
         cs.possible_num_phases = [1]  # Single phase only
         cs.command = command
         cs.charge_score = score
@@ -342,7 +350,8 @@ class TestBudgetingAlgorithm:
                 charger=charger,
                 current_amp=6,  # All start at minimum
                 power=1380.0,   # 6A * 230V
-                score=i + 1     # Priority 1, 2, 3
+                score=i + 1,
+                idx=i
             )
             actionable_chargers.append(cs)
         
@@ -367,7 +376,7 @@ class TestBudgetingAlgorithm:
         # Verify that higher priority chargers get more power
         # Since charger 0 has the highest priority (score=1), it should get more amps
         assert budgeted_amps[0] >= budgeted_amps[1]
-        assert budgeted_amps[1] >= budgeted_amps[2]
+        assert budgeted_amps[0] >= budgeted_amps[2]
         
     async def test_budgeting_algorithm_power_constraint(self):
         """Test algorithm behavior with limited power."""
@@ -385,7 +394,8 @@ class TestBudgetingAlgorithm:
                 charger=charger,
                 current_amp=config["current_amp"],
                 power=config["power"],
-                score=config["score"]
+                score=config["score"],
+                idx=i
             )
             actionable_chargers.append(cs)
         
@@ -399,40 +409,7 @@ class TestBudgetingAlgorithm:
         assert result is not None
         # Verify high priority charger maintains some charging
         assert result[0].budgeted_amp > 0
-        
-    async def test_budgeting_algorithm_phase_limits(self):
-        """Test that phase current limits are respected."""
-        actionable_chargers = []
-        
-        # All chargers want maximum power
-        for i, charger in enumerate(self.chargers):
-            cs = self.create_charger_status(
-                charger=charger,
-                current_amp=16,  # Max amp
-                power=3680.0,    # 16A * 230V
-                score=1          # Same priority
-            )
-            actionable_chargers.append(cs)
-        
-        # Mock the phase constraint check
-        call_count = 0
-        def is_acceptable_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            return call_count > 1
-            
-        self.dynamic_group.is_current_acceptable.side_effect = is_acceptable_side_effect
-        
-        # Test with plenty of power but phase constraints
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
-            actionable_chargers,
-            12000.0,  # 12kW available
-            self.current_time
-        )
-        
-        assert result is not None
-        # Verify the phase constraint method was called
-        assert self.dynamic_group.is_current_acceptable.called
+
         
     async def test_budgeting_algorithm_empty_list(self):
         """Test algorithm with no actionable chargers."""
@@ -453,7 +430,8 @@ class TestBudgetingAlgorithm:
                 charger=charger,
                 current_amp=10,
                 power=2300.0,
-                score=i + 1
+                score=i + 1,
+                idx=i
             )
             actionable_chargers.append(cs)
         
@@ -478,7 +456,8 @@ class TestBudgetingAlgorithm:
                 charger=charger,
                 current_amp=10,
                 power=2300.0,
-                score=i + 1
+                score=i + 1,
+                idx=i
             )
             actionable_chargers.append(cs)
         

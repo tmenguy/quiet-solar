@@ -39,14 +39,10 @@ def is_amps_zero(amps: list[float | int]) -> bool:
     return True
 
 def is_amps_greater(left_amps: list[float | int], right_amps: list[float | int]):
-    one_bigger = False
     for i in range(3):
-        if left_amps[i] < right_amps[i]:
-            return False
         if left_amps[i] > right_amps[i]:
-            one_bigger = True
-
-    return one_bigger
+            return True
+    return False
 
 
 def add_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:

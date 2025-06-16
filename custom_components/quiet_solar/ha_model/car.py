@@ -383,7 +383,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             amps_val = int(amperage[0])
 
             if done_graph is False:
-                if self._add_to_amps_power_graph([0.0, amperage_transition[1][0]], amperage_transition[1], power_value_or_delta) is False:
+                if self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta) is False:
                     return do_update
 
 

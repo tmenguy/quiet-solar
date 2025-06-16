@@ -1197,7 +1197,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def current_num_phases(self) -> int:
-        return self.get_charging_num_phases()
+        if self.can_do_3_to_1_phase_switch() and self.physical_3p:
+            state = self.hass.states.get(self.charger_three_to_one_phase_switch)
+
+            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                res = 3
+            else:
+                if state.state == "on":
+                    res = 1
+                else:
+                    res = 3
+            return res
+        else:
+            res = self.physical_num_phases
+
+        return res
 
     def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
@@ -2297,24 +2311,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return True
         return False
 
-
-    def get_charging_num_phases(self) -> int | None:
-        if self.can_do_3_to_1_phase_switch() and self.physical_3p:
-            state = self.hass.states.get(self.charger_three_to_one_phase_switch)
-
-            if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-                res = 3
-            else:
-                if state.state == "on":
-                    res = 1
-                else:
-                    res = 3
-            return res
-        else:
-            res = self.physical_num_phases
-
-        return res
-
     async def set_charging_num_phases(self, num_phases:int, time: datetime, for_default_when_unplugged=False) -> bool:
 
         has_done_change = False
@@ -2340,6 +2336,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # success, direct
             self._expected_num_active_phases.register_launch(value=self.physical_num_phases, time=time)
             await self._expected_num_active_phases.success(time=time)
+            has_done_change = True
 
         return has_done_change
 
