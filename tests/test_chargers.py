@@ -32,7 +32,7 @@ from custom_components.quiet_solar.const import (
 )
 
 
-def commom_setup(self):
+def common_setup(self):
     """Set up the test environment with QSHome, QSDynamicGroup, and QSChargerWallbox objects."""
     # Mock Home Assistant instance and config_entry
     self.hass = MagicMock()
@@ -81,7 +81,7 @@ def commom_setup(self):
 class TestChargersSetup(unittest.TestCase):
     def setUp(self):
 
-        commom_setup(self)
+        common_setup(self)
 
         # Add the dynamic group to home
         self.home.add_device(self.wallboxes_group)
@@ -105,6 +105,8 @@ class TestChargersSetup(unittest.TestCase):
             mock_entity_reg.async_get = MagicMock()
             # Mock the async_entries_for_device function to return empty list
             mock_entity_reg.async_entries_for_device = MagicMock(return_value=[])
+
+            self.current_time = datetime.now(pytz.UTC)
             
             for phase in [1, 2, 3]:
                 charger_config = {
@@ -120,6 +122,14 @@ class TestChargersSetup(unittest.TestCase):
                     "config_entry": self.config_entry
                 }
                 charger = QSChargerWallbox(**charger_config)
+                # Attach the default generic car to each charger
+                charger.attach_car(charger._default_generic_car, self.current_time)
+                
+                # Mock the expected states to make the charger operational
+                charger._expected_charge_state.value = True
+                charger._expected_amperage.value = 6
+                charger._expected_num_active_phases.value = 1
+                
                 self.chargers.append(charger)
                 self.home.add_device(charger)
         
@@ -127,7 +137,7 @@ class TestChargersSetup(unittest.TestCase):
         self.charger_group = QSChargerGroup(self.wallboxes_group)
         
         # Set up current time
-        self.current_time = datetime.now(pytz.UTC)
+
     
     @pytest.mark.asyncio
     async def test_budgeting_algorithm_minimize_diffs_basic(self):
@@ -279,45 +289,42 @@ class TestBudgetingAlgorithm:
     @pytest.fixture(autouse=True)
     def setup(self):
         """Set up the test environment."""
-        commom_setup(self)
-
-        # Mock the is_current_acceptable_and_diff method
-        def is_current_acceptable_and_diff_mock(new_amps, estimated_current_amps, time):
-            # Check if any phase exceeds the limit
-            for i in range(3):
-                if new_amps[i] > self.dynamic_group.dyn_group_max_phase_current[i]:
-                    return (False, [new_amps[i] - self.dynamic_group.dyn_group_max_phase_current[i] for i in range(3)])
-            return (True, [0, 0, 0])
+        common_setup(self)
         
-        #self.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=is_current_acceptable_and_diff_mock)
+        # Add the dynamic group to home
+        self.home.add_device(self.dynamic_group)
         
         # Create the charger group for testing
         self.charger_group = QSChargerGroup(self.dynamic_group)
         
-        # Create mock chargers with different phase assignments
+        # Create real QSChargerWallbox instances with different phase assignments
         self.chargers = []
-        for phase in [0, 1, 2]:  # Internal phase numbering (0, 1, 2)
-            charger = MagicMock()
-            charger.name = f"Wallbox_Phase_{phase + 1}"
-            charger.get_mono_phase = MagicMock(return_value=phase)
-            charger.device_is_3p = False
-            charger.charger_max_charging_amp_conf = 16
-            charger.charger_min_charging_amp_conf = 6
-            charger.min_charge = 6  # Add this attribute
-            charger.max_charge = 16  # Add max_charge
-            charger.charger_default_idle_charge = 7  # Add idle charge
+        
+        # Mock entity_registry for charger creation
+        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry') as mock_entity_reg:
+            # Mock the async_get function
+            mock_entity_reg.async_get = MagicMock()
+            # Mock the async_entries_for_device function to return empty list
+            mock_entity_reg.async_entries_for_device = MagicMock(return_value=[])
             
-            # Mock the get_delta_dampened_power method
-            def get_delta_dampened_power_mock(from_amp, from_num_phase, to_amp, to_num_phase):
-                # Simple calculation: difference in power based on amp change
-                old_power = from_amp * 230 * from_num_phase
-                new_power = to_amp * 230 * to_num_phase
-                diff_power = new_power - old_power
-                return (diff_power, old_power, new_power)
-            
-            charger.get_delta_dampened_power = MagicMock(side_effect=get_delta_dampened_power_mock)
-            
-            self.chargers.append(charger)
+            for phase in [1, 2, 3]:
+                charger_config = {
+                    CONF_NAME: f"Wallbox_Phase_{phase}",
+                    CONF_MONO_PHASE: phase,
+                    CONF_CHARGER_DEVICE_WALLBOX: f"device_wallbox_{phase}",
+                    CONF_CHARGER_MIN_CHARGE: 6,
+                    CONF_CHARGER_MAX_CHARGE: 16,
+                    CONF_IS_3P: False,  # Single phase chargers
+                    "dynamic_group_name": self.dynamic_group.name,
+                    "home": self.home,
+                    "hass": self.hass,
+                    "config_entry": self.config_entry
+                }
+                charger = QSChargerWallbox(**charger_config)
+                # Attach the default generic car to make charger operational
+                charger.attach_car(charger._default_generic_car, datetime.now(pytz.UTC))
+                self.chargers.append(charger)
+                self.home.add_device(charger)
             
         # Set current time
         self.current_time = datetime.now(pytz.UTC)
@@ -479,6 +486,168 @@ class TestBudgetingAlgorithm:
         
         # Verify that there was some reduction
         assert total_reduction > 0
+
+    async def test_budgeting_algorithm_high_solar_respects_group_limit(self):
+        """Test that with abundant solar power, the algorithm gradually increases
+        charging current while respecting the dynamic group's 32A phase current limit."""
+        
+        # Create new 3-phase chargers for this test
+        self.chargers_3p = []
+        
+        # Mock entity_registry for charger creation
+        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry') as mock_entity_reg:
+            # Mock the async_get function
+            mock_entity_reg.async_get = MagicMock()
+            # Mock the async_entries_for_device function to return empty list
+            mock_entity_reg.async_entries_for_device = MagicMock(return_value=[])
+            
+            for i in range(3):
+                charger_config = {
+                    CONF_NAME: f"Wallbox_3Phase_{i}",
+                    CONF_IS_3P: True,  # Configure as 3-phase
+                    CONF_CHARGER_DEVICE_WALLBOX: f"device_wallbox_3p_{i}",
+                    CONF_CHARGER_MIN_CHARGE: 6,
+                    CONF_CHARGER_MAX_CHARGE: 32,  # 32A max for 3-phase
+                    "dynamic_group_name": self.dynamic_group.name,
+                    "home": self.home,
+                    "hass": self.hass,
+                    "config_entry": self.config_entry
+                }
+                charger = QSChargerWallbox(**charger_config)
+                # Attach the default generic car to make charger operational
+                charger.attach_car(charger._default_generic_car, self.current_time)
+                self.chargers_3p.append(charger)
+                self.home.add_device(charger)
+        
+        # Create new charger group for the 3-phase chargers
+        self.charger_group_3p = QSChargerGroup(self.dynamic_group)
+        
+        # Create actionable chargers all starting at minimum (6A)
+        actionable_chargers = []
+        for i, charger in enumerate(self.chargers_3p):
+            cs = self.create_charger_status(
+                charger=charger,
+                current_amp=6,  # All start at minimum
+                power=6 * 230 * 3,  # 6A * 230V * 3 phases = 4140W
+                score=1,        # Same priority for all
+                idx=i
+            )
+            cs.current_active_phase_number = 3  # Set to 3 phases
+            cs.possible_amps = list(range(6, 33))  # 6A to 32A
+            cs.possible_num_phases = [3]  # Only 3-phase operation
+            actionable_chargers.append(cs)
+        
+        # Test with abundant solar power (50kW)
+        full_available_home_power = 50000.0
+        
+        # Run the budgeting algorithm multiple times to simulate continuous optimization
+        results = []
+        current_chargers = actionable_chargers
+        
+        # Run more iterations to see the full behavior
+        max_iterations = 30
+        for iteration in range(max_iterations):
+            print(f"\n--- Iteration {iteration + 1} ---")
+            print(f"Available power: {full_available_home_power}W")
+            print("Current state before budgeting:")
+            total_current_power = 0
+            total_phase_currents = [0, 0, 0]
+            
+            for i, cs in enumerate(current_chargers):
+                power = cs.accurate_current_power
+                print(f"  Charger {i} (3-phase): {cs.current_real_max_charging_amp}A, Power: {power}W")
+                total_current_power += power
+                # For 3-phase chargers, current flows through all phases
+                for phase in range(3):
+                    total_phase_currents[phase] += cs.current_real_max_charging_amp
+            
+            print(f"  Total current power: {total_current_power}W")
+            print(f"  Phase currents: L1={total_phase_currents[0]}A, L2={total_phase_currents[1]}A, L3={total_phase_currents[2]}A")
+            
+            result = await self.charger_group_3p.budgeting_algorithm_minimize_diffs(
+                current_chargers,
+                full_available_home_power,
+                self.current_time
+            )
+            
+            assert result is not None
+            results.append(result)
+            
+            print("Budgeted result:")
+            budgeted_phase_currents = [0, 0, 0]
+            for i, cs in enumerate(result):
+                print(f"  Charger {i}: {cs.budgeted_amp}A")
+                # Calculate phase currents for budgeted values
+                for phase in range(3):
+                    budgeted_phase_currents[phase] += cs.budgeted_amp
+            print(f"  Budgeted phase currents: L1={budgeted_phase_currents[0]}A, L2={budgeted_phase_currents[1]}A, L3={budgeted_phase_currents[2]}A")
+            
+            # Check if we've reached a stable state (no changes in budgeted amps)
+            if iteration > 0 and all(
+                results[-1][i].budgeted_amp == results[-2][i].budgeted_amp 
+                for i in range(len(results[-1]))
+            ):
+                print(f"\nReached stable state after {iteration + 1} iterations")
+                break
+            
+            # Update current chargers for next iteration
+            current_chargers = []
+            for i, cs in enumerate(result):
+                # Create new status with updated current
+                new_cs = self.create_charger_status(
+                    charger=self.chargers_3p[i],
+                    current_amp=cs.budgeted_amp,
+                    power=cs.budgeted_amp * 230 * 3,  # 3-phase power
+                    score=1,
+                    idx=i
+                )
+                new_cs.current_active_phase_number = 3
+                new_cs.possible_amps = list(range(6, 33))
+                new_cs.possible_num_phases = [3]
+                current_chargers.append(new_cs)
+        
+        # Verify final results
+        final_result = results[-1]
+        
+        print("\n=== Final Results ===")
+        total_final_power = 0
+        phase_currents = [0, 0, 0]
+        
+        for i, cs in enumerate(final_result):
+            # For 3-phase chargers, current flows through all phases
+            for phase in range(3):
+                phase_currents[phase] += cs.budgeted_amp
+            power = cs.budgeted_amp * 230 * 3  # 3-phase power
+            total_final_power += power
+            print(f"Charger {i} (3-phase): {cs.budgeted_amp}A ({power}W)")
+        
+        print(f"Total final power: {total_final_power}W")
+        print(f"Phase currents: L1={phase_currents[0]}A, L2={phase_currents[1]}A, L3={phase_currents[2]}A")
+        
+        # Key assertions:
+        
+        # 1. At least one charger should have increased from minimum
+        assert any(cs.budgeted_amp > 6 for cs in final_result), "At least one charger should increase from minimum"
+        
+        # 2. No charger should exceed its maximum (32A)
+        for i, cs in enumerate(final_result):
+            assert cs.budgeted_amp <= 32, f"Charger {i} exceeds its 32A maximum"
+        
+        # 3. CRITICAL: Total current per phase should not exceed the dynamic group's 32A limit
+        # This is the key test - with 3 chargers on 3-phase, the total could be 3*32=96A per phase
+        # but the dynamic group limit of 32A should prevent this
+        for phase_idx, current in enumerate(phase_currents):
+            assert current <= 32, f"Phase {phase_idx + 1} current {current}A exceeds 32A limit"
+        
+        # 4. Total power consumption should increase significantly from initial
+        initial_total_power = len(actionable_chargers) * 6 * 230 * 3  # 3 * 6A * 230V * 3 phases
+        assert total_final_power > initial_total_power, "Total power should increase with abundant solar"
+        
+        # 5. The algorithm should converge to maximum safe power
+        # With 32A limit per phase and 3 phases: 32A * 230V * 3 = 22,080W theoretical max
+        print(f"\nAlgorithm behavior: Started with {initial_total_power}W, ended with {total_final_power}W")
+        print(f"Power utilization: {(total_final_power / full_available_home_power) * 100:.1f}% of available {full_available_home_power}W")
+        print(f"Dynamic group limit utilization: {(total_final_power / 22080) * 100:.1f}% of theoretical max 22,080W")
 
 
 if __name__ == '__main__':
