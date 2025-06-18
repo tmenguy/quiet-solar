@@ -2298,7 +2298,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             result = None
         else:
             try:
-                result = int(state.state)
+                result = float(state.state)
             except TypeError:
                 result = None
             except ValueError:
@@ -2723,10 +2723,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     _LOGGER.warning(f"Forcing a charger state update!")
 
+                    entity_to_probe = []
+                    if self.charger_plugged is not None:
+                        entity_to_probe.append(self.charger_plugged)
+                    if self.charger_pause_resume_switch is not None:
+                        entity_to_probe.append(self.charger_pause_resume_switch)
+                    if self.charger_max_charging_current_number is not None:
+                        entity_to_probe.append(self.charger_max_charging_current_number)
+
                     await self.hass.services.async_call(
                         homeassistant.DOMAIN,
                         homeassistant.SERVICE_UPDATE_ENTITY,
-                        {ATTR_ENTITY_ID: [self.charger_pause_resume_switch, self.charger_max_charging_current_number]},
+                        {ATTR_ENTITY_ID: entity_to_probe},
                         blocking=False
                     )
                     self._last_charger_state_prob_time = time
@@ -2883,7 +2891,7 @@ class QSChargerOCPP(QSChargerGeneric):
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             res_plugged = None
         else:
-            res_plugged = state.state == "off"
+            res_plugged = state.state == "off" # if the car is plugged it won't be seen as "available" in OCPP, so we use "off" to mean "plugged in"
 
         return res_plugged, state_time
 
@@ -2908,7 +2916,7 @@ class QSChargerOCPP(QSChargerGeneric):
         return [QSOCPPv16ChargePointStatus.unavailable, QSOCPPv16ChargePointStatus.faulted]
 
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return [QSOCPPv16ChargePointStatus.suspended_ev]
+        return [QSOCPPv16ChargePointStatus.suspended_evse] #or ev?
 
 
     def get_car_status_rebooting_vals(self) -> list[str]:
@@ -2947,7 +2955,7 @@ class QSChargerWallbox(QSChargerGeneric):
         self.attach_power_to_probe(self.secondary_power_sensor)
         # self.do_reboot_on_phase_switch = True
 
-    def low_level_plug_check_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> (bool|None, datetime):
 
         state = self.hass.states.get(self.charger_pause_resume_switch)
         if state is not None:
