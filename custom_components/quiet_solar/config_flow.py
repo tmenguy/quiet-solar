@@ -633,9 +633,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict[key_sc] = selector.DeviceSelector(
                             selector.DeviceSelectorConfig(
-                                integration="OCPP",
-                                entity=selector.EntityFilterSelectorConfig(
-                                    domain="sensor")
+                                integration="ocpp"
                                 )
                             )
         schema = vol.Schema(sc_dict)
