@@ -84,7 +84,7 @@ from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
-CHARGER_STATE_REFRESH_INTERVAL = 3
+CHARGER_STATE_REFRESH_INTERVAL = 7
 CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 15
 
@@ -2197,13 +2197,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def _do_update_charger_state(self, time):
         if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL:
-            await self.hass.services.async_call(
-                homeassistant.DOMAIN,
-                homeassistant.SERVICE_UPDATE_ENTITY,
-                {ATTR_ENTITY_ID: [self.charger_pause_resume_switch, self.charger_max_charging_current_number]},
-                blocking=False
-            )
-            self._last_charger_state_prob_time = time
+
+            state = self.hass.states.get(self.charger_max_charging_current_number)
+
+            if state is not None:
+                state_time = state.last_updated
+
+                if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL:
+                    self._last_charger_state_prob_time = state_time
+                else:
+                    _LOGGER.warning(f"Forcing a charger state update!!!!!!")
+
+                    await self.hass.services.async_call(
+                        homeassistant.DOMAIN,
+                        homeassistant.SERVICE_UPDATE_ENTITY,
+                        {ATTR_ENTITY_ID: [self.charger_pause_resume_switch, self.charger_max_charging_current_number]},
+                        blocking=False
+                    )
+                    self._last_charger_state_prob_time = time
 
     # ============================ INTERFACE TO BE OVERCHARGED ===================================== #
 
