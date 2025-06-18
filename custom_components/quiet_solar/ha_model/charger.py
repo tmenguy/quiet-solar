@@ -84,7 +84,7 @@ from ..home_model.load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
-CHARGER_STATE_REFRESH_INTERVAL = 7
+CHARGER_STATE_REFRESH_INTERVAL = 11
 CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 15
 
