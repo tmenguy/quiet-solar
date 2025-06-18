@@ -705,7 +705,7 @@ class HADeviceMixin:
                                       num_seconds_before: float | None,
                                       time: datetime,
                                       invert_val_probe=False,
-                                      allowed_max_holes_s: float = 3,
+                                      allowed_max_holes_s: float | None = None,
                                       count_only_duration=False) -> float | None:
 
         states_vals = set(states_vals)
@@ -737,6 +737,12 @@ class HADeviceMixin:
         if not values or from_idx < 0:
             return None
 
+        if allowed_max_holes_s is None:
+            if num_seconds_before is None:
+                allowed_max_holes_s = 30.0
+            else:
+                allowed_max_holes_s = num_seconds_before / 2.0
+
 
         state_status_duration = 0
 
@@ -744,6 +750,8 @@ class HADeviceMixin:
         current_hole = 0.0
 
         all_invalid = True
+
+        had_one_good = False
 
         for i in range(from_idx, -1, -1):
 
@@ -765,7 +773,14 @@ class HADeviceMixin:
 
                 if val_prob_ok:
                     state_status_duration += delta_t
+                    # if there was some unavailable between the last good state and this one, we reset the hole
+                    # and we add the invalid time as "good" time, only if we are between 2 "good" states
+                    if had_one_good:
+                        state_status_duration += current_hole
+
                     current_hole = 0.0
+
+                    had_one_good = True
                 else:
                     # it is a bad state: whatever don't count passed it
                     # if we never had a good state, state_status_duration will be 0, this is what we want

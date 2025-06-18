@@ -94,7 +94,7 @@ CHARGER_MIN_REBOOT_DURATION_S = 120
 
 CHARGER_STATE_REFRESH_INTERVAL = 3
 CHARGER_ADAPTATION_WINDOW = 30
-CHARGER_CHECK_STATE_WINDOW = 12
+CHARGER_CHECK_STATE_WINDOW = 15
 
 CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 2*60
 CHARGER_LONG_CONNECTION = 60*5
@@ -1690,7 +1690,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_car_options(self, time: datetime)  -> list[str]:
 
-        if self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW) or self.is_plugged(time):
             options = []
             for car in self.home._cars:
                 options.append(car.name)
@@ -2112,7 +2112,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         contiguous_status = self.get_last_state_value_duration(self.charger_status_sensor,
                                                                states_vals=status_vals,
-                                                               num_seconds_before=2*for_duration,
+                                                               num_seconds_before=8*for_duration,
                                                                time=time,
                                                                invert_val_probe=invert_prob)
         if contiguous_status is None:
@@ -2138,7 +2138,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         contiguous_status = self.get_last_state_value_duration(self._internal_fake_is_plugged_id,
                                                                states_vals=[QSChargerStates.PLUGGED],
-                                                               num_seconds_before=2 * for_duration,
+                                                               num_seconds_before=8*for_duration,
                                                                time=time,
                                                                invert_val_probe=not check_for_val)
         if contiguous_status is None:
