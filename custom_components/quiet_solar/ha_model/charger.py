@@ -96,7 +96,7 @@ CHARGER_STATE_REFRESH_INTERVAL = 7
 CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 15
 
-CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 2*60
+CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 3*60
 CHARGER_LONG_CONNECTION = 60*5
 
 CAR_CHARGER_LONG_RELATIONSHIP = 60*15
@@ -2234,11 +2234,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_charge_disabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self.check_charge_state(time, for_duration, check_for_val=False)
 
-    def is_car_stopped_asking_current(self, time: datetime,
-                                      for_duration: float | None = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP) -> bool | None:
+    def is_car_stopped_asking_current(self, time: datetime) -> bool | None:
 
         result = False
-        if self.is_plugged(time=time, for_duration=for_duration):
+        if self.is_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW) or self.is_plugged(time=time):
 
             result = None
 
@@ -2251,6 +2250,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 return None
 
             status_vals = self.get_car_stopped_asking_current_status_vals()
+
+            for_duration: float = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP
 
             if status_vals and len(status_vals) > 0:
                 result = self._check_charger_status(status_vals, time, for_duration)
@@ -2916,7 +2917,7 @@ class QSChargerOCPP(QSChargerGeneric):
         return [QSOCPPv16ChargePointStatus.unavailable, QSOCPPv16ChargePointStatus.faulted]
 
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return [QSOCPPv16ChargePointStatus.suspended_evse] #or ev?
+        return [QSOCPPv16ChargePointStatus.suspended_ev]
 
 
     def get_car_status_rebooting_vals(self) -> list[str]:
