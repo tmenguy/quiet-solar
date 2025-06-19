@@ -1353,6 +1353,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_stable_dynamic_charge_status(self, time: datetime)-> QSChargerStatus | None:
 
+        if self.qs_enable_device is False:
+            return None
+
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             return None
 
