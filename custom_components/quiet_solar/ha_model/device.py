@@ -840,11 +840,12 @@ class HADeviceMixin:
         if entity_id is None:
             return None
 
-        if self._entity_probed_state_attached_unfiltered.get(entity_id):
+        if self._entity_probed_state_attached_unfiltered.get(entity_id) is False:
             if strict:
                 return None
             else:
                 return entity_id
+
         return f"{entity_id}_no_filters"
 
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,

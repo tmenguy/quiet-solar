@@ -196,6 +196,9 @@ class LoadConstraint(object):
     @classmethod
     def from_dict_to_kwargs(cls, data: dict) -> dict:
         res = copy.deepcopy(data)
+        if "phase_current" in res:
+            # this is a legacy constraint, remove the phase_current
+            del res["phase_current"]
         res["start_of_constraint"] = datetime.fromisoformat(data["start_of_constraint"])
         res["end_of_constraint"] = datetime.fromisoformat(data["end_of_constraint"])
         return res
