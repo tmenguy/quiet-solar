@@ -190,15 +190,13 @@ class LoadConstraint(object):
             "current_value": self.current_value,
             "target_value": self.target_value,
             "start_of_constraint": f"{self.start_of_constraint}",
-            "end_of_constraint": f"{self.end_of_constraint}"
+            "end_of_constraint": f"{self.end_of_constraint}",
+            "support_auto": self.support_auto
         }
 
     @classmethod
     def from_dict_to_kwargs(cls, data: dict) -> dict:
         res = copy.deepcopy(data)
-        if "phase_current" in res:
-            # this is a legacy constraint, remove the phase_current
-            del res["phase_current"]
         res["start_of_constraint"] = datetime.fromisoformat(data["start_of_constraint"])
         res["end_of_constraint"] = datetime.fromisoformat(data["end_of_constraint"])
         return res
@@ -407,13 +405,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["power_steps"] = [c.to_dict() for c in self._power_cmds]
-        data["support_auto"] = self.support_auto
         return data
 
     @classmethod
     def from_dict_to_kwargs(cls, data: dict) -> dict:
         res = super().from_dict_to_kwargs(data)
-        res["power_steps"] = [LoadCommand(**c) for c in data["power_steps"]]
+
+        res["power_steps"] = []
+        for c in data["power_steps"]:
+            if "phase_current" in c:
+                # this is a legacy constraint command, remove the phase_current
+                del c["phase_current"]
+            res["power_steps"].append(LoadCommand(**c))
         return res
 
     def best_duration_to_meet(self) -> timedelta:
