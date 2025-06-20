@@ -1576,10 +1576,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         score = None
 
         is_long_time_attached = False
-        is_car_connected_to_charger = self.car is not None and self.car.name == car.name
-
         connected_time_delta = None
-        if is_car_connected_to_charger:
+        if self.car is not None and self.car.name == car.name:
             connected_time_delta = time - self.car_attach_time
             is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP)
 
@@ -1590,14 +1588,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 attached_car = self.home.get_car_by_name(self._user_attached_car_name)
                 if car is not None:
                     if attached_car.name != car.name:
-                        _LOGGER.info(f"get_car_score: car {attached_car.name} user attached to charger {self.name}")
                         score = 0.0
+                        _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score} when {attached_car.name} user attached to charger")
+
                     else:
-                        _LOGGER.info(f"get_car_score:Best Car from user selection: {car.name} for charger {self.name}")
                         score = max_sore
+                        _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, Best Car from user selection")
+
 
         if is_long_time_attached:
-            return max_sore - 1.0
+            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger")
+            score = max_sore - 1.0
 
         if score is None:
 
@@ -1648,13 +1649,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         score_plug_time_bump += 1.0
 
             score_dist_bump = 0
-            dist = None
+            dist = -1
             if self.charger_latitude is not None and self.charger_longitude is not None:
                 max_dist = 50.0  # 50 meters
                 car_lat, car_long = car.get_car_coordinates(time)
                 if car_lat is not None and car_long is not None:
                     dist = haversine((self.charger_latitude, self.charger_longitude), (car_lat, car_long), unit=Unit.METERS)
-                    _LOGGER.info(f"get_car_score: Car {car.name} distance to charger {self.name}: {dist}m")
                     if dist <= max_dist:
                         score_dist_bump = 1.0 + int((dist_span/10.0)*(max_dist - dist)/max_dist)
 
@@ -1677,7 +1677,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only if plugged .... then if home or a very compatible plug time
                 score = score_plug_bump + plug_span*score_plug_time_bump + plug_span*plug_time_span*score_dist_bump
 
-            _LOGGER.info(f"get_car_score: Car {car.name} for charger {self.name} score: {score} score_dist_bump {score_dist_bump} / dist {dist}m score_plug_bump {score_plug_bump} score_plug_time_bump {score_plug_time_bump} connected_time_delta {connected_time_delta}")
+            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist*100)/100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}")
 
         return score
 
@@ -1703,14 +1703,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         if charger != self and charger.car is not None and charger.car.name == car.name:
                             if charger._user_attached_car_name is not None and charger._user_attached_car_name == car.name:
-                                _LOGGER.error(f"get_best_car:  car {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}")
+                                _LOGGER.error(f"get_best_car: {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}")
                                 charger._user_attached_car_name = None
-
+                            else:
+                                _LOGGER.info(f"get_best_car: {car.name} manually attached to charger {self.name}, detaching from {charger.name}")
                             charger.detach_car()
 
                     return car
             else:
-                _LOGGER.info(f"get_best_car:NO GOOD CAR BECAUSE:CHARGER_NO_CAR_CONNECTED")
+                _LOGGER.info(f"get_best_car: NO GOOD CAR BECAUSE:CHARGER_NO_CAR_CONNECTED")
                 return None
 
         cars_to_charger = {}
@@ -1728,7 +1729,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if charger != self:
                     active_chargers.append(charger)
-
 
         best_score = 0
 
