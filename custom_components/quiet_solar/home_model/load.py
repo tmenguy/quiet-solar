@@ -214,7 +214,7 @@ class AbstractDevice(object):
 
     def update_amps_with_delta(self, from_amps:list[float|int], delta:int|float, is_3p:bool) -> list[float|int]:
         amps = copy.copy(from_amps)
-        if is_3p:
+        if is_3p is False:
             amps[self.mono_phase_index] += delta
         else:
             amps[0] += delta

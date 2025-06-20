@@ -9,10 +9,11 @@ from typing import Any, Callable, Awaitable
 import pytz
 from datetime import time as dt_time
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry
+from homeassistant.helpers import entity_registry, device_registry
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERVICE_TURN_OFF, SERVICE_TURN_ON, \
     ATTR_ENTITY_ID, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower
 from homeassistant.components import number, homeassistant
+from homeassistant.util import slugify
 from haversine import haversine, Unit
 
 from .dynamic_group import QSDynamicGroup
@@ -1154,7 +1155,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self.default_charge_time : dt_time | None = None
 
-        self.do_reboot_on_phase_switch = False
+
         self.minimum_reboot_duration_s = CHARGER_MIN_REBOOT_DURATION_S
 
         super().__init__(**kwargs)
@@ -2759,7 +2760,34 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     )
                     self._last_charger_state_prob_time = time
 
+    def _find_charger_entity_id(self, device, entries, prefix, suffix):
+
+        found = None
+        for entry in entries:
+            if entry.entity_id.startswith(prefix) and entry.entity_id.endswith(suffix):
+                found = entry.entity_id
+                break
+
+        device_name = device.name_by_user or device.name
+        computed = prefix + slugify(device_name) + suffix
+
+        if found is not None and found != computed:
+            _LOGGER.warning(f"Entity ID {found} does not match expected {computed} for device {device.id}")
+            # we could rename it here if needed
+
+        if found is None:
+            _LOGGER.warning(
+                f"Entity ID for {device_name} not found with prefix {prefix} and suffix {suffix}, expected {computed}")
+            found = computed
+
+        return found
+
+
     # ============================ INTERFACE TO BE OVERCHARGED ===================================== #
+
+    @property
+    def do_reboot_on_phase_switch(self):
+        return False
 
     def low_level_charge_check_now(self, time: datetime) -> bool | None:
 
@@ -2853,31 +2881,22 @@ class QSChargerOCPP(QSChargerGeneric):
         hass: HomeAssistant | None = kwargs.get("hass", None)
 
         if self.charger_device_ocpp is not None and hass is not None:
+
+            device_registry_instance = device_registry.async_get(hass)
+            device = device_registry_instance.async_get(self.charger_device_ocpp)
+
             entity_reg = entity_registry.async_get(hass)
             entries = entity_registry.async_entries_for_device(entity_reg, self.charger_device_ocpp)
 
-            for entry in entries:
-                if entry.entity_id.startswith("number.") and entry.entity_id.endswith("_maximum_current"):
-                    kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = entry.entity_id
 
-                if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_charge_control"):
-                    kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = entry.entity_id
+            kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(device, entries, "number.", "_maximum_current")
+            kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_charge_control")
+            kwargs[CONF_CHARGER_PLUGGED] = self._find_charger_entity_id(device, entries, "switch.", "_availability")
 
-                if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_availability"):
-                    kwargs[CONF_CHARGER_PLUGGED] = entry.entity_id
-
-                # if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_power_active_import"):
-                #    self.charger_ocpp_power_active_import = entry.entity_id
-
-                # OCPP only sensors :
-                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_status_connector"):
-                    self.charger_ocpp_status_connector = entry.entity_id
-
-                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_status_connector"):
-                    kwargs[CONF_CHARGER_STATUS_SENSOR] = entry.entity_id
-
-                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_current_import"):
-                    self.charger_ocpp_current_import = entry.entity_id
+            # if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_power_active_import"):
+            #    self.charger_ocpp_power_active_import = entry.entity_id
+            kwargs[CONF_CHARGER_STATUS_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_status_connector")
+            self.charger_ocpp_current_import = self._find_charger_entity_id(device, entries, "sensor.", "_current_import")
 
         super().__init__(**kwargs)
 
@@ -2944,30 +2963,27 @@ class QSChargerOCPP(QSChargerGeneric):
 
 
 class QSChargerWallbox(QSChargerGeneric):
+
+
+
     def __init__(self, **kwargs):
         self.charger_device_wallbox = kwargs.pop(CONF_CHARGER_DEVICE_WALLBOX, None)
         self.charger_wallbox_charging_power = None
         hass: HomeAssistant | None = kwargs.get("hass", None)
 
         if self.charger_device_wallbox is not None and hass is not None:
+
+            device_registry_instance = device_registry.async_get(hass)
+            device = device_registry_instance.async_get(self.charger_device_wallbox)
+
             entity_reg = entity_registry.async_get(hass)
             entries = entity_registry.async_entries_for_device(entity_reg, self.charger_device_wallbox)
 
-            for entry in entries:
-                if entry.entity_id.startswith("number.") and entry.entity_id.endswith("_maximum_charging_current"):
-                    kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = entry.entity_id
-
-                if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_pause_resume"):
-                    kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = entry.entity_id
-
-                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_charging_power"):
-                    self.charger_wallbox_charging_power = entry.entity_id
-
-                if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_status_description"):
-                    kwargs[CONF_CHARGER_STATUS_SENSOR] = entry.entity_id
-
-                if entry.entity_id.startswith("switch.") and entry.entity_id.endswith("_phase_switch"):
-                    kwargs[CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH] = entry.entity_id
+            kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(device, entries, "number.", "_maximum_charging_current")
+            kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_pause_resume")
+            self.charger_wallbox_charging_power = self._find_charger_entity_id(device, entries, "sensor.", "_charging_power")
+            kwargs[CONF_CHARGER_STATUS_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_status_description")
+            # kwargs[CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_phase_switch")
 
         super().__init__(**kwargs)
 
