@@ -409,6 +409,10 @@ class QSChargerGroup(object):
 
         verified_correct_state_time = None
         for charger in self._chargers:
+
+            if charger.qs_enable_device is False:
+                continue
+
             res, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
             if res is False:
                 return False, None
@@ -476,6 +480,10 @@ class QSChargerGroup(object):
                     sum_power_from_chargers = 0.0
 
                     for charger in self._chargers:
+
+                        if charger.qs_enable_device is False:
+                            continue
+
                         cs = charger.get_stable_dynamic_charge_status(time)
                         if cs is not None:
 
@@ -1033,6 +1041,10 @@ class QSChargerGroup(object):
             current_amps  = [0.0, 0.0, 0.0]
             new_amps = [0.0, 0.0, 0.0]
             for charger in self._chargers:
+
+                if charger.qs_enable_device is False:
+                    continue
+
                 cs = charger.get_stable_dynamic_charge_status(time)
                 if cs is not None:
                     curr_amps = cs.get_current_charging_amps()
@@ -1555,6 +1567,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cars = {}
         for charger in self.home._chargers:
+
+            if charger.qs_enable_device is False:
+                continue
+
             car = charger.car
             if car is not None and car != charger._default_generic_car:
                 cars[car]= charger
