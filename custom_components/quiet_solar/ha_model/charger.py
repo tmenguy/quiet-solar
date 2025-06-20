@@ -2900,16 +2900,14 @@ class QSChargerOCPP(QSChargerGeneric):
 
         super().__init__(**kwargs)
 
-        self.secondary_power_sensor = self.charger_ocpp_current_import
-        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self.convert_amps_to_W)
+        self.secondary_power_sensor = self.charger_ocpp_current_import # it is total amps (3 phases sum)
+        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self.convert_ocpp_current_import_amps_to_W)
         # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
 
 
-    def convert_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
-        mult = 1.0
-        if self.current_3p:
-            mult = 3.0
-        val = amps * mult * self.home.voltage
+    def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
+
+        val = amps * self.home.voltage
 
         new_attr = {}
         if attr is not None:
