@@ -98,9 +98,9 @@ CHARGER_ADAPTATION_WINDOW = 30
 CHARGER_CHECK_STATE_WINDOW = 15
 
 CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 3*60
-CHARGER_LONG_CONNECTION = 60*5
+CHARGER_LONG_CONNECTION = 60*10
 
-CAR_CHARGER_LONG_RELATIONSHIP = 60*15
+CAR_CHARGER_LONG_RELATIONSHIP = 60*60
 
 STATE_CMD_RETRY_NUMBER = 3
 STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
@@ -1563,138 +1563,242 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         await self.on_device_state_change_helper(time, device_change_type, load_name=load_name, mobile_app=mobile_app, mobile_app_url=mobile_app_url)
 
+    def get_car_score(self, car: QSCar,  time: datetime, cache:dict) -> float:
+
+        # 0 to 9: part of the score for the plug only
+        # 10 to 10*10000 - 1: part of the score for the plug_time only: 10000 span
+        # 100000 to 1000*100000: part of the score for the distance to the charger 1000span
+        plug_span = 10.0
+        plug_time_span = 10000.0
+        dist_span = 1000.0
+        max_sore = plug_span*plug_time_span*dist_span*10.0
+
+        score = None
+
+        is_long_time_attached = False
+        is_car_connected_to_charger = self.car is not None and self.car.name == car.name
+
+        connected_time_delta = None
+        if is_car_connected_to_charger:
+            connected_time_delta = time - self.car_attach_time
+            is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP)
+
+
+
+        if self._user_attached_car_name is not None:
+            if self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
+                attached_car = self.home.get_car_by_name(self._user_attached_car_name)
+                if car is not None:
+                    if attached_car.name != car.name:
+                        _LOGGER.info(f"get_car_score: car {attached_car.name} user attached to charger {self.name}")
+                        score = 0.0
+                    else:
+                        _LOGGER.info(f"get_car_score:Best Car from user selection: {car.name} for charger {self.name}")
+                        score = max_sore
+
+        if is_long_time_attached:
+            return max_sore - 1.0
+
+        if score is None:
+
+            score = 0.0
+
+            plug_span = 10.0
+            plug_time_span = 10000.0
+            dist_span = 1000.0
+
+            score_plug_bump = 0
+            car_plug_res = cache.get(car, {}).get("car_plug_res", "NOT_FOUND")
+            if car_plug_res == "NOT_FOUND":
+                car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+                if car_plug_res is None:
+                    car_plug_res = car.is_car_plugged(time=time)
+                cache.setdefault(car, {})["car_plug_res"] = car_plug_res
+
+            if car_plug_res:
+                score_plug_bump = 5
+
+            score_plug_time_bump = 0
+            if score_plug_bump > 0:
+                charger_plugged_duration = cache.get(self,{}).get("charger_plugged_duration")
+                if  charger_plugged_duration is None:
+                    charger_plugged_duration = self.get_continuous_plug_duration(time)
+                    if charger_plugged_duration is None:
+                        charger_plugged_duration = -1.0
+                    cache.setdefault(self,{})["charger_plugged_duration"] = charger_plugged_duration
+
+                car_plugged_duration = cache.get(car,{}).get("car_plugged_duration")
+                if car_plugged_duration is None:
+                    car_plugged_duration = car.get_continuous_plug_duration(time)
+                    if car_plugged_duration is None:
+                        car_plugged_duration = -1.0
+                    cache.setdefault(self,{})["car_plugged_duration"] = car_plugged_duration
+
+                if charger_plugged_duration >= 0 and car_plugged_duration >= 0:
+                    # check they have been roughly connected at the same time
+                    if abs(charger_plugged_duration - car_plugged_duration) < CHARGER_LONG_CONNECTION:
+                        score_plug_time_bump = 1.0 + int((plug_time_span/10.0)*((CHARGER_LONG_CONNECTION - abs(charger_plugged_duration - car_plugged_duration))/CAR_CHARGER_LONG_RELATIONSHIP))
+
+                if connected_time_delta is not None :
+                    if connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP):
+                        # not usefull seeing the return above on is_long_time_attached
+                        score_plug_time_bump += 2*(plug_time_span/10.0)
+                    elif connected_time_delta > timedelta(seconds=CHARGER_LONG_CONNECTION):
+                        # the current charger has been connected to this car for a long time, we can keep it?
+                        score_plug_time_bump += 1.0
+
+            score_dist_bump = 0
+            dist = None
+            if self.charger_latitude is not None and self.charger_longitude is not None:
+                max_dist = 50.0  # 50 meters
+                car_lat, car_long = car.get_car_coordinates(time)
+                if car_lat is not None and car_long is not None:
+                    dist = haversine((self.charger_latitude, self.charger_longitude), (car_lat, car_long), unit=Unit.METERS)
+                    _LOGGER.info(f"get_car_score: Car {car.name} distance to charger {self.name}: {dist}m")
+                    if dist <= max_dist:
+                        score_dist_bump = 1.0 + int((dist_span/10.0)*(max_dist - dist)/max_dist)
+
+                    if dist <= 3.0:
+                        # we are very very close to the charger, we can assume it is plugged
+                        score_plug_bump += 1
+
+            car_home_res = cache.get(car, {}).get("car_home_res", "NOT_FOUND")
+            if car_home_res == "NOT_FOUND":
+                # check if the car is home
+                car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+                if car_home_res is None:
+                    car_home_res = car.is_car_home(time=time)
+                cache.setdefault(car, {})["car_home_res"] = car_home_res
+
+            if car_home_res and score_dist_bump == 0:
+                score_dist_bump = 1.0
+
+            if score_plug_bump > 0 and (score_dist_bump > 0 or score_plug_time_bump > 0):
+                # only if plugged .... then if home or a very compatible plug time
+                score = score_plug_bump + plug_span*score_plug_time_bump + plug_span*plug_time_span*score_dist_bump
+
+            _LOGGER.info(f"get_car_score: Car {car.name} for charger {self.name} score: {score} score_dist_bump {score_dist_bump} / dist {dist}m score_plug_bump {score_plug_bump} score_plug_time_bump {score_plug_time_bump} connected_time_delta {connected_time_delta}")
+
+        return score
+
+
     def get_best_car(self, time: datetime) -> QSCar | None:
         # find the best car ....
 
-        cars = {}
+        # cleanly handle the case where it has been user forced to a car
+        if self._user_attached_car_name is not None:
+            if self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
+                if self._user_attached_car_name == self._default_generic_car.name:
+                    car = self._default_generic_car
+                else:
+                    car = self.home.get_car_by_name(self._user_attached_car_name)
+
+                if car is not None:
+                    _LOGGER.info(f"get_best_car:Best Car from user selection: {car.name}")
+
+                    for charger in self.home._chargers:
+
+                        if charger.qs_enable_device is False:
+                            continue
+
+                        if charger != self and charger.car is not None and charger.car.name == car.name:
+                            if charger._user_attached_car_name is not None and charger._user_attached_car_name == car.name:
+                                _LOGGER.error(f"get_best_car:  car {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}")
+                                charger._user_attached_car_name = None
+
+                            charger.detach_car()
+
+                    return car
+            else:
+                _LOGGER.info(f"get_best_car:NO GOOD CAR BECAUSE:CHARGER_NO_CAR_CONNECTED")
+                return None
+
+        cars_to_charger = {}
+        active_chargers = [self]
         for charger in self.home._chargers:
 
             if charger.qs_enable_device is False:
                 continue
 
-            car = charger.car
-            if car is not None and car != charger._default_generic_car:
-                cars[car]= charger
+            if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
 
+                car = charger.car
+                if car is not None and car.name != charger._default_generic_car.name:
+                    cars_to_charger[car] = charger
 
-        if self._user_attached_car_name is not None:
-            if self._user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
-                car = self.home.get_car_by_name(self._user_attached_car_name)
-                if car is not None:
-                    _LOGGER.info(f"Best Car from user selection: {car.name}")
-
-                    existing_charger = cars.get(car)
-
-                    if existing_charger is not None and existing_charger != self:
-                        # will force a reset of everyhting
-                        existing_charger.detach_car()
-
-                    return car
-            else:
-                _LOGGER.info(f"NO GOOD CAR BECAUSE: CHARGER_NO_CAR_CONNECTED")
-                return None
+                if charger != self:
+                    active_chargers.append(charger)
 
 
         best_score = 0
-        best_car = None
 
-        charger_plugged_duration = None
+        cache = {}
+
+        chargers_scores = {}
+
+        assigned_chargers = {}
+
+        for charger in active_chargers:
+
+            chargers_scores[charger] = []
+
+            for car in self.home._cars:
+                score = charger.get_car_score(car, time, cache)
+                chargers_scores[charger].append((score,car))
+
+        # now we do know the scores and the cars :
+        for charger in active_chargers:
+            # sort the scores
+            chargers_scores[charger].sort(reverse=True, key=lambda x: x[0])
+
+        while True:
+            # assign the biggest score of the bunch
+
+            best_cur_score = None
+            best_cur_charger = None
+            best_cur_car = None
+
+            for charger in active_chargers:
+                if charger in assigned_chargers:
+                    continue
+
+                if len(chargers_scores[charger]) == 0:
+                    continue
+
+                score, car = chargers_scores[charger][0]
+
+                if best_cur_score is None or score > best_cur_score:
+                    best_cur_score = score
+                    best_cur_car = car
+                    best_cur_charger = charger
 
 
-        for car in self.home._cars:
+            if best_cur_car is None:
+                # no more changes to do
+                break
 
-            score = 0
+            assigned_chargers[best_cur_charger] = best_cur_car
 
-            existing_charger = cars.get(car)
+            #remove best_cur_car from all the lists
+            for charger in active_chargers:
+                if len(chargers_scores[charger]) == 0:
+                    continue
 
-            if existing_charger and existing_charger != self and existing_charger._user_attached_car_name == car.name:
-                # this car is already attached to another charger, with a manual selection, can't be a candidate here
-                continue
+                cur_scores = chargers_scores[charger]
+                chargers_scores[charger] = [s for s in cur_scores if s[1].name != best_cur_car.name]
 
-            if (existing_charger and
-                    time - existing_charger.car_attach_time > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP)):
-                # this car is already attached to another charger, for a long enough time,.. it is not a candidate
-                if existing_charger == self:
-                    # the current charger has been connected to this car for a long time, we can keep it?
-                    best_car = car
-                    best_score = score
-                    break
-                else:
-                    # we will let it on the other charger, this car is not a candidate anymore
-                    # only if the other charger is plugged in, else the car may be a candidate
-                    if existing_charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
-                        continue
-
-
-            score_plug_bump = 0
-            car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
-            if car_plug_res:
-                score_plug_bump = 1000
-            elif car_plug_res is None:
-                car_plug_res = car.is_car_plugged(time=time)
-                if car_plug_res:
-                    score_plug_bump = 1000
-
-            score_plug_time_bump = 0
-            if score_plug_bump > 0:
-                if charger_plugged_duration is None:
-                    charger_plugged_duration = self.get_continuous_plug_duration(time)
-
-                car_plugged_duration = car.get_continuous_plug_duration(time)
-
-                if charger_plugged_duration is not None and car_plugged_duration is not None:
-                    # check they have been rougly connected at the same time
-                    if abs(charger_plugged_duration - car_plugged_duration) < CAR_CHARGER_LONG_RELATIONSHIP:
-                        score_plug_time_bump = 100.0 + 100.0*(CAR_CHARGER_LONG_RELATIONSHIP - abs(charger_plugged_duration - car_plugged_duration))/CAR_CHARGER_LONG_RELATIONSHIP
-
-                if (existing_charger and existing_charger == self and
-                        time - self.car_attach_time > timedelta(seconds=CHARGER_LONG_CONNECTION)):
-                    # the current charger has been connected to this car for a long time, we can keep it?
-                    score_plug_time_bump += 100.0
-
-            score_dist_bump = 0
-            if self.charger_latitude is not None and self.charger_longitude is not None:
-                max_dist = 50.0 # 50 meters
-                car_lat, car_long = car.get_car_coordinates(time)
-                if car_lat is not None and car_long is not None:
-                    dist = haversine((self.charger_latitude, self.charger_longitude), (car_lat, car_long), unit=Unit.METERS)
-                    _LOGGER.info(f"Car {car.name} distance to charger {self.name}: {dist}m")
-                    if dist <= max_dist:
-                        score_dist_bump = 1.0 + 1.0*((max_dist - dist)/max_dist)
-
-                    if dist <= 3.0 and score_plug_bump == 0:
-                        # we are very very close to the charger, we can assume it is plugged
-                        score_plug_bump = 0.1
-
-            score_home_bump = 0
-            car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
-            if car_home_res:
-                score_home_bump = 10
-            elif car_home_res is None:
-                car_home_res = car.is_car_home(time=time)
-                if car_home_res:
-                    score_home_bump = 10
-
-            if score_dist_bump > 0 and score_home_bump == 0:
-                score_home_bump = 10
-
-            if score_plug_bump > 0 and (score_home_bump > 0 or score_plug_time_bump > 0):
-                # only if plugged .... then if home or a very compatible plug time
-                score = score_plug_bump + score_plug_time_bump + score_home_bump + score_dist_bump
-
-            if score > best_score:
-                best_car = car
-                best_score = score
-
+        # ok now we have the best car for each charger ..... simply use the one for the current charger
+        # and detach if it was used elsewhere, will be re-attached by the other charger directly
+        best_car = assigned_chargers.get(self)
 
         if best_car is None:
             best_car = self.get_default_car()
             _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
             _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
-            existing_charger = cars.get(best_car)
+            existing_charger = cars_to_charger.get(best_car)
             if existing_charger is not None and existing_charger != self:
-                # will force a reset of everyhting
+                # will force a reset of everything
                 _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
                 existing_charger.detach_car()
                 # hoping we won't have back and forth between chargers
