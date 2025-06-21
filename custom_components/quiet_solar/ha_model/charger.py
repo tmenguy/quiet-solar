@@ -1597,8 +1597,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
         if is_long_time_attached:
-            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger")
             score = max_sore - 1.0
+            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger")
+
 
         if score is None:
 
@@ -1744,7 +1745,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             for car in self.home._cars:
                 score = charger.get_car_score(car, time, cache)
-                chargers_scores[charger].append((score,car))
+                # a score of 0 can't be added : it means no chance to be selected
+                if score > 0:
+                    chargers_scores[charger].append((score,car))
 
         # now we do know the scores and the cars :
         for charger in active_chargers:
@@ -1766,7 +1769,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     continue
 
                 score, car = chargers_scores[charger][0]
-
+                # score > 0 by construction (see the get_car_score loop above)
                 if best_cur_score is None or score > best_cur_score:
                     best_cur_score = score
                     best_cur_car = car

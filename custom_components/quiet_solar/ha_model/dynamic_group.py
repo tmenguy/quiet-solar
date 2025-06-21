@@ -303,6 +303,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
                             if is_amps_greater(c_budget["max_amp"], c_budget["current_budget"]):
 
+                                init_budget = copy.copy(c_budget["current_budget"])
                                 budget_to_allocate = add_amps(budget_to_allocate, c_budget["current_budget"])
                                 current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
 
@@ -313,7 +314,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                                 budget_to_allocate = diff_amps(budget_to_allocate, c_budget["current_budget"])
                                 current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
 
-                                one_modif = True
+                                if not is_amps_zero(diff_amps(init_budget, c_budget["current_budget"])):
+                                    one_modif = True
 
                             if max(budget_to_allocate) <= 0.01:
                                 do_spread = False
@@ -357,26 +359,55 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         return allocated_final_budget
 
     def  _shave_phase_amps_clusters(self, cluster_list_to_shave, current_budget_spend:list[float|int], from_father_budget:list[float|int]) -> list[float|int]:
-        for shaved_cluster in cluster_list_to_shave:
-            if is_amps_zero(shaved_cluster["sum_needed"]):
-                continue
 
-            for c_budget in shaved_cluster["budgets"]:
-                if is_amps_zero(c_budget["current_budget"]):
+        _LOGGER.info(f"_shave_phase_amps_clusters begin for a group: {self.name} current budget spend {current_budget_spend} from father budget {from_father_budget}")
+
+        for can_clear_budget in [False, True]:
+            for shaved_cluster in cluster_list_to_shave:
+                if is_amps_zero(shaved_cluster["sum_needed"]):
                     continue
 
-                # by construction all are set at their minimum
-                shaved_cluster["sum_needed"] = diff_amps(shaved_cluster["sum_needed"], c_budget["needed_amp"])
-                c_budget["needed_amp"] = [0,0,0]
-                current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
-                c_budget["current_budget"] = [0,0,0]
+                while True:
+                    one_modif = False
+                    for c_budget in shaved_cluster["budgets"]:
+                        if is_amps_zero(c_budget["current_budget"]):
+                            continue
 
+                        if can_clear_budget:
+                            shaved_cluster["sum_needed"] = diff_amps(shaved_cluster["sum_needed"], c_budget["needed_amp"])
+                            c_budget["needed_amp"] = [0,0,0]
+                            current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
+                            c_budget["current_budget"] = [0,0,0]
+                        else:
+
+                            if is_amps_greater(c_budget["current_budget"], c_budget["min_amp"]):
+                                init_budget = copy.copy(c_budget["current_budget"])
+
+                                current_budget_spend = diff_amps(current_budget_spend, c_budget["current_budget"])
+                                device = c_budget["device"]
+                                c_budget["current_budget"] = device.update_amps_with_delta(
+                                    from_amps=c_budget["current_budget"], delta=-1, is_3p=device.physical_3p)
+                                c_budget["current_budget"] = max_amps(c_budget["current_budget"], c_budget["min_amp"])
+                                current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
+
+                                if not is_amps_zero(diff_amps(init_budget, c_budget["current_budget"])):
+                                    one_modif = True
+
+                        if not is_amps_greater(current_budget_spend, from_father_budget):
+                            break
+
+                    # out of the while loop if shaved enough or no more modification possible
+                    if not is_amps_greater(current_budget_spend, from_father_budget) or one_modif is False:
+                        break
 
                 if not is_amps_greater(current_budget_spend, from_father_budget):
                     break
 
             if not is_amps_greater(current_budget_spend, from_father_budget):
                 break
+
+        _LOGGER.info(f"_shave_phase_amps_clusters results for a group: {self.name} current budget spend {current_budget_spend} from father budget {from_father_budget}")
+
 
         return current_budget_spend
 
