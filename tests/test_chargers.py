@@ -167,9 +167,10 @@ class TestChargersSetup(unittest.TestCase):
             full_available_home_power = 5000.0
             
             # Run the budgeting algorithm
-            result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+            result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
                 full_available_home_power,
+                False,
                 self.current_time
             )
             
@@ -206,9 +207,10 @@ class TestChargersSetup(unittest.TestCase):
         with patch.object(self.wallboxes_group, 'is_current_acceptable') as mock_acceptable:
             mock_acceptable.return_value = True
             
-            result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+            result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
-                3000.0,  # Only 3kW available
+                3000.0,# Only 3kW available
+                False,
                 self.current_time
             )
             
@@ -241,9 +243,10 @@ class TestChargersSetup(unittest.TestCase):
             mock_acceptable.side_effect = [False, True, True]
             
             # Test with 10kW available (should trigger redistribution)
-            result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+            result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
                 10000.0,
+                False,
                 self.current_time
             )
             
@@ -366,9 +369,10 @@ class TestBudgetingAlgorithm:
         full_available_home_power = 5000.0
         
         # Run the budgeting algorithm
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+        result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             full_available_home_power,
+            False,
             self.current_time
         )
         
@@ -407,9 +411,10 @@ class TestBudgetingAlgorithm:
             actionable_chargers.append(cs)
         
         # Test with very limited power (2kW) - should prioritize high priority charger
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+        result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             2000.0,  # Only 2kW available
+            False,
             self.current_time
         )
         
@@ -420,9 +425,10 @@ class TestBudgetingAlgorithm:
         
     async def test_budgeting_algorithm_empty_list(self):
         """Test algorithm with no actionable chargers."""
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+        result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             [],  # No chargers
             5000.0,
+            False,
             self.current_time
         )
         
@@ -443,9 +449,10 @@ class TestBudgetingAlgorithm:
             actionable_chargers.append(cs)
         
         # Test with zero power
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+        result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
-            0.0,  # No power available
+            0.0, # No power available
+            False,
             self.current_time
         )
         
@@ -469,9 +476,10 @@ class TestBudgetingAlgorithm:
             actionable_chargers.append(cs)
         
         # Test with negative power (exporting to grid)
-        result = await self.charger_group.budgeting_algorithm_minimize_diffs(
+        result, _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             -2000.0,  # Exporting 2kW
+            False,
             self.current_time
         )
         
@@ -564,9 +572,10 @@ class TestBudgetingAlgorithm:
             print(f"  Total current power: {total_current_power}W")
             print(f"  Phase currents: L1={total_phase_currents[0]}A, L2={total_phase_currents[1]}A, L3={total_phase_currents[2]}A")
             
-            result = await self.charger_group_3p.budgeting_algorithm_minimize_diffs(
+            result, _ = await self.charger_group_3p.budgeting_algorithm_minimize_diffs(
                 current_chargers,
                 full_available_home_power,
+                False,
                 self.current_time
             )
             
