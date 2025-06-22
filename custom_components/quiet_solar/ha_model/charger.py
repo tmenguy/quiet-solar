@@ -1297,18 +1297,26 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         target_charge = asked_target_charge
 
         if target_charge is None:
-            if self.is_next_charge_full():
-                target_charge = 100
-            else:
-                if self.car:
-                    target_charge = self.car.car_default_charge
-                else:
-                    target_charge = 80
+
+            target_charge = self.get_car_target_charge()
 
             if self.car and target_charge is not None:
                 await self.car.set_max_charge_limit(target_charge)
 
         return target_charge
+
+    def get_car_target_charge(self):
+
+        if self.is_next_charge_full():
+            target_charge = 100
+        else:
+            if self.car:
+                target_charge = self.car.car_default_charge
+            else:
+                target_charge = 80
+
+        return target_charge
+
 
     def is_next_charge_full(self) -> bool:
         return self._is_next_charge_full
@@ -1504,20 +1512,37 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # if there is a tinne constraint that is not too far away : score boost
         # if this constraint is mandatory of as fast as possible : score boost
         if ct is not None:
+
+
+            time_to_complete_h = None
+            score_boost = 10000
             if ct.as_fast_as_possible:
-                score = 200000
+                score_boost = 300000
             elif ct.is_mandatory:
-                score = 100000
-
-            if ct.end_of_constraint < DATETIME_MAX_UTC:
-                # there is a true end constraint, if 12h or more : add 1000 else add something closer
-                score += (13 - min(12, int((ct.end_of_constraint - time).total_seconds()/3600.0))) * 1000
+                score_boost = 200000
 
 
-        # give more to the ones with the lower soc in kwh
-        capa = self.car.get_car_current_capacity(time)
-        if capa is not None:
-            score += max(0, 999 - int(capa/1000.0)) # capa is in Wh make it kWh
+
+            if ct.as_fast_as_possible:
+                time_to_complete_h = 0
+            elif ct.end_of_constraint < DATETIME_MAX_UTC:
+                # there is a true end constraint
+                time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
+
+            if time_to_complete_h is not None and time_to_complete_h <= 24:
+                score += (25 - time_to_complete_h) * score_boost
+
+        # give more to the ones with the lower scar percentage to reach their default target charge
+        target_charge = self.get_car_target_charge()
+        #capa = self.car.get_car_current_capacity(time)
+        car_percent = self.car.get_car_charge_percent(time)
+        if car_percent is None:
+            _LOGGER.warning(f"charging score: {self.name} for {self.car.name} car_percent is None")
+            car_percent = 0.0
+
+        score += target_charge - car_percent
+
+        _LOGGER.info(f"charging score: {self.name} for {self.car.name} {score}")
 
         cs.charge_score = score
 
@@ -1525,7 +1550,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
     def reset(self):
-        _LOGGER.info(f"Charger reset")
+        _LOGGER.info(f"Charger reset {self.name}")
         super().reset()
         self.detach_car()
         self._reset_state_machine()
@@ -1533,7 +1558,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._asked_for_reboot_at_time = None
 
     def reset_load_only(self):
-        _LOGGER.info(f"Charger reset only load")
+        _LOGGER.info(f"Charger reset only load {self.name}")
         super().reset()
 
     def _reset_state_machine(self):
@@ -1604,10 +1629,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if score is None:
 
             score = 0.0
-
-            plug_span = 10.0
-            plug_time_span = 10000.0
-            dist_span = 1000.0
 
             score_plug_bump = 0
             car_plug_res = cache.get(car, {}).get("car_plug_res", "NOT_FOUND")
