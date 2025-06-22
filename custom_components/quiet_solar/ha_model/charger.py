@@ -1540,7 +1540,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.warning(f"charging score: {self.name} for {self.car.name} car_percent is None")
             car_percent = 0.0
 
-        score += target_charge - car_percent
+        car_battery_capacity = self.car.car_battery_capacity
+        if car_battery_capacity is None or car_battery_capacity == 0:
+            car_battery_capacity = 100000
+
+        #convert in kwh
+        car_battery_capacity = car_battery_capacity / 1000.0
+        max_battery = 300
+        score += max_battery - (car_battery_capacity*car_percent)
 
         _LOGGER.info(f"charging score: {self.name} for {self.car.name} {score}")
 
