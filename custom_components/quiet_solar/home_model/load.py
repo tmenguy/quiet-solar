@@ -10,7 +10,7 @@ import random
 import pytz
 
 from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
-from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
+from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC, TimeBasedSimplePowerLoadConstraint
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
@@ -741,7 +741,7 @@ class AbstractLoad(AbstractDevice):
             if removed_infinits:
                 keep : LoadConstraint = removed_infinits[0]
                 for k in removed_infinits:
-                    if k.is_constraint_met():
+                    if k.is_constraint_met(time=time):
                         continue
                     if k.score() > keep.score():
                         keep = k
@@ -765,7 +765,7 @@ class AbstractLoad(AbstractDevice):
             keep = removed_as_fast[0][1]
             end_ctr = keep.end_of_constraint
             for (_, k) in removed_as_fast:
-                if k.is_constraint_met():
+                if k.is_constraint_met(time=time):
                     continue
                 if k.score() > keep.score():
                     keep = k
@@ -814,12 +814,12 @@ class AbstractLoad(AbstractDevice):
         for c in self._constraints:
             if prev_ct is not None:
                 c.reset_initial_value_to_follow_prev_if_needed(time, prev_ct)
-                if c.is_constraint_met():
+                if c.is_constraint_met(time=time):
                     # keep the prev energy as it was possibly higher to meet this constraint
                     continue
             prev_ct = c
 
-        self._constraints = [c for c in self._constraints if c.is_constraint_met() is False]
+        self._constraints = [c for c in self._constraints if c.is_constraint_met(time=time) is False]
 
         #recompute the constraint start:
         kept = []
@@ -914,7 +914,7 @@ class AbstractLoad(AbstractDevice):
 
                 do_update_c = False
 
-                if c.is_constraint_met():
+                if c.is_constraint_met(time=time):
                     c.skip = True
                     force_solving = True
                     await self.ack_completed_constraint(time, c)
@@ -948,7 +948,7 @@ class AbstractLoad(AbstractDevice):
                                 break
 
                             if nc.end_of_constraint < new_constraint_end:
-                                if nc.is_constraint_met():
+                                if nc.is_constraint_met(time=time):
                                     nc.skip = True
                                 else:
                                     force_solving = True
@@ -985,14 +985,14 @@ class AbstractLoad(AbstractDevice):
                         # ok we have pushed or made a target the next important constraint
                         do_update_c = True
                         c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE  # force as much as we can....
-                        _LOGGER.info(f"{c.name} handled_constraint_force")
+                        _LOGGER.info(f"{c.name} handled_constraint_force is now as fast as possible, end of constraint {c.end_of_constraint} (pushed count {c.pushed_count})")
                 else:
                     do_update_c = True
 
                 if do_update_c and c.is_constraint_active_for_time_period(time, time + period):
                     do_continue_ct = await c.update(time)
                     if do_continue_ct is False:
-                        if c.is_constraint_met():
+                        if c.is_constraint_met(time=time):
                             await self.ack_completed_constraint(time, c)
                             _LOGGER.info(f"{c.name} skipped because met (just after update)")
                         else:

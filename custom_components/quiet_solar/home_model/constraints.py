@@ -272,7 +272,7 @@ class LoadConstraint(object):
 
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime | None = None) -> bool:
 
-        if self.is_constraint_met():
+        if self.is_constraint_met(time=start_time):
             return False
 
         if end_time is None:
@@ -296,7 +296,7 @@ class LoadConstraint(object):
 
 
 
-    def is_constraint_met(self, current_value=None) -> bool:
+    def is_constraint_met(self, time:datetime, current_value=None) -> bool:
         """ is the constraint met in its current form? """
         if current_value is None:
             current_value = self.current_value
@@ -350,7 +350,7 @@ class LoadConstraint(object):
                 self.last_value_change_update = time
 
             self.current_value = value
-            if do_continue_constraint is False or self.is_constraint_met():
+            if do_continue_constraint is False or self.is_constraint_met(time=time):
                 return False
         return True
 
@@ -367,6 +367,16 @@ class LoadConstraint(object):
     @abstractmethod
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
+
+
+    def best_duration_extenstion_to_push_constraint(self, time:datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
+
+        duration_s = self.best_duration_to_meet() + end_constraint_min_tolerancy
+        duration_s = max(timedelta(seconds=1200),
+                         duration_s * (1.0 + self.pushed_count * 0.2))  # extend if we continue to push it
+
+        return duration_s
+
 
     @abstractmethod
     def compute_best_period_repartition(self,
@@ -912,6 +922,26 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         elif self.target_value >= 60:
             target_string = f"{int(self.target_value / 60)}mn"
         return target_string
+
+    def best_duration_extenstion_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
+        return self.best_duration_to_meet()
+
+
+    def is_constraint_met(self, time:datetime, current_value=None) -> bool:
+
+        if current_value is None:
+            current_value = self.current_value
+
+        if self.target_value is None:
+            return False
+
+        if current_value >= (0.995*self.target_value): #0.5% tolerance
+            return True
+
+        if self.end_of_constraint is not None and self.end_of_constraint <= time and current_value >= (0.9*self.target_value): # 10% tolerance if close to end
+            return True
+
+        return False
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""

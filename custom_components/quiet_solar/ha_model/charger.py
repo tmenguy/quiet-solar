@@ -2810,7 +2810,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
 
-        if result is not None and ct.is_constraint_met(result):
+        if result is not None and ct.is_constraint_met(time=time, current_value=result):
             do_continue_constraint = False
         else:
             do_continue_constraint = True
@@ -2838,7 +2838,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 ct = LoadConstraint()
                 ct.target_value = target_charge
                 ct.current_value = current_charge
-                if ct.is_constraint_met(current_charge):
+                if ct.is_constraint_met(time=time, current_value=current_charge):
                     # force met constraint
                     result = ct.target_value
 
