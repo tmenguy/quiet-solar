@@ -676,9 +676,6 @@ class QSChargerGroup(object):
             else:
                 stop_on_first_change = True
 
-        _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: base full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
-
 
         # sort the charger according to their score, if increase put the most important to finish the charge first
         # if decrease: remove charging from less important first (lower score)
@@ -686,6 +683,10 @@ class QSChargerGroup(object):
             actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
         else:
             actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=increase)
+
+
+        _LOGGER.info(
+            f"budgeting_algorithm_minimize_diffs: {[cs.charger.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
         do_stop = False
         for allow_state_change in allow_state_changes:
@@ -1177,7 +1178,7 @@ class QSChargerGroup(object):
 
             if init_state != new_state or new_amp != init_amp or new_num_phases != init_phase_num:
                 _LOGGER.info(
-                    f"new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state} new_num_phases {new_num_phases} / init_phase_num {init_phase_num}")
+                    f"{cs.charger.name} new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state} new_num_phases {new_num_phases} / init_phase_num {init_phase_num}")
                 _LOGGER.info(f"car: {cs.charger.car.name} min charge {cs.charger.min_charge} max charge {cs.charger.max_charge} charger {cs.charger.name}")
 
             if init_state != new_state:
@@ -1460,15 +1461,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_stable_dynamic_charge_status(self, time: datetime)-> QSChargerStatus | None:
 
         if self.qs_enable_device is False:
+            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} not enabled in qs")
             return None
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} no car or no plugged {self.car}")
             return None
 
         handled = self._probe_and_enforce_stopped_charge_command_state(time, command=self.current_command, probe_only=True)
 
         if handled:
             # the charger is in a "static" state and is not consumming any current
+            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} None as _probe_and_enforce_stopped_charge_command_state")
             return None
 
         cs = QSChargerStatus(self)
@@ -1626,7 +1630,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         #capa = self.car.get_car_current_capacity(time)
         car_percent = self.car.get_car_charge_percent(time)
         if car_percent is None:
-            _LOGGER.warning(f"charging score: {self.name} for {self.car.name} car_percent is None")
+            _LOGGER.warning(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} car_percent is None")
             car_percent = 0.0
 
         car_battery_capacity = self.car.car_battery_capacity
@@ -1638,7 +1642,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         max_battery = 300
         score += max_battery - ((car_battery_capacity*car_percent)/100.0)
 
-        _LOGGER.info(f"charging score: {self.name} for {self.car.name} {score}")
+        _LOGGER.info(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} {score}")
 
         cs.charge_score = score
 
@@ -1848,7 +1852,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if charger != self:
                     active_chargers.append(charger)
 
-        best_score = 0
 
         cache = {}
 
@@ -1915,7 +1918,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             best_car = self.get_default_car()
             _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
-            _LOGGER.info(f"Best Car: {best_car.name} with score {best_score}")
+            _LOGGER.info(f"Best Car: {best_car.name} with score {best_cur_score} for charger {self.name}")
             existing_charger = cars_to_charger.get(best_car)
             if existing_charger is not None and existing_charger != self:
                 # will force a reset of everything
