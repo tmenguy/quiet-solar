@@ -2632,12 +2632,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # if we reset here it will remove the current constraint list from the load!!!!
-            _LOGGER.info(f"ensure_correct_state: no car or not plugged")
+            _LOGGER.info(f"ensure_correct_state: {self.name} no car or not plugged")
             return True, None
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
-            _LOGGER.info(f"ensure_correct_state: short unplug")
+            _LOGGER.info(f"ensure_correct_state:{self.name} short unplug")
             return False, None # we don't know if final
 
         return await self._ensure_correct_state(time, probe_only), self._verified_correct_state_time
