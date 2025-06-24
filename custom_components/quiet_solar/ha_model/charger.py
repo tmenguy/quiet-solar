@@ -574,10 +574,10 @@ class QSChargerGroup(object):
                             await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
 
 
-    def _update_and_prob_for_amps_reduction(self, cs, new_amps, estimated_current_amps, time) -> tuple[bool, bool]:
+    def _update_and_prob_for_amps_reduction(self, old_amps, new_amps, estimated_current_amps, time) -> tuple[bool, bool]:
 
         old_res, prev_diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
-            new_amps=new_amps,
+            new_amps=old_amps,
             estimated_current_amps=estimated_current_amps,
             time=time
         )
@@ -695,7 +695,10 @@ class QSChargerGroup(object):
                     next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
                                                                                                 allow_phase_change=allow_phase_change,
                                                                                                 increase=increase)
-                    if next_possible_budgeted_amp is not None:
+                    if next_possible_budgeted_amp is None:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): forbid change because of can_change_budget budgeted_amp {cs.budgeted_amp} num_phases {cs.budgeted_num_phases} increase {increase}")
+                    else:
 
                         diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
 
@@ -708,6 +711,9 @@ class QSChargerGroup(object):
                                 pass
                             else:
                                 # no we exhausted too far the available solar budget
+                                _LOGGER.info(
+                                    f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): forbid change because of power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+
                                 next_possible_budgeted_amp = None
 
                         if next_possible_budgeted_amp is not None:
@@ -717,6 +723,8 @@ class QSChargerGroup(object):
                                         time=time
                             ) is False:
                                 next_possible_budgeted_amp = None
+                                _LOGGER.info(
+                                    f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): forbid change because of dynamic_group new_amps {new_alloted_amps} estimated_current_amps {current_amps}")
 
                         if next_possible_budgeted_amp is not None:
 
@@ -732,7 +740,7 @@ class QSChargerGroup(object):
                                 do_stop = True
 
                             if increase is False and power_budget >= 0:
-                                # we are back on track for solar forllowing, we reduced enough
+                                # we are back on track for solar or we reduced enough
                                 do_stop = True
 
 
@@ -886,7 +894,7 @@ class QSChargerGroup(object):
                     try_amp, _, try_amps = cs.get_amps_phase_switch(from_amp=cs.budgeted_amp, from_num_phase=1)
                     new_alloted_amps = add_amps(new_alloted_amps, try_amps)
 
-                    res_probe, do_update = self._update_and_prob_for_amps_reduction(cs=cs,
+                    res_probe, do_update = self._update_and_prob_for_amps_reduction(old_amps=alloted_amps,
                                                                                     new_amps=new_alloted_amps,
                                                                                     estimated_current_amps=current_amps,
                                                                                     time=time)
@@ -980,7 +988,7 @@ class QSChargerGroup(object):
                             updated_amps = cs.update_amps_with_delta(mandatory_amps, num_phases=cs.budgeted_num_phases,
                                                                      delta=-delta_remove)
 
-                            res_probe, do_update = self._update_and_prob_for_amps_reduction(cs=cs,
+                            res_probe, do_update = self._update_and_prob_for_amps_reduction(old_amps=mandatory_amps,
                                                                                             new_amps=updated_amps,
                                                                                             estimated_current_amps=current_amps,
                                                                                             time=time)

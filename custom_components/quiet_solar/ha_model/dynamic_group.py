@@ -71,7 +71,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps, time=time)
 
     def is_current_acceptable(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> bool:
-        return self.is_current_acceptable_and_diff(new_amps, estimated_current_amps, time)[0]
+        res = self.is_current_acceptable_and_diff(new_amps, estimated_current_amps, time)[0]
+        if res is False:
+            _LOGGER.info(f"is_current_acceptable: group {self.name} not acceptable for new amps {new_amps} with estimated current amps {estimated_current_amps} at time {time}")
+        return res
 
     def is_current_acceptable_and_diff(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> (bool, list[float|int]):
 
