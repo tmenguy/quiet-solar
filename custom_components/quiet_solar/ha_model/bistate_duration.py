@@ -241,11 +241,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if next_time < dt_now:
                         next_time = next_time + timedelta(days=1)
 
+
                     target_value = self.default_on_duration * 3600.0
 
-                    if (next_time - dt_now).total_seconds() < target_value:
+                    # the code below is commented as can be very wrong : will push the end time to the next day even if not finished!
+                    # if (next_time - dt_now).total_seconds() < target_value:
                         # we need to adapt the end time to the next day
-                        next_time = next_time + timedelta(days=1)
+                    #    next_time = next_time + timedelta(days=1)
 
                     end_schedule = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
