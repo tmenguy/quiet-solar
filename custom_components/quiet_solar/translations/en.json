@@ -271,6 +271,9 @@
             "qs_load_mark_current_constraint_done": {
                 "name": "Force Current Constraint Done"
             },
+            "qs_load_clean_and_reset": {
+                "name": "Force Load Reset and Clean"
+            },
             "qs_load_reset_override_state": {
                 "name": "Reset User Override"
             },
