@@ -8,7 +8,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
-    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE
+    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE, \
+    BUTTON_LOAD_CLEAN_AND_RESET
 from .entity import QSDeviceEntity
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
