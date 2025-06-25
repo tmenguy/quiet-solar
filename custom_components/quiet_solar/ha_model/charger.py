@@ -1858,6 +1858,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         chargers_scores = {}
 
         assigned_chargers = {}
+        assigned_chargers_score = {}
 
         for charger in active_chargers:
 
@@ -1901,6 +1902,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 break
 
             assigned_chargers[best_cur_charger] = best_cur_car
+            assigned_chargers_score[best_cur_charger] = best_cur_score
 
             #remove best_cur_car from all the lists
             for charger in active_chargers:
@@ -1918,7 +1920,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             best_car = self.get_default_car()
             _LOGGER.info(f"Default best car used: {best_car.name}")
         else:
-            _LOGGER.info(f"Best Car: {best_car.name} with score {best_cur_score} for charger {self.name}")
+            _LOGGER.info(f"Best Car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}")
             existing_charger = cars_to_charger.get(best_car)
             if existing_charger is not None and existing_charger != self:
                 # will force a reset of everything
@@ -2873,7 +2875,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         handled = False
         if self.is_car_stopped_asking_current(time):
-            _LOGGER.info(f"_compute_and_launch_new_charge_state:car stopped asking current ... do nothing")
+            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} stopped asking current ... do nothing")
             handled = True
             if probe_only is False:
                 self._expected_amperage.set(self.charger_default_idle_charge, time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
@@ -2881,6 +2883,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command is None or command.is_off_or_idle():
             handled = True
+            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} not a running command {command}")
             if probe_only is False:
                 self._expected_charge_state.set(False, time)
                 self._expected_amperage.set(self.charger_default_idle_charge, time) # do not use charger min charge so next time we plug ...it may work
@@ -2889,7 +2892,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             handled = False
 
         if self.is_in_state_reset():
-            _LOGGER.info(f"_compute_and_launch_new_charge_state: in state reset at the end .. force an idle like state")
+            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name}in state reset at the end .. force an idle like state")
             handled = True
             if probe_only is False:
                 self._expected_charge_state.set(False, time)
