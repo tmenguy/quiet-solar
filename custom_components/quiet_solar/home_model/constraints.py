@@ -232,7 +232,7 @@ class LoadConstraint(object):
 
     def _get_target_date_string(self) -> str:
         if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
-            target = "no limit"
+            target = ""
         else:
             local_target_date = self.end_of_constraint.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
@@ -266,9 +266,12 @@ class LoadConstraint(object):
 
         prefix = ""
         if self.load_param:
-            prefix = f"{self.load_param}:"
+            prefix = f"{self.load_param}: "
 
-        return f"{prefix} {target_string} {target_date}{postfix}"
+        if target_date:
+            target_date = f" {target_date}"
+
+        return f"{prefix}{target_string}{target_date}{postfix}"
 
     def is_constraint_active_for_time_period(self, start_time: datetime, end_time: datetime | None = None) -> bool:
 

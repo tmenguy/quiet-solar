@@ -10,7 +10,7 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
 from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
-    SWITCH_POOL_FORCE_WINTER_MODE, SWITCH_ENABLE_DEVICE
+    SWITCH_POOL_FORCE_WINTER_MODE, SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .entity import QSDeviceEntity
@@ -35,6 +35,14 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     )
 
     entities.append(QSSwitchEntityChargerFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
+
+    qs_bump_solar_priority = QSSwitchEntityDescription(
+        key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+    )
+
+    entities.append(QSSwitchEntityCharger(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
+
 
 
     return entities
@@ -217,8 +225,7 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
             await self.async_turn_off()
 
 
-
-class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
+class QSSwitchEntityCharger(QSSwitchEntityWithRestore):
 
     def _set_availabiltiy(self):
 
@@ -229,6 +236,9 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
 
         if self.device.qs_enable_device is False:
             self._attr_available = False
+
+
+class QSSwitchEntityChargerFullCharge(QSSwitchEntityCharger):
 
 
     @callback
@@ -249,8 +259,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the zone on."""
-        #await self.device.async_on()
+
         self._set_availabiltiy()
         if isinstance(self.device, QSChargerGeneric):
             if self.device.car is not None:
@@ -264,8 +273,7 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the zone off."""
-        #await self.device.async_off()
+
         self._set_availabiltiy()
         if isinstance(self.device, QSChargerGeneric):
             await self.device.set_next_charge_full_or_not(False)
@@ -282,3 +290,5 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntity):
             self._attr_is_on = False
 
         self.async_write_ha_state()
+
+

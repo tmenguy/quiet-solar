@@ -560,6 +560,9 @@
       "qs_next_car_charge_full": {
         "name": "Force next charge to 100%"
       },
+      "qs_bump_solar_charge_priority": {
+        "name": "Bump solar charge priority"
+      },
       "qs_best_effort_green_only": {
         "name": "Best Effort Green Only"
       },

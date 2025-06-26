@@ -372,6 +372,9 @@
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
             },
+            "qs_bump_solar_charge_priority": {
+                "name": "Bump solar charge priority"
+            },
             "qs_pool_force_winter_mode": {
                 "name": "Force Winter Mode"
             }

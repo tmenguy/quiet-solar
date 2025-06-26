@@ -154,6 +154,7 @@ BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
+SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT = "qs_next_car_charge_add_default"
 

@@ -1227,6 +1227,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._is_next_charge_full = False
         self._do_force_next_charge = False
+        self._qs_bump_solar_priority = False
 
         self.car: QSCar | None = None
         self._user_attached_car_name: str | None = None
@@ -1293,6 +1294,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             charger_group = self.father_device.charger_group = QSChargerGroup(self.father_device)
 
         return charger_group
+
+    @property
+    def qs_bump_solar_charge_priority(self) -> bool:
+        return self._qs_bump_solar_priority
+
+    @qs_bump_solar_charge_priority.setter
+    def qs_bump_solar_charge_priority(self, value: bool):
+        if value is False:
+            self._qs_bump_solar_priority = False
+        else:
+            # only one can have a bump of the entire chargers list
+            for c in self.home._chargers:
+                c.qs_bump_solar_charge_priority = False
+            self._qs_bump_solar_priority = True
+
 
     @property
     def current_num_phases(self) -> int:
@@ -1604,15 +1620,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         score = 0
         # if there is a tinne constraint that is not too far away : score boost
         # if this constraint is mandatory of as fast as possible : score boost
+        score_boost_standard_ct = 1000
+        score_boost_mandatory = 100*score_boost_standard_ct
+        score_boost_as_fast_as_possible = 100*score_boost_mandatory
         if ct is not None:
 
 
             time_to_complete_h = None
-            score_boost = 10000
+            score_boost = score_boost_standard_ct
             if ct.as_fast_as_possible:
-                score_boost = 300000
+                score_boost = score_boost_as_fast_as_possible
             elif ct.is_mandatory:
-                score_boost = 200000
+                score_boost = score_boost_mandatory
 
 
 
@@ -1625,9 +1644,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if time_to_complete_h is not None and time_to_complete_h <= 24:
                 score += (25 - time_to_complete_h) * score_boost
 
-        # give more to the ones with the lower scar percentage to reach their default target charge
-        target_charge = self.get_car_target_charge()
-        #capa = self.car.get_car_current_capacity(time)
+
+        if self.qs_bump_solar_charge_priority:
+            score += score_boost_as_fast_as_possible * 50 # to be above any mandatory constraint for solar but below an as fast as possible constraint
+
+        # give more to the ones with the lower car SOC percentage to reach their default target charge
         car_percent = self.car.get_car_charge_percent(time)
         if car_percent is None:
             _LOGGER.warning(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} car_percent is None")
@@ -1635,12 +1656,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         car_battery_capacity = self.car.car_battery_capacity
         if car_battery_capacity is None or car_battery_capacity == 0:
-            car_battery_capacity = 100000
+            car_battery_capacity = 100000 # (100kWh)
 
         #convert in kwh
         car_battery_capacity = car_battery_capacity / 1000.0
         max_battery = 300
         score += max_battery - ((car_battery_capacity*car_percent)/100.0)
+
 
         _LOGGER.info(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} {score}")
 
@@ -1656,6 +1678,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._reset_state_machine()
         self._do_force_next_charge = False
         self._asked_for_reboot_at_time = None
+        self.qs_bump_solar_priority = False
 
     def reset_load_only(self):
         _LOGGER.info(f"Charger reset only load {self.name}")
@@ -1966,7 +1989,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def add_default_charge(self):
         if self.can_add_default_charge():
             if self.default_charge_time is not None:
-                # compute the next occurency of the default charge time
+                # compute the next occurrence of the default charge time
                 dt_now = datetime.now(tz=None)
                 next_time = datetime(year=dt_now.year, month=dt_now.month, day=dt_now.day, hour=self.default_charge_time.hour, minute=self.default_charge_time.minute, second=self.default_charge_time.second)
                 if next_time < dt_now:
