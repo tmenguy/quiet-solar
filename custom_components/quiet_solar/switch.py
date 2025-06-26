@@ -170,6 +170,12 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         """Update the entity's state."""
         self._set_availabiltiy()
 
+        if hasattr(self.device, self.entity_description.key):
+            attr_val = getattr(self.device, self.entity_description.key, False)
+            if attr_val != self._attr_is_on:
+                self._attr_is_on = attr_val
+                self.async_write_ha_state()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
 
         setattr(self.device, self.entity_description.key, True)
