@@ -105,7 +105,10 @@ CAR_CHARGER_LONG_RELATIONSHIP = 60*60
 STATE_CMD_RETRY_NUMBER = 3
 STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
 
-TIME_OK_BETWEEN_CHANGING_CHARGER_STATE = 60*10
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON = 60*10
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF = 60*30
+
+TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60*30
 
 
 
@@ -1178,7 +1181,7 @@ class QSChargerGroup(object):
 
             new_num_phases = cs.budgeted_num_phases
 
-            if init_state != new_state or new_amp != init_amp or new_num_phases != init_phase_num:
+            if init_state != new_state or (new_amp != init_amp and new_state) or new_num_phases != init_phase_num:
                 _LOGGER.info(
                     f"{cs.charger.name} new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state} new_num_phases {new_num_phases} / init_phase_num {init_phase_num}")
                 _LOGGER.info(f"car: {cs.charger.car.name} min charge {cs.charger.min_charge} max charge {cs.charger.max_charge} charger {cs.charger.name}")
@@ -1192,10 +1195,10 @@ class QSChargerGroup(object):
 
                 if cs.charger._expected_charge_state.last_change_asked is None:
                     _LOGGER.info(
-                        f"Change State: new_state {new_state} delta None > {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                        f"Change State: new_state {new_state} delta None")
                 else:
                     _LOGGER.info(
-                        f"Change State: new_state {new_state} delta {(time - cs.charger._expected_charge_state.last_change_asked).total_seconds()}s >= {TIME_OK_BETWEEN_CHANGING_CHARGER_STATE}s")
+                        f"Change State: new_state {new_state} delta {(time - cs.charger._expected_charge_state.last_change_asked).total_seconds()}s")
 
 
             if new_amp is not None:
@@ -1598,20 +1601,26 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             cs.can_be_forced_stopped = can_stop
 
-            if can_stop and self._expected_charge_state.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
+            if current_state is False:
+                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON
+            else:
+                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF
+
+            can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
+
+            if can_change_state and can_stop:
                 possible_amps = [0]
                 possible_amps.extend(run_list)
+            elif can_stop and current_state is False:
+                # force to stay off as we don't have the right to change
+                possible_amps = [0]
             else:
-                if can_stop and current_state is False:
-                    # force to stay off as we don't have the right to change phases
-                    possible_amps = [0]
-                else:
-                    # force to stay on (by not adding the possibility to go to 0)
-                    possible_amps = run_list
+                # that may force a change if can_stop False and Current_state is False
+                possible_amps = run_list
 
             # check if we have the right to change phase number
             if self.can_do_3_to_1_phase_switch():
-                if self._expected_num_active_phases.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE):
+                if self._expected_num_active_phases.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES):
                     # we can change the number of phases
                     possible_num_phases = [1,3]
 
