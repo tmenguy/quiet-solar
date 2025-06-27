@@ -304,11 +304,12 @@ class QSChargerStatus(object):
         def _try_amp_decrease(self, amp, allow_state_change):
             next_amp = None
             if self.possible_amps[0] == 0:
-                if amp > self.possible_amps[1]:
-                    next_amp = amp - 1
-                else:
-                    if allow_state_change:
-                        next_amp = 0
+                if len(self.possible_amps) > 1:
+                    if amp > self.possible_amps[1]:
+                        next_amp = amp - 1
+                    else:
+                        if amp != 0 and allow_state_change:
+                            next_amp = 0
             else:
                 if amp > self.possible_amps[0]:
                     next_amp = amp - 1
@@ -320,7 +321,8 @@ class QSChargerStatus(object):
                 if amp == 0:
                     if allow_state_change:
                         if self.possible_amps[0] == 0:
-                            next_amp = self.possible_amps[1]
+                            if len(self.possible_amps) > 1:
+                                next_amp = self.possible_amps[1]
                         else:
                             next_amp = self.possible_amps[0]
                 elif amp < self.possible_amps[-1]:
