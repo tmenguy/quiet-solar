@@ -422,7 +422,13 @@ class QSChargerGroup(object):
             if charger.qs_enable_device is False:
                 continue
 
-            res, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
+            res, handled_static, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
+
+            _LOGGER.info(f"ensure_correct_state dyn group: {charger.name} {res}/{handled_static}")
+
+            if handled_static:
+                continue
+
             if res is False:
                 return False, None
             # if vcst is None it means the charger is probably unplugged for a long enough time: it is not a problem
@@ -455,9 +461,13 @@ class QSChargerGroup(object):
         # could be plugged, unplugged whatever but in a good state
         _LOGGER.info(
             f"dyn_handle: START")
+
         res_state, verified_correct_state_time = await self.ensure_correct_state(time)
 
-        if res_state:
+        if not res_state:
+            _LOGGER.info(
+                f"dyn_handle: res_state FALSE, do nothing")
+        else:
 
             if self.remaining_budget_to_apply:
                 # in case we would have had increases that could go above the limits because done before the decrease
@@ -2691,7 +2701,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"ensure_correct_state:{self.name} short unplug")
             return False, None # we don't know if final
 
-        return await self._ensure_correct_state(time, probe_only), self._verified_correct_state_time
+        if self.running_command is not None:
+            _LOGGER.info(f"ensure_correct_state:{self.name} running command {self.running_command}")
+            return False, None
+
+        handled = self._probe_and_enforce_stopped_charge_command_state(time, command=self.current_command, probe_only=probe_only)
+        return await self._ensure_correct_state(time, probe_only), handled, self._verified_correct_state_time
 
     async def _ensure_correct_state(self, time, probe_only:bool = False) -> bool:
 
@@ -2725,20 +2740,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 await self._expected_num_active_phases.success(time=time)
 
-        if one_bad is False:
-            max_charging_current = self.get_max_charging_amp_per_phase()
-            if max_charging_current == self._expected_amperage.value:
-                await self._expected_amperage.success(time=time)
-            else:
-                one_bad = True
-                if probe_only is False:
-                    if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                        _LOGGER.info(f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A")
-                        await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
-                    else:
-                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {max_charging_current}A expected {self._expected_amperage.value}A")
 
+        #if we expect a charge stop, if it is stopped the amps is not a mandatory check should only be done if we expect a charge start
         if one_bad is False:
+
             is_charge_enabled = self.is_charge_enabled(time)
             is_charge_disabled = self.is_charge_disabled(time)
 
@@ -2747,13 +2752,31 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if is_charge_disabled is None:
                 _LOGGER.info(f"Ensure State:{self.name} is_charge_disabled state unknown")
 
+            amps_bad_set = True
+            if self._expected_charge_state.value is False and is_charge_disabled:
+                # ok we are in a good stopped state : even if the amperage is not set, we can say that the result will be good
+                amps_bad_set = False
+
+            max_charging_current = self.get_max_charging_amp_per_phase()
+            if max_charging_current == self._expected_amperage.value:
+                await self._expected_amperage.success(time=time)
+            else:
+                one_bad = amps_bad_set
+                _LOGGER.info(
+                    f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A")
+                if probe_only is False:
+                    if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
+                        _LOGGER.info(f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A LAUNCH set_max_charging_current")
+                        await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
+                    else:
+                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {max_charging_current}A expected {self._expected_amperage.value}A")
 
             if not ((self._expected_charge_state.value is True and is_charge_enabled) or (
                 self._expected_charge_state.value is False and is_charge_disabled)):
-                # acknowledge the charging power success above
                 one_bad = True
+                _LOGGER.info(
+                    f"Ensure State:{self.name} expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
                 if probe_only is False:
-                    _LOGGER.info(f"Ensure State:{self.name} expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
                     # if amperage is ok check if charge state is ok
                     if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
                         if self._expected_charge_state.value:
@@ -2764,12 +2787,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             await self.stop_charge(time=time)
                     else:
                         _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
+            else:
+                await self._expected_charge_state.success(time=time)
 
         if one_bad is False:
             _LOGGER.debug(f"Ensure State:{self.name} success amp {self._expected_amperage.value} (#phases: {self._expected_num_active_phases.value})")
-            await self._expected_charge_state.success(time=time)
-            await self._expected_amperage.success(time=time)
-            await self._expected_num_active_phases.success(time=time)
 
             if self._verified_correct_state_time is None:
                 # ok we enter the state knowing where we are
@@ -2923,27 +2945,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_car_stopped_asking_current(time):
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} stopped asking current ... do nothing")
             handled = True
-            if probe_only is False:
-                self._expected_amperage.set(self.charger_default_idle_charge, time) # do not set charger_min_charge as it can be lower than what the car is asking only do that when stopping the charge
-                self._expected_num_active_phases.set(self.current_num_phases, time)
-                self._expected_charge_state.set(True, time) # is it really needed? ... seems so to keep the box in the right state ?
         elif command is None or command.is_off_or_idle():
             handled = True
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} not a running command {command}")
-            if probe_only is False:
-                self._expected_charge_state.set(False, time)
-                self._expected_amperage.set(self.charger_default_idle_charge, time) # do not use charger min charge so next time we plug ...it may work
-                self._expected_num_active_phases.set(self.current_num_phases, time)
         elif command.is_auto() or command.is_like(CMD_ON):
             handled = False
 
         if self.is_in_state_reset():
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name}in state reset at the end .. force an idle like state")
             handled = True
-            if probe_only is False:
-                self._expected_charge_state.set(False, time)
-                self._expected_amperage.set(self.charger_default_idle_charge, time)
-                self._expected_num_active_phases.set(self.current_num_phases, time)
+
+        if probe_only is False and handled is True:
+            self._expected_charge_state.set(False, time)
+            self._expected_amperage.set(self.charger_default_idle_charge, time)
+            self._expected_num_active_phases.set(self.current_num_phases, time)
 
         return handled
 
