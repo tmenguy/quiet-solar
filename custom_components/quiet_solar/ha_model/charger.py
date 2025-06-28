@@ -479,12 +479,17 @@ class QSChargerGroup(object):
 
                 if available_power:
 
+
+
                     last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                     all_p_mean = get_average_sensor(available_power, last_timing=time)
                     last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                     all_p_median = get_median_sensor(available_power, last_timing=time)
 
                     full_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+
+                    _LOGGER.info(
+                        f"dyn_handle: full_available_home_power {full_available_home_power}W, {last_p_mean}, {all_p_mean}, {last_p_median}, {all_p_median}")
 
                     actionable_chargers = []
 
@@ -2795,19 +2800,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
             # if we reset here it will remove the current constraint list from the load!!!!
-            _LOGGER.info(f"update_value_callback: reset because no car or not plugged")
+            _LOGGER.info(f"update_value_callback: {self.name} reset because no car or not plugged")
             return (None, False)
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
-            _LOGGER.info(f"update_value_callback:short unplug")
+            _LOGGER.info(f"update_value_callback: {self.name} short unplug")
             return (None, True)
 
         result_calculus = None
         sensor_result = None
 
         if self.current_command is None or self.current_command.is_off_or_idle():
-            _LOGGER.info(f"update_value_callback:no command or idle/off")
+            _LOGGER.info(f"update_value_callback: {self.name} no command or idle/off")
             result = None
         else:
 
@@ -2825,7 +2830,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if sensor_result is None:
                 if self.car.car_charge_percent_sensor:
                     _LOGGER.info(
-                        f"update_value_callback:use calculus because sensor None {result_calculus}")
+                        f"update_value_callback:{self.name} {self.car.name} use calculus because sensor None {result_calculus}")
                 result = result_calculus
             else:
                 if sensor_result > 99:
@@ -2845,12 +2850,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             is_growing = self.car.is_car_charge_growing(num_seconds=computed_percent_probe_window, time=time)
                             if is_growing is None:
                                 _LOGGER.info(
-                                    f"update_value_callback:use calculus because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
+                                    f"update_value_callback:{self.name} {self.car.name} use calculus because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
                                 result = result_calculus
                             elif is_growing is False:
                                 # we are not growing and we should ...
                                 if computed_percent_probe_window > 5:
-                                    _LOGGER.info(f"update_value_callback:use calculus because sensor not growing (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
+                                    _LOGGER.info(f"update_value_callback:{self.name} {self.car.name} use calculus because sensor not growing (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
                                     result = result_calculus
                             # else : the sensor is growing ... keep it
 
@@ -2865,7 +2870,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # await self._dynamic_compute_and_launch_new_charge_state(time)
             await self.charger_group.dyn_handle(time)
 
-        _LOGGER.info(f"update_value_callback: {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
+        _LOGGER.info(f"update_value_callback:{self.name} {self.car.name}  {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
 
         return (result, do_continue_constraint)
 
