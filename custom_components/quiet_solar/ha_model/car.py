@@ -110,7 +110,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self.get_last_state_value_duration(self.car_plugged,
                                                   states_vals=["on"],
                                                   num_seconds_before=None,
-                                                  time=time)
+                                                  time=time)[0]
 
     def is_car_plugged(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
@@ -122,7 +122,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             contiguous_status = self.get_last_state_value_duration(self.car_plugged,
                                                                    states_vals=["on"],
                                                                    num_seconds_before=8*for_duration,
-                                                                   time=time)
+                                                                   time=time)[0]
             if contiguous_status is not None:
                 return contiguous_status >= for_duration and contiguous_status > 0
             else:
@@ -172,7 +172,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             contiguous_status = self.get_last_state_value_duration(self.car_tracker,
                                                                    states_vals=["home"],
                                                                    num_seconds_before=8*for_duration,
-                                                                   time=time)
+                                                                   time=time)[0]
             if contiguous_status is not None:
                 return contiguous_status >= for_duration and contiguous_status > 0
             else:

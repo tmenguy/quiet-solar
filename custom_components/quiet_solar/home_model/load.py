@@ -38,6 +38,12 @@ def is_amps_zero(amps: list[float | int]) -> bool:
 
     return True
 
+def are_amps_equal(left_amps: list[float | int], right_amps: list[float | int]) -> bool:
+    for i in [0,1,2]:
+        if left_amps[i] != right_amps[i]:
+            return False
+    return True
+
 def is_amps_greater(left_amps: list[float | int], right_amps: list[float | int]):
     for i in range(3):
         if left_amps[i] > right_amps[i]:

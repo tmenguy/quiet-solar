@@ -8,7 +8,8 @@ from typing import Any
 
 from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice, is_amps_greater, diff_amps, add_amps, max_amps, min_amps, is_amps_zero
+from ..home_model.load import AbstractDevice, is_amps_greater, diff_amps, add_amps, max_amps, min_amps, is_amps_zero, \
+    are_amps_equal
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,9 +81,6 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
             return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
-
-        if estimated_current_amps is None:
-            estimated_current_amps = 0.0
 
         phases_amps = self.get_device_amps_consumption(tolerance_seconds=None, time=time)
 
@@ -317,7 +315,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                                 budget_to_allocate = diff_amps(budget_to_allocate, c_budget["current_budget"])
                                 current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
 
-                                if not is_amps_zero(diff_amps(init_budget, c_budget["current_budget"])):
+                                if not are_amps_equal(init_budget, c_budget["current_budget"]):
                                     one_modif = True
 
                             if max(budget_to_allocate) <= 0.01:
@@ -393,7 +391,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                                 c_budget["current_budget"] = max_amps(c_budget["current_budget"], c_budget["min_amp"])
                                 current_budget_spend = add_amps(current_budget_spend, c_budget["current_budget"])
 
-                                if not is_amps_zero(diff_amps(init_budget, c_budget["current_budget"])):
+                                if not are_amps_equal(init_budget, c_budget["current_budget"]):
                                     one_modif = True
 
                         if not is_amps_greater(current_budget_spend, from_father_budget):

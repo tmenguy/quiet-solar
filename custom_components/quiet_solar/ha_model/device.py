@@ -706,7 +706,7 @@ class HADeviceMixin:
                                       time: datetime,
                                       invert_val_probe=False,
                                       allowed_max_holes_s: float | None = None,
-                                      count_only_duration=False) -> float | None:
+                                      count_only_duration=False) -> (float | None, list[tuple[float, datetime, str]]):
 
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
@@ -735,7 +735,7 @@ class HADeviceMixin:
                 from_idx = len(values) - 1
 
         if not values or from_idx < 0:
-            return None
+            return None, []
 
         if allowed_max_holes_s is None:
             if num_seconds_before is None:
@@ -752,6 +752,8 @@ class HADeviceMixin:
         all_invalid = True
 
         had_one_good = False
+
+        ok_ranges = []
 
         for i in range(from_idx, -1, -1):
 
@@ -772,10 +774,11 @@ class HADeviceMixin:
                     val_prob_ok = state in states_vals
 
                 if val_prob_ok:
+                    ok_ranges.append((delta_t, state, ts))
                     state_status_duration += delta_t
                     # if there was some unavailable between the last good state and this one, we reset the hole
                     # and we add the invalid time as "good" time, only if we are between 2 "good" states
-                    if had_one_good:
+                    if count_only_duration is False and had_one_good:
                         state_status_duration += current_hole
 
                     current_hole = 0.0
@@ -792,9 +795,9 @@ class HADeviceMixin:
                     break
 
         if all_invalid:
-            return None
+            return None, ok_ranges
 
-        return state_status_duration
+        return state_status_duration, ok_ranges
 
     def register_all_on_change_states(self):
 
