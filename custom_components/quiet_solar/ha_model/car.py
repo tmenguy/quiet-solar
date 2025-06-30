@@ -328,12 +328,46 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return power, from_power, to_power
 
 
+
+    def _theoretical_max_power(self, amperage:tuple[float,int] | tuple[int,int], delta_amp:float) -> float:
+        if amperage[0] == 0:
+            return 0.0
+        theoretical_power = float(self.home.voltage * max(0.0, amperage[0] + delta_amp))
+        if amperage[1] == 3:
+            theoretical_power = theoretical_power * 3
+        return theoretical_power
+
+
+
     def _add_to_amps_power_graph(self, from_a: tuple[float,int], to_a:tuple[float,int], power_delta: int | float) -> bool:
         from_amp = int(from_a[0] * from_a[1])
         to_amp = int(to_a[0] * to_a[1])
 
         if from_amp == to_amp:
             return False
+
+
+        if from_amp > to_amp:
+
+            if power_delta > 0.0:
+                # we do not allow to add a delta that is positive from a higher amperage to a lower amperage
+                _LOGGER.warning(f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} > to_amp {to_a} with power_delta {power_delta} - ignoring this value")
+                return False
+
+            from_amp, to_amp = to_amp, from_amp
+            from_a, to_a = to_a, from_a
+            power_delta = -power_delta
+
+
+        from_theoretical = self._theoretical_max_power(from_a, -0.6)
+        to_theoretical = self._theoretical_max_power(to_a, 0.6)
+
+        if power_delta > to_theoretical - from_theoretical:
+            _LOGGER.warning(
+                f"_add_to_amps_power_graph: {self.name} power_delta {power_delta} > theoretical_delta {to_theoretical - from_theoretical} from {from_a} to {to_a} - ignoring this value"
+            )
+            return False
+
 
         self._dampening_deltas[(from_amp, to_amp)] = power_delta
         self._dampening_deltas[(to_amp, from_amp)] = -power_delta
@@ -346,21 +380,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return True
 
 
-
     def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
 
         do_update = False
-        done_graph = False
 
         if amperage_transition is None and amperage is None:
             return do_update
 
         if amperage_transition is not None:
-
-            if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
-                return do_update
-
-            done_graph = True
 
             if amperage is None:
                 if amperage_transition[0][0] == 0:
@@ -369,11 +396,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     amperage = amperage_transition[0]
                     power_value_or_delta = -power_value_or_delta
 
+            if amperage is None:
+
+                if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
+                    return do_update
+
 
         if amperage is not None:
 
             if amperage[0] < self.car_charger_min_charge or amperage[0] > self.car_charger_max_charge:
                 return False
+
 
             if amperage[1] == 3:
                 for_3p = True
@@ -382,11 +415,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             amps_val = int(amperage[0])
 
-            if done_graph is False:
-                if self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta) is False:
-                    return do_update
 
 
+            if self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta) is False:
+                return do_update
 
             if power_value_or_delta < MIN_CHARGE_POWER_W:
                 # we may have a 0 value for a given amperage actually it could change the min and max amperage

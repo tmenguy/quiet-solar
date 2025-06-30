@@ -217,7 +217,6 @@ class QSChargerStatus(object):
         self.current_active_phase_number = None
         self.possible_amps = None
         self.possible_num_phases = None
-        self.best_power_measure = None
         self.budgeted_amp = None
         self.budgeted_num_phases = None
         self.charge_score = 0
@@ -232,7 +231,6 @@ class QSChargerStatus(object):
         d.current_active_phase_number = self.current_active_phase_number
         d.possible_amps = copy.copy(self.possible_amps)
         d.possible_num_phases = copy.copy(self.possible_num_phases)
-        d.best_power_measure = self.best_power_measure
         d.budgeted_amp = self.budgeted_amp
         d.budgeted_num_phases = self.budgeted_num_phases
         d.charge_score = self.charge_score
@@ -264,13 +262,6 @@ class QSChargerStatus(object):
         diff_power, old_power, new_power = self.charger.get_delta_dampened_power(old_amp, old_num_phases, new_amp, new_num_phases)
 
         if diff_power is None and old_power is not None and new_power is not None:
-
-            if old_amp*old_num_phases == self.current_real_max_charging_amp*self.current_active_phase_number:
-                old_power = self.best_power_measure
-
-            if new_amp*new_num_phases == self.current_real_max_charging_amp*self.current_active_phase_number:
-                new_power = self.best_power_measure
-
             diff_power = new_power - old_power
 
         return diff_power
@@ -513,9 +504,7 @@ class QSChargerGroup(object):
                     _LOGGER.info(
                         f"dyn_handle: full_available_home_power {full_available_home_power}W, {last_p_mean}, {all_p_mean}, {last_p_median}, {all_p_median}")
 
-
-
-                    sum_power_from_chargers = 0.0
+                    dampened_chargers = {}
 
                     for cs in actionable_chargers:
 
@@ -524,14 +513,13 @@ class QSChargerGroup(object):
                         if (charger._expected_charge_state.value is True and
                             cs.current_real_max_charging_amp >= charger.min_charge and
                             cs.accurate_current_power is not None and
-                            cs.accurate_current_power > 0):
+                            charger.dampening_power_value_for_car_consumption(cs.accurate_current_power) > 0):
                             charger.update_car_dampening_value(time=time,
                                                                amperage=(cs.current_real_max_charging_amp, cs.current_active_phase_number),
                                                                amperage_transition=None,
                                                                power_value_or_delta=cs.accurate_current_power,
                                                                can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
-
-                        sum_power_from_chargers += cs.best_power_measure
+                            dampened_chargers[charger] = cs
 
 
                     a_charging_cs = None
@@ -547,14 +535,40 @@ class QSChargerGroup(object):
                             num_charging_cs += 1
 
                     # we can update a bit the dampening for the only one charging if we do have a global counter for the group
-                    if num_charging_cs == 1 and current_real_cars_power is not None:
+                    num_true_charging_cs = 0
+                    charging = []
+                    reason = ""
+                    for c in self._chargers:
+
+                        if c.qs_enable_device is False:
+                            num_true_charging_cs = 0
+                            # can't dampen if the charger is not enabled
+                            reason = f"{c.name} qs disabled"
+                            break
+
+                        is_charger_zero = c.is_charging_power_zero(time=time, for_duration=CHARGER_ADAPTATION_WINDOW)
+                        if is_charger_zero is None:
+                            num_true_charging_cs = 0
+                            # can't dampen if the charger is not enabled
+                            reason = f"{c.name} is_charger_zero None"
+                            break
+                        elif is_charger_zero is False:
+                            num_true_charging_cs += 1
+                            charging.append(c.name)
+
+
+                    if num_true_charging_cs ==1 and num_charging_cs == 1 and current_real_cars_power is not None and a_charging_cs.charger.dampening_power_value_for_car_consumption(current_real_cars_power) > 0 and a_charging_cs not in dampened_chargers:
                         _LOGGER.info(
-                            f"dyn_handle: dampening simple case")
+                            f"dyn_handle: dampening simple case {a_charging_cs.charger.name} {current_real_cars_power}W for {a_charging_cs.current_real_max_charging_amp}A #phases{ a_charging_cs.current_active_phase_number}")
                         a_charging_cs.charger.update_car_dampening_value(time=time,
                                                                          amperage=(a_charging_cs.current_real_max_charging_amp, a_charging_cs.current_active_phase_number),
                                                                          amperage_transition=None,
                                                                          power_value_or_delta=current_real_cars_power,
                                                                          can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+                    else:
+                        _LOGGER.info(
+                            f"dyn_handle: can't dampen simple case {num_true_charging_cs} {charging} {reason}")
+
 
 
                     # check the current state of the chargers to see if we can try to map the delta power properly
@@ -571,11 +585,12 @@ class QSChargerGroup(object):
                                     last_changed_charger = c
 
                         if last_changed_charger and num_changes == 1:
-                            _LOGGER.info(
-                                f"dyn_handle: dampening transition case")
                             # great we do have a single change in the chargers, and we do have the previous cars power
-                            # we can save the transition from self.know_reduced_state[c] to  current_reduced_states[c]
+                            # we can save the transition from self.know_reduced_state[c] to current_reduced_states[c]
                             delta_power = current_real_cars_power - self.know_reduced_state_real_power
+
+                            _LOGGER.info(
+                                f"dyn_handle: dampening transition case {last_changed_charger.charger.name} from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} delta {delta_power}W ({current_real_cars_power} - {self.know_reduced_state_real_power})")
                             last_changed_charger.update_car_dampening_value(time=time,
                                                                             amperage=None,
                                                                             amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
@@ -726,7 +741,7 @@ class QSChargerGroup(object):
                                                                                                 increase=increase)
                     if next_possible_budgeted_amp is None:
                         _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): forbid change because of can_change_budget budgeted_amp {cs.budgeted_amp} num_phases {cs.budgeted_num_phases} increase {increase}")
+                            f"budgeting_algorithm_minimize_diffs ({cs.charger.name}): forbid change because of can_change_budget possible_amps {cs.possible_amps} current_amps {cs.get_current_charging_amps()} budgeted_amp {cs.get_budget_amps()} increase {increase}")
                     else:
 
                         diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
@@ -1243,7 +1258,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_latitude = kwargs.pop(CONF_CHARGER_LATITUDE, None)
         self.charger_longitude = kwargs.pop(CONF_CHARGER_LONGITUDE, None)
 
-        self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 50)
+        self.charger_consumption_W = kwargs.pop(CONF_CHARGER_CONSUMPTION, 70)
 
         self.charger_status_sensor = kwargs.pop(CONF_CHARGER_STATUS_SENSOR, None)
 
@@ -1546,15 +1561,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif cs.current_real_max_charging_amp < self.min_charge:
             cs.current_real_max_charging_amp = 0
 
-        cs.best_power_measure = 0.0
-        if cs.accurate_current_power is not None:
-            cs.best_power_measure =  cs.accurate_current_power
-        elif cs.secondary_current_power is not None:
-            cs.best_power_measure = cs.secondary_current_power
-        elif self._expected_charge_state.value is True and cs.current_real_max_charging_amp >= self.min_charge:
-            pstep, _, _ = self.car.get_charge_power_per_phase_A(cs.current_active_phase_number==3)
-            cs.best_power_measure = pstep[cs.current_real_max_charging_amp]
-
 
         current_state = True
         if cs.current_real_max_charging_amp == 0:
@@ -1698,7 +1704,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         score += max_battery - ((car_battery_capacity*car_percent)/100.0)
 
 
-        _LOGGER.info(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} {score}")
+        _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} for {self.car.name} score:{score} possible_amps:{cs.possible_amps} possible_num_phases:{cs.possible_num_phases} current_amps:{cs.get_current_charging_amps()} command:{cs.command}")
 
         cs.charge_score = score
 
@@ -2594,12 +2600,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return result
 
-    def is_charging_power_zero(self, time: datetime, for_duration: float) -> bool:
-        val = self.get_median_power(for_duration, time)
+    def is_charging_power_zero(self, time: datetime, for_duration: float) -> bool | None:
+        val = self.get_median_power(for_duration, time, use_fallback_command=False)
         if val is None:
-            return False
+            return None
 
-        return self.dampening_power_value_for_car_consumption(val) == 0.0  # 50 W of consumption for the charger for ex
+        return self.dampening_power_value_for_car_consumption(val) == 0.0  # 70 W of consumption for the charger for ex
 
 
     async def set_max_charging_current(self, current, time: datetime, for_default_when_unplugged=False):
