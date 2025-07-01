@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta
 from unittest import TestCase
-import numpy as np
-import pytz
-from homeassistant.core import State
 
-from quiet_solar.ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
-from quiet_solar.home_model.load import AbstractLoad, align_time_series_and_values
+import pytz
+
+
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
+from custom_components.quiet_solar.home_model.load import AbstractLoad, align_time_series_and_values
 
 
 class QSCTest(HADeviceMixin, AbstractLoad):

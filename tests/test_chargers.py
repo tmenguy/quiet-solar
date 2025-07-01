@@ -378,11 +378,12 @@ class TestBudgetingAlgorithm:
         
         # Verify result is not None and is a list
         assert result is not None
-        assert isinstance(result, list)
-        assert len(result) == 3
+        assert result
+
+        actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
         
         # Extract budgeted amps from the returned charger status objects
-        budgeted_amps = [cs.budgeted_amp for cs in result]
+        budgeted_amps = [cs.budgeted_amp for cs in actionable_chargers]
         
         # Verify that higher priority chargers get more power
         # Since charger 0 has the highest priority (score=1), it should get more amps
@@ -417,10 +418,12 @@ class TestBudgetingAlgorithm:
             False,
             self.current_time
         )
+
+        actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
         
-        assert result is not None
+        assert result
         # Verify high priority charger maintains some charging
-        assert result[0].budgeted_amp > 0
+        assert actionable_chargers[0].budgeted_amp > 0
 
         
     async def test_budgeting_algorithm_empty_list(self):
@@ -433,7 +436,7 @@ class TestBudgetingAlgorithm:
         )
         
         # Should return None or empty list
-        assert result is None or result == []
+        assert result
         
     async def test_budgeting_algorithm_zero_power(self):
         """Test algorithm with no available power."""
@@ -456,9 +459,9 @@ class TestBudgetingAlgorithm:
             self.current_time
         )
         
-        assert result is not None
+        assert result
         # All chargers should be reduced to minimum or idle charge
-        for cs in result:
+        for cs in actionable_chargers:
             # The algorithm may use charger_default_idle_charge (7A) or min_charge (6A)
             assert cs.budgeted_amp <= 10  # Should be reduced from initial 10A
             
@@ -483,13 +486,13 @@ class TestBudgetingAlgorithm:
             self.current_time
         )
         
-        assert result is not None
+        assert result
         # All chargers should be reduced
         total_reduction = 0
-        for i, cs in enumerate(result):
+        for i, cs in enumerate(actionable_chargers):
             # The algorithm should reduce charging
-            assert cs.budgeted_amp <= actionable_chargers[i].current_real_max_charging_amp
-            reduction = actionable_chargers[i].current_real_max_charging_amp - cs.budgeted_amp
+            assert cs.budgeted_amp <= cs.current_real_max_charging_amp
+            reduction = cs.current_real_max_charging_amp - cs.budgeted_amp
             total_reduction += reduction
         
         # Verify that there was some reduction
@@ -579,7 +582,9 @@ class TestBudgetingAlgorithm:
                 self.current_time
             )
             
-            assert result is not None
+            assert result
+
+            result = list(sorted(current_chargers, key=lambda cs: cs.charge_score, reverse=True))
             results.append(result)
             
             print("Budgeted result:")

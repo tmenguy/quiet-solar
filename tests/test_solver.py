@@ -3,15 +3,15 @@ from unittest import TestCase
 
 import pytz
 
-from quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, FLOATING_PERIOD_S
-from quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
+from custom_components.quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, FLOATING_PERIOD_S
+from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
     LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
-from quiet_solar.home_model.load import TestLoad
-from quiet_solar.home_model.solver import PeriodSolver
+from custom_components.quiet_solar.home_model.load import TestLoad
+from custom_components.quiet_solar.home_model.solver import PeriodSolver
 from datetime import datetime
 from datetime import timedelta
 
-from quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE
+from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE
 
 
 def _util_constraint_save_dump(time, cs):

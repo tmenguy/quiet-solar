@@ -465,8 +465,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
                 self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
 
-                car_percent = self.get_car_charge_percent(time)
-
                 if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
 
                     if self.car_is_custom_power_charge_values_3p is None:
@@ -490,18 +488,30 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return do_update
 
-    def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power):
+    def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power) -> int|float:
 
 
         min_charge = self._conf_car_charger_min_charge
 
         prev_measured_val = customized_amp_to_power[min_charge]
 
+        if prev_measured_val == 0.0 or prev_measured_val > 0 and prev_measured_val < MIN_CHARGE_POWER_W:
+            orig_min_charge = min_charge
+            for i in range(orig_min_charge, self.car_charger_max_charge):
+                prev_measured_val = customized_amp_to_power[i]
+                if prev_measured_val == 0.0 or prev_measured_val > 0 and prev_measured_val < MIN_CHARGE_POWER_W:
+                    min_charge = i + 1
+                    customized_amp_to_power[i] = 0.0
+                else:
+                    break
+
         new_vals: list[float] = [0.0] * (len(theoretical_amp_to_power))
 
         prev_measured_a = min_charge
+        prev_measured_val = customized_amp_to_power[prev_measured_a]
 
-        if prev_measured_val <= 0:
+        # -1 is by default, so we can use it to detect if no value was set
+        if prev_measured_val < 0:
             # compute a best possible first
             prev_measured_val = theoretical_amp_to_power[min_charge]
             first = None
@@ -515,6 +525,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     else:
                         break
 
+            # interpolate the first possible value if we do have some measures, else it will be the theoretical value
             if first is not None and second is not None:
                 first_possible_val = (min_charge - first) * ((customized_amp_to_power[second] -  customized_amp_to_power[first])/(second - first)) + customized_amp_to_power[first]
                 if first_possible_val > 0:
@@ -528,7 +539,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             measured = customized_amp_to_power[a]
 
             if a == self.car_charger_max_charge:
-                if measured <= 0 or (prev_measured_val > 0 and measured > 0 and measured < prev_measured_val):
+                if measured < 0 or (prev_measured_val > 0 and measured > 0 and measured < prev_measured_val):
                     measured = max(prev_measured_val, theoretical_amp_to_power[self.car_charger_max_charge])
 
 
@@ -546,6 +557,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         for a in range(0, len(theoretical_amp_to_power)):
             amp_to_power[a] = new_vals[a]
 
+        return min_charge
+
 
 
 
@@ -558,35 +571,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
             customized_amp_to_power_3p = self.customized_amp_to_power_3p
             customized_amp_to_power_1p = self.customized_amp_to_power_1p
 
-        self._interpolate_power_steps(customized_amp_to_power_3p,
+        min_charge_3p = self._interpolate_power_steps(customized_amp_to_power_3p,
                                       self.theoretical_amp_to_power_3p,
                                       self.amp_to_power_3p)
-        self._interpolate_power_steps(customized_amp_to_power_1p,
+        min_charge_1p = self._interpolate_power_steps(customized_amp_to_power_1p,
                                       self.theoretical_amp_to_power_1p,
                                       self.amp_to_power_1p)
 
-        if do_recompute_min_charge or use_conf_values:
-            init_car_min_charge = self.car_charger_min_charge
+        if use_conf_values:
             self.car_charger_min_charge = self._conf_car_charger_min_charge
-            if use_conf_values is False:
-                for i, val in enumerate(self.amp_to_power_3p):
-                    if i < self._conf_car_charger_min_charge:
-                        continue
-                    if 0 <= val < MIN_CHARGE_POWER_W:
-                        self.car_charger_min_charge = i + 1
-                    else:
-                        break
 
-                for i, val in enumerate(self.amp_to_power_1p):
-                    if i < self.car_charger_min_charge: # use self.car_charger_min_charge instead of self._conf_car_charger_min_charge as it has been updated by the loop above
-                        continue
-                    if 0 <= val < MIN_CHARGE_POWER_W:
-                        self.car_charger_min_charge = i + 1
-                    else:
-                        break
-
-                if init_car_min_charge != self.car_charger_min_charge:
-                    _LOGGER.info(f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}")
+        if do_recompute_min_charge:
+            init_car_min_charge = self.car_charger_min_charge
+            self.car_charger_min_charge = max(min_charge_3p, min_charge_1p)
+            if init_car_min_charge != self.car_charger_min_charge:
+                _LOGGER.info(
+                    f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}")
 
 
     def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:

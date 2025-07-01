@@ -401,7 +401,7 @@ class QSChargerGroup(object):
         if value is None:
             return None
 
-        if value < self.charger_consumption_W:
+        if abs(value) < self.charger_consumption_W:
             return 0.0
         else:
             return value
@@ -558,7 +558,7 @@ class QSChargerGroup(object):
 
                     if num_true_charging_cs <= 1 and num_charging_cs == 1 and current_real_cars_power is not None and a_charging_cs.charger not in dampened_chargers:
                         charger = a_charging_cs.charger
-                        # num_true_charging_cs <= because teh power could be 0 for the charger, so we can dampen it to change the min_charge of the car ...
+                        # num_true_charging_cs <= because the power could be 0 for the charger, so we can dampen it to change the min_charge of the car ...
                         _LOGGER.info(
                             f"dyn_handle: dampening simple case {charger.name} {current_real_cars_power}W for {a_charging_cs.current_real_max_charging_amp}A #phases{ a_charging_cs.current_active_phase_number}")
                         a_charging_cs.charger.update_car_dampening_value(time=time,
@@ -1489,7 +1489,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if value is None:
             return None
 
-        if value < self.charger_consumption_W:
+        if abs(value) < self.charger_consumption_W:
             return 0.0
         else:
             return value
@@ -2994,9 +2994,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def update_car_dampening_value(self, time : datetime, amperage:None|tuple[float,int]|tuple[int,int], amperage_transition: None|tuple[tuple[int,int]|tuple[float,int], tuple[int,int]|tuple[float,int]], power_value_or_delta: float, can_be_saved:bool=False):
         if self.car:
-            if amperage is not None:
-                power_value_or_delta = self.dampening_power_value_for_car_consumption(power_value_or_delta)
-
             if self.car.update_dampening_value(amperage=amperage, amperage_transition=amperage_transition, power_value_or_delta=power_value_or_delta, time=time, can_be_saved=can_be_saved):
                 self.update_power_steps()
 

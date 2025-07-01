@@ -27,6 +27,8 @@ class TestCars(unittest.TestCase):
         }
         car = QSCar(**car_conf)
 
+        assert car.car_charger_min_charge == 7
+
         val, old_power, new_power = car.get_delta_dampened_power(from_amp=7, to_amp=8, from_num_phase=3, to_num_phase=3)
 
         assert val is None
@@ -41,6 +43,10 @@ class TestCars(unittest.TestCase):
         assert val is None
         assert old_power == 600
         assert new_power == 800
+
+        car.update_dampening_value(amperage=(7,3), amperage_transition=None, power_value_or_delta=20,
+                                   time=datetime.datetime.now(), can_be_saved=False)
+        assert car.car_charger_min_charge == 8
 
 
     def test_dampening(self):
