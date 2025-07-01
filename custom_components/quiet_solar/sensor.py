@@ -54,6 +54,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         key="car_soc_percentage",
         translation_key=SENSOR_CAR_SOC_PERCENT,
         native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda device, key: device.get_car_charge_percent(),
     )
