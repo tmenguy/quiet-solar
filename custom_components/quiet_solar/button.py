@@ -11,6 +11,7 @@ from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_
     BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE, \
     BUTTON_LOAD_CLEAN_AND_RESET
 from .entity import QSDeviceEntity
+from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
 from .home_model.load import AbstractDevice, AbstractLoad
@@ -62,6 +63,28 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
 
     return entities
 
+def create_ha_button_for_QSCar(device: QSCar):
+    entities = []
+
+    qs_force_next_charge = QSButtonEntityDescription(
+        key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
+        translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
+        async_press=lambda x: x.device.force_charge_now(),
+        is_available=lambda x: x.device.can_force_a_charge_now()
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_force_next_charge))
+
+    qs_add_default_next_charge = QSButtonEntityDescription(
+        key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
+        translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
+        async_press=lambda x: x.device.add_default_charge(),
+        is_available=lambda x: x.device.can_add_default_charge()
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge))
+
+    return entities
 
 def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     entities = []
@@ -104,6 +127,9 @@ def create_ha_button(device: AbstractDevice):
 
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_button_for_QSChargerGeneric(device))
+
+    if isinstance(device, QSCar):
+        ret.extend(create_ha_button_for_QSCar(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_button_for_AbstractLoad(device))

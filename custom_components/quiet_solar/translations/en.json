@@ -37,7 +37,7 @@
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
-                    "car_is_default": "Is this car the default one? (only put one car with this)",
+                    "car_is_invited": "Is this car a placeholder one for a guest?",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",
@@ -325,6 +325,9 @@
             },
             "selected_car_for_charger": {
                 "name": "Selected Car:"
+            },
+            "selected_charger_for_car": {
+                "name": "Connected Charger:"
             }
         },
         "sensor": {
@@ -426,7 +429,7 @@
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
-                    "car_is_default": "Is this car the default one? (only put one car with this)",
+                    "car_is_invited": "Is this car a placeholder one for a guest?",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",

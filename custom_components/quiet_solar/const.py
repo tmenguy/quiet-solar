@@ -75,13 +75,13 @@ CONF_CHARGER_REBOOT_BUTTON = "charger_reboot_button"
 CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
 CHARGER_NO_CAR_CONNECTED = "No car connected"
-
+CAR_NO_CHARGER_CONNECTED = "Car not connected"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
 CONF_CAR_CHARGE_PERCENT_SENSOR = "car_charge_percent_sensor"
 CONF_CAR_CHARGE_PERCENT_MAX_NUMBER = "car_charge_percent_max_number"
-CONF_CAR_IS_DEFAULT = "car_is_default"
+CONF_CAR_IS_INVITED = "car_is_invited"
 CONF_CAR_BATTERY_CAPACITY = "car_battery_capacity"
 CONF_CAR_CHARGER_MIN_CHARGE = "car_charger_min_charge"
 CONF_CAR_CHARGER_MAX_CHARGE = "car_charger_max_charge"

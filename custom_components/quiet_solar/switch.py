@@ -11,6 +11,7 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 from . import DOMAIN
 from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
     SWITCH_POOL_FORCE_WINTER_MODE, SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY
+from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .entity import QSDeviceEntity
@@ -34,14 +35,37 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
         translation_key=SWITCH_CAR_NEXT_CHARGE_FULL,
     )
 
-    entities.append(QSSwitchEntityChargerFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
+    entities.append(QSSwitchEntityChargerOrCarFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
 
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
     )
 
-    entities.append(QSSwitchEntityCharger(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
+    entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
+
+
+
+    return entities
+
+
+def create_ha_switch_for_QSCar(device: QSCar):
+    entities = []
+
+
+    qs_next_charge_full = QSSwitchEntityDescription(
+        key=SWITCH_CAR_NEXT_CHARGE_FULL,
+        translation_key=SWITCH_CAR_NEXT_CHARGE_FULL,
+    )
+
+    entities.append(QSSwitchEntityChargerOrCarFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
+
+    qs_bump_solar_priority = QSSwitchEntityDescription(
+        key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+    )
+
+    entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
 
 
 
@@ -93,6 +117,9 @@ def create_ha_switch(device: AbstractDevice):
     ret = []
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_switch_for_QSCharger(device))
+
+    if isinstance(device, QSCar):
+        ret.extend(create_ha_switch_for_QSCar(device))
 
     if isinstance(device, QSPool):
         ret.extend(create_ha_switch_for_QSPool(device))
@@ -231,49 +258,71 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
             await self.async_turn_off()
 
 
-class QSSwitchEntityCharger(QSSwitchEntityWithRestore):
+class QSSwitchEntityChargerOrCar(QSSwitchEntityWithRestore):
+
+    def car(self) -> QSCar | None:
+        """Return the car associated with this charger."""
+        if isinstance(self.device, QSChargerGeneric):
+            return self.device.car
+        elif isinstance(self.device, QSCar):
+            return self.device
+        return None
+
+    def charger(self) -> QSChargerGeneric | None:
+        """Return the charger associated with this car."""
+        if isinstance(self.device, QSChargerGeneric):
+            return self.device
+        elif isinstance(self.device, QSCar):
+            return self.device.charger
+        return None
 
     def _set_availabiltiy(self):
 
         if isinstance(self.device, QSChargerGeneric):
             self._attr_available = self.device.car is not None
+            if self.device.qs_enable_device is False:
+                self._attr_available = False
+        elif isinstance(self.device, QSCar):
+            self._attr_available = self.device.charger is not None
+            if self.device.charger is not None and self.device.charger.qs_enable_device is False:
+                self._attr_available = False
         else:
             self._attr_available = True
 
-        if self.device.qs_enable_device is False:
-            self._attr_available = False
 
 
-class QSSwitchEntityChargerFullCharge(QSSwitchEntityCharger):
 
+class QSSwitchEntityChargerOrCarFullCharge(QSSwitchEntityChargerOrCar):
 
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
         self._set_availabiltiy()
         has_set = False
-        if isinstance(self.device, QSChargerGeneric):
-            if self.device.car is not None:
-                if self.device.car.car_default_charge == 100:
-                    # force it at on in case the car wants a hundred anyway
-                    self._attr_is_on = True
-                    has_set = True
+        car = self.car()
+
+        if car is not None:
+            if car.car_default_charge == 100:
+                # force it at on in case the car wants a hundred anyway
+                self._attr_is_on = True
+                has_set = True
 
             if not has_set:
-                self._attr_is_on = self.device.is_next_charge_full()
+                self._attr_is_on = car.is_next_charge_full()
 
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
 
         self._set_availabiltiy()
-        if isinstance(self.device, QSChargerGeneric):
-            if self.device.car is not None:
-                if self.device.car.car_default_charge == 100:
-                    # no need to force the state of the charge here
-                    await self.device.set_next_charge_full_or_not(False)
-                else:
-                    await self.device.set_next_charge_full_or_not(True)
+        car = self.car()
+
+        if car is not None:
+            if car.car_default_charge == 100:
+                # no need to force the state of the charge here
+                await car.set_next_charge_full_or_not(False)
+            else:
+                await car.set_next_charge_full_or_not(True)
 
         self._attr_is_on = True
         self.async_write_ha_state()
@@ -281,15 +330,16 @@ class QSSwitchEntityChargerFullCharge(QSSwitchEntityCharger):
     async def async_turn_off(self, **kwargs: Any) -> None:
 
         self._set_availabiltiy()
-        if isinstance(self.device, QSChargerGeneric):
-            await self.device.set_next_charge_full_or_not(False)
+        car = self.car()
+
+        if car is not None:
+            await car.set_next_charge_full_or_not(False)
 
         has_set = False
-        if isinstance(self.device, QSChargerGeneric):
-            if self.device.car is not None:
-                if self.device.car.car_default_charge == 100:
-                    self._attr_is_on = True
-                    has_set = True
+        if car is not None:
+            if car.car_default_charge == 100:
+                self._attr_is_on = True
+                has_set = True
 
 
         if not has_set:

@@ -18,7 +18,7 @@ from .ha_model.home import QSHome, QSHomeMode
 
 from .home_model.load import AbstractDevice
 from .const import (
-    DOMAIN, CHARGER_NO_CAR_CONNECTED,
+    DOMAIN, CHARGER_NO_CAR_CONNECTED, CAR_NO_CHARGER_CONNECTED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,9 +28,7 @@ class QSSelectEntityDescription(SelectEntityDescription):
     qs_default_option:str | None  = None
 
 
-def create_ha_select_for_QSCar(device: QSCar):
-    entities = []
-    return entities
+
 
 def create_ha_select_for_QSCharger(device: QSChargerGeneric):
     entities = []
@@ -42,6 +40,15 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
     entities.append(QSChargerCarSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
+def create_ha_select_for_QSCar(device: QSCar):
+    entities = []
+
+    selected_car_description = QSSelectEntityDescription(
+        key="selected_charger_for_car",
+        translation_key="selected_charger_for_car",
+    )
+    entities.append(QSCarChargerSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
+    return entities
 
 
 def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
@@ -283,4 +290,97 @@ class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
         self.async_write_ha_state()
 
 
+
+@dataclass
+class QSExtraStoredDataChargerSelect(ExtraStoredData):
+    """Object to hold extra stored data."""
+    user_selected_charger: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dict representation of the text data."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]):
+        """Initialize a stored text state from a dict."""
+        try:
+            return cls(
+                restored["user_selected_charger"],
+            )
+        except KeyError:
+            return None
+
+
+class QSCarChargerSelect(QSBaseSelect, RestoreEntity):
+
+    device: QSCar
+    user_selected_charger: str | None = None
+
+    def __init__(
+        self,
+        data_handler,
+        device: AbstractDevice,
+        description: QSSelectEntityDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        if isinstance(device, QSCar):
+            self._attr_options = device.get_charger_options(datetime.now(pytz.UTC))
+            self._attr_current_option = device.get_current_selected_charger_option()
+
+        super().__init__(data_handler=data_handler, device=device, description=description)
+
+    @property
+    def extra_restore_state_data(self) -> QSExtraStoredDataChargerSelect:
+        """Return sensor specific state data to be restored."""
+        return QSExtraStoredDataChargerSelect(self.user_selected_charger)
+
+    async def async_get_last_select_data(self) -> QSExtraStoredDataChargerSelect | None:
+        """Restore native_value and native_unit_of_measurement."""
+        if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
+            return None
+        return QSExtraStoredDataChargerSelect.from_dict(restored_last_extra_data.as_dict())
+
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to Home Assistant."""
+        self._attr_options = self.device.get_charger_options(datetime.now(pytz.UTC))
+        await super().async_added_to_hass()
+
+        last_sensor_state = await self.async_get_last_select_data()
+        if (
+                not last_sensor_state
+        ):
+            return
+        self.user_selected_car = last_sensor_state.user_selected_charger
+        self._attr_current_option = self.user_selected_charger
+
+        if self.user_selected_car is not None:
+            await self.device.set_user_selected_charger_by_name(datetime.now(pytz.UTC), self.user_selected_charger)
+
+        self.async_write_ha_state()
+
+
+    async def async_select_option(self, option: str) -> None:
+        """Select an option."""
+        self._attr_current_option = option
+        self.user_selected_charger = option
+        await self.device.set_user_selected_charger_by_name(datetime.now(pytz.UTC), option)
+        self.async_write_ha_state()
+
+    @callback
+    def async_update_callback(self, time:datetime) -> None:
+        """Update the entity's state."""
+        if self.hass is None:
+            return
+
+        #if self.entity_description.value_fn is None:
+        self._attr_options = self.device.get_charger_options(time)
+        self._attr_current_option = self.device.get_current_selected_charger_option()
+
+        if self._attr_current_option == CAR_NO_CHARGER_CONNECTED:
+            self.user_selected_charger = None
+
+        self._set_availabiltiy()
+
+        self.async_write_ha_state()
 

@@ -1,14 +1,20 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Callable, Awaitable
+from typing import Any
+
+import pytz
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
-from homeassistant.components import number, homeassistant
-from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
+from homeassistant.components import number
+
+from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
-    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_DEFAULT, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING
+    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, CAR_NO_CHARGER_CONNECTED
 from ..ha_model.device import HADeviceMixin
+from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
 from ..home_model.load import AbstractDevice
+from datetime import time as dt_time
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +31,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_charge_percent_max_number = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, None)
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
-        self.car_is_default = kwargs.pop(CONF_CAR_IS_DEFAULT, False)
+        self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
         self._conf_car_charger_min_charge = self.car_charger_min_charge
@@ -93,7 +99,23 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
 
+        self.charger = None
+        self.do_force_next_charge = False
+        self._is_next_charge_full = False
+        self.user_attached_charger_name : str | None = None
+
+        self.default_charge_time: dt_time | None = None
+
         self.reset()
+
+    def get_platforms(self):
+        parent = super().get_platforms()
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
+        return list(parent)
 
     def reset(self):
         super().reset()
@@ -101,6 +123,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
         self.calendar = self._conf_calendar
+        self.charger = None
+        self.do_force_next_charge = False
+        self.user_attached_charger_name = None
+
+    def attach_charger(self, charger):
+        _LOGGER.info(f"Car {self.name} attached charger {self.charger.name}")
+        charger.attach_car(self)
+
+    def detach_charger(self):
+        if self.charger is not None:
+            _LOGGER.info(f"Car {self.name} detached charger {self.charger.name}")
+            self.charger.detach_car()
+
 
     def get_continuous_plug_duration(self, time:datetime) -> float | None:
 
@@ -596,20 +631,140 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.amp_to_power_1p, self.car_charger_min_charge, self.car_charger_max_charge
 
 
-    def get_platforms(self):
-        parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
-        parent.update([ Platform.SENSOR, Platform.SELECT ])
-        return list(parent)
-
-    async def add_default_charge(self, end_charge:datetime):
+    async def add_default_charge_at_datetime(self, end_charge:datetime):
         if self.calendar is None:
             return
         start_time = end_charge
         end_time = end_charge + timedelta(seconds=60*30)
         await self.set_next_scheduled_event(start_time, end_time, f"Charge {self.name}")
+
+
+    async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None):
+        if self.calendar is None:
+            return
+
+        if default_charge_time is None:
+            _LOGGER.error(f"Car {self.name} cannot add default charge at None time")
+            return
+
+        # compute the next occurrence of the default charge time
+        dt_now = datetime.now(tz=None)
+        next_time = datetime(year=dt_now.year, month=dt_now.month, day=dt_now.day, hour=default_charge_time.hour,
+                             minute=default_charge_time.minute, second=default_charge_time.second)
+        if next_time < dt_now:
+            next_time = next_time + timedelta(days=1)
+
+        next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        await self.add_default_charge_at_datetime(next_time)
+
+
+
+    async def add_default_charge(self):
+        if self.can_add_default_charge():
+            await self.add_default_charge_at_dt_time(self.default_charge_time)
+
+    def can_add_default_charge(self) -> bool:
+        if self.charger is not None and self.calendar is not None:
+            return True
+        return False
+
+    def can_force_a_charge_now(self) -> bool:
+        if self.charger is not None:
+            return True
+        return False
+
+    async def force_charge_now(self):
+        if self.can_force_a_charge_now():
+            self.do_force_next_charge = True
+
+    async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
+
+        target_charge = asked_target_charge
+
+        if target_charge is None:
+
+            target_charge = self.get_car_target_charge()
+
+            if target_charge is not None:
+                await self.set_max_charge_limit(target_charge)
+
+        return target_charge
+
+    async def set_next_charge_full_or_not(self, value: bool):
+        self._is_next_charge_full = value
+
+        new_target = await self.setup_car_charge_target_if_needed()
+
+        if self.charger:
+            if new_target and self.charger._constraints:
+                for ct in self.charger._constraints:
+                    if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
+                        ct.target_value = new_target
+
+    def get_car_target_charge(self):
+
+        if self.is_next_charge_full():
+            target_charge = 100
+        else:
+            target_charge = self.car_default_charge
+
+        return target_charge
+
+    def is_next_charge_full(self) -> bool:
+        return self._is_next_charge_full
+
+
+    @property
+    def qs_bump_solar_charge_priority(self) -> bool:
+        if self.charger is not None:
+            return self.charger.qs_bump_solar_charge_priority
+        return False
+
+    @qs_bump_solar_charge_priority.setter
+    def qs_bump_solar_charge_priority(self, value: bool):
+        if self.charger is not None:
+            self.charger.qs_bump_solar_charge_priority = value
+            return
+
+    def get_charger_options(self, time: datetime)  -> list[str]:
+
+        options = []
+        for charger in self.home._chargers:
+            if charger.is_optimistic_plugged(time):
+                options.append(charger.name)
+            else:
+                charger.user_attached_car_name = None
+
+        options.append(CAR_NO_CHARGER_CONNECTED)
+        return options
+
+
+    def get_current_selected_charger_option(self):
+        if self.charger is None:
+            return CAR_NO_CHARGER_CONNECTED
+        else:
+            return self.charger.name
+
+    async def set_user_selected_charger_by_name(self, time:datetime, charger_name: str):
+
+        # if the car is already attached to a charger, we detach it
+        if self.charger is not None and self.charger.name != charger_name:
+            self.detach_charger()
+
+        if charger_name == CAR_NO_CHARGER_CONNECTED:
+            self.user_attached_charger_name = CAR_NO_CHARGER_CONNECTED
+            return
+
+        self.user_attached_charger_name = None
+
+        charger = None
+        for c in self.home._chargers:
+            if c.name == charger_name:
+                charger = c
+                break
+
+        if charger is not None:
+            await charger.set_user_selected_car_by_name(time=time, car_name=self.name)
 
 
