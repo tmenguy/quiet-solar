@@ -13,7 +13,7 @@ from ..home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-MIN_CHARGE_POWER_W = 150
+MIN_CHARGE_POWER_W = 70
 
 
 class QSCar(HADeviceMixin, AbstractDevice):
@@ -359,10 +359,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             power_delta = -power_delta
 
 
-        from_theoretical = self._theoretical_max_power(from_a, -0.6)
-        to_theoretical = self._theoretical_max_power(to_a, 0.6)
+        from_theoretical = self._theoretical_max_power(from_a, -0.5)
+        to_theoretical = self._theoretical_max_power(to_a, 0.5)
 
-        if power_delta > to_theoretical - from_theoretical:
+        if power_delta - MIN_CHARGE_POWER_W > to_theoretical - from_theoretical:
             _LOGGER.warning(
                 f"_add_to_amps_power_graph: {self.name} power_delta {power_delta} > theoretical_delta {to_theoretical - from_theoretical} from {from_a} to {to_a} - ignoring this value"
             )
@@ -417,12 +417,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
 
-            if self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta) is False:
+            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta) is False:
                 return do_update
 
-            if power_value_or_delta < MIN_CHARGE_POWER_W:
-                # we may have a 0 value for a given amperage actually it could change the min and max amperage
-                power_value_or_delta = 0
 
             if for_3p:
                 old_val = self.amp_to_power_3p[amps_val]
@@ -430,30 +427,41 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 old_val = self.amp_to_power_1p[amps_val]
 
             do_update = False
-            if (power_value_or_delta == 0 or old_val == 0):
+            if (power_value_or_delta < MIN_CHARGE_POWER_W or old_val < MIN_CHARGE_POWER_W):
                 if power_value_or_delta == old_val:
                     do_update = False
                 else:
                     do_update = True
-            elif abs(old_val - power_value_or_delta) > 0.1*max(old_val, power_value_or_delta):
+            elif abs(old_val - power_value_or_delta) > 0.05*max(old_val, power_value_or_delta):
                 do_update = True
 
             if do_update:
 
                 can_be_saved = False
 
-                if for_3p:
-                    self.customized_amp_to_power_3p[amps_val] = float(power_value_or_delta)
-                    if 3*amps_val <= self.car_charger_max_charge and 3*amps_val >= self.car_charger_min_charge:
-                        self.customized_amp_to_power_1p[3*amps_val] = float(power_value_or_delta)
-                else:
-                    self.customized_amp_to_power_1p[amps_val] = float(power_value_or_delta)
-                    if amps_val % 3 == 0 and amps_val//3 >= self.car_charger_min_charge and amps_val//3 <= self.car_charger_max_charge:
-                        self.customized_amp_to_power_3p[amps_val//3] = float(power_value_or_delta)
+                do_recompute_min_charge = can_be_saved
 
-                do_recompute_min_charge = False
-                if can_be_saved and power_value_or_delta == 0:
-                    do_recompute_min_charge = True
+                car_percent = self.get_car_charge_percent(time)
+
+                if power_value_or_delta >= MIN_CHARGE_POWER_W:
+                    if for_3p:
+                        self.customized_amp_to_power_3p[amps_val] = float(power_value_or_delta)
+                        if 3*amps_val <= self.car_charger_max_charge and 3*amps_val >= self.car_charger_min_charge:
+                            self.customized_amp_to_power_1p[3*amps_val] = float(power_value_or_delta)
+                    else:
+                        self.customized_amp_to_power_1p[amps_val] = float(power_value_or_delta)
+                        if amps_val % 3 == 0 and amps_val//3 >= self.car_charger_min_charge and amps_val//3 <= self.car_charger_max_charge:
+                            self.customized_amp_to_power_3p[amps_val//3] = float(power_value_or_delta)
+                elif amps_val <= self._conf_car_charger_min_charge + 2:
+                    power_value_or_delta = 0.0
+                    # limite the possibility to have amps 0
+                    for i in range(0, amps_val+1):
+                        # no need to do per phase for 0: the car won't take current on amps values only
+                        self.customized_amp_to_power_3p[i] = 0.0
+                        self.customized_amp_to_power_1p[i] = 0.0
+
+                    if car_percent is None or car_percent < 90.0:
+                        do_recompute_min_charge = True
 
                 self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
 
@@ -558,6 +566,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       self.amp_to_power_1p)
 
         if do_recompute_min_charge or use_conf_values:
+            init_car_min_charge = self.car_charger_min_charge
             self.car_charger_min_charge = self._conf_car_charger_min_charge
             if use_conf_values is False:
                 for i, val in enumerate(self.amp_to_power_3p):
@@ -575,6 +584,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         self.car_charger_min_charge = i + 1
                     else:
                         break
+
+                if init_car_min_charge != self.car_charger_min_charge:
+                    _LOGGER.info(f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}")
 
 
     def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:
