@@ -555,8 +555,9 @@ class QSChargerGroup(object):
                             num_true_charging_cs += 1
                             charging.append(c.name)
 
-                    charger = a_charging_cs.charger
-                    if num_true_charging_cs <= 1 and num_charging_cs == 1 and current_real_cars_power is not None and charger not in dampened_chargers:
+
+                    if num_true_charging_cs <= 1 and num_charging_cs == 1 and current_real_cars_power is not None and a_charging_cs.charger not in dampened_chargers:
+                        charger = a_charging_cs.charger
                         # num_true_charging_cs <= because teh power could be 0 for the charger, so we can dampen it to change the min_charge of the car ...
                         _LOGGER.info(
                             f"dyn_handle: dampening simple case {charger.name} {current_real_cars_power}W for {a_charging_cs.current_real_max_charging_amp}A #phases{ a_charging_cs.current_active_phase_number}")
