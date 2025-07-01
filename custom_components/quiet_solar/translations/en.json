@@ -272,7 +272,7 @@
                 "name": "Force Current Constraint Done"
             },
             "qs_load_clean_and_reset": {
-                "name": "Force Load Reset and Clean"
+                "name": "BEWARE: Force Reset"
             },
             "qs_load_reset_override_state": {
                 "name": "Reset User Override"
@@ -356,7 +356,10 @@
                 "name": "Constraint Current Value"
             },
             "qs_load_best_power_value": {
-                "name": "QS Load Power Value"
+                "name": "Power Consumption"
+            },
+            "qs_car_soc_percent": {
+                "name": "Current Charge"
             },
             "qs_load_current_command_sensor": {
                 "name": "Load Current Command"

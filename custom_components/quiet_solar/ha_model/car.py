@@ -220,7 +220,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "home"
 
-    def get_car_charge_percent(self, time: datetime, tolerance_seconds: float=4*3600 ) -> float | None:
+    def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float=4*3600 ) -> float | None:
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
     def is_car_charge_growing(self,
@@ -767,4 +767,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if charger is not None:
             await charger.set_user_selected_car_by_name(time=time, car_name=self.name)
 
-
+    async def clean_and_reset(self):
+        if self.charger is not None:
+            await self.charger.clean_and_reset()
+        self.reset()

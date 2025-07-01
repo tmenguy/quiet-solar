@@ -270,12 +270,16 @@ class AbstractDevice(object):
             return ret
 
 
-    def get_current_active_constraint(self, time:datetime) -> LoadConstraint | None:
+    def get_current_active_constraint(self, time:datetime | None = None) -> LoadConstraint | None:
         if self.qs_enable_device is False:
             self._constraints = []
 
         if not self._constraints:
             self._constraints = []
+
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+
         for c in self._constraints:
             if c.is_constraint_active_for_time_period(time):
                 return c
@@ -672,7 +676,7 @@ class AbstractLoad(AbstractDevice):
         await self.on_device_state_change(time, DEVICE_CHANGE_CONSTRAINT_COMPLETED)
 
 
-    def get_active_readable_name(self, time:datetime, filter_for_human_notification=False) -> str | None:
+    def get_active_readable_name(self, time:datetime | None = None, filter_for_human_notification=False) -> str | None:
 
         current_constraint = self.get_current_active_constraint(time)
 

@@ -127,6 +127,8 @@ SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
 SENSOR_CONSTRAINT_SENSOR_CLIMATE = "qs_constraint_sensor_climate"
 SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 
+SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
+
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_15mn": 15*60,
     "qs_no_control_forecast_30mn": 30*60,

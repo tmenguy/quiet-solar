@@ -22,6 +22,7 @@ from .const import (
     QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
+    SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT,
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -31,6 +32,33 @@ from .home_model.load import AbstractDevice, AbstractLoad
 
 def create_ha_sensor_for_QSCar(device: QSCar):
     entities = []
+
+    load_current_command = QSSensorEntityDescription(
+        key="current_constraint",
+        translation_key=SENSOR_CONSTRAINT_SENSOR_CHARGE,
+        value_fn=lambda device, key: "NO CHARGE" if device.charger is None else device.charger.get_active_readable_name(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    load_current_command = QSSensorEntityDescription(
+        key="best_power_value",
+        translation_key=SENSOR_LOAD_BEST_POWER_VALUE,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.POWER,
+        value_fn=lambda device, key: 0.0 if device.charger is None else device.charger.best_power_value,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    load_current_command = QSSensorEntityDescription(
+        key="car_soc_percentage",
+        translation_key=SENSOR_CAR_SOC_PERCENT,
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda device, key: device.get_car_charge_percent(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
     return entities
 
 
@@ -248,8 +276,6 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
             else:
                 self.async_write_ha_state()
                 return
-
-
 
         self._attr_native_value = state
         self.async_write_ha_state()
