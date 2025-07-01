@@ -590,7 +590,7 @@ class QSChargerGroup(object):
                             delta_power = current_real_cars_power - self.know_reduced_state_real_power
 
                             _LOGGER.info(
-                                f"dyn_handle: dampening transition case {last_changed_charger.charger.name} from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} delta {delta_power}W ({current_real_cars_power} - {self.know_reduced_state_real_power})")
+                                f"dyn_handle: dampening transition case {last_changed_charger.name} from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} delta {delta_power}W ({current_real_cars_power} - {self.know_reduced_state_real_power})")
                             last_changed_charger.update_car_dampening_value(time=time,
                                                                             amperage=None,
                                                                             amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
