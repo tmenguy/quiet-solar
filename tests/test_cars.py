@@ -29,7 +29,7 @@ class TestCars(unittest.TestCase):
 
         assert car.car_charger_min_charge == 7
 
-        car.can_dampen_dynamically = True
+        car.can_dampen_strongly_dynamically = True
 
         val = car.get_delta_dampened_power(from_amp=7, to_amp=8, from_num_phase=3, to_num_phase=3)
 
@@ -51,7 +51,7 @@ class TestCars(unittest.TestCase):
         home = QSHome(hass=None, config_entry=None, name="test home")
         car = QSCar(hass=None, home=home, config_entry=None,
                                           name=f"test car")
-        car.can_dampen_dynamically = True
+        car.can_dampen_strongly_dynamically = True
 
         car.update_dampening_value(amperage=None, amperage_transition=((8, 3),(10, 3)), power_value_or_delta=1000, time=datetime.datetime.now(), can_be_saved=False)
 
@@ -74,49 +74,49 @@ class TestCars(unittest.TestCase):
         car.update_dampening_value(amperage=None, amperage_transition=((6,3), (14,3)), power_value_or_delta=2000,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
-        car.update_dampening_value(amperage=None, amperage_transition=((13,3), (14,3)), power_value_or_delta=1000,
+        car.update_dampening_value(amperage=None, amperage_transition=((13,3), (14,3)), power_value_or_delta=500,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
-        car.update_dampening_value(amperage=None, amperage_transition=((7,3), (8,3)), power_value_or_delta=1000,
+        car.update_dampening_value(amperage=None, amperage_transition=((7,3), (8,3)), power_value_or_delta=500,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
-        car.update_dampening_value(amperage=None, amperage_transition=((11,3), (12,3)), power_value_or_delta=1000,
+        car.update_dampening_value(amperage=None, amperage_transition=((11,3), (12,3)), power_value_or_delta=500,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
-        car.update_dampening_value(amperage=None, amperage_transition=((12,3), (13,3)), power_value_or_delta=1000,
+        car.update_dampening_value(amperage=None, amperage_transition=((12,3), (13,3)), power_value_or_delta=500,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
 
         val = car.get_delta_dampened_power(from_amp=14, to_amp=7, from_num_phase=3, to_num_phase=3)
-        assert val == -5499
+        assert val == -3999
 
 
         car.update_dampening_value(amperage=(7,3), amperage_transition=None, power_value_or_delta=1211,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
         val = car.get_delta_dampened_power(from_amp=14, to_amp=0, from_num_phase=3, to_num_phase=3)
-        assert val == -6710
+        assert val == -5210
 
     def test_dampening_phase_changes(self):
         home = QSHome(hass=None, config_entry=None, name="test home")
         car = QSCar(hass=None, home=home, config_entry=None,
                                           name=f"test car")
-        car.can_dampen_dynamically = True
+        car.can_dampen_strongly_dynamically = True
 
-        car.update_dampening_value(amperage=None, amperage_transition=((8, 1),(10, 3)), power_value_or_delta=1000, time=datetime.datetime.now(), can_be_saved=False)
+        car.update_dampening_value(amperage=None, amperage_transition=((8, 1),(10, 3)), power_value_or_delta=4000, time=datetime.datetime.now(), can_be_saved=False)
 
         val = car.get_delta_dampened_power(from_amp=8, from_num_phase=1, to_amp=10, to_num_phase=3)
-        assert val == 1000
+        assert val == 4000
 
         val = car.get_delta_dampened_power(from_amp=10, from_num_phase=3, to_amp=8, to_num_phase=1)
-        assert val == -1000
+        assert val == -4000
 
-        car.update_dampening_value(amperage=None,amperage_transition=((16,1), (10,3)), power_value_or_delta=501, time=datetime.datetime.now(), can_be_saved=False)
+        car.update_dampening_value(amperage=None,amperage_transition=((16,1), (10,3)), power_value_or_delta=2001, time=datetime.datetime.now(), can_be_saved=False)
 
         car.update_dampening_value(amperage=None,amperage_transition=((16,1), (12,3)), power_value_or_delta=3000, time=datetime.datetime.now(), can_be_saved=False)
 
         val = car.get_delta_dampened_power(from_amp=8, to_amp=12, from_num_phase=1, to_num_phase=3)
-        assert val == 3499
+        assert val == 4999
 
         val = car.get_delta_dampened_power(from_amp=8, to_amp=13, from_num_phase=1, to_num_phase=3)
         assert val == 7130.0
@@ -125,20 +125,20 @@ class TestCars(unittest.TestCase):
                                    time=datetime.datetime.now(), can_be_saved=False)
 
 
-        car.update_dampening_value(amperage=None, amperage_transition=((21,1), (18,1)), power_value_or_delta=-900,
+        car.update_dampening_value(amperage=None, amperage_transition=((21,1), (18,1)), power_value_or_delta=-750,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
 
 
         val = car.get_delta_dampened_power(from_amp=14, to_amp=7, from_num_phase=3, to_num_phase=3)
-        assert val == -4100
+        assert val == -4250
 
 
         car.update_dampening_value(amperage=(7,3), amperage_transition=None, power_value_or_delta=4000,
                                    time=datetime.datetime.now(), can_be_saved=False)
 
         val = car.get_delta_dampened_power(from_amp=14, to_amp=0, from_num_phase=3, to_num_phase=3)
-        assert val == -8100
+        assert val == -8250
 
 
 
