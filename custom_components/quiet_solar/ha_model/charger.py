@@ -1973,22 +1973,27 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if best_car is None:
             # there is no good car for this charger: get an invited car that is not already assigned to another charger
-            for car in self.home._cars:
-                if car.car_is_invited and cars_to_charger.get(car) is None:
-                    best_car = car
-                    _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name}")
-                    break
+            if self.car is not None and self.car.car_is_invited:
+                best_car = self.car
+            else:
+                for car in self.home._cars:
+                    if car.car_is_invited and cars_to_charger.get(car) is None:
+                        best_car = car
+                        _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name}")
+                        break
             if best_car is None:
                 best_car = self._default_generic_car
                 _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
         else:
             _LOGGER.info(f"Best Car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}")
-            existing_charger = cars_to_charger.get(best_car)
-            if existing_charger is not None and existing_charger != self:
-                # will force a reset of everything
-                _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
-                existing_charger.detach_car()
-                # hoping we won't have back and forth between chargers
+
+        existing_charger = cars_to_charger.get(best_car)
+        if existing_charger is not None and existing_charger != self:
+            # will force a reset of everything
+            _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
+            existing_charger.detach_car()
+            # hoping we won't have back and forth between chargers
+
         return best_car
 
     def get_car_options(self, time: datetime)  -> list[str]:
