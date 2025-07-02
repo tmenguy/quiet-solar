@@ -310,10 +310,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return None
 
     def _get_power_from_stored_amps(self, from_amp: int | float, from_num_phase: int ) -> None|float:
-        from_power = None
-        if from_amp == 0:
+        if from_amp < self.car_charger_min_charge:
             from_power = 0.0
-        elif from_amp >= self.car_charger_min_charge and from_amp <= self.car_charger_max_charge:
+        else:
+            from_amp = max(min(self.car_charger_max_charge, from_amp), self.car_charger_min_charge)
             if from_num_phase == 1:
                 from_power = self.amp_to_power_1p[from_amp]
             else:
@@ -321,18 +321,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return from_power
 
 
-
-    def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> tuple[float | None, float | None, float | None]:
-
-        from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
-        to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
-
+    def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> float | None:
 
         if from_amp*from_num_phase == to_amp*to_num_phase:
-            return 0.0, from_power, to_power
-
-        if from_power is None or to_power is None:
-            return None, from_power, to_power
+            return 0.0
 
         power = None
 
@@ -353,14 +345,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         p = self._dampening_deltas.get((path[i-1], path[i]))
                         if p is None:
                             _LOGGER.error(f"get_delta_dampened_power path in error: Car {self.name} deltas {self._dampening_deltas} graph {self._dampening_deltas_graph} from_amp {from_amp} to_amp {to_amp} path[i-1] {path[i-1]} path[i] {path[i]}")
-                            return None, from_power, to_power
+                            power = None
+                            break
 
                         power += p
                 elif path:
                     _LOGGER.error(
                         f"get_delta_dampened_power path error: Car {self.name} deltas {self._dampening_deltas} graph {self._dampening_deltas_graph} from_amp {from_amp} to_amp {to_amp}")
 
-        return power, from_power, to_power
+        if power is None:
+            from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
+            to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
+
+            if from_power is not None and to_power is not None:
+                power = to_power - from_power
+
+        return power
 
 
 
