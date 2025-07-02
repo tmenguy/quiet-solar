@@ -146,6 +146,17 @@ async def async_setup_entry(
 
     return
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+    device = hass.data[DOMAIN].get(entry.entry_id)
+    if device:
+        try:
+            if device.home:
+                device.home.remove_device(device)
+        except Exception as e:
+            pass
+
+
+    return True
 
 @dataclass(frozen=True, kw_only=True)
 class QSSwitchEntityDescription(SwitchEntityDescription):

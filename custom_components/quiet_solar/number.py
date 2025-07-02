@@ -64,6 +64,17 @@ async def async_setup_entry(
             async_add_entities(entities)
     return
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+    device = hass.data[DOMAIN].get(entry.entry_id)
+    if device:
+        try:
+            if device.home:
+                device.home.remove_device(device)
+        except Exception as e:
+            pass
+
+
+    return True
 
 class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
     """Implementation of a Qs DateTime sensor."""

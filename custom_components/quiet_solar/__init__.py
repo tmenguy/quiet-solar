@@ -1,6 +1,6 @@
 from __future__ import annotations
+import logging
 
-import asyncio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers.typing import ConfigType
@@ -11,6 +11,7 @@ from .data_handler import QSDataHandler
 
 from homeassistant.helpers import config_validation as cv
 
+_LOGGER = logging.getLogger(__name__)
 
 from .const import (
     DATA_DEVICE_IDS,
@@ -36,12 +37,23 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
     for entry in entries:
         if except_for_entry_id is not None and except_for_entry_id == entry.entry_id:
             continue
-        await hass.config_entries.async_unload(entry.entry_id)
+        try:
+            await hass.config_entries.async_unload(entry.entry_id)
+        except Exception as e:
+            # Log the error but continue with the next entry
+            _LOGGER.error(f"Error unloading entry {entry.entry_id}: {e}")
+
 
     hass.data[DOMAIN] = {}
 
     for entry in entries:
-        await hass.config_entries.async_reload(entry.entry_id)
+        if except_for_entry_id is not None and except_for_entry_id == entry.entry_id:
+            continue
+        try:
+            await hass.config_entries.async_reload(entry.entry_id)
+        except Exception as e:
+            # Log the error but continue with the next entry
+            _LOGGER.error(f"Error reloading entry {entry.entry_id}: {e}")
 
 @callback
 def register_reload_service(hass: HomeAssistant) -> None:
