@@ -331,6 +331,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         power = None
 
+        from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
+        to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
+
         if len(self._dampening_deltas) > 0:
 
             from_amp = from_amp*from_num_phase
@@ -357,9 +360,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         f"get_delta_dampened_power path error: Car {self.name} deltas {self._dampening_deltas} graph {self._dampening_deltas_graph} from_amp {from_amp} to_amp {to_amp}")
 
         if power is None:
-            from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
-            to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
-
             if from_power is not None and to_power is not None:
                 power = to_power - from_power
 
