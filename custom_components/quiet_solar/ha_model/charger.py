@@ -1266,7 +1266,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_three_to_one_phase_switch = kwargs.pop(CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, None)
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
         self.charger_min_charge = kwargs.pop(CONF_CHARGER_MIN_CHARGE, 6)
-        self._charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge, 7))
+        self._charger_default_idle_charge = min(self.charger_max_charge, max(self.charger_min_charge))
         self.charger_reboot_button = kwargs.pop(CONF_CHARGER_REBOOT_BUTTON, None)
 
         self.charger_latitude = kwargs.pop(CONF_CHARGER_LATITUDE, None)
