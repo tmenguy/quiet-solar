@@ -69,7 +69,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.amp_to_power_1p[a] = self.theoretical_amp_to_power_1p[a] = val_1p
             self.amp_to_power_3p[a] = self.theoretical_amp_to_power_3p[a] = val_3p
 
+        self.can_dampen_dynamically = True
         if self.car_use_custom_power_charge_values:
+
+            self.can_dampen_dynamically = False
 
             for a in range(self.car_charger_min_charge, self.car_charger_max_charge + 1):
                 val = float(kwargs.pop(f"charge_{a}", -1))
@@ -392,6 +395,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             from_amp, to_amp = to_amp, from_amp
             from_a, to_a = to_a, from_a
             power_delta = -power_delta
+        else:
+            if power_delta < 0.0:
+                # we do not allow to add a delta that is positive from a higher amperage to a lower amperage
+                _LOGGER.warning(f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} < to_amp {to_a} with power_delta {power_delta} - ignoring this value")
+                return False
 
 
         from_theoretical = self._theoretical_max_power(from_a, -0.5)
@@ -418,6 +426,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
 
         do_update = False
+
+        if self.can_dampen_dynamically is False:
+            _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
+            return do_update
 
         if amperage_transition is None and amperage is None:
             return do_update
