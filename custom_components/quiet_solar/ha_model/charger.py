@@ -90,25 +90,29 @@ _LOGGER = logging.getLogger(__name__)
 
 
 
-CHARGER_MAX_POWER_AMPS_PRECISION = 100  # 100W precision for power
+CHARGER_MAX_POWER_AMPS_PRECISION_W = 100  # 100W precision for power
 CHARGER_MIN_REBOOT_DURATION_S = 120
-CHARGER_ALLOW_RESET_BUDGET_S = 30*60 # to check if a car is now really more important than others and is not charging
 
 
-CHARGER_STATE_REFRESH_INTERVAL = 7
-CHARGER_ADAPTATION_WINDOW = 30
-CHARGER_CHECK_STATE_WINDOW = 15
+CHARGER_STATE_REFRESH_INTERVAL_S = 7
+CHARGER_ADAPTATION_WINDOW_S = 30
+CHARGER_CHECK_STATE_WINDOW_S = 15
 
-CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP = 5*60 # to be sure the car is not asking for current anymore
-CHARGER_LONG_CONNECTION = 60*10
+CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S = 5 * 60 # to be sure the car is not asking for current anymore
+CHARGER_LONG_CONNECTION_S = 60 * 10
 
-CAR_CHARGER_LONG_RELATIONSHIP = 60*60
+CAR_CHARGER_LONG_RELATIONSHIP_S = 60 * 60
 
 STATE_CMD_RETRY_NUMBER = 3
-STATE_CMD_TIME_BETWEEN_RETRY = CHARGER_STATE_REFRESH_INTERVAL * 3
+STATE_CMD_TIME_BETWEEN_RETRY_S = CHARGER_STATE_REFRESH_INTERVAL_S * 3
 
-TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON = 60*10
-TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF = 60*30
+
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 30
+TIME_OK_BETWEEN_BUDGET_RESET_S = 30 * 60 # to check if a car is now really more important than others and is not charging
+TIME_OK_SHOULD_BUDGET_RESET_S = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
+
+
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60*30
 
@@ -195,7 +199,7 @@ class QSStateCmd():
             return True
 
         if self.last_time_set is not None and (
-                time - self.last_time_set).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY:
+                time - self.last_time_set).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY_S:
             return True
 
         return False
@@ -394,7 +398,8 @@ class QSChargerGroup(object):
         self.remaining_budget_to_apply = []
         self.know_reduced_state = None
         self.know_reduced_state_real_power = None
-        self._last_time_reset_possible_budget_detected : datetime | None = None
+        self._last_time_reset_budget_done : datetime | None = None
+        self._last_time_should_reset_budget_received: datetime | None = None
 
         self.charger_consumption_W = 0.0
         for device in dynamic_group._childrens:
@@ -488,16 +493,16 @@ class QSChargerGroup(object):
                 await self.apply_budgets(self.remaining_budget_to_apply, actionable_chargers, time, check_charger_state=True)
                 self.remaining_budget_to_apply = []
             # only take decision if the state is "good" for a while CHARGER_ADAPTATION_WINDOW, for all active chargers
-            elif verified_correct_state_time is not None and (time - verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW:
+            elif verified_correct_state_time is not None and (time - verified_correct_state_time).total_seconds() > CHARGER_ADAPTATION_WINDOW_S:
 
                 # all chargers are now in a correct state, stable enough to do a computation
 
                 # let's compute the current power consummed by all the chargers : we may have it on the group itself ... if it is made of the
                 # chargers only ... or we will have to compute it by asking each chargers
                 current_real_cars_power = self.dynamic_group.get_median_sensor(self.dynamic_group.accurate_power_sensor,
-                                                                                CHARGER_ADAPTATION_WINDOW, time)
+                                                                               CHARGER_ADAPTATION_WINDOW_S, time)
 
-                available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW, time)
+                available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW_S, time)
                 # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this power is available to the car
 
                 if available_power:
@@ -526,7 +531,7 @@ class QSChargerGroup(object):
                                                                amperage=(cs.current_real_max_charging_amp, cs.current_active_phase_number),
                                                                amperage_transition=None,
                                                                power_value_or_delta=cs.accurate_current_power,
-                                                               can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+                                                               can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
                             dampened_chargers[charger] = cs
 
 
@@ -554,7 +559,7 @@ class QSChargerGroup(object):
                             reason = f"{c.name} qs disabled"
                             break
 
-                        is_charger_zero = c.is_charging_power_zero(time=time, for_duration=CHARGER_ADAPTATION_WINDOW)
+                        is_charger_zero = c.is_charging_power_zero(time=time, for_duration=CHARGER_ADAPTATION_WINDOW_S)
                         if is_charger_zero is None:
                             num_true_charging_cs = 0
                             # can't dampen if the charger is not enabled
@@ -574,7 +579,7 @@ class QSChargerGroup(object):
                                                                          amperage=(a_charging_cs.current_real_max_charging_amp, a_charging_cs.current_active_phase_number),
                                                                          amperage_transition=None,
                                                                          power_value_or_delta=current_real_cars_power,
-                                                                         can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+                                                                         can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
                         dampened_chargers[charger] = a_charging_cs
                     else:
                         _LOGGER.info(
@@ -615,22 +620,28 @@ class QSChargerGroup(object):
                                                                                 amperage=None,
                                                                                 amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
                                                                                 power_value_or_delta=delta_power,
-                                                                                can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW))
+                                                                                can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
                             else:
                                 _LOGGER.info(
                                     f"dyn_handle: can't dampening {last_changed_charger.name} current_real_cars_power {current_real_cars_power}W, know_reduced_state_real_power {self.know_reduced_state_real_power}W, from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} so no transition")
 
 
                     allow_budget_reset = False
-                    if self._last_time_reset_possible_budget_detected is not None and (time - self._last_time_reset_possible_budget_detected).total_seconds() > CHARGER_ALLOW_RESET_BUDGET_S:
+                    if self._last_time_reset_budget_done is None or (time - self._last_time_reset_budget_done).total_seconds() > TIME_OK_BETWEEN_BUDGET_RESET_S:
                         allow_budget_reset = True
 
-                    success, is_budget_reset_possible = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, allow_budget_reset, time)
-                    if is_budget_reset_possible:
-                        if self._last_time_reset_possible_budget_detected is None:
-                            self._last_time_reset_possible_budget_detected = time
+                    if self._last_time_should_reset_budget_received is not None and (time - self._last_time_should_reset_budget_received).total_seconds() > TIME_OK_SHOULD_BUDGET_RESET_S:
+                        allow_budget_reset = True
+
+                    success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, allow_budget_reset, time)
+                    if done_reset_budget:
+                        self._last_time_reset_budget_done = time
+                        self._last_time_should_reset_budget_received = None
+                    elif should_do_reset_allocation:
+                        if self._last_time_should_reset_budget_received is None:
+                            self._last_time_should_reset_budget_received = time
                     else:
-                        self._last_time_reset_possible_budget_detected = None
+                        self._last_time_should_reset_budget_received = None
 
                     if success:
                         await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
@@ -663,32 +674,47 @@ class QSChargerGroup(object):
             return False, False
 
 
-    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, allow_budget_reset, time:datetime) -> (bool, bool):
+    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, allow_budget_reset, time:datetime) -> (bool, bool, bool):
 
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
 
         do_reset_allocation = False
-        reset_allocation_possible = False
+        should_do_reset_allocation = False
+
         # try to check if the "best" charger is in fact not charging when another one is charging
-        # allow to stop another one to allow the best one to charge, do that only every hour or so
+        # allow to stop another one to allow the best one to charge, do that only every hour or so or less
         if len(actionable_chargers) > 1:
             # the best one is not charging
-            if actionable_chargers[0].current_real_max_charging_amp == 0:
+            # if actionable_chargers[0].possible_amps[0] is not 0: ... it will be started by nature right after in the normal _do_prepare_budgets_for_algo
+            if actionable_chargers[0].current_real_max_charging_amp == 0 and (actionable_chargers[0].possible_amps[0] == 0 and len(actionable_chargers[0].possible_amps) > 1):
 
-                cs_to_stop = None
+                cs_to_stop_can_now = None
+                cs_to_stop_by_forcing_it = None
                 for i in range(1, len(actionable_chargers)):
                     if actionable_chargers[i].current_real_max_charging_amp > 0 and \
                             actionable_chargers[i].can_be_forced_stopped:
-                        cs_to_stop = actionable_chargers[i]
-                        break
+                        # pick the last possible ones
+                        if actionable_chargers[i].possible_amps[0] == 0:
+                            # we can stop it now
+                            cs_to_stop_can_now = actionable_chargers[i]
+                        else:
+                            cs_to_stop_by_forcing_it = actionable_chargers[i]
 
-                if cs_to_stop is not None:
-                    # ok we may have an opportunity to stop a charger to allow the best one to charge
-                    # check that the last time we did check that was more than an hour ago or so
-                    reset_allocation_possible = True
+                if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
+                    # add the possibility to stop it anyway even if it was not long ago
                     if allow_budget_reset:
                         _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop.name} is")
+                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we can stop it by forcing it")
+                        cs_to_stop_by_forcing_it.possible_amps.insert(0, 0)
+                    cs_to_stop_can_now = cs_to_stop_by_forcing_it
+
+                if cs_to_stop_can_now is not None:
+                    # ok we may have an opportunity to stop a charger to allow the best one to charge
+                    # check that the last time we did check that was more than an hour ago or so
+                    should_do_reset_allocation = True
+                    if allow_budget_reset:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
                         do_reset_allocation = True
 
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers, do_reset_allocation)
@@ -705,7 +731,7 @@ class QSChargerGroup(object):
         if current_ok is False:
             _LOGGER.error(
                 f"budgeting_algorithm_minimize_diffs: CAN'T SHAVE BUDGETS !!!!")
-            return False, reset_allocation_possible
+            return False, should_do_reset_allocation, False
 
         # ok we do have the "best" possible base for the chargers
         diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
@@ -850,7 +876,7 @@ class QSChargerGroup(object):
                     _LOGGER.info(f"dyn_handle: auto-price case")
 
                     best_price = self.home.get_best_tariff(time)
-                    durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW
+                    durations_eval_s = 2 * CHARGER_ADAPTATION_WINDOW_S
                     current_price = self.home.get_tariff(time, time + timedelta(seconds=durations_eval_s))
 
                     # find the smallest possible increment in power
@@ -908,7 +934,7 @@ class QSChargerGroup(object):
                             cs_to_update.budgeted_amp = new_amp_budget
                             cs_to_update.budgeted_num_phases = next_num_phases_budget
 
-        return True, reset_allocation_possible
+        return True, should_do_reset_allocation, do_reset_allocation
 
     async def _do_prepare_budgets_for_algo(self, actionable_chargers, do_reset_allocation):
         current_amps = [0.0, 0.0, 0.0]
@@ -948,7 +974,7 @@ class QSChargerGroup(object):
         ) is False:
             # ok we know it is possible to shave to reach the max phase current, due to the preparation before
             _LOGGER.info(
-                f"budgeting_algorithm_minimize_diffs: group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}")
+                f"_shave_current_budgets: group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}")
             # start decrease the lower scores
             actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score)
             current_ok = False
@@ -988,7 +1014,7 @@ class QSChargerGroup(object):
                                                                              increase=False)
                             if next_amp is not None:
                                 _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs:  shaving {cs.name} from {cs.budgeted_amp} to {next_amp}")
+                                    f"_shave_current_budgets:  shaving {cs.name} from {cs.budgeted_amp} to {next_amp}")
                                 alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
                                 cs.budgeted_amp = next_amp
                                 cs.budgeted_num_phases = next_num_phases
@@ -1021,7 +1047,7 @@ class QSChargerGroup(object):
         ) is False:
             # ouch ... we have to lower the charge of some cars
             _LOGGER.warning(
-                f"budgeting_algorithm_minimize_diffs: need to shave some auto consign"
+                f"_shave_mandatory_budgets: need to shave some auto consign"
             )
 
             # first try to stop auto only
@@ -1429,19 +1455,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         amp = self.min_charge + bisect.bisect_left(steps[self.min_charge:self.max_charge + 1], power)
         if amp <= self.min_charge:
-            if safe_border is False and abs(steps[self.min_charge] - power) > CHARGER_MAX_POWER_AMPS_PRECISION:
+            if safe_border is False and abs(steps[self.min_charge] - power) > CHARGER_MAX_POWER_AMPS_PRECISION_W:
                 amp = None
             else:
                 amp = self.min_charge
         elif amp > self.max_charge:
-            if safe_border is False and abs(steps[self.max_charge] - power) > CHARGER_MAX_POWER_AMPS_PRECISION:
+            if safe_border is False and abs(steps[self.max_charge] - power) > CHARGER_MAX_POWER_AMPS_PRECISION_W:
                 amp = None
             else:
                 amp = self.max_charge
         elif steps[amp] != power:
-            if amp > self.min_charge and abs(steps[amp - 1] - power) < CHARGER_MAX_POWER_AMPS_PRECISION:
+            if amp > self.min_charge and abs(steps[amp - 1] - power) < CHARGER_MAX_POWER_AMPS_PRECISION_W:
                 amp = amp - 1
-            elif amp < self.max_charge and abs(steps[amp + 1] - power) < CHARGER_MAX_POWER_AMPS_PRECISION:
+            elif amp < self.max_charge and abs(steps[amp + 1] - power) < CHARGER_MAX_POWER_AMPS_PRECISION_W:
                 amp = amp + 1
 
         return amp
@@ -1507,7 +1533,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} not enabled in qs")
             return None
 
-        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} no car or no plugged {self.car}")
             return None
 
@@ -1524,9 +1550,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs = QSChargerStatus(self)
 
-        cs.accurate_current_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW, time)
+        cs.accurate_current_power = self.get_median_sensor(self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW_S, time)
 
-        cs.secondary_current_power = self.get_median_sensor(self.secondary_power_sensor, CHARGER_ADAPTATION_WINDOW, time)
+        cs.secondary_current_power = self.get_median_sensor(self.secondary_power_sensor, CHARGER_ADAPTATION_WINDOW_S, time)
 
         cs.current_real_max_charging_amp = self._expected_amperage.value
 
@@ -1615,9 +1641,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             cs.can_be_forced_stopped = can_stop
 
             if current_state is False:
-                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON
+                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
             else:
-                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF
+                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
 
             can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
 
@@ -1750,7 +1776,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         connected_time_delta = None
         if self.car is not None and self.car.name == car.name:
             connected_time_delta = time - self.car_attach_time
-            is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP)
+            is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP_S)
 
 
 
@@ -1779,7 +1805,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             score_plug_bump = 0
             car_plug_res = cache.get(car, {}).get("car_plug_res", "NOT_FOUND")
             if car_plug_res == "NOT_FOUND":
-                car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+                car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
                 if car_plug_res is None:
                     car_plug_res = car.is_car_plugged(time=time)
                 cache.setdefault(car, {})["car_plug_res"] = car_plug_res
@@ -1805,14 +1831,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if charger_plugged_duration >= 0 and car_plugged_duration >= 0:
                     # check they have been roughly connected at the same time
-                    if abs(charger_plugged_duration - car_plugged_duration) < CHARGER_LONG_CONNECTION:
-                        score_plug_time_bump = 1.0 + int((plug_time_span/10.0)*((CHARGER_LONG_CONNECTION - abs(charger_plugged_duration - car_plugged_duration))/CAR_CHARGER_LONG_RELATIONSHIP))
+                    if abs(charger_plugged_duration - car_plugged_duration) < CHARGER_LONG_CONNECTION_S:
+                        score_plug_time_bump = 1.0 + int((plug_time_span/10.0) * ((CHARGER_LONG_CONNECTION_S - abs(charger_plugged_duration - car_plugged_duration)) / CAR_CHARGER_LONG_RELATIONSHIP_S))
 
                 if connected_time_delta is not None :
-                    if connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP):
+                    if connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP_S):
                         # not usefull seeing the return above on is_long_time_attached
                         score_plug_time_bump += 2*(plug_time_span/10.0)
-                    elif connected_time_delta > timedelta(seconds=CHARGER_LONG_CONNECTION):
+                    elif connected_time_delta > timedelta(seconds=CHARGER_LONG_CONNECTION_S):
                         # the current charger has been connected to this car for a long time, we can keep it?
                         score_plug_time_bump += 1.0
 
@@ -1833,7 +1859,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             car_home_res = cache.get(car, {}).get("car_home_res", "NOT_FOUND")
             if car_home_res == "NOT_FOUND":
                 # check if the car is home
-                car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+                car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
                 if car_home_res is None:
                     car_home_res = car.is_car_home(time=time)
                 cache.setdefault(car, {})["car_home_res"] = car_home_res
@@ -1894,7 +1920,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if charger.qs_enable_device is False:
                 continue
 
-            if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+            if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
                 car = charger.car
                 if car is not None and car.name != charger._default_generic_car.name:
@@ -2084,7 +2110,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 await self.reboot(time)
                 return False
 
-        if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
             if self.car:
                 _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
@@ -2101,7 +2127,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only do that if the prev one has done nothing
                 await self.set_max_charging_current(current=self.charger_default_idle_charge, time=time, for_default_when_unplugged=True)
 
-        elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
             existing_constraints = []
             best_car = self.get_best_car(time)
@@ -2508,7 +2534,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_optimistic_plugged(self, time: datetime) -> bool | None:
         is_plugged = self.is_plugged(time=time)
         if is_plugged is None:
-            is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW)
+            is_plugged = self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
 
         return is_plugged
 
@@ -2581,7 +2607,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_car_stopped_asking_current(self, time: datetime) -> bool | None:
 
         result = False
-        if self.is_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW) or self.is_plugged(time=time):
+        if self.is_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S) or self.is_plugged(time=time):
 
             result = None
 
@@ -2595,7 +2621,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             status_vals = self.get_car_stopped_asking_current_status_vals()
 
-            for_duration: float = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP
+            for_duration: float = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S
 
             if status_vals and len(status_vals) > 0:
                 result = self._check_charger_status(status_vals, time, for_duration)
@@ -2724,7 +2750,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                    time=to_time,
                                                                    invert_val_probe=False,
                                                                    count_only_duration=True)[0]
-            if contiguous_status is None or contiguous_status < 2*CHARGER_STATE_REFRESH_INTERVAL:
+            if contiguous_status is None or contiguous_status < 2*CHARGER_STATE_REFRESH_INTERVAL_S:
                 return False
             else:
                 # long enough recognition of a state associated with a reboot, now check that we are no more in this state
@@ -2733,7 +2759,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                        num_seconds_before=reboot_duration_s,
                                                                        time=to_time,
                                                                        invert_val_probe=True)[0]
-                if no_reboot_time is not None and no_reboot_time > 2*CHARGER_STATE_REFRESH_INTERVAL:
+                if no_reboot_time is not None and no_reboot_time > 2*CHARGER_STATE_REFRESH_INTERVAL_S:
                     return True
 
         return True
@@ -2751,7 +2777,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # return None in ths particular case as nothing frm this charger will be actionable
             return None, False, None
 
-        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             # if we reset here it will remove the current constraint list from the load!!!!
             _LOGGER.info(f"ensure_correct_state: {self.name} no car or not plugged")
             return True, False, None
@@ -2887,7 +2913,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         """
         await self._do_update_charger_state(time)
 
-        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW):
+        if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             # if we reset here it will remove the current constraint list from the load!!!!
             _LOGGER.info(f"update_value_callback: {self.name} reset because no car or not plugged")
             return (None, False)
@@ -3079,14 +3105,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result
 
     async def _do_update_charger_state(self, time):
-        if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL:
+        if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL_S:
 
             state = self.hass.states.get(self.charger_max_charging_current_number)
 
             if state is not None:
                 state_time = state.last_updated
 
-                if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL:
+                if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL_S:
                     self._last_charger_state_prob_time = state_time
                 else:
                     _LOGGER.warning(f"Forcing a charger state update!")
