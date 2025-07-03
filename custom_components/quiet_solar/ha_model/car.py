@@ -110,6 +110,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.default_charge_time: dt_time | None = None
 
+        self._qs_bump_solar_priority = False
+
         self.reset()
 
     def get_platforms(self):
@@ -130,6 +132,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.charger = None
         self.do_force_next_charge = False
         self.user_attached_charger_name = None
+
 
     def attach_charger(self, charger):
         _LOGGER.info(f"Car {self.name} attached charger {self.charger.name}")
@@ -767,17 +770,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self._is_next_charge_full
 
 
+
     @property
     def qs_bump_solar_charge_priority(self) -> bool:
-        if self.charger is not None:
-            return self.charger.qs_bump_solar_charge_priority
-        return False
+        return self._qs_bump_solar_priority
 
     @qs_bump_solar_charge_priority.setter
     def qs_bump_solar_charge_priority(self, value: bool):
-        if self.charger is not None:
-            self.charger.qs_bump_solar_charge_priority = value
-            return
+        if value is False:
+            self._qs_bump_solar_priority = False
+        else:
+            # only one can have a bump of the entire chargers list
+            for c in self.home._cars:
+                c.qs_bump_solar_charge_priority = False
+            self._qs_bump_solar_priority = True
+
+
 
     def get_charger_options(self, time: datetime)  -> list[str]:
 

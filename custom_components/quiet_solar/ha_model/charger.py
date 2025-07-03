@@ -1317,9 +1317,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._internal_fake_is_plugged_id = "is_there_a_car_plugged"
 
-
-        self._qs_bump_solar_priority = False
-
         self.car: QSCar | None = None
         self.user_attached_car_name: str | None = None
         self.car_attach_time: datetime | None = None
@@ -1388,18 +1385,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def qs_bump_solar_charge_priority(self) -> bool:
-        return self._qs_bump_solar_priority
+        if self.car is not None:
+            return self.car.qs_bump_solar_charge_priority
+        return False
 
     @qs_bump_solar_charge_priority.setter
     def qs_bump_solar_charge_priority(self, value: bool):
-        if value is False:
-            self._qs_bump_solar_priority = False
-        else:
-            # only one can have a bump of the entire chargers list
-            for c in self.home._chargers:
-                c.qs_bump_solar_charge_priority = False
-            self._qs_bump_solar_priority = True
-
+        if self.car is not None:
+            self.car.qs_bump_solar_charge_priority = value
 
     @property
     def current_num_phases(self) -> int:
@@ -1675,15 +1668,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         score_boost_as_fast_as_possible = 100*score_boost_mandatory
         if ct is not None:
 
-
             time_to_complete_h = None
             score_boost = score_boost_standard_ct
             if ct.as_fast_as_possible:
                 score_boost = score_boost_as_fast_as_possible
             elif ct.is_mandatory:
                 score_boost = score_boost_mandatory
-
-
 
             if ct.as_fast_as_possible:
                 time_to_complete_h = 0
@@ -1696,7 +1686,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
         if self.qs_bump_solar_charge_priority:
-            score += score_boost_as_fast_as_possible * 50 # to be above any mandatory constraint for solar but below an as fast as possible constraint
+            score += score_boost_standard_ct * 50 # to be below any mandatory constraint for solar and as fast as possible constraint
 
         # give more to the ones with the lower car SOC percentage to reach their default target charge
         car_percent = self.car.get_car_charge_percent(time)
