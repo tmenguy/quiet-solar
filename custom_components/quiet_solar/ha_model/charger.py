@@ -224,7 +224,7 @@ class QSChargerStatus(object):
         self.budgeted_amp = None
         self.budgeted_num_phases = None
         self.charge_score = 0
-        self.can_be_forced_stopped = False
+        self.can_be_started_and_stopped = False
 
     def duplicate(self):
         d = QSChargerStatus(self.charger)
@@ -238,7 +238,7 @@ class QSChargerStatus(object):
         d.budgeted_amp = self.budgeted_amp
         d.budgeted_num_phases = self.budgeted_num_phases
         d.charge_score = self.charge_score
-        d.can_be_forced_stopped = self.can_be_forced_stopped
+        d.can_be_started_and_stopped = self.can_be_started_and_stopped
 
     @property
     def name(self) -> str:
@@ -455,6 +455,35 @@ class QSChargerGroup(object):
             cs = charger.get_stable_dynamic_charge_status(time)
             if cs is not None:
                 actionable_chargers.append(cs)
+
+        actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
+
+        # we will know check the ones that had a possible state change blocked or approved, and be sure to align a bit better
+        # those possible changes to not allow a more important one to be stopped because of a negative power budget
+        # if a less important one will continue charging
+
+        for i, cs in enumerate(actionable_chargers):
+
+            if (cs.can_be_started_and_stopped
+                    and i < len(actionable_chargers) - 1
+                    and cs.possible_amps[0] == 0
+                    and len(cs.possible_amps) > 1
+                    and cs.current_real_max_charging_amp > 0):
+                # ok this one may be stopped  .... check if all the "lower ones" can be stopped too, if not forbid its possible stop
+                can_stop = True
+                for j in range(i + 1, len(actionable_chargers)):
+                    next_cs = actionable_chargers[j]
+                    if next_cs.can_be_started_and_stopped and next_cs.possible_amps[0] > 0:
+                        can_stop = False
+                        break
+
+                if can_stop is False:
+                    # we can stop this one, so we will allow it to be stopped
+                    # remove the 0 to not allow to stop it
+                    cs.possible_amps = cs.possible_amps[1:]
+
+
+
 
         return actionable_chargers, verified_correct_state_time
 
@@ -692,7 +721,7 @@ class QSChargerGroup(object):
                 cs_to_stop_by_forcing_it = None
                 for i in range(1, len(actionable_chargers)):
                     if actionable_chargers[i].current_real_max_charging_amp > 0 and \
-                            actionable_chargers[i].can_be_forced_stopped:
+                            actionable_chargers[i].can_be_started_and_stopped:
                         # pick the last possible ones
                         if actionable_chargers[i].possible_amps[0] == 0:
                             # we can stop it now
@@ -700,22 +729,22 @@ class QSChargerGroup(object):
                         else:
                             cs_to_stop_by_forcing_it = actionable_chargers[i]
 
-                if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
-                    # add the possibility to stop it anyway even if it was not long ago
-                    if allow_budget_reset:
-                        _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we can stop it by forcing it")
-                        cs_to_stop_by_forcing_it.possible_amps.insert(0, 0)
-                    cs_to_stop_can_now = cs_to_stop_by_forcing_it
 
-                if cs_to_stop_can_now is not None:
+
+                if cs_to_stop_can_now is not None or cs_to_stop_by_forcing_it is not None:
+
                     # ok we may have an opportunity to stop a charger to allow the best one to charge
                     # check that the last time we did check that was more than an hour ago or so
                     should_do_reset_allocation = True
                     if allow_budget_reset:
-                        _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
-                        do_reset_allocation = True
+
+                        if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
+                            _LOGGER.info(
+                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION FAILED FOR NOW, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we cannot stop it now")
+                        else:
+                            _LOGGER.info(
+                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
+                            do_reset_allocation = True
 
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers, do_reset_allocation)
 
@@ -1058,7 +1087,7 @@ class QSChargerGroup(object):
             actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score)
 
 
-            really_stoppable_shave_cs = [cs for cs in actionable_chargers if cs.can_be_forced_stopped]
+            really_stoppable_shave_cs = [cs for cs in actionable_chargers if cs.can_be_started_and_stopped]
             first_stoppable_shave_cs = [cs for cs in actionable_chargers if
                                         (cs.command.is_like(CMD_AUTO_GREEN_ONLY) or cs.command.is_like(CMD_AUTO_PRICE))]
             shave_only_amps_cs = [cs for cs in actionable_chargers if cs.possible_amps[0] > cs.charger.min_charge]
@@ -1572,7 +1601,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # bu default do not phase switch
         possible_num_phases = [cs.current_active_phase_number]
 
-        cs.can_be_forced_stopped = False
+        cs.can_be_started_and_stopped = False
 
         # we need to force a charge here from a given minimum
         if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
@@ -1627,11 +1656,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # check if it is on or off : can we change from off to on or on to off because of allowed changes
             # check if we need to wait a bit before changing the state of the charger
 
-            can_stop = True
+            cs.can_be_started_and_stopped = True
             if cs.command.is_like(CMD_AUTO_PRICE):
-                can_stop = False
-
-            cs.can_be_forced_stopped = can_stop
+                cs.can_be_started_and_stopped = False
 
             if current_state is False:
                 time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
@@ -1640,15 +1667,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
 
-            if can_change_state and can_stop:
-                possible_amps = [0]
-                possible_amps.extend(run_list)
-            elif can_stop and current_state is False:
-                # force to stay off as we don't have the right to change
-                possible_amps = [0]
-            else:
-                # that may force a change if can_stop False and Current_state is False
-                possible_amps = run_list
+            # that may force a change if can_stop False and Current_state is False
+            possible_amps = run_list
+            if cs.can_be_started_and_stopped:
+                if can_change_state:
+                    possible_amps = [0]
+                    possible_amps.extend(run_list)
+                elif current_state is False:
+                    # we are off and we can't change the state, so we can only stay off
+                    possible_amps = [0]
+
 
             # check if we have the right to change phase number
             if self.can_do_3_to_1_phase_switch():
