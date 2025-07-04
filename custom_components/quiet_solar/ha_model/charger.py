@@ -739,9 +739,20 @@ class QSChargerGroup(object):
                     if allow_budget_reset:
 
                         if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
-                            _LOGGER.info(
-                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION FAILED FOR NOW, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we cannot stop it now")
-                        else:
+
+                            time_to_check = int(min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)*0.9)
+
+                            can_change_state = cs_to_stop_by_forcing_it.charger._expected_charge_state.is_ok_to_set(time, time_to_check)
+
+                            if can_change_state:
+                                _LOGGER.info(
+                                    f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, light forcing {cs_to_stop_by_forcing_it.name} to be allowed to stop")
+                                cs_to_stop_can_now = cs_to_stop_by_forcing_it
+                            else:
+                                _LOGGER.info(
+                                    f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION FAILED FOR NOW, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we cannot stop it now")
+
+                        if cs_to_stop_can_now:
                             _LOGGER.info(
                                 f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
                             do_reset_allocation = True
