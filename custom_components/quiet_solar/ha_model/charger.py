@@ -809,11 +809,6 @@ class QSChargerGroup(object):
                 stop_on_first_change = True
 
 
-        fill_or_empty_charger_individually = False
-        if do_reset_allocation:
-            # force a lot for the best scoring chargers ...
-            fill_or_empty_charger_individually = True
-
         # sort the charger according to their score, if increase put the most important to finish the charge first
         # if decrease: remove charging from less important first (lower score)
         if do_reset_allocation:
@@ -888,12 +883,8 @@ class QSChargerGroup(object):
                                         # we are back on track for solar or we reduced enough
                                         do_stop = True
 
-                        if fill_or_empty_charger_individually:
-                            if do_stop or next_possible_budgeted_amp is None:
-                                # we can't change this charger anymore ... just stop here
-                                break
-                        else:
-                            # only one operation per charger
+                        if do_stop or next_possible_budgeted_amp is None:
+                            # we can't change this charger anymore ... just stop here
                             break
 
                     if do_stop:
