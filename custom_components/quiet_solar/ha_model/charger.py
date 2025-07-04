@@ -809,6 +809,11 @@ class QSChargerGroup(object):
                 stop_on_first_change = True
 
 
+        fill_or_empty_charger_individually = False
+        if do_reset_allocation:
+            # force a lot for the best scoring chargers ...
+            fill_or_empty_charger_individually = True
+
         # sort the charger according to their score, if increase put the most important to finish the charge first
         # if decrease: remove charging from less important first (lower score)
         if do_reset_allocation:
@@ -825,61 +830,71 @@ class QSChargerGroup(object):
             for allow_phase_change in check_phase_change:
                 for cs in actionable_chargers:
 
-                    next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
-                                                                                                allow_phase_change=allow_phase_change,
-                                                                                                increase=increase)
-                    if next_possible_budgeted_amp is None:
-                        _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of can_change_budget possible_amps {cs.possible_amps} current_amps {cs.get_current_charging_amps()} budgeted_amp {cs.get_budget_amps()} increase {increase}")
-                    else:
+                    while True:
 
-                        diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
-
-                        if diff_power is None:
-                            next_possible_budgeted_amp = None
+                        next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
+                                                                                                    allow_phase_change=allow_phase_change,
+                                                                                                    increase=increase)
+                        if next_possible_budgeted_amp is None:
                             _LOGGER.info(
-                                f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of diff_power None power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                                f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of can_change_budget possible_amps {cs.possible_amps} current_amps {cs.get_current_charging_amps()} budgeted_amp {cs.get_budget_amps()} increase {increase}")
                         else:
-                            new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
-                            new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
-                            if increase:
-                                if power_budget - diff_power >= 0:
-                                    # ok good change, we still have some power to give
-                                    pass
-                                else:
-                                    # no we exhausted too far the available solar budget
-                                    _LOGGER.info(
-                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                            diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
 
-                                    next_possible_budgeted_amp = None
-
-                            if next_possible_budgeted_amp is not None:
-                                if self.dynamic_group.is_current_acceptable(
-                                            new_amps=new_alloted_amps,
-                                            estimated_current_amps=current_amps,
-                                            time=time
-                                ) is False:
-                                    next_possible_budgeted_amp = None
-                                    _LOGGER.info(
-                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of dynamic_group new_amps {new_alloted_amps} estimated_current_amps {current_amps}")
-
-                            if next_possible_budgeted_amp is not None:
-
-                                power_budget -= diff_power
-                                alloted_amps = new_alloted_amps
-
+                            if diff_power is None:
+                                next_possible_budgeted_amp = None
                                 _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs ({cs.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
-                                cs.budgeted_amp = next_possible_budgeted_amp
-                                cs.budgeted_num_phases = next_possible_num_phases
+                                    f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of diff_power None power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                            else:
+                                new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
+                                new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
-                                if stop_on_first_change:
-                                    do_stop = True
+                                if increase:
+                                    if power_budget - diff_power >= 0:
+                                        # ok good change, we still have some power to give
+                                        pass
+                                    else:
+                                        # no we exhausted too far the available solar budget
+                                        _LOGGER.info(
+                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
 
-                                if increase is False and power_budget >= 0:
-                                    # we are back on track for solar or we reduced enough
-                                    do_stop = True
+                                        next_possible_budgeted_amp = None
+
+                                if next_possible_budgeted_amp is not None:
+                                    if self.dynamic_group.is_current_acceptable(
+                                                new_amps=new_alloted_amps,
+                                                estimated_current_amps=current_amps,
+                                                time=time
+                                    ) is False:
+                                        next_possible_budgeted_amp = None
+                                        _LOGGER.info(
+                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of dynamic_group new_amps {new_alloted_amps} estimated_current_amps {current_amps}")
+
+                                if next_possible_budgeted_amp is not None:
+
+                                    power_budget -= diff_power
+                                    alloted_amps = new_alloted_amps
+
+                                    _LOGGER.info(
+                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
+                                    cs.budgeted_amp = next_possible_budgeted_amp
+                                    cs.budgeted_num_phases = next_possible_num_phases
+
+                                    if stop_on_first_change:
+                                        do_stop = True
+
+                                    if increase is False and power_budget >= 0:
+                                        # we are back on track for solar or we reduced enough
+                                        do_stop = True
+
+                        if fill_or_empty_charger_individually:
+                            if do_stop or next_possible_budgeted_amp is None:
+                                # we can't change this charger anymore ... just stop here
+                                break
+                        else:
+                            # only one operation per charger
+                            break
 
                     if do_stop:
                         break
