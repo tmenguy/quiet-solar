@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import pytz
 from homeassistant.components.select import SelectEntityDescription, SelectEntity
@@ -26,6 +26,9 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True, kw_only=True)
 class QSSelectEntityDescription(SelectEntityDescription):
     qs_default_option:str | None  = None
+    get_available_options_fn: Callable[[AbstractDevice, str], list[str] | None] | None = None
+    get_current_option_fn   : Callable[[AbstractDevice, str], str|None] | None = None
+    async_set_current_option_fn   : Callable[[AbstractDevice, str, str], Any] | None = None
 
 
 
@@ -36,8 +39,12 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
     selected_car_description = QSSelectEntityDescription(
         key="selected_car_for_charger",
         translation_key="selected_car_for_charger",
+        get_available_options_fn=lambda device, key: device.get_car_options(),
+        get_current_option_fn=lambda device, key: device.get_current_selected_car_option(),
+        async_set_current_option_fn=lambda device, key, option: device.set_user_selected_car_by_name(option),
+
     )
-    entities.append(QSChargerCarSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
 def create_ha_select_for_QSCar(device: QSCar):
@@ -46,8 +53,24 @@ def create_ha_select_for_QSCar(device: QSCar):
     selected_car_description = QSSelectEntityDescription(
         key="selected_charger_for_car",
         translation_key="selected_charger_for_car",
+        get_available_options_fn=lambda device, key: device.get_charger_options(),
+        get_current_option_fn=lambda device, key: device.get_current_selected_charger_option(),
+        async_set_current_option_fn=lambda device, key, option: device.set_user_selected_charger_by_name(option),
+
     )
-    entities.append(QSCarChargerSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+
+
+
+    selected_car_description = QSSelectEntityDescription(
+        key="selected_next_charge_limit_for_car",
+        translation_key="selected_next_charge_limit_for_car",
+        get_available_options_fn=lambda device, key: device.get_car_next_charge_values_options(),
+        get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
+        async_set_current_option_fn=lambda device, key, option: device.set_next_charge_target(option),
+    )
+    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+
     return entities
 
 
@@ -134,16 +157,44 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(data_handler=data_handler, device=device, description=description)
+        self._attr_options = self.get_available_options(description, device)
         self._set_availabiltiy()
         self._do_restore_default = True
+
+    def get_available_options(self, description:QSSelectEntityDescription|None = None, device:AbstractDevice|None=None) -> list[str] | None:
+        """Return the available options."""
+        if description is None:
+            description = self.entity_description
+        if device is None:
+            device = self.device
+
+        if description.get_available_options_fn is None:
+            return description.options
+        else:
+            return description.get_available_options_fn(device, description.key)
+
+    def get_current_option(self) -> str | None:
+        """Return the current option."""
+        if self.entity_description.get_current_option_fn is None:
+            return getattr(self.device, self.entity_description.key)
+        else:
+            return self.entity_description.get_current_option_fn(self.device, self.entity_description.key)
+
+    async def set_current_option(self, option):
+        """Return the current option."""
+        if self.entity_description.async_set_current_option_fn is None:
+            try:
+                setattr(self.device, self.entity_description.key, option)
+            except:
+                _LOGGER.info(
+                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}")
+        else:
+            await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option)
 
     async def async_select_option(self, option: str) -> None:
         """Select an option."""
         self._attr_current_option = option
-        try:
-            setattr(self.device, self.entity_description.key, option)
-        except:
-            _LOGGER.info(f"can't set select option {option} on {self.device.name} for {self.entity_description.key}")
+        await self.set_current_option(option)
         self._set_availabiltiy()
         self.async_write_ha_state()
 
@@ -155,14 +206,16 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
         self._set_availabiltiy()
 
-        #if self.entity_description.value_fn is None:
-        if (option := getattr(self.device, self.entity_description.key)) is None:
-            return
+        self._attr_options = self.get_available_options()
+        self._attr_current_option = self.get_current_option()
 
-        self._attr_current_option = option
         self.async_write_ha_state()
+
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
+        self._attr_options = self.get_available_options()
+        self._attr_current_option = self.get_current_option()
+
         await super().async_added_to_hass()
 
         self._set_availabiltiy()
@@ -172,8 +225,10 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
                 new_option = self.entity_description.qs_default_option.value
                 await self.async_select_option(new_option)
 
+
+
 class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
-    """Entity to represent VAD sensitivity."""
+    """Entity."""
 
     def __init__(
         self,
@@ -182,8 +237,8 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         description: QSSelectEntityDescription,
     ) -> None:
         """Initialize the sensor."""
+        self._do_restore_default = False
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._set_availabiltiy()
         self._do_restore_default = False
 
 
@@ -196,8 +251,7 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         if state is not None and state.state in self.options:
             new_option = state.state
         else:
-            new_option = getattr(self.device, self.entity_description.key, None)
-
+            new_option =self.get_current_option()
 
         if new_option is None and self.entity_description.qs_default_option:
             new_option = self.entity_description.qs_default_option
@@ -206,192 +260,3 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
             new_option = self.options[0]
 
         await self.async_select_option(new_option)
-
-
-@dataclass
-class QSExtraStoredDataCarSelect(ExtraStoredData):
-    """Object to hold extra stored data."""
-    user_selected_car: str | None
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return a dict representation of the text data."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, restored: dict[str, Any]):
-        """Initialize a stored text state from a dict."""
-        try:
-            return cls(
-                restored["user_selected_car"],
-            )
-        except KeyError:
-            return None
-
-class QSChargerCarSelect(QSBaseSelect, RestoreEntity):
-
-    device: QSChargerGeneric
-    user_selected_car: str | None = None
-
-    def __init__(
-        self,
-        data_handler,
-        device: AbstractDevice,
-        description: QSSelectEntityDescription,
-    ) -> None:
-        """Initialize the sensor."""
-        if isinstance(device, QSChargerGeneric):
-            self._attr_options = device.get_car_options(datetime.now(pytz.UTC))
-            self._attr_current_option = device.get_current_selected_car_option()
-
-        super().__init__(data_handler=data_handler, device=device, description=description)
-
-    @property
-    def extra_restore_state_data(self) -> QSExtraStoredDataCarSelect:
-        """Return sensor specific state data to be restored."""
-        return QSExtraStoredDataCarSelect(self.user_selected_car)
-
-    async def async_get_last_select_data(self) -> QSExtraStoredDataCarSelect | None:
-        """Restore native_value and native_unit_of_measurement."""
-        if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
-            return None
-        return QSExtraStoredDataCarSelect.from_dict(restored_last_extra_data.as_dict())
-
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to Home Assistant."""
-        self._attr_options = self.device.get_car_options(datetime.now(pytz.UTC))
-        await super().async_added_to_hass()
-
-        last_sensor_state = await self.async_get_last_select_data()
-        if (
-                not last_sensor_state
-        ):
-            return
-        self.user_selected_car = last_sensor_state.user_selected_car
-        self._attr_current_option = self.user_selected_car
-
-        if self.user_selected_car is not None:
-            await self.device.set_user_selected_car_by_name(datetime.now(pytz.UTC), self.user_selected_car)
-
-        self.async_write_ha_state()
-
-
-    async def async_select_option(self, option: str) -> None:
-        """Select an option."""
-        self._attr_current_option = option
-        self.user_selected_car = option
-        await self.device.set_user_selected_car_by_name(datetime.now(pytz.UTC), option)
-        self.async_write_ha_state()
-
-    @callback
-    def async_update_callback(self, time:datetime) -> None:
-        """Update the entity's state."""
-        if self.hass is None:
-            return
-
-        #if self.entity_description.value_fn is None:
-        self._attr_options = self.device.get_car_options(time)
-        self._attr_current_option = self.device.get_current_selected_car_option()
-
-        if self._attr_current_option == CHARGER_NO_CAR_CONNECTED:
-            self.user_selected_car = None
-
-        self._set_availabiltiy()
-
-        self.async_write_ha_state()
-
-
-
-@dataclass
-class QSExtraStoredDataChargerSelect(ExtraStoredData):
-    """Object to hold extra stored data."""
-    user_selected_charger: str | None
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return a dict representation of the text data."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, restored: dict[str, Any]):
-        """Initialize a stored text state from a dict."""
-        try:
-            return cls(
-                restored["user_selected_charger"],
-            )
-        except KeyError:
-            return None
-
-
-class QSCarChargerSelect(QSBaseSelect, RestoreEntity):
-
-    device: QSCar
-    user_selected_charger: str | None = None
-
-    def __init__(
-        self,
-        data_handler,
-        device: AbstractDevice,
-        description: QSSelectEntityDescription,
-    ) -> None:
-        """Initialize the sensor."""
-        if isinstance(device, QSCar):
-            self._attr_options = device.get_charger_options(datetime.now(pytz.UTC))
-            self._attr_current_option = device.get_current_selected_charger_option()
-
-        super().__init__(data_handler=data_handler, device=device, description=description)
-
-    @property
-    def extra_restore_state_data(self) -> QSExtraStoredDataChargerSelect:
-        """Return sensor specific state data to be restored."""
-        return QSExtraStoredDataChargerSelect(self.user_selected_charger)
-
-    async def async_get_last_select_data(self) -> QSExtraStoredDataChargerSelect | None:
-        """Restore native_value and native_unit_of_measurement."""
-        if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
-            return None
-        return QSExtraStoredDataChargerSelect.from_dict(restored_last_extra_data.as_dict())
-
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to Home Assistant."""
-        self._attr_options = self.device.get_charger_options(datetime.now(pytz.UTC))
-        await super().async_added_to_hass()
-
-        last_sensor_state = await self.async_get_last_select_data()
-        if (
-                not last_sensor_state
-        ):
-            return
-        self.user_selected_car = last_sensor_state.user_selected_charger
-        self._attr_current_option = self.user_selected_charger
-
-        if self.user_selected_car is not None:
-            await self.device.set_user_selected_charger_by_name(datetime.now(pytz.UTC), self.user_selected_charger)
-
-        self.async_write_ha_state()
-
-
-    async def async_select_option(self, option: str) -> None:
-        """Select an option."""
-        self._attr_current_option = option
-        self.user_selected_charger = option
-        await self.device.set_user_selected_charger_by_name(datetime.now(pytz.UTC), option)
-        self.async_write_ha_state()
-
-    @callback
-    def async_update_callback(self, time:datetime) -> None:
-        """Update the entity's state."""
-        if self.hass is None:
-            return
-
-        #if self.entity_description.value_fn is None:
-        self._attr_options = self.device.get_charger_options(time)
-        self._attr_current_option = self.device.get_current_selected_charger_option()
-
-        if self._attr_current_option == CAR_NO_CHARGER_CONNECTED:
-            self.user_selected_charger = None
-
-        self._set_availabiltiy()
-
-        self.async_write_ha_state()
-

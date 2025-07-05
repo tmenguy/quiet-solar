@@ -1,3 +1,4 @@
+import bisect
 import logging
 from datetime import datetime, timedelta
 from typing import Any
@@ -11,7 +12,7 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
-    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, CAR_NO_CHARGER_CONNECTED
+    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, CAR_NO_CHARGER_CONNECTED, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
 from ..home_model.load import AbstractDevice
@@ -30,6 +31,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
         self.car_charge_percent_max_number = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, None)
+        self._conf_car_charge_percent_max_number_steps = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, None)
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
@@ -57,6 +59,25 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.conf_customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
         self.conf_customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
+
+        self.car_charge_percent_max_number_steps = []
+        if self._conf_car_charge_percent_max_number_steps and isinstance(self._conf_car_charge_percent_max_number_steps, str):
+            vals_str = self._conf_car_charge_percent_max_number_steps.split(",")
+            self.car_charge_percent_max_number_steps = []
+            for val in vals_str:
+                try:
+                    v = int(val.strip())
+                    if v >= 0 and v <= 100:
+                        self.car_charge_percent_max_number_steps.append(v)
+                except ValueError:
+                    _LOGGER.error(f"Invalid value {val} for car charge percent max number steps, must be an integer")
+                    self.car_charge_percent_max_number_steps = []
+                    break
+
+            if len(self.car_charge_percent_max_number_steps) > 0:
+                self.car_charge_percent_max_number_steps.sort()
+                if self.car_charge_percent_max_number_steps[-1] != 100:
+                  self.car_charge_percent_max_number_steps.append(100)
 
         super().__init__(**kwargs)
 
@@ -105,7 +126,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.charger = None
         self.do_force_next_charge = False
-        self._is_next_charge_full = False
+
+        self._next_charge_target = None
         self.user_attached_charger_name : str | None = None
 
         self.default_charge_time: dt_time | None = None
@@ -251,13 +273,25 @@ class QSCar(HADeviceMixin, AbstractDevice):
         except TypeError:
             return None
 
-    async def set_max_charge_limit(self, percent):
+    async def adapt_max_charge_limit(self, asked_percent):
 
         if self.car_charge_percent_max_number is None:
             return
 
-        current_charge_limit = self.get_max_charge_limit()
+        percent= asked_percent
+        # in fact stop the charge only at the "default charge" of the carelse ... continue to charge
+        if asked_percent <= self.car_default_charge:
+            percent = self.car_default_charge
 
+        if self.car_charge_percent_max_number_steps and len(self.car_charge_percent_max_number_steps) >= 1:
+            p_idx = bisect.bisect_left(self.car_charge_percent_max_number_steps, percent)
+            if p_idx >= len(self.car_charge_percent_max_number_steps):
+                percent = self.car_charge_percent_max_number_steps[-1]
+            else:
+                # get the one that is the closest to the percent but bigger or equal
+                percent = self.car_charge_percent_max_number_steps[p_idx]
+
+        current_charge_limit = self.get_max_charge_limit()
         if current_charge_limit != percent:
             _LOGGER.info(f"Car {self.name} set max charge limit from {current_charge_limit}% to {percent}%")
 
@@ -714,7 +748,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await self.add_default_charge_at_datetime(next_time)
 
 
-
     async def add_default_charge(self):
         if self.can_add_default_charge():
             await self.add_default_charge_at_dt_time(self.default_charge_time)
@@ -738,16 +771,80 @@ class QSCar(HADeviceMixin, AbstractDevice):
         target_charge = asked_target_charge
 
         if target_charge is None:
-
             target_charge = self.get_car_target_charge()
 
-            if target_charge is not None:
-                await self.set_max_charge_limit(target_charge)
+        if target_charge is not None:
+            await self.adapt_max_charge_limit(target_charge)
 
         return target_charge
 
-    async def set_next_charge_full_or_not(self, value: bool):
-        self._is_next_charge_full = value
+
+
+
+    def get_car_next_charge_values_options(self):
+        time = datetime.now(pytz.UTC)
+        current_soc = self.get_car_charge_percent(time)
+        if current_soc is None:
+            current_soc = 0
+
+        options = set()
+        options.add(100)
+        if current_soc < 90:
+            first = int(current_soc // 10 + 1)
+            if first < 10:
+                for i in range(first, 10):
+                    options.add(i * 10)
+
+        if current_soc < self.car_default_charge:
+            options.add(int(self.car_default_charge))
+
+        #85 is a special case, as it is usefull for NMC cars
+        if current_soc < 85:
+            options.add(85)
+
+        v = int(self.get_car_target_charge())
+        #always add the current set
+        options.add(v)
+
+        options = list(options)
+        options.sort()
+
+        for i in range(len(options)):
+            options[i] = self.get_car_option_charge_from_value(options[i])
+
+        return options
+
+    def get_car_option_charge_from_value(self, value:int|float):
+        value = int(float(value))
+        if value > 100:
+            value = 100
+
+        if value == self.car_default_charge:
+            return f"{value}% - {self.name} default"
+        elif value == 100:
+            return "100% - full"
+        else:
+            return f"{value}%"
+
+
+    async def set_next_charge_target(self, value:int|float|str):
+
+        if isinstance(value, str):
+            if "default" in value:
+                value = self.car_default_charge
+            elif "full" in value:
+                value = 100
+            else:
+                try:
+                    value = value.strip("%")
+                    value = float(value)
+                except ValueError:
+                    _LOGGER.error(f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'")
+                    return
+
+        value = int(value)
+
+        self._next_charge_target = value
 
         new_target = await self.setup_car_charge_target_if_needed()
 
@@ -757,18 +854,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
                         ct.target_value = new_target
 
+    def get_car_target_charge_option(self):
+        return self.get_car_option_charge_from_value(self.get_car_target_charge())
+
     def get_car_target_charge(self):
-
-        if self.is_next_charge_full():
-            target_charge = 100
-        else:
-            target_charge = self.car_default_charge
-
-        return target_charge
-
-    def is_next_charge_full(self) -> bool:
-        return self._is_next_charge_full
-
+        if self._next_charge_target is None:
+            self._next_charge_target = self.car_default_charge
+        return self._next_charge_target
 
 
     @property
@@ -785,9 +877,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 c.qs_bump_solar_charge_priority = False
             self._qs_bump_solar_priority = True
 
+    def get_charger_options(self)  -> list[str]:
 
-
-    def get_charger_options(self, time: datetime)  -> list[str]:
+        time = datetime.now(pytz.UTC)
 
         options = []
         for charger in self.home._chargers:
@@ -806,7 +898,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return self.charger.name
 
-    async def set_user_selected_charger_by_name(self, time:datetime, charger_name: str):
+    async def set_user_selected_charger_by_name(self, charger_name: str):
 
         # if the car is already attached to a charger, we detach it
         if self.charger is not None and self.charger.name != charger_name:
@@ -825,7 +917,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 break
 
         if charger is not None:
-            await charger.set_user_selected_car_by_name(time=time, car_name=self.name)
+            await charger.set_user_selected_car_by_name(car_name=self.name)
 
     async def clean_and_reset(self):
         if self.charger is not None:

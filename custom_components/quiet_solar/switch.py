@@ -29,14 +29,6 @@ from .home_model.load import AbstractDevice, AbstractLoad
 def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     entities = []
 
-
-    qs_next_charge_full = QSSwitchEntityDescription(
-        key=SWITCH_CAR_NEXT_CHARGE_FULL,
-        translation_key=SWITCH_CAR_NEXT_CHARGE_FULL,
-    )
-
-    entities.append(QSSwitchEntityChargerOrCarFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
-
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
@@ -51,14 +43,6 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
 
 def create_ha_switch_for_QSCar(device: QSCar):
     entities = []
-
-
-    qs_next_charge_full = QSSwitchEntityDescription(
-        key=SWITCH_CAR_NEXT_CHARGE_FULL,
-        translation_key=SWITCH_CAR_NEXT_CHARGE_FULL,
-    )
-
-    entities.append(QSSwitchEntityChargerOrCarFullCharge(data_handler=device.data_handler, device=device, description=qs_next_charge_full))
 
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
@@ -301,61 +285,5 @@ class QSSwitchEntityChargerOrCar(QSSwitchEntityWithRestore):
             self._attr_available = True
 
 
-
-
-class QSSwitchEntityChargerOrCarFullCharge(QSSwitchEntityChargerOrCar):
-
-    @callback
-    def async_update_callback(self, time:datetime) -> None:
-        """Update the entity's state."""
-        self._set_availabiltiy()
-        has_set = False
-        car = self.car()
-
-        if car is not None:
-            if car.car_default_charge == 100:
-                # force it at on in case the car wants a hundred anyway
-                self._attr_is_on = True
-                has_set = True
-
-            if not has_set:
-                self._attr_is_on = car.is_next_charge_full()
-
-        self.async_write_ha_state()
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-
-        self._set_availabiltiy()
-        car = self.car()
-
-        if car is not None:
-            if car.car_default_charge == 100:
-                # no need to force the state of the charge here
-                await car.set_next_charge_full_or_not(False)
-            else:
-                await car.set_next_charge_full_or_not(True)
-
-        self._attr_is_on = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-
-        self._set_availabiltiy()
-        car = self.car()
-
-        if car is not None:
-            await car.set_next_charge_full_or_not(False)
-
-        has_set = False
-        if car is not None:
-            if car.car_default_charge == 100:
-                self._attr_is_on = True
-                has_set = True
-
-
-        if not has_set:
-            self._attr_is_on = False
-
-        self.async_write_ha_state()
 
 

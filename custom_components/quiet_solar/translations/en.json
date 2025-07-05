@@ -32,7 +32,8 @@
                 "data": {
                     "calendar": "Add a calendar to define when the car needs to be ready",
                     "car_battery_capacity": "Battery capacity (Wh)",
-                    "car_charge_percent_max_number": "% set car charge limit",
+                    "car_charge_percent_max_number": "% set car charge limit entity",
+                    "car_charge_percent_max_number_steps": "Optional: for the entity above which % values are allowed, comma separated",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
@@ -268,11 +269,11 @@
             "qs_home_serialize_for_debug": {
                 "name": "Quiet Solar Dump for Debug"
             },
-            "qs_load_mark_current_constraint_done": {
-                "name": "Force Current Constraint Done"
-            },
             "qs_load_clean_and_reset": {
                 "name": "BEWARE: Force Reset"
+            },
+            "qs_load_mark_current_constraint_done": {
+                "name": "Force Current Constraint Done"
             },
             "qs_load_reset_override_state": {
                 "name": "Reset User Override"
@@ -328,9 +329,15 @@
             },
             "selected_charger_for_car": {
                 "name": "Connected Charger:"
+            },
+            "selected_next_charge_limit_for_car": {
+                "name": "Next Charge Limit"
             }
         },
         "sensor": {
+            "qs_car_soc_percent": {
+                "name": "Current Charge"
+            },
             "qs_constraint_sensor": {
                 "name": "Next"
             },
@@ -358,9 +365,6 @@
             "qs_load_best_power_value": {
                 "name": "Power Consumption"
             },
-            "qs_car_soc_percent": {
-                "name": "Current Charge"
-            },
             "qs_load_current_command_sensor": {
                 "name": "Load Current Command"
             },
@@ -372,14 +376,14 @@
             "qs_best_effort_green_only": {
                 "name": "Best Effort Green Only"
             },
+            "qs_bump_solar_charge_priority": {
+                "name": "Bump solar charge priority"
+            },
             "qs_enable_device": {
                 "name": "Enabled for quiet solar"
             },
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
-            },
-            "qs_bump_solar_charge_priority": {
-                "name": "Bump solar charge priority"
             },
             "qs_pool_force_winter_mode": {
                 "name": "Force Winter Mode"
@@ -427,7 +431,8 @@
                 "data": {
                     "calendar": "Add a calendar to define when the car needs to be ready",
                     "car_battery_capacity": "Battery capacity (Wh)",
-                    "car_charge_percent_max_number": "% set car charge limit",
+                    "car_charge_percent_max_number": "% set car charge limit entity",
+                    "car_charge_percent_max_number_steps": "Optional: for the entity above which % values are allowed, comma separated",
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",

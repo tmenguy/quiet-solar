@@ -2057,7 +2057,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return best_car
 
-    def get_car_options(self, time: datetime)  -> list[str]:
+    def get_car_options(self)  -> list[str]:
+
+        time = datetime.now(pytz.UTC)
 
         if self.is_optimistic_plugged(time):
             options = []
@@ -2076,10 +2078,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             return self.car.name
 
-    async def set_user_selected_car_by_name(self, time:datetime, car_name: str):
+    async def set_user_selected_car_by_name(self, car_name: str):
         self.user_attached_car_name = car_name
         if self.user_attached_car_name != self.get_current_selected_car_option():
             self.detach_car()
+            time = datetime.now(pytz.UTC)
             if await self.check_load_activity_and_constraints(time):
                 self.home.force_next_solve()
 
@@ -2236,7 +2239,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next full {self.car.is_next_charge_full()} pushed forces constraint {force_constraint.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_charge()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
                 for ct in existing_constraints:
