@@ -12,7 +12,7 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
-    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, CAR_NO_CHARGER_CONNECTED, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
+    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
 from ..home_model.load import AbstractDevice
@@ -888,36 +888,40 @@ class QSCar(HADeviceMixin, AbstractDevice):
             else:
                 charger.user_attached_car_name = None
 
-        options.append(CAR_NO_CHARGER_CONNECTED)
+        options.append(FORCE_CAR_NO_CHARGER_CONNECTED)
         return options
 
 
-    def get_current_selected_charger_option(self):
+    def get_current_selected_charger_option(self) -> str | None:
+        if self.user_attached_charger_name is not None:
+            return self.user_attached_charger_name
+
         if self.charger is None:
-            return CAR_NO_CHARGER_CONNECTED
+            return None
         else:
             return self.charger.name
 
-    async def set_user_selected_charger_by_name(self, charger_name: str):
+    async def set_user_selected_charger_by_name(self, charger_name: str | None):
 
         # if the car is already attached to a charger, we detach it
         if self.charger is not None and self.charger.name != charger_name:
             self.detach_charger()
 
-        if charger_name == CAR_NO_CHARGER_CONNECTED:
-            self.user_attached_charger_name = CAR_NO_CHARGER_CONNECTED
+        if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
+            self.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
             return
 
         self.user_attached_charger_name = None
 
-        charger = None
-        for c in self.home._chargers:
-            if c.name == charger_name:
-                charger = c
-                break
+        if charger_name is not None:
+            charger = None
+            for c in self.home._chargers:
+                if c.name == charger_name:
+                    charger = c
+                    break
 
-        if charger is not None:
-            await charger.set_user_selected_car_by_name(car_name=self.name)
+            if charger is not None:
+                await charger.set_user_selected_car_by_name(car_name=self.name)
 
     async def clean_and_reset(self):
         if self.charger is not None:

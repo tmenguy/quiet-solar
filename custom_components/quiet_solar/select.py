@@ -3,7 +3,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Callable
 
-import pytz
+
 from homeassistant.components.select import SelectEntityDescription, SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -17,9 +17,8 @@ from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome, QSHomeMode
 
 from .home_model.load import AbstractDevice
-from .const import (
-    DOMAIN, CHARGER_NO_CAR_CONNECTED, CAR_NO_CHARGER_CONNECTED,
-)
+from .const import DOMAIN
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_car_by_name(option),
 
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSUserOverrideSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
 def create_ha_select_for_QSCar(device: QSCar):
@@ -58,7 +57,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_charger_by_name(option),
 
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSUserOverrideSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
 
 
 
@@ -69,7 +68,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
         async_set_current_option_fn=lambda device, key, option: device.set_next_charge_target(option),
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
 
     return entities
 
@@ -83,7 +82,7 @@ def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
         options= device.get_bistate_modes(),
         qs_default_option="bistate_mode_default"
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
 
     return entities
 
@@ -97,7 +96,7 @@ def create_ha_select_for_QSHome(device: QSHome):
         options= list(map(str, QSHomeMode)),
         qs_default_option=str(QSHomeMode.HOME_MODE_SENSORS_ONLY.value)
     )
-    entities.append(QSBaseSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
 
     return entities
 
@@ -191,7 +190,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         else:
             await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option)
 
-    async def async_select_option(self, option: str) -> None:
+    async def async_select_option(self, option: str | None) -> None:
         """Select an option."""
         self._attr_current_option = option
         await self.set_current_option(option)
@@ -226,7 +225,6 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
                 await self.async_select_option(new_option)
 
 
-
 class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
     """Entity."""
 
@@ -242,6 +240,9 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         self._do_restore_default = False
 
 
+class QSSimpleSelectRestore(QSBaseSelectRestore):
+    """Entity."""
+
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
@@ -251,7 +252,7 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         if state is not None and state.state in self.options:
             new_option = state.state
         else:
-            new_option =self.get_current_option()
+            new_option = self.get_current_option()
 
         if new_option is None and self.entity_description.qs_default_option:
             new_option = self.entity_description.qs_default_option
@@ -260,3 +261,61 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
             new_option = self.options[0]
 
         await self.async_select_option(new_option)
+
+
+@dataclass
+class QSExtraStoredDataSelect(ExtraStoredData):
+    """Object to hold extra stored data."""
+    user_selected_option: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dict representation of the text data."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]):
+        """Initialize a stored text state from a dict."""
+        try:
+            return cls(
+                restored["user_selected_option"],
+            )
+        except KeyError:
+            return None
+
+class QSUserOverrideSelectRestore(QSBaseSelectRestore):
+
+    user_selected_option: str | None = None
+
+    @property
+    def extra_restore_state_data(self) -> QSExtraStoredDataSelect:
+        """Return sensor specific state data to be restored."""
+        return QSExtraStoredDataSelect(self.user_selected_option)
+
+    async def async_get_last_select_data(self) -> QSExtraStoredDataSelect | None:
+        """Restore native_value and native_unit_of_measurement."""
+        if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
+            return None
+        return QSExtraStoredDataSelect.from_dict(restored_last_extra_data.as_dict())
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to Home Assistant."""
+        await super().async_added_to_hass()
+
+        last_sensor_state = await self.async_get_last_select_data()
+
+        if not last_sensor_state:
+            user_option = None
+        else:
+            user_option = last_sensor_state.user_selected_option
+
+        self.user_selected_option = user_option
+        self._attr_current_option = self.user_selected_option
+
+        await self.async_select_option(self.user_selected_option)
+
+    async def async_select_option(self, option: str) -> None:
+        """Select an option."""
+        self.user_selected_option = option
+        await super().async_select_option(option)
+
+

@@ -77,7 +77,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
     CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
-    CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, CAR_NO_CHARGER_CONNECTED
+    CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, FORCE_CAR_NO_CHARGER_CONNECTED
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -1978,7 +1978,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             for car in self.home._cars:
 
-                if car.user_attached_charger_name == CAR_NO_CHARGER_CONNECTED:
+                if car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
                     continue
 
                 score = charger.get_car_score(car, time, cache)
@@ -2072,15 +2072,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self.user_attached_car_name = None
             return [CHARGER_NO_CAR_CONNECTED]
 
-    def get_current_selected_car_option(self):
+    def get_current_selected_car_option(self) -> str|None:
+        if self.user_attached_car_name is not None:
+            return self.user_attached_car_name
+
         if self.car is None:
-            return CHARGER_NO_CAR_CONNECTED
+            return None
         else:
             return self.car.name
 
-    async def set_user_selected_car_by_name(self, car_name: str):
+    async def set_user_selected_car_by_name(self, car_name: str | None):
         self.user_attached_car_name = car_name
-        if self.user_attached_car_name != self.get_current_selected_car_option():
+        if self.car is not None and self.car.name != car_name:
             self.detach_car()
             time = datetime.now(pytz.UTC)
             if await self.check_load_activity_and_constraints(time):

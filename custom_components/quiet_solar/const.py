@@ -75,7 +75,7 @@ CONF_CHARGER_REBOOT_BUTTON = "charger_reboot_button"
 CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
 CHARGER_NO_CAR_CONNECTED = "No car connected"
-CAR_NO_CHARGER_CONNECTED = "Car not connected"
+FORCE_CAR_NO_CHARGER_CONNECTED = "Force Car not connected"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
