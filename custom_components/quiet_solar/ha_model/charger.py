@@ -127,8 +127,9 @@ class QSChargerStates(StrEnum):
 
 class QSStateCmd():
 
-    def __init__(self):
+    def __init__(self, initial_num_in_out_immediate:int=0):
         self.reset()
+        self.initial_num_in_out_immediate = initial_num_in_out_immediate
 
     def reset(self):
         self.value = None
@@ -167,7 +168,7 @@ class QSStateCmd():
             return True
 
         # for initial in/out!
-        if self._num_set <= 2:
+        if self._num_set <= self.initial_num_in_out_immediate:
             return True
 
         if (time - self.last_change_asked).total_seconds() > min_change_time:
@@ -713,12 +714,25 @@ class QSChargerGroup(object):
         # try to check if the "best" charger is in fact not charging when another one is charging
         # allow to stop another one to allow the best one to charge, do that only every hour or so or less
         if len(actionable_chargers) > 1:
+
+            cs_to_stop_can_now = None
+            cs_to_stop_by_forcing_it = None
+
+            do_try_to_stop_other_chargers = False
             # the best one is not charging
             # if actionable_chargers[0].possible_amps[0] is not 0: ... it will be started by nature right after in the normal _do_prepare_budgets_for_algo
             if actionable_chargers[0].current_real_max_charging_amp == 0 and (actionable_chargers[0].possible_amps[0] == 0 and len(actionable_chargers[0].possible_amps) > 1):
+                do_try_to_stop_other_chargers = True
+                _LOGGER.info(
+                    f"budgeting_algorithm_minimize_diffs: DO TRY RESET ALLOCATION for not charging best charger {actionable_chargers[0].name}")
 
-                cs_to_stop_can_now = None
-                cs_to_stop_by_forcing_it = None
+            elif actionable_chargers[0].current_real_max_charging_amp > 0 and actionable_chargers[0].charger.qs_bump_solar_charge_priority:
+                # if there is a bump solar charge priority, we may want to stop all the other chargers to allow the best one to charge
+                do_try_to_stop_other_chargers = True
+                _LOGGER.info(
+                    f"budgeting_algorithm_minimize_diffs: DO TRY RESET ALLOCATION for bump solar best charger {actionable_chargers[0].name}")
+
+            if do_try_to_stop_other_chargers:
                 for i in range(1, len(actionable_chargers)):
                     if actionable_chargers[i].current_real_max_charging_amp > 0 and \
                             actionable_chargers[i].can_be_started_and_stopped:
@@ -729,33 +743,32 @@ class QSChargerGroup(object):
                         else:
                             cs_to_stop_by_forcing_it = actionable_chargers[i]
 
+            if cs_to_stop_can_now is not None or cs_to_stop_by_forcing_it is not None:
 
+                # ok we may have an opportunity to stop a charger to allow the best one to charge
+                # check that the last time we did check that was more than an hour ago or so
+                should_do_reset_allocation = True
+                if allow_budget_reset:
 
-                if cs_to_stop_can_now is not None or cs_to_stop_by_forcing_it is not None:
+                    if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
 
-                    # ok we may have an opportunity to stop a charger to allow the best one to charge
-                    # check that the last time we did check that was more than an hour ago or so
-                    should_do_reset_allocation = True
-                    if allow_budget_reset:
+                        time_to_check = int(min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)*0.9)
 
-                        if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
+                        can_change_state = cs_to_stop_by_forcing_it.charger._expected_charge_state.is_ok_to_set(time, time_to_check)
 
-                            time_to_check = int(min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)*0.9)
-
-                            can_change_state = cs_to_stop_by_forcing_it.charger._expected_charge_state.is_ok_to_set(time, time_to_check)
-
-                            if can_change_state:
-                                _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, light forcing {cs_to_stop_by_forcing_it.name} to be allowed to stop")
-                                cs_to_stop_can_now = cs_to_stop_by_forcing_it
-                            else:
-                                _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION FAILED FOR NOW, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we cannot stop it now")
-
-                        if cs_to_stop_can_now:
+                        if can_change_state:
                             _LOGGER.info(
-                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
-                            do_reset_allocation = True
+                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, light forcing {cs_to_stop_by_forcing_it.name} to be allowed to stop")
+                            cs_to_stop_can_now = cs_to_stop_by_forcing_it
+                            cs_to_stop_by_forcing_it.possible_amps.insert(0, 0)
+                        else:
+                            _LOGGER.info(
+                                f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION FAILED FOR NOW, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_by_forcing_it.name} is charging, but we cannot stop it now")
+
+                    if cs_to_stop_can_now:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
+                        do_reset_allocation = True
 
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers, do_reset_allocation)
 
@@ -1398,6 +1411,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_num_active_phases: QSStateCmd | None = None
         self.reset()
 
+        self.initial_num_in_out_immediate = 0
+
 
         self._unknown_state_vals = set()
         self._unknown_state_vals.update([STATE_UNKNOWN, STATE_UNAVAILABLE])
@@ -1551,7 +1566,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     @property
     def _expected_charge_state(self):
         if self._inner_expected_charge_state is None:
-            self._inner_expected_charge_state = QSStateCmd()
+            self._inner_expected_charge_state = QSStateCmd(initial_num_in_out_immediate=self.initial_num_in_out_immediate)
         return self._inner_expected_charge_state
 
     @property
@@ -3418,6 +3433,9 @@ class QSChargerWallbox(QSChargerGeneric):
 
         self.secondary_power_sensor = self.charger_wallbox_charging_power
         self.attach_power_to_probe(self.secondary_power_sensor)
+
+        # the wallbox are starting charging right away
+        self.initial_num_in_out_immediate = 2
         # self.do_reboot_on_phase_switch = True
 
     def low_level_plug_check_now(self, time: datetime) -> (bool|None, datetime):
