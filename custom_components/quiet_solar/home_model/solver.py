@@ -288,7 +288,7 @@ class PeriodSolver(object):
         for ci , _ in constraints:
 
             c = constraints_evolution.get(ci,ci)
-            out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
+            out_c, _, is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only= not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -480,7 +480,7 @@ class PeriodSolver(object):
 
         for ci , _ in constraints:
             c = constraints_evolution.get(ci, ci)
-            out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
+            out_c, _, is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -497,61 +497,81 @@ class PeriodSolver(object):
             # We may have a path here if we still do have some surplus and battery is full : we may be ok to force a bit some loads to consume more and use the battery for a time so the battery because the battery could fill itself back with solar
             # and we won't give back anything to the grid
             energy_given_back_to_grid = 0.0
-            available_power = np.copy(self._available_power)
+            available_power = np.zeros(len(self._available_power), dtype=np.float64)
+
+            #limit this to the next 6hours
+
+            duration_s = 0.0
+            last_surplus_index = 0
             for i in range(num_slots):
                 if self._available_power[i] < 0.0 and self._battery.is_value_full(battery_charge[i]):
                     energy_given_back_to_grid += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0)
-                else:
-                    available_power[i] = 0
+                    available_power[i] = self._available_power[i]
 
-            _LOGGER.info(f"solve:Estimated  Energy given back to the grid: {energy_given_back_to_grid} Wh")
+                duration_s += self._durations_s[i]
+                if duration_s > 6*3600:
+                    break
 
-            if False and energy_given_back_to_grid < 0.0:
+            _LOGGER.info(f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh")
+
+            if energy_given_back_to_grid < 0.0:
                 # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
                 # we have some energy given back to the grid, so we can try to force some loads to consume more
                 # this is only possible if the battery is full and we have some surplus
 
-                constraints = []
-                for c in self._active_constraints:
-                    c_now = constraints_evolution.get(c, c)
-                    if c.is_before_battery is False or c.is_mandatory is False and c_now.is_constraint_met(self._start_time) is False:
-                        constraints.append((c, c.score()))
-
-                constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
-
                 energy_to_be_spent = (-energy_given_back_to_grid/2)*0.6 # try to reuse 60% of the estimated energy given back to the grid, so we can try to force some loads to consume more
 
-                # we should go back through the constraints and use this energy to be spent on the loads that are not mandatory and that can consume more energy
-                # ex: a car that didn't have enough solar power to charge on the remaining available energy, should have a power consign that is using the solar and some
-                # pieces of this energy to charge more, and has there will be some spare surplus energy, this surplus will fill back what was spent
+                one_energy_to_be_spent_change = True
+                while one_energy_to_be_spent_change and energy_to_be_spent > 0:
 
-                # the issue here for cars or whatever is that we may be charged ot finished already ...
-                # so we must keep the commands and constraints that have been computed and changed before and add some stuff to it if there are not met
+                    constraints = []
+                    for c in self._active_constraints:
+                        c_now = constraints_evolution.get(c, c)
+                        if (c.is_before_battery is False or c.is_mandatory is False) and c_now.is_constraint_met(self._start_time) is False:
+                            constraints.append((c, c.score()))
 
-                for ci, _ in constraints:
-                    c = constraints_evolution.get(ci, ci)
-                    out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
-                        do_use_available_power_only=True,
-                        bump_available_energy=energy_to_be_spent,
-                        prices=self._prices,
-                        power_slots_duration_s=self._durations_s,
-                        power_available_power=available_power,
-                        prices_ordered_values=self._prices_ordered_values,
-                        time_slots=self._time_slots,
-                        existing_commands=actions.get(ci.load, None)
-                    )
-                    constraints_evolution[ci.real_constraint] = out_c
-                    available_power = available_power + out_power
-                    self._available_power = self._available_power + out_power
-                    self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+                    if len(constraints) == 0:
+                        break
 
+                    constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
+                    # we should go back through the constraints and use this energy to be spent on the loads that are not mandatory and that can consume more energy
+                    # ex: a car that didn't have enough solar power to charge on the remaining available energy, should have a power consign that is using the solar and some
+                    # pieces of this energy to charge more, and has there will be some spare surplus energy, this surplus will fill back what was spent
 
+                    # the issue here for cars or whatever is that we may be charged ot finished already ...
+                    # so we must keep the commands and constraints that have been computed and changed before and add some stuff to it if there are not met
 
+                    one_energy_to_be_spent_change = False
+                    for ci, _ in constraints:
+                        c = constraints_evolution.get(ci, ci)
+                        out_c, new_energy_to_be_spent, is_solved, out_commands, out_power = c.compute_best_period_repartition(
+                            do_use_available_power_only=True,
+                            prices=self._prices,
+                            power_slots_duration_s=self._durations_s,
+                            power_available_power=available_power,
+                            prices_ordered_values=self._prices_ordered_values,
+                            time_slots=self._time_slots,
+                            bump_available_energy=energy_to_be_spent,
+                            existing_commands=actions.get(ci.load, None)
+                        )
 
+                        if new_energy_to_be_spent != energy_to_be_spent:
+                            _LOGGER.info(
+                                f"solve:{ci.load.name} getting surplus energy {energy_to_be_spent - new_energy_to_be_spent} Wh")
+                            energy_to_be_spent = new_energy_to_be_spent
+                            one_energy_to_be_spent_change = True
 
+                        constraints_evolution[ci] = out_c
 
+                        available_power = available_power + out_power
+                        self._available_power = self._available_power + out_power
+                        self._merge_commands_slots_for_load(actions, ci.load, out_commands)
 
+                        if energy_to_be_spent < 0.0:
+                            break
+
+        # we have now all the constraints solved, and the battery commands computed
         # now will be time to layout the commands for the constraints and their respective loads
         # commands are to be sent as change of state for the load attached to the constraints
         output_cmds = []

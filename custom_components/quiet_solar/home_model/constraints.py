@@ -409,8 +409,11 @@ class LoadConstraint(object):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[
-        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                                        time_slots: list[datetime],
+                                        bump_available_energy : float = 0.0,
+                                        existing_commands: list[LoadCommand | None] | None = None
+                                        ) -> tuple[
+        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """ Compute the best repartition of the constraint over the given period."""
 
 
@@ -602,7 +605,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[Self,bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                                        time_slots: list[datetime],
+                                        bump_available_energy : float = 0.0,
+                                        existing_commands: list[LoadCommand | None] | None = None
+                                        ) -> tuple[
+        Self, float, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         # force to only use solar power for non mandatory constraints
         if self.is_mandatory is False:
@@ -689,39 +696,42 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     new_first_slots = bisect_left(time_slots, start_reduction)
                     first_slot = max(first_slot, new_first_slots)
 
-
-                sub_power_available_power = power_available_power[first_slot:last_slot + 1]
-                min_power_idx = np.argmin(sub_power_available_power)
-                left = min_power_idx
-                right = min_power_idx
-                sorted_available_power = [min_power_idx]
-                for i in range(len(sub_power_available_power) - 1):
-                    if left == 0:
-                        right = right + 1
-                        if right >= len(sub_power_available_power):
-                            # should never happen
-                            break
-                        sorted_available_power.append(right)
-                    elif right == len(sub_power_available_power) - 1:
-                        left = left - 1
-                        if left < 0:
-                            # should never happen
-                            break
-                        sorted_available_power.append(left)
-                    else:
-                        left_val = sub_power_available_power[left - 1]
-                        right_val = sub_power_available_power[right + 1]
-
-                        if left_val < right_val:
+                if bump_available_energy > 0.0:
+                    _LOGGER.info(f"compute_best_period_repartition: bump available energy {bump_available_energy} for {self.name}")
+                    sorted_available_power = range(0,last_slot + 1 - first_slot)
+                else:
+                    sub_power_available_power = power_available_power[first_slot:last_slot + 1]
+                    min_power_idx = np.argmin(sub_power_available_power)
+                    left = min_power_idx
+                    right = min_power_idx
+                    sorted_available_power = [min_power_idx]
+                    for i in range(len(sub_power_available_power) - 1):
+                        if left == 0:
+                            right = right + 1
+                            if right >= len(sub_power_available_power):
+                                # should never happen
+                                break
+                            sorted_available_power.append(right)
+                        elif right == len(sub_power_available_power) - 1:
                             left = left - 1
+                            if left < 0:
+                                # should never happen
+                                break
                             sorted_available_power.append(left)
                         else:
-                            right = right + 1
-                            sorted_available_power.append(right)
+                            left_val = sub_power_available_power[left - 1]
+                            right_val = sub_power_available_power[right + 1]
 
-                if len(sorted_available_power) != len(sub_power_available_power):
-                    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
-                    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
+                            if left_val < right_val:
+                                left = left - 1
+                                sorted_available_power.append(left)
+                            else:
+                                right = right + 1
+                                sorted_available_power.append(right)
+
+                    if len(sorted_available_power) != len(sub_power_available_power):
+                        _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                        sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
 
                 # try to shave first the biggest free slots
@@ -729,19 +739,72 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     i = i_sorted + first_slot
 
-                    if power_available_power[i] <= -min_power:
+                    available_power = power_available_power[i]
+
+                    if bump_available_energy > 0.0 and available_power >= 0.0:
+                        continue
+
+                    current_command_power = 0.0
+                    if existing_commands and existing_commands[i] is not None:
+                        current_command_power = existing_commands[i].power_consign
+
+                    j = None
+                    do_for_bump = False
+                    if bump_available_energy > 0.0:
+
+                        init_bump_available_energy = bump_available_energy
+
+                        # it means we have the right to exceed the available power by a bit
+                        if current_command_power > 0 and len(power_sorted_cmds) > 1:
+                            current_command_power = existing_commands[i].power_consign
+
+                            # we want to bump a bit the available power
+                            for k in range(len(power_sorted_cmds)):
+                                if power_sorted_cmds[k].power_consign > current_command_power:
+                                    j = k
+                                    break
+
+                            if j is not None:
+                                bump_available_energy += (current_command_power * power_slots_duration_s[i]) / 3600.0
+
+                        elif current_command_power > 0.0:
+                            j = None # the load is already fullfilling its budget, we do not want to add more power
+                        else:
+                            for k in range(len(power_sorted_cmds)):
+                                if power_sorted_cmds[k].power_consign > -available_power:
+                                    j = k
+                                    break
+
+                            if j is None:
+                                j = len(power_sorted_cmds) - 1
+
+                        if j is not None:
+                            bump_available_energy -= (power_sorted_cmds[j].power_consign * power_slots_duration_s[i]) / 3600.0
+                            if bump_available_energy < 0.0:
+                                bump_available_energy = init_bump_available_energy
+                                j = None
+                            else:
+                                do_for_bump = True
+
+                    if current_command_power == 0.0 and j is None and available_power <= -min_power:
                         j = 0
-                        while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < - \
-                                power_available_power[i]:
+                        while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < -available_power:
                             j += 1
 
+                    if j is not None:
+
                         if self.support_auto:
-                            out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
-                                                                           new_type=CMD_AUTO_GREEN_ONLY.command)
+                            if do_for_bump:
+                                # it will force some use to empty a bit the battery
+                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                               new_type=CMD_AUTO_PRICE.command)
+                            else:
+                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                               new_type=CMD_AUTO_GREEN_ONLY.command)
                         else:
                             out_commands[i] = copy_command(power_sorted_cmds[j])
 
-                        out_power[i] = out_commands[i].power_consign
+                        out_power[i] = out_commands[i].power_consign - current_command_power # in case we replace an existing command
                         out_power_idxs[i] = j
 
                         nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
@@ -890,7 +953,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_energy}Wh {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
 
-        return out_constraint, final_ret, out_commands, out_power
+        return out_constraint, bump_available_energy, final_ret, out_commands, out_power
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
