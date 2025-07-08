@@ -512,14 +512,17 @@ class PeriodSolver(object):
                 if duration_s > 6*3600:
                     break
 
-            _LOGGER.info(f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh")
+
 
             if energy_given_back_to_grid < 0.0:
                 # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
                 # we have some energy given back to the grid, so we can try to force some loads to consume more
                 # this is only possible if the battery is full and we have some surplus
 
-                energy_to_be_spent = (-energy_given_back_to_grid/2)*0.6 # try to reuse 60% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                energy_to_be_spent = (-energy_given_back_to_grid/2)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+
+                _LOGGER.info(
+                    f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
 
                 one_energy_to_be_spent_change = True
                 while one_energy_to_be_spent_change and energy_to_be_spent > 0:
