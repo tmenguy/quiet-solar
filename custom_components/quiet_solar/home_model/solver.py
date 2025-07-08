@@ -9,7 +9,7 @@ from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
-    CMD_GREEN_CHARGE_ONLY
+    CMD_GREEN_CHARGE_ONLY, merge_commands
 from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
 _LOGGER = logging.getLogger(__name__)
@@ -210,6 +210,31 @@ class PeriodSolver(object):
 
 
 
+    def _merge_commands_slots_for_load(self, loads, load, new_command_list):
+
+        if new_command_list is None:
+            return
+
+        existing_cmds = loads.get(load, None)
+        if existing_cmds is None:
+            existing_cmds = new_command_list
+            loads[load] = new_command_list
+
+        for s in range(len(new_command_list)):
+
+            new_cmd = new_command_list[s]
+            if new_cmd is None:
+                new_cmd = CMD_IDLE
+
+            prev_cmd = existing_cmds[s]
+            if prev_cmd is None:
+                prev_cmd = CMD_IDLE
+
+            cmd = merge_commands(prev_cmd, new_cmd)
+
+            existing_cmds[s] = cmd
+
+
 
     def solve(self) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
         """
@@ -231,6 +256,8 @@ class PeriodSolver(object):
         # special treatment for "dynamically adaptable load ex : a car with variable power charge, or the battery itself
         # the battery should have a "soft" constraint to cover the computed left unavidable consmuption (ie sum on the
         # positive numbers in available power)
+
+        constraints_evolution = {}
 
 
         if self._loads and len(self._loads) > 0:
@@ -256,8 +283,12 @@ class PeriodSolver(object):
 
         actions = {}
 
-        for c , _ in constraints:
-            is_solved, out_commands, out_power = c.compute_best_period_repartition(
+        num_slots = len(self._durations_s)
+
+        for ci , _ in constraints:
+
+            c = constraints_evolution.get(ci,ci)
+            out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only= not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -265,8 +296,10 @@ class PeriodSolver(object):
                 prices_ordered_values = self._prices_ordered_values,
                 time_slots = self._time_slots
             )
+            constraints_evolution[ci] = out_c
             self._available_power = self._available_power + out_power
-            actions.setdefault(c.load, []).append(out_commands)
+            self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+
 
 
         # ok we have solved our mandatory constraints
@@ -274,6 +307,7 @@ class PeriodSolver(object):
 
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
         battery_commands = None
+        battery_charge = None
 
         if self._battery is not None:
 
@@ -292,7 +326,6 @@ class PeriodSolver(object):
             limited_discharge_per_price = {}
             
             num_optim_tries = 0
-
 
             while continue_optimizing:
             
@@ -445,8 +478,9 @@ class PeriodSolver(object):
 
         constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
-        for c , _ in constraints:
-            is_solved, out_commands, out_power = c.compute_best_period_repartition(
+        for ci , _ in constraints:
+            c = constraints_evolution.get(ci, ci)
+            out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -454,28 +488,81 @@ class PeriodSolver(object):
                 prices_ordered_values = self._prices_ordered_values,
                 time_slots = self._time_slots
             )
+            constraints_evolution[ci] = out_c
             self._available_power = self._available_power + out_power
-            actions.setdefault(c.load, []).append(out_commands)
+            self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+
+
+        if self._battery is not None and battery_charge is not None:
+            # We may have a path here if we still do have some surplus and battery is full : we may be ok to force a bit some loads to consume more and use the battery for a time so the battery because the battery could fill itself back with solar
+            # and we won't give back anything to the grid
+            energy_given_back_to_grid = 0.0
+            available_power = np.copy(self._available_power)
+            for i in range(num_slots):
+                if self._available_power[i] < 0.0 and self._battery.is_value_full(battery_charge[i]):
+                    energy_given_back_to_grid += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0)
+                else:
+                    available_power[i] = 0
+
+            _LOGGER.info(f"solve:Estimated  Energy given back to the grid: {energy_given_back_to_grid} Wh")
+
+            if False and energy_given_back_to_grid < 0.0:
+                # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
+                # we have some energy given back to the grid, so we can try to force some loads to consume more
+                # this is only possible if the battery is full and we have some surplus
+
+                constraints = []
+                for c in self._active_constraints:
+                    c_now = constraints_evolution.get(c, c)
+                    if c.is_before_battery is False or c.is_mandatory is False and c_now.is_constraint_met(self._start_time) is False:
+                        constraints.append((c, c.score()))
+
+                constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
+
+                energy_to_be_spent = (-energy_given_back_to_grid/2)*0.6 # try to reuse 60% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+
+                # we should go back through the constraints and use this energy to be spent on the loads that are not mandatory and that can consume more energy
+                # ex: a car that didn't have enough solar power to charge on the remaining available energy, should have a power consign that is using the solar and some
+                # pieces of this energy to charge more, and has there will be some spare surplus energy, this surplus will fill back what was spent
+
+                # the issue here for cars or whatever is that we may be charged ot finished already ...
+                # so we must keep the commands and constraints that have been computed and changed before and add some stuff to it if there are not met
+
+                for ci, _ in constraints:
+                    c = constraints_evolution.get(ci, ci)
+                    out_c, is_solved, out_commands, out_power = c.compute_best_period_repartition(
+                        do_use_available_power_only=True,
+                        bump_available_energy=energy_to_be_spent,
+                        prices=self._prices,
+                        power_slots_duration_s=self._durations_s,
+                        power_available_power=available_power,
+                        prices_ordered_values=self._prices_ordered_values,
+                        time_slots=self._time_slots,
+                        existing_commands=actions.get(ci.load, None)
+                    )
+                    constraints_evolution[ci.real_constraint] = out_c
+                    available_power = available_power + out_power
+                    self._available_power = self._available_power + out_power
+                    self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+
+
+
+
+
+
 
 
         # now will be time to layout the commands for the constraints and their respective loads
         # commands are to be sent as change of state for the load attached to the constraints
         output_cmds = []
-        num_slots = len(self._durations_s)
 
-        for load, commands_lists in actions.items():
+        for load, command_list in actions.items():
             lcmd = []
             current_command = None
             for s in range(num_slots):
-                s_cmd = CMD_IDLE
-                for cmds in commands_lists:
-                    cmd = cmds[s]
-                    #only one should be not NULL...hum why?
-                    if cmd is not None:
-                        s_cmd = cmd
-                        break
-
-
+                s_cmd = command_list[s]
+                if s_cmd is None:
+                    s_cmd = CMD_IDLE
 
                 if s_cmd != current_command or (s_cmd.power_consign != current_command.power_consign):
                     lcmd.append((self._time_slots[s], s_cmd))

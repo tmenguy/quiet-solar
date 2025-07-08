@@ -45,6 +45,11 @@ class Battery(AbstractDevice):
 
         return charging_power
 
+    def is_value_full(self, energy_value_wh: float | None) -> bool:
+        if energy_value_wh is None:
+            return False
+        return energy_value_wh >= (self.max_soc * self.capacity)
+
     def get_best_discharge_power(self, power_in: float, duration_s: float, current_charge: float | None = None):
 
         if power_in < self.min_discharging_power:

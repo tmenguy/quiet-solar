@@ -100,6 +100,17 @@ class LoadConstraint(object):
         self.skip = False
         self.pushed_count = 0
 
+        self.real_constraint = self
+
+    def shallow_copy_for_added_energy(self, added_energy: float) -> Self:
+        # no deep copy to not copy inner objects
+        out = copy.copy(self)
+        out.current_value = self.convert_added_energy_to_target_value(added_energy)
+        return out
+
+
+
+
     def reset_load_param(self, new_param):
         self.load_param = new_param
 
@@ -114,6 +125,12 @@ class LoadConstraint(object):
         if other.to_dict() == self.to_dict():
             return other.name == self.name
         return False
+
+    def __hash__(self):
+        # Create a hash based on the same attributes used in __eq__
+        # We need to hash the dictionary representation and the name
+        dict_str = str(sorted(self.to_dict().items()))
+        return hash((dict_str, self.name))
 
     @property
     def as_fast_as_possible(self) -> bool:
@@ -363,6 +380,10 @@ class LoadConstraint(object):
         """ return the energy to be added to the load to meet the constraint"""
         return self.load.efficiency_factor*(self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(self.current_value))
 
+    def convert_added_energy_to_target_value(self, added_energy:float) -> float:
+        return self.convert_energy_to_target_value(self.convert_target_value_to_energy(self.current_value) + (added_energy / self.load.efficiency_factor))
+
+
     @abstractmethod
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint when the state change."""
@@ -389,7 +410,7 @@ class LoadConstraint(object):
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
                                         time_slots: list[datetime]) -> tuple[
-                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """ Compute the best repartition of the constraint over the given period."""
 
 
@@ -581,8 +602,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]) -> tuple[
-                                        bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                                        time_slots: list[datetime]) -> tuple[Self,bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         # force to only use solar power for non mandatory constraints
         if self.is_mandatory is False:
@@ -595,7 +615,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             else:
                 do_use_available_power_only = True
 
-        nrj_to_be_added = self.get_energy_to_be_added()
+        initial_energy_to_be_added = nrj_to_be_added = self.get_energy_to_be_added()
 
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
         out_power_idxs = np.zeros(len(power_available_power), dtype=np.int64)
@@ -700,7 +720,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             sorted_available_power.append(right)
 
                 if len(sorted_available_power) != len(sub_power_available_power):
-                    _LOGGER.error(f"ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
                     sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
 
@@ -865,7 +885,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY)
                     out_power[i] = 0.0
 
-        return final_ret, out_commands, out_power
+        added_energy = initial_energy_to_be_added - nrj_to_be_added
+        out_constraint = self.shallow_copy_for_added_energy(added_energy)
+
+        _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_energy}Wh {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
+
+        return out_constraint, final_ret, out_commands, out_power
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):

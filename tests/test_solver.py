@@ -214,7 +214,7 @@ class TestSolver(TestCase):
                 pv_forecast=None,
                 unavoidable_consumption_forecast=None
             )
-            cmds, battery_comands = s.solve()
+            cmds, battery_commands = s.solve()
 
             assert cmds is not None
 
