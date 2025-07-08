@@ -115,7 +115,7 @@ TIME_OK_SHOULD_BUDGET_RESET_S = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_
 
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60*30
-
+CHARGER_START_STOP_RETRY_S = 90
 
 
 
@@ -127,9 +127,10 @@ class QSChargerStates(StrEnum):
 
 class QSStateCmd():
 
-    def __init__(self, initial_num_in_out_immediate:int=0):
+    def __init__(self, initial_num_in_out_immediate:int=0, command_retries_s:float=STATE_CMD_TIME_BETWEEN_RETRY_S):
         self.reset()
         self.initial_num_in_out_immediate = initial_num_in_out_immediate
+        self.command_retries_s = command_retries_s
 
     def reset(self):
         self.value = None
@@ -200,7 +201,7 @@ class QSStateCmd():
             return True
 
         if self.last_time_set is not None and (
-                time - self.last_time_set).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY_S:
+                time - self.last_time_set).total_seconds() > self.command_retries_s:
             return True
 
         return False
@@ -1412,6 +1413,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.reset()
 
         self.initial_num_in_out_immediate = 0
+        self.charge_start_stop_retry_s = CHARGER_START_STOP_RETRY_S
 
 
         self._unknown_state_vals = set()
@@ -1566,7 +1568,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     @property
     def _expected_charge_state(self):
         if self._inner_expected_charge_state is None:
-            self._inner_expected_charge_state = QSStateCmd(initial_num_in_out_immediate=self.initial_num_in_out_immediate)
+            self._inner_expected_charge_state = QSStateCmd(initial_num_in_out_immediate=self.initial_num_in_out_immediate, command_retries_s=self.charge_start_stop_retry_s)
         return self._inner_expected_charge_state
 
     @property
@@ -2486,12 +2488,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if charge_state or charge_state is None:
             _LOGGER.info("STOP CHARGE LAUNCHED")
             try:
-                await self.hass.services.async_call(
-                    domain=Platform.SWITCH,
-                    service=SERVICE_TURN_OFF,
-                    target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                    blocking=False
-                )
+                await self.low_level_stop_charge(time)
             except Exception as e:
                 _LOGGER.warning(f"stop_charge EXCEPTION {e}")
 
@@ -2501,12 +2498,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if charge_state or charge_state is None:
             _LOGGER.info("START CHARGE LAUNCHED")
             try:
-                await self.hass.services.async_call(
-                    domain=Platform.SWITCH,
-                    service=SERVICE_TURN_ON,
-                    target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
-                    blocking=False
-                )
+                await self.low_level_start_charge(time)
             except Exception as e:
                 _LOGGER.warning(f"start_charge EXCEPTION {e}")
 
@@ -3295,6 +3287,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             done = False
         return done
 
+
+    async def low_level_stop_charge(self, time: datetime):
+
+        await self.hass.services.async_call(
+            domain=Platform.SWITCH,
+            service=SERVICE_TURN_OFF,
+            target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
+            blocking=False
+        )
+
+    async def low_level_start_charge(self, time: datetime):
+
+        await self.hass.services.async_call(
+            domain=Platform.SWITCH,
+            service=SERVICE_TURN_ON,
+            target={ATTR_ENTITY_ID: self.charger_pause_resume_switch},
+            blocking=False
+        )
+
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return []
 
@@ -3347,6 +3358,101 @@ class QSChargerOCPP(QSChargerGeneric):
         self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self.convert_ocpp_current_import_amps_to_W)
         # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
 
+    async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
+        """Handle notifications from the OCPP integration and take automated actions."""
+        _LOGGER.info(f"Received OCPP notification for charger {self.name}: {title} - {message}")
+        # check message: Warning: Start transaction failed with response
+        return
+
+        try:
+            _LOGGER.info(f"Received OCPP notification for charger {self.name}: {title} - {message}")
+            
+            # Analyze the notification content and take appropriate actions
+            message_lower = message.lower()
+            title_lower = title.lower()
+            
+            # Check for conditions that require a reboot
+            reboot_triggers = [
+                "firmware upload status",
+                "configuration changed", 
+                "reset required",
+                "reboot required",
+                "restart needed",
+                "configuration update",
+                "profile updated"
+            ]
+            
+            should_reboot = False
+            for trigger in reboot_triggers:
+                if trigger in message_lower:
+                    should_reboot = True
+                    _LOGGER.info(f"OCPP notification indicates reboot needed: {trigger}")
+                    break
+            
+            # Check for error conditions that might need attention
+            error_triggers = [
+                "error",
+                "failed", 
+                "fault",
+                "warning",
+                "exception",
+                "timeout"
+            ]
+            
+            is_error = False
+            for error_trigger in error_triggers:
+                if error_trigger in message_lower:
+                    is_error = True
+                    _LOGGER.warning(f"OCPP notification indicates error condition: {error_trigger}")
+                    break
+            
+            # Take automated actions based on notification content
+            current_time = datetime.now(pytz.UTC)
+            
+            if should_reboot and self.can_reboot():
+                _LOGGER.info(f"Automatically rebooting charger {self.name} due to OCPP notification: {message}")
+                await self.reboot(current_time)
+                
+            elif is_error:
+                # For error conditions, we might want to reset the charger state or take other actions
+                _LOGGER.info(f"Handling error condition for charger {self.name}: {message}")
+                
+                # Reset the charger's internal state if it's having issues
+                if "connection" in message_lower or "communication" in message_lower:
+                    self._reset_state_machine()
+                    _LOGGER.info(f"Reset state machine for charger {self.name} due to communication issues")
+                
+                # If the charger reports being unavailable, mark it as such
+                if "unavailable" in message_lower or "offline" in message_lower:
+                    self.status = "unavailable"
+                    _LOGGER.info(f"Marked charger {self.name} as unavailable due to OCPP notification")
+            
+            # Log successful operations  
+            elif any(keyword in message_lower for keyword in ["success", "completed", "ready", "available"]):
+                _LOGGER.info(f"OCPP operation successful for charger {self.name}: {message}")
+                
+                # If charger is back online, ensure it's marked as available
+                if "available" in message_lower or "ready" in message_lower:
+                    self.status = "ok"
+                    _LOGGER.info(f"Marked charger {self.name} as available due to OCPP notification")
+            
+            # Handle firmware update notifications
+            elif "firmware" in message_lower:
+                _LOGGER.info(f"Firmware-related notification for charger {self.name}: {message}")
+                
+                if "upload status" in message_lower and ("completed" in message_lower or "success" in message_lower):
+                    _LOGGER.info(f"Firmware upload completed for charger {self.name}, scheduling reboot")
+                    await self.reboot(current_time)
+            
+            # Handle diagnostic upload notifications
+            elif "diagnostic" in message_lower:
+                _LOGGER.info(f"Diagnostic-related notification for charger {self.name}: {message}")
+            
+            # General notification logging
+            else:
+                _LOGGER.info(f"General OCPP notification for charger {self.name}: {message}")
+        except Exception as e:
+            _LOGGER.error(f"Error handling OCPP notification for charger {self.name}: {e}")
 
     def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
 
@@ -3374,7 +3480,6 @@ class QSChargerOCPP(QSChargerGeneric):
             res_plugged = state.state == "off" # if the car is plugged it won't be seen as "available" in OCPP, so we use "off" to mean "plugged in"
 
         return res_plugged, state_time
-
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
