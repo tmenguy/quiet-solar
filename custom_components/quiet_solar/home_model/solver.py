@@ -8,9 +8,9 @@ import pytz
 from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
-from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
+from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
     CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type
-from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -358,6 +358,9 @@ class PeriodSolver(object):
                 else:
                     segments_to_shave[s_idx] = [empty_segments[s_idx - 1][1] + 1, s[0] - 1]
 
+                if segments_to_shave[s_idx] is not None:
+                    for i in range(segments_to_shave[s_idx][0], segments_to_shave[s_idx][1] + 1):
+                        energy_to_get_back[s_idx] += max(0.0, self._available_power[i]) * self._durations_s[i] / 3600.0
 
             for s_idx in range(len(segments_to_shave)):
                 s = segments_to_shave[s_idx]
@@ -365,7 +368,7 @@ class PeriodSolver(object):
                     continue
 
                 to_shave_segment = [s[0], empty_segments[s_idx][1]]
-                energy_delta = -energy_to_get_back[s_idx]
+                energy_delta = -min(self._battery.get_value_full(), energy_to_get_back[s_idx]) # should I bump a bit what need to be reclaimed?
                 break
 
         return to_shave_segment, energy_delta
@@ -387,6 +390,9 @@ class PeriodSolver(object):
                 constraints = sorted(constraints, key=lambda x: x[1], reverse=False)
 
             orig_energy_delta = energy_delta
+
+            _LOGGER.info(
+                f"_constraints_delta: trying to get/give energy delta: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]}")
 
             load_to_re_adapt = set()
 
@@ -457,8 +463,6 @@ class PeriodSolver(object):
                                 elif cmd.is_like(CMD_AUTO_GREEN_ONLY):
                                     # we need to cap it
                                     cmds[i] = copy_command_and_change_type(cmd, CMD_AUTO_GREEN_CAP.command)
-
-
 
         return solved, has_changed, energy_delta
 
