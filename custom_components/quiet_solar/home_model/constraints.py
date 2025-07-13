@@ -7,8 +7,9 @@ from abc import abstractmethod
 from typing import Self
 import pytz
 
-from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, copy_command_and_change_type, CMD_IDLE, \
-    CMD_AUTO_PRICE
+from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, \
+    copy_command_and_change_type, CMD_IDLE, \
+    CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
@@ -102,7 +103,7 @@ class LoadConstraint(object):
 
         self.real_constraint = self
 
-    def shallow_copy_for_added_energy(self, added_energy: float) -> Self:
+    def shallow_copy_for_delta_energy(self, added_energy: float) -> Self:
         # no deep copy to not copy inner objects
         out = copy.copy(self)
         out.current_value = self.convert_added_energy_to_target_value(added_energy)
@@ -144,13 +145,21 @@ class LoadConstraint(object):
     def is_before_battery(self) -> bool:
         return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
-    def score(self):
-        score_offset = 10000000000
-        score = int(100.0*self.convert_target_value_to_energy(self.target_value))
-        score += self.type * score_offset
+    def score(self, time:datetime):
+
+        energy_score_span = 1000000.0 # 1000kwh
+        type_score_span = 100.0
+
+        reserved_load_score_span = 100000.0
+        load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
+
+        energy_score = float(min(max(0, int(self.convert_target_value_to_energy(self.target_value))), int(energy_score_span) - 1))
+        type_score = self.type
+        user_score = 0.0
         if self.from_user:
-            score += 100*score_offset
-        return score
+            user_score = 1.0
+
+        return energy_score + energy_score_span*load_score + energy_score_span*reserved_load_score_span*type_score + energy_score_span*reserved_load_score_span*type_score_span*user_score
 
     def evaluate_needed_mean_power(self, time:datetime) -> float:
 
@@ -222,7 +231,7 @@ class LoadConstraint(object):
         return value
 
     def convert_energy_to_target_value(self, energy: float) -> float:
-        return energy
+        return max(0.0, energy)
 
     def get_percent_completion(self, time) -> float | None:
 
@@ -381,7 +390,8 @@ class LoadConstraint(object):
         return self.load.efficiency_factor*(self.convert_target_value_to_energy(self.target_value) - self.convert_target_value_to_energy(self.current_value))
 
     def convert_added_energy_to_target_value(self, added_energy:float) -> float:
-        return self.convert_energy_to_target_value(self.convert_target_value_to_energy(self.current_value) + (added_energy / self.load.efficiency_factor))
+        # added energy can be negative, so we can reduce the current value
+        return self.convert_energy_to_target_value(max(0.0, self.convert_target_value_to_energy(self.current_value) + (added_energy / self.load.efficiency_factor)))
 
 
     @abstractmethod
@@ -409,11 +419,9 @@ class LoadConstraint(object):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime],
-                                        bump_available_energy : float = 0.0,
-                                        existing_commands: list[LoadCommand | None] | None = None
+                                        time_slots: list[datetime]
                                         ) -> tuple[
-        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int]:
         """ Compute the best repartition of the constraint over the given period."""
 
 
@@ -599,17 +607,149 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return min_power, out_sorted_commands
 
+
+    def adapt_repartition(self,
+                          first_slot:int,
+                          last_slot:int,
+                          energy_delta: float,
+                          power_slots_duration_s: npt.NDArray[np.float64],
+                          existing_commands: list[LoadCommand | None],
+                          allow_change_state: bool):
+
+        """ Adapt the repartition of the constraint over the given period."""
+        out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
+        out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
+
+        sorted_available_power = range(first_slot, last_slot + 1)
+        if energy_delta >= 0.0:
+            _LOGGER.info(
+                f"adapt_repartition: bump available energy {energy_delta} for {self.name}")
+        else:
+            sorted_available_power = reversed(sorted_available_power)
+
+        # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
+        min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
+
+        init_energy_delta = energy_delta
+
+        num_changes = 0
+
+        delta_energy = 0.0
+
+        first_adaptation = None
+
+        # try to shave first the biggest free slots
+        for i in sorted_available_power:
+
+            current_command_power = 0.0
+            if existing_commands and existing_commands[i] is not None:
+                current_command_power = existing_commands[i].power_consign
+
+            j = None
+            if init_energy_delta >= 0.0:
+
+                if current_command_power == 0 and allow_change_state is False:
+                    # we do not want to change the state of the load, so we cannot add energy
+                    continue
+
+                j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
+                if j == len(power_sorted_cmds) - 1:
+                    # we are already at the max power, we cannot add more
+                    continue
+                elif j is None:
+                    j = 0
+                else:
+                    j += 1
+
+            else: # init_energy_delta < 0.0:
+
+                # for reduction: reduce strongly
+                if current_command_power == 0:
+                    # we won't be able to reduce...cap at 0 to force stay this way
+                    j = -1
+                else:
+                    j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
+
+                    if (j is None or j == 0):
+                        if allow_change_state is False:
+                            # we won't be able to go below
+                            continue
+                        else:
+                            j = -1
+                    else:
+                        # go to the minimum power load
+                        j = 0
+
+
+            if j is not None:
+
+                if j >= 0:
+                    base_cmd = power_sorted_cmds[j]
+                else:
+                    if self.support_auto:
+                        base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                        base_cmd.power_consign = 0.0
+                    else:
+                        # it is ok in case of adaptation the cmd merge of the solver is taking the new one aall the time
+                        base_cmd = copy_command(CMD_IDLE)
+
+                if self.support_auto:
+                    if init_energy_delta >= 0.0:
+                        # it will force some use to empty a bit the battery
+                        out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
+                                                                       new_type=CMD_AUTO_FROM_CONSIGN.command)
+                    else:
+                        out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
+                                                                       new_type=CMD_AUTO_GREEN_CAP.command)
+                else:
+                    out_commands[i] = copy_command(base_cmd)
+
+                out_delta_power[i] = out_commands[i].power_consign - current_command_power
+                d_energy = (out_delta_power[i] * power_slots_duration_s[i]) / 3600.0
+                delta_energy += d_energy
+                energy_delta -= d_energy
+
+                num_changes += 1
+
+                if first_adaptation is None:
+                    first_adaptation = i
+
+                if energy_delta * init_energy_delta <= 0.0:
+                    # it means they are not of the same sign, we are done
+                    break
+
+        out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
+
+        if first_adaptation is not None:
+            if init_energy_delta < 0.0 and self.support_auto:
+                for i in range(first_adaptation, last_slot + 1):
+                    out_commands[i] = copy_command_and_change_type(cmd=out_commands[i] ,
+                                                                   new_type=CMD_AUTO_GREEN_CAP.command)
+
+        return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
+
+
+    def _get_consign_idx_for_power(self, power_sorted_cmds:list[LoadCommand], power: float) -> int | None:
+
+        j = None
+        if power >= power_sorted_cmds[0].power_consign:
+            j = 0
+            while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign <= power:
+                j += 1
+
+        return j
+
+
+
     def compute_best_period_repartition(self,
                                         do_use_available_power_only: bool,
                                         power_available_power: npt.NDArray[np.float64],
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime],
-                                        bump_available_energy : float = 0.0,
-                                        existing_commands: list[LoadCommand | None] | None = None
+                                        time_slots: list[datetime]
                                         ) -> tuple[
-        Self, float, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int]:
 
         # force to only use solar power for non mandatory constraints
         if self.is_mandatory is False:
@@ -696,115 +836,57 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     new_first_slots = bisect_left(time_slots, start_reduction)
                     first_slot = max(first_slot, new_first_slots)
 
-                if bump_available_energy > 0.0:
-                    _LOGGER.info(f"compute_best_period_repartition: bump available energy {bump_available_energy} for {self.name}")
-                    sorted_available_power = range(0,last_slot + 1 - first_slot)
-                else:
-                    sub_power_available_power = power_available_power[first_slot:last_slot + 1]
-                    min_power_idx = np.argmin(sub_power_available_power)
-                    left = min_power_idx
-                    right = min_power_idx
-                    sorted_available_power = [min_power_idx]
-                    for i in range(len(sub_power_available_power) - 1):
-                        if left == 0:
-                            right = right + 1
-                            if right >= len(sub_power_available_power):
-                                # should never happen
-                                break
-                            sorted_available_power.append(right)
-                        elif right == len(sub_power_available_power) - 1:
+
+                sub_power_available_power = power_available_power[first_slot:last_slot + 1]
+                min_power_idx = np.argmin(sub_power_available_power)
+                left = min_power_idx
+                right = min_power_idx
+                sorted_available_power = [min_power_idx]
+                for i in range(len(sub_power_available_power) - 1):
+                    if left == 0:
+                        right = right + 1
+                        if right >= len(sub_power_available_power):
+                            # should never happen
+                            break
+                        sorted_available_power.append(right)
+                    elif right == len(sub_power_available_power) - 1:
+                        left = left - 1
+                        if left < 0:
+                            # should never happen
+                            break
+                        sorted_available_power.append(left)
+                    else:
+                        left_val = sub_power_available_power[left - 1]
+                        right_val = sub_power_available_power[right + 1]
+
+                        if left_val < right_val:
                             left = left - 1
-                            if left < 0:
-                                # should never happen
-                                break
                             sorted_available_power.append(left)
                         else:
-                            left_val = sub_power_available_power[left - 1]
-                            right_val = sub_power_available_power[right + 1]
+                            right = right + 1
+                            sorted_available_power.append(right)
 
-                            if left_val < right_val:
-                                left = left - 1
-                                sorted_available_power.append(left)
-                            else:
-                                right = right + 1
-                                sorted_available_power.append(right)
-
-                    if len(sorted_available_power) != len(sub_power_available_power):
-                        _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
-                        sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
+                if len(sorted_available_power) != len(sub_power_available_power):
+                    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
 
                 # try to shave first the biggest free slots
                 for i_sorted in sorted_available_power:
 
                     i = i_sorted + first_slot
-
                     available_power = power_available_power[i]
-
-                    if bump_available_energy > 0.0 and available_power >= 0.0:
-                        continue
-
-                    current_command_power = 0.0
-                    if existing_commands and existing_commands[i] is not None:
-                        current_command_power = existing_commands[i].power_consign
-
-                    j = None
-                    do_for_bump = False
-                    if bump_available_energy > 0.0:
-
-                        init_bump_available_energy = bump_available_energy
-
-                        # it means we have the right to exceed the available power by a bit
-                        if current_command_power > 0 and len(power_sorted_cmds) > 1:
-                            current_command_power = existing_commands[i].power_consign
-
-                            # we want to bump a bit the available power
-                            for k in range(len(power_sorted_cmds)):
-                                if power_sorted_cmds[k].power_consign > current_command_power:
-                                    j = k
-                                    break
-
-                            if j is not None:
-                                bump_available_energy += (current_command_power * power_slots_duration_s[i]) / 3600.0
-
-                        elif current_command_power > 0.0:
-                            j = None # the load is already fullfilling its budget, we do not want to add more power
-                        else:
-                            for k in range(len(power_sorted_cmds)):
-                                if power_sorted_cmds[k].power_consign > -available_power:
-                                    j = k
-                                    break
-
-                            if j is None:
-                                j = len(power_sorted_cmds) - 1
-
-                        if j is not None:
-                            bump_available_energy -= (power_sorted_cmds[j].power_consign * power_slots_duration_s[i]) / 3600.0
-                            if bump_available_energy < 0.0:
-                                bump_available_energy = init_bump_available_energy
-                                j = None
-                            else:
-                                do_for_bump = True
-
-                    if current_command_power == 0.0 and j is None and available_power <= -min_power:
-                        j = 0
-                        while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign < -available_power:
-                            j += 1
+                    j = self._get_consign_idx_for_power(power_sorted_cmds, 0.0 - available_power)
 
                     if j is not None:
 
                         if self.support_auto:
-                            if do_for_bump:
-                                # it will force some use to empty a bit the battery
-                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
-                                                                               new_type=CMD_AUTO_PRICE.command)
-                            else:
-                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                            out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
                                                                                new_type=CMD_AUTO_GREEN_ONLY.command)
                         else:
                             out_commands[i] = copy_command(power_sorted_cmds[j])
 
-                        out_power[i] = out_commands[i].power_consign - current_command_power # in case we replace an existing command
+                        out_power[i] = out_commands[i].power_consign
                         out_power_idxs[i] = j
 
                         nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
@@ -817,7 +899,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 else:
 
                     # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
-                    # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible
+                    # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible,
+                    # this is checked in the charger budgeting algorithm, with self.home.battery_can_discharge() is False
                     for i in range(first_slot, last_slot + 1):
 
                         if power_available_power[i] + out_power[i] < 0:
@@ -949,11 +1032,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     out_power[i] = 0.0
 
         added_energy = initial_energy_to_be_added - nrj_to_be_added
-        out_constraint = self.shallow_copy_for_added_energy(added_energy)
+        out_constraint = self.shallow_copy_for_delta_energy(added_energy)
 
         _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_energy}Wh {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
 
-        return out_constraint, bump_available_energy, final_ret, out_commands, out_power
+        return out_constraint, final_ret, out_commands, out_power, first_slot, last_slot
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
@@ -979,7 +1062,7 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
         return (value * self.total_capacity_wh) / 100.0
 
     def convert_energy_to_target_value(self, energy: float) -> float:
-        return (100.0 * energy) / self.total_capacity_wh
+        return (100.0 * max(0.0, energy)) / self.total_capacity_wh
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
@@ -1050,7 +1133,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         return (self._power * value) / 3600.0
 
     def convert_energy_to_target_value(self, energy: float) -> float:
-        return (energy * 3600.0) / self._power
+        return (max(0.0, energy) * 3600.0) / self._power
 
 
 DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.UTC)

@@ -232,13 +232,13 @@ class QSBattery(HADeviceMixin, Battery):
         if current_charge is None:
             return False
 
-        if self.get_max_charging_power() == 0:
+        if self.get_max_discharging_power() == 0:
             return False
 
-        if current_charge > max(self.min_soc * self.capacity, 500): # 500Wh is a threshold
-            return True
+        if self.is_value_empty(current_charge):
+            return False
 
-        return False
+        return True
 
 
     def get_platforms(self):

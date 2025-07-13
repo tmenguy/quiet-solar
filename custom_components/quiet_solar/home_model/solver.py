@@ -9,7 +9,7 @@ from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, CMD_AUTO_FROM_CONSIGN, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
-    CMD_GREEN_CHARGE_ONLY, merge_commands
+    CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type
 from ..const import CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
 _LOGGER = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ class PeriodSolver(object):
 
 
 
-    def _merge_commands_slots_for_load(self, loads, load, new_command_list):
+    def _merge_commands_slots_for_load(self, loads, load, new_command_list, prio_on_new=False):
 
         if new_command_list is None:
             return
@@ -230,9 +230,237 @@ class PeriodSolver(object):
             if prev_cmd is None:
                 prev_cmd = CMD_IDLE
 
-            cmd = merge_commands(prev_cmd, new_cmd)
+            cmd = merge_commands(prev_cmd, new_cmd, prio_on_cmd2=prio_on_new)
 
             existing_cmds[s] = cmd
+
+    def _battery_get_charging_power(self, limited_discharge_per_price = None):
+
+        available_power_list = self._available_power
+        battery_charge_power = np.zeros(len(available_power_list), dtype=np.float64)
+        battery_charge = np.zeros(len(available_power_list), dtype=np.float64)
+        battery_commands = [CMD_GREEN_CHARGE_AND_DISCHARGE] * len(available_power_list)
+        prices_discharged_energy_buckets = {}
+        prices_remaining_grid_energy_buckets = {}
+        remaining_grid_price = 0
+        remaining_grid_energy = 0
+        excess_solar_energy = 0
+
+        if self._battery:
+
+            init_battery_charge = self._battery.current_charge
+            if init_battery_charge is None:
+                init_battery_charge = 0.0
+
+            prev_battery_charge = init_battery_charge
+
+            for i in range(len(available_power_list)):
+
+                charging_power = 0.0
+                available_power = available_power_list[i]
+
+                if available_power < 0.0:
+
+                    charging_power = self._battery.get_best_charge_power(0.0 - available_power,
+                                                                         float(self._durations_s[i]),
+                                                                         current_charge=prev_battery_charge)
+                    if charging_power < 0.0:
+                        charging_power = 0.0
+
+                elif available_power > 0.0:
+
+                    # discharge....
+                    charging_power = self._battery.get_best_discharge_power(float(available_power),
+                                                                            float(self._durations_s[i]),
+                                                                            current_charge=float(prev_battery_charge))
+                    if charging_power > 0:
+                        charging_power = 0.0 - charging_power
+                    else:
+                        charging_power = 0.0
+
+                battery_charge_power[i] = charging_power
+
+                charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
+
+                if limited_discharge_per_price is not None:
+                    limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
+                    if limit_discharge is not None:
+                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
+                            # we need to ... forbid discharge to keep it when we will need it for bigger prices
+                            charged_energy = max(0.0, charged_energy)
+                            charging_power = max(0.0, charging_power)
+                            battery_commands[i] = CMD_GREEN_CHARGE_ONLY
+
+                        limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy, 0.0))
+
+                if charged_energy < 0.0:
+                    prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(
+                        self._prices[i], 0.0) - charged_energy
+
+                grid_nrj = (((available_power + charging_power) * float(self._durations_s[i])) / 3600.0)
+                if grid_nrj > 0:
+                    # we will ask it from the grid:
+                    remaining_grid_energy += grid_nrj
+                    remaining_grid_price += self._prices[i] * grid_nrj
+                    prices_remaining_grid_energy_buckets[self._prices[i]] = prices_remaining_grid_energy_buckets.get(
+                        self._prices[i], 0.0) + grid_nrj
+                elif grid_nrj < 0:
+                    excess_solar_energy = excess_solar_energy - grid_nrj
+
+
+                battery_charge[i] = prev_battery_charge + charged_energy
+                prev_battery_charge = battery_charge[i]
+
+
+        return battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy
+
+
+    def _prepare_battery_segmentation(self):
+
+        to_shave_segment = None
+        energy_delta = None
+
+        num_slots = len(self._available_power)
+        # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
+        battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+
+        empty_segments = [[None, num_slots - 1]]
+        for i in range(len(self._available_power)):
+
+            current_charge = float(battery_charge[i])
+            if self._battery.is_value_empty(current_charge):
+                if empty_segments[-1][0] is None:
+                    empty_segments[-1][0] = i
+                else:
+                    empty_segments[-1][1] = i
+            else:
+                if empty_segments[-1][0] is not None:
+                    empty_segments.append([None, num_slots - 1])
+        # if the last segment is empty, we remove it
+        if empty_segments[-1][0] is None:
+            empty_segments.pop()
+
+        if len(empty_segments) == 0 or (
+                len(empty_segments) == 1 and (empty_segments[0][0] == 0 and empty_segments[0][1] == num_slots - 1)):
+            # not empty segments, so we can use the battery as we want ... or all empty we can do nothing
+            pass
+        else:
+            energy_to_get_back = [0.0] * len(empty_segments)
+            segments_to_shave = [None] * len(empty_segments)
+            for s_idx, s in enumerate(empty_segments):
+
+                for i in range(s[0], s[1] + 1):
+                    energy_to_get_back[s_idx] += max(0.0, self._available_power[i]) * self._durations_s[i] / 3600.0
+
+                if s_idx == 0:
+                    if s[0] > 0:
+                        segments_to_shave[s_idx] = [0, s[0] - 1]
+                else:
+                    segments_to_shave[s_idx] = [empty_segments[s_idx - 1][1] + 1, s[0] - 1]
+
+
+            for s_idx in range(len(segments_to_shave)):
+                s = segments_to_shave[s_idx]
+                if s is None:
+                    continue
+
+                to_shave_segment = [s[0], empty_segments[s_idx][1]]
+                energy_delta = -energy_to_get_back[s_idx]
+                break
+
+        return to_shave_segment, energy_delta
+
+
+    def _constraints_delta(self, energy_delta, constraints, constraints_evolution, constraints_bounds, actions, seg_start, seg_end, allow_change_state):
+
+        solved = False
+        has_changed = False
+
+        if energy_delta != 0:
+
+            if energy_delta > 0:
+                # mor consumption, start with the more important ones
+                constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
+            else:
+                # energy to reclaim
+                # start with the less important constraints first, to be reduced if needed
+                constraints = sorted(constraints, key=lambda x: x[1], reverse=False)
+
+            orig_energy_delta = energy_delta
+
+            load_to_re_adapt = set()
+
+            for ci, _ in constraints:
+                out_c = constraints_evolution[ci]
+                first_slot, last_slot = constraints_bounds.get(ci, (None, None))
+
+                if first_slot is None or last_slot is None:
+                    _LOGGER.warning(f"_constraints_delta: constraint {ci} has no bounds, skipping")
+                    continue
+
+                out_commands = actions.get(ci.load, None)
+
+                if seg_start > last_slot or first_slot > seg_end:
+                    # segment is not in the range of the constraint, skip it
+                    continue
+                st = max(seg_start, first_slot)
+                nd = min(seg_end, last_slot)
+                if st > nd:
+                    continue
+
+                # energy_delta can be negative or positive, negative means reduce the consumed energy bay the constraint
+                init_energy_delta = energy_delta
+                out_c_adapted, solved, has_changes, energy_delta, out_commands_adapted, out_delta_power = out_c.adapt_repartition(
+                    first_slot=st,
+                    last_slot=nd,
+                    energy_delta=energy_delta,
+                    power_slots_duration_s=self._durations_s,
+                    existing_commands=out_commands,
+                    allow_change_state=allow_change_state)
+                if has_changes:
+                    _LOGGER.info(
+                        f"_constraints_delta: {ci.load.name} delta: {energy_delta - init_energy_delta}Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
+                    has_changed = True
+                    constraints_evolution[ci] = out_c_adapted
+                    self._available_power = self._available_power + out_delta_power
+                    self._merge_commands_slots_for_load(actions, ci.load, out_commands_adapted, prio_on_new=True)
+
+                if ci.support_auto:
+                    load_to_re_adapt.add(ci.load)
+
+
+                if solved:
+                    break
+
+            # adapt all constraints that would need caping to respect less consumption
+            if orig_energy_delta < 0 and len(load_to_re_adapt) > 1:
+                # need to CAP all auto load if there is a CAP somewhere
+                for i in range(seg_start, seg_end + 1):
+                    has_cap = False
+
+                    for load in load_to_re_adapt:
+                        cmds = actions.get(load,None)
+                        if cmds is not None:
+                            cmd = cmds[i]
+                            if cmd is not None and cmd.is_like(CMD_AUTO_GREEN_CAP):
+                                # we need to cap it
+                                has_cap = True
+                                break
+
+                    if has_cap:
+                        for load in load_to_re_adapt:
+                            cmds = actions.get(load, None)
+                            if cmds is not None:
+                                cmd = cmds[i]
+                                if cmd is None:
+                                    cmds[i] = copy_command(CMD_AUTO_GREEN_CAP)
+                                elif cmd.is_like(CMD_AUTO_GREEN_ONLY):
+                                    # we need to cap it
+                                    cmds[i] = copy_command_and_change_type(cmd, CMD_AUTO_GREEN_CAP.command)
+
+
+
+        return solved, has_changed, energy_delta
 
 
 
@@ -258,6 +486,7 @@ class PeriodSolver(object):
         # positive numbers in available power)
 
         constraints_evolution = {}
+        constraints_bounds = {}
 
 
         if self._loads and len(self._loads) > 0:
@@ -274,22 +503,23 @@ class PeriodSolver(object):
             _LOGGER.info(f"solve: NO LOADS!")
 
         #ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
+
+
+        actions = {}
+        num_slots = len(self._durations_s)
+
         constraints = []
         for c in self._active_constraints:
             if c.is_before_battery:
-                constraints.append((c, c.score()))
+                constraints.append((c, c.score(self._start_time)))
 
         constraints= sorted(constraints, key=lambda x: x[1], reverse=True)
-
-        actions = {}
-
-        num_slots = len(self._durations_s)
 
         for ci , _ in constraints:
 
             c = constraints_evolution.get(ci,ci)
-            out_c, _, is_solved, out_commands, out_power = c.compute_best_period_repartition(
-                do_use_available_power_only= not c.is_mandatory,
+            out_c, is_solved, out_commands, out_power, first_slot, last_slot = c.compute_best_period_repartition(
+                do_use_available_power_only=not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
                 power_available_power = self._available_power,
@@ -297,13 +527,46 @@ class PeriodSolver(object):
                 time_slots = self._time_slots
             )
             constraints_evolution[ci] = out_c
+            constraints_bounds[ci] = (first_slot, last_slot)
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci.load, out_commands)
 
+        constraints = []
+        for c in self._active_constraints:
+            if c.is_before_battery and c.is_mandatory is False:
+                constraints.append((c, c.score(self._start_time)))
 
+        if len(constraints) > 0 and self._battery is not None:
 
-        # ok we have solved our mandatory constraints
-        # now try to do our best with the non mandatory ones and the variables ones (car) .... and battery
+            # we have some spots where we need grid energy...so we consume perhaps too much already with the non mandatory constraints
+
+            # segment battery usage by spots where the battery will be empty, and try to cap the commands sent
+            # for non mandatory constraints, we will try to cap the commands sent to the battery so it can charge more
+
+            while True:
+                # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
+                to_shave_segment, energy_delta = self._prepare_battery_segmentation()
+
+                if to_shave_segment is None:
+                    _LOGGER.info(
+                        f"solve: No segment to shave for battery low points")
+                    break
+                else:
+
+                    # now we need to get the commands that are coming from the non mandatory constraints
+                    # and try to limit them so the battery can charge more and reclaim energy_to_get_back[s_idx] in the process
+                    # to not ask anything from the grid
+                    solved, has_changed, energy_delta = self._constraints_delta(energy_delta,
+                                                                                constraints,
+                                                                                constraints_evolution,
+                                                                                constraints_bounds,
+                                                                                actions,
+                                                                                to_shave_segment[0],
+                                                                                to_shave_segment[1],
+                                                                                allow_change_state=True)
+                    if solved is False or has_changed is False:
+                        break
+
 
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
         battery_commands = None
@@ -316,97 +579,29 @@ class PeriodSolver(object):
             # - CMD_GREEN_CHARGE_ONLY: do not discharge the battery, charge at maximum from solar
             # - CMD_FORCE_CHARGE: charge the battery according to the power consign value
 
-
-
-            init_battery_charge =  self._battery.current_charge
-            if init_battery_charge is None:
-                init_battery_charge = 0.0
-
             continue_optimizing = True
             limited_discharge_per_price = {}
             
             num_optim_tries = 0
 
+            # first try to fill the battery to the max of what is left and consume on all slots : if the battery covers all (ie no grid need) fine, we need to let the battery do its job
+            # in automatic mode, it will discharge when needed, and charge when it can
+            # if it is not the case :
+            # first, if usefull try to limit some non mandatory loads so the battery can charge more
+            # if not enough remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
+            # if the battery "not used energy" from this pass is
+
             while continue_optimizing:
             
                 num_optim_tries += 1
-                # first try to fill the battery to the max of what is left and consume on all slots : if the battery covers all (ie no grid need) fine, we need to let the battery do its job
-                # in automatic mode, it will discharge when needed, and charge when it can
-                # if it is not the case : remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
-                # if the battery "not used energy" from this pass is
-                remaining_grid_price  = 0
-                remaining_grid_energy = 0
-                prev_battery_charge = init_battery_charge
-                battery_charge = np.zeros(len(self._available_power), dtype=np.float64)
-                battery_commands = [CMD_GREEN_CHARGE_AND_DISCHARGE] * len(self._available_power)
-                available_power = np.copy(self._available_power)
-                prices_discharged_energy_buckets = {}
-                prices_remaining_grid_energy_buckets = {}
 
-
-                for i in range(len(available_power)):
-
-                    charging_power = 0.0
-
-                    cmd = None
-
-                    if available_power[i] < 0.0:
-
-                        charging_power = self._battery.get_best_charge_power(0.0 - available_power[i], float(self._durations_s[i]), current_charge=prev_battery_charge)
-                        if charging_power < 0.0:
-                            charging_power = 0.0
-
-                    elif available_power[i] > 0.0:
-
-                        # discharge....
-                        charging_power = self._battery.get_best_discharge_power(float(available_power[i]),
-                                                                                float(self._durations_s[i]),
-                                                                                current_charge=float(prev_battery_charge))
-                        if charging_power > 0:
-                            charging_power = 0.0 - charging_power
-                        else:
-                            charging_power = 0.0
-
-                    charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
-                    
-                    
-                    limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
-                    if limit_discharge is not None:
-                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
-                            # we need to .... forbid discharge to keep it when we will need it for bigger prices
-                            charged_energy = max(0.0, charged_energy)
-                            charging_power = max(0.0, charging_power)
-                            cmd = CMD_GREEN_CHARGE_ONLY
-                                
-                        limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy,0.0))
-
-
-                    if charged_energy < 0.0:
-                        prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(self._prices[i], 0.0) - charged_energy 
-
-                    available_power[i] += charging_power
-
-                    if cmd is not None:
-                        battery_commands[i] = cmd
-
-                    battery_charge[i] = prev_battery_charge + charged_energy
-                    prev_battery_charge = battery_charge[i]
-
-
-                    if available_power[i] > 0:
-                        # we will ask it from the grid:
-                        grid_nrj = ((available_power[i]*float(self._durations_s[i])) / 3600.0)
-                        remaining_grid_energy += grid_nrj
-                        remaining_grid_price += self._prices[i]*grid_nrj
-                        prices_remaining_grid_energy_buckets[self._prices[i]] = prices_remaining_grid_energy_buckets.get(self._prices[i], 0.0) + grid_nrj
-
-
+                battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
 
                 if num_optim_tries > 1:
                     # stop after a first pass of optimization
                     continue_optimizing = False
 
-                #the goal is to lower as much as possible the remaining_grid_price ... by, if possible, discharging more in the "high" prices and less in the low prices
+                #the goal is to lower as much as possible the remaining_grid_energy ... by, if possible, discharging more in the "high" prices and less in the low prices
                 if remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1: # 100Wh hum or use a bit of a buffer here for uncertainty?
                     # fantastic we do nothing
                     continue_optimizing = False
@@ -432,14 +627,14 @@ class PeriodSolver(object):
                                 if energy_can_still_be_discharged > 0.0:
                                     # we have some energy to cover
                                     if energy_can_still_be_discharged >= energy_to_cover:
-                                        _LOGGER.info(f"==> Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
+                                        _LOGGER.info(f"solve:==> Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
                                         # we can cover it
                                         energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                         energy_to_cover = 0
 
                                         
                                     else:
-                                        _LOGGER.info(f"==> Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
+                                        _LOGGER.info(f"solve:==> Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
                                         energy_can_still_be_discharged = 0
                                         energy_to_cover -= energy_can_still_be_discharged
 
@@ -457,7 +652,7 @@ class PeriodSolver(object):
 
                 if continue_optimizing is False:
                     # now we have the best battery commands for the period
-                    self._available_power = available_power
+                    self._available_power = self._available_power + battery_charge_power
 
 
         # we may have charged "too much" and if it covers everything, we could remove some charging
@@ -474,13 +669,13 @@ class PeriodSolver(object):
         constraints = []
         for c in self._active_constraints:
             if c.is_before_battery is False:
-                constraints.append((c, c.score()))
+                constraints.append((c, c.score(self._start_time)))
 
         constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
         for ci , _ in constraints:
             c = constraints_evolution.get(ci, ci)
-            out_c, _, is_solved, out_commands, out_power = c.compute_best_period_repartition(
+            out_c, is_solved, out_commands, out_power, first_slot, last_slot = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -489,6 +684,7 @@ class PeriodSolver(object):
                 time_slots = self._time_slots
             )
             constraints_evolution[ci] = out_c
+            constraints_bounds[ci] = (first_slot, last_slot)
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci.load, out_commands)
 
@@ -499,20 +695,20 @@ class PeriodSolver(object):
             energy_given_back_to_grid = 0.0
             available_power = np.zeros(len(self._available_power), dtype=np.float64)
 
-            #limit this to the next 6hours
-
+            #limit this to the next 6 hours
             duration_s = 0.0
-            last_surplus_index = 0
+            first_surplus_index = None
+            last_surplus_index = None
             for i in range(num_slots):
                 if self._available_power[i] < 0.0 and self._battery.is_value_full(battery_charge[i]):
                     energy_given_back_to_grid += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0)
-                    available_power[i] = self._available_power[i]
+                    if first_surplus_index is None:
+                        first_surplus_index = i
+                    last_surplus_index = i
 
                 duration_s += self._durations_s[i]
                 if duration_s > 6*3600:
                     break
-
-
 
             if energy_given_back_to_grid < 0.0:
                 # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
@@ -524,55 +720,27 @@ class PeriodSolver(object):
                 _LOGGER.info(
                     f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
 
-                one_energy_to_be_spent_change = True
-                while one_energy_to_be_spent_change and energy_to_be_spent > 0:
+                while True:
 
                     constraints = []
                     for c in self._active_constraints:
                         c_now = constraints_evolution.get(c, c)
                         if (c.is_before_battery is False or c.is_mandatory is False) and c_now.is_constraint_met(self._start_time) is False:
-                            constraints.append((c, c.score()))
+                            constraints.append((c, c.score(self._start_time)))
 
                     if len(constraints) == 0:
                         break
 
-                    constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
-
-                    # we should go back through the constraints and use this energy to be spent on the loads that are not mandatory and that can consume more energy
-                    # ex: a car that didn't have enough solar power to charge on the remaining available energy, should have a power consign that is using the solar and some
-                    # pieces of this energy to charge more, and has there will be some spare surplus energy, this surplus will fill back what was spent
-
-                    # the issue here for cars or whatever is that we may be charged ot finished already ...
-                    # so we must keep the commands and constraints that have been computed and changed before and add some stuff to it if there are not met
-
-                    one_energy_to_be_spent_change = False
-                    for ci, _ in constraints:
-                        c = constraints_evolution.get(ci, ci)
-                        out_c, new_energy_to_be_spent, is_solved, out_commands, out_power = c.compute_best_period_repartition(
-                            do_use_available_power_only=True,
-                            prices=self._prices,
-                            power_slots_duration_s=self._durations_s,
-                            power_available_power=available_power,
-                            prices_ordered_values=self._prices_ordered_values,
-                            time_slots=self._time_slots,
-                            bump_available_energy=energy_to_be_spent,
-                            existing_commands=actions.get(ci.load, None)
-                        )
-
-                        if new_energy_to_be_spent != energy_to_be_spent:
-                            _LOGGER.info(
-                                f"solve:{ci.load.name} getting surplus energy {energy_to_be_spent - new_energy_to_be_spent} Wh")
-                            energy_to_be_spent = new_energy_to_be_spent
-                            one_energy_to_be_spent_change = True
-
-                        constraints_evolution[ci] = out_c
-
-                        available_power = available_power + out_power
-                        self._available_power = self._available_power + out_power
-                        self._merge_commands_slots_for_load(actions, ci.load, out_commands)
-
-                        if energy_to_be_spent < 0.0:
-                            break
+                    solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
+                                                                                      constraints,
+                                                                                      constraints_evolution,
+                                                                                      constraints_bounds,
+                                                                                      actions,
+                                                                                      first_surplus_index,
+                                                                                      last_surplus_index,
+                                                                                      True)
+                    if solved or has_changed is False:
+                        break
 
         # we have now all the constraints solved, and the battery commands computed
         # now will be time to layout the commands for the constraints and their respective loads

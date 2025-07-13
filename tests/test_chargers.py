@@ -17,8 +17,7 @@ from custom_components.quiet_solar.ha_model.charger import (
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_GREEN_ONLY,
-    CMD_AUTO_PRICE
+    CMD_AUTO_GREEN_ONLY
 )
 from custom_components.quiet_solar.const import (
     CONF_DYN_GROUP_MAX_PHASE_AMPS,

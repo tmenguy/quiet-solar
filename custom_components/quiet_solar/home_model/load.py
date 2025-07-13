@@ -516,6 +516,8 @@ class AbstractLoad(AbstractDevice):
 
         return res
 
+    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int) -> float:
+        return 0.0
 
     def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
         if self.load_is_auto_to_be_boosted or  self.qs_best_effort_green_only:
@@ -753,7 +755,7 @@ class AbstractLoad(AbstractDevice):
                 for k in removed_infinits:
                     if k.is_constraint_met(time=time):
                         continue
-                    if k.score() > keep.score():
+                    if k.score(time) > keep.score(time):
                         keep = k
 
                 self._constraints.append(keep)
@@ -777,7 +779,7 @@ class AbstractLoad(AbstractDevice):
             for (_, k) in removed_as_fast:
                 if k.is_constraint_met(time=time):
                     continue
-                if k.score() > keep.score():
+                if k.score(time) > keep.score(time):
                     keep = k
             keep.end_of_constraint = end_ctr
             self._constraints = [keep].extend(new_constraints)
@@ -808,7 +810,7 @@ class AbstractLoad(AbstractDevice):
             for current_cluster in clusters:
                 keep_ic : tuple[int, LoadConstraint] = current_cluster[0]
                 for i, c in current_cluster:
-                    if c.score() > keep_ic[1].score():
+                    if c.score(time) > keep_ic[1].score(time):
                         keep_ic = (i,c)
 
                 for i, c in current_cluster:
@@ -860,7 +862,7 @@ class AbstractLoad(AbstractDevice):
 
             if (self._last_completed_constraint is not None and
                 self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
-                self._last_completed_constraint.score() >= constraint.score()):
+                self._last_completed_constraint.score(time) >= constraint.score(time)):
                 _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as last completed one")
                 return False
 
@@ -870,7 +872,7 @@ class AbstractLoad(AbstractDevice):
                 if c == constraint:
                     return False
                 if  c.end_of_constraint == constraint.end_of_constraint:
-                    if c.score() == constraint.score():
+                    if c.score(time) == constraint.score(time):
                         _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
                         return False
                     else:
@@ -963,7 +965,7 @@ class AbstractLoad(AbstractDevice):
                                 else:
                                     force_solving = True
                                     # nc constraint may need to be forced or not
-                                    if nc.score() > c.score():
+                                    if nc.score(time) > c.score(time):
                                         # we should skip the current one
                                         c.skip = True
                                         handled_constraint_force = True

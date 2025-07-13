@@ -83,7 +83,7 @@ from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstrai
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE
+    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP
 from ..home_model.load import AbstractLoad, diff_amps, add_amps, is_amps_zero, are_amps_equal
 
 _LOGGER = logging.getLogger(__name__)
@@ -389,6 +389,64 @@ class QSChargerStatus(object):
                     next_num_phases = next_num_phases_with_phase_change
 
         return next_amp, next_num_phases
+
+    def get_consign_amps_values(self, consign_is_minimum=True, add_tolerance=0.0) -> (list[int]|None, int|float):
+
+        possible_num_phases = None
+
+        if self.command.power_consign is not None and self.command.power_consign > 0:
+
+            power = self.command.power_consign
+
+            if consign_is_minimum:
+                power = power*(1.0 - add_tolerance)
+            else:
+                power = power*(1.0 + add_tolerance)
+
+            if self.charger.can_do_3_to_1_phase_switch():
+
+                # avoid phase switch if not needed
+                possible_num_phases = [self.current_active_phase_number]
+
+                # if we can have "both" 1 and 3 phases, we will try to see if the current phase setup is compatible, if so
+                # no need to phase switch and we keep the current need
+                current_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number == 3)
+
+                res_current = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=False)
+
+                if res_current is not None:
+                    # we can keep the current phase setup
+                    consign_amp = res_current
+                else:
+                    # need to phase switch to get the minimum asked power (either up or down)
+                    switch_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number != 3)
+                    res_switch = self.charger._get_amps_from_power_steps(switch_steps, power, safe_border=False)
+
+                    if res_switch is None:
+                        # well we stay as we are ... no phase switch
+                        consign_amp = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=False)
+                    else:
+                        # we can switch to the other phase setup
+                        consign_amp = res_switch
+                        if self.current_active_phase_number == 3:
+                            possible_num_phases = [1]
+                        else:
+                            possible_num_phases = [3]
+
+            else:
+                native_power_steps = self.charger.car.get_charge_power_per_phase_A(self.charger.physical_3p)
+                consign_amp = self.charger._get_amps_from_power_steps(native_power_steps, power, safe_border=True)
+        else:
+            if consign_is_minimum:
+                consign_amp = self.charger.min_charge
+            else:
+                consign_amp = self.charger.max_charge
+
+        consign_amp = int(max(consign_amp, self.charger.min_charge))
+        consign_amp = int(min(consign_amp, self.charger.max_charge))
+
+        return possible_num_phases, consign_amp
+
 
 class QSChargerGroup(object):
 
@@ -839,6 +897,11 @@ class QSChargerGroup(object):
             for allow_phase_change in check_phase_change:
                 for cs in actionable_chargers:
 
+                    local_stop_on_first_change = stop_on_first_change
+                    if cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
+                        local_stop_on_first_change = False
+
+                    num_changes = 0
                     while True:
 
                         next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
@@ -890,7 +953,9 @@ class QSChargerGroup(object):
                                     cs.budgeted_amp = next_possible_budgeted_amp
                                     cs.budgeted_num_phases = next_possible_num_phases
 
-                                    if stop_on_first_change:
+                                    num_changes += 1
+
+                                    if local_stop_on_first_change:
                                         do_stop = True
 
                                     if increase is False and power_budget >= 0:
@@ -900,6 +965,9 @@ class QSChargerGroup(object):
                         if do_stop or next_possible_budgeted_amp is None:
                             # we can't change this charger anymore ... just stop here
                             break
+
+                    if stop_on_first_change and num_changes > 0:
+                        do_stop = True
 
                     if do_stop:
                         break
@@ -915,7 +983,7 @@ class QSChargerGroup(object):
 
             best_global_command = CMD_AUTO_GREEN_ONLY
             for cs in actionable_chargers:
-                if cs.command.is_like(CMD_AUTO_PRICE) or cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
+                if cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE,CMD_AUTO_FROM_CONSIGN]):
                     best_global_command = CMD_AUTO_PRICE
                     break
 
@@ -952,7 +1020,7 @@ class QSChargerGroup(object):
 
                     for cs in actionable_chargers:
 
-                        if cs.command.is_like(CMD_AUTO_GREEN_ONLY):
+                        if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_ONLY, CMD_AUTO_GREEN_CAP]):
                             # no need to try to augment on the green only: reserve it to the price ones
                             continue
 
@@ -1120,7 +1188,7 @@ class QSChargerGroup(object):
 
             really_stoppable_shave_cs = [cs for cs in actionable_chargers if cs.can_be_started_and_stopped]
             first_stoppable_shave_cs = [cs for cs in actionable_chargers if
-                                        (cs.command.is_like(CMD_AUTO_GREEN_ONLY) or cs.command.is_like(CMD_AUTO_PRICE))]
+                                        ( cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_PRICE]))]
             shave_only_amps_cs = [cs for cs in actionable_chargers if cs.possible_amps[0] > cs.charger.min_charge]
 
             for cs_s in [really_stoppable_shave_cs, first_stoppable_shave_cs, shave_only_amps_cs, actionable_chargers]:
@@ -1632,98 +1700,74 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if cs.current_real_max_charging_amp == 0:
             current_state = False
 
-        # bu default do not phase switch
-        possible_num_phases = [cs.current_active_phase_number]
-
         cs.can_be_started_and_stopped = False
 
         # we need to force a charge here from a given minimum
         if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
 
-            if cs.command.power_consign is not None:
-
-                power = cs.command.power_consign
-
-                if self.can_do_3_to_1_phase_switch():
-
-                    # avoid phase switch if not needed
-                    possible_num_phases = [cs.current_active_phase_number]
-
-                    # if we can have "both" 1 and 3 phases, we will try to see if the current phase setup is compatible, if so
-                    # no need to phase switch and we keep the current need
-                    current_steps = self.car.get_charge_power_per_phase_A(cs.current_active_phase_number == 3)
-
-                    res_current = self._get_amps_from_power_steps(current_steps, power, safe_border=False)
-
-                    if res_current is not None:
-                        # we can keep the current phase setup
-                        min_amps = res_current
-                    else:
-                        # need to phase switch to get the minimum asked power (either up or down)
-                        switch_steps = self.car.get_charge_power_per_phase_A(cs.current_active_phase_number != 3)
-                        res_switch = self._get_amps_from_power_steps(switch_steps, power, safe_border=False)
-
-                        if res_switch is None:
-                            # well we stay as we are ... no phase switch
-                            min_amps = self.min_charge
-                        else:
-                            # we can switch to the other phase setup
-                            min_amps = res_switch
-                            if cs.current_active_phase_number == 3:
-                                possible_num_phases = [1]
-                            else:
-                                possible_num_phases = [3]
-
-                else:
-                    min_amps = self._get_amps_from_power_steps(native_power_steps, power, safe_border=True)
-            else:
-                min_amps = self.min_charge
-
-            min_amps = int(max(min_amps, self.min_charge))
-            min_amps = int(min(min_amps, self.max_charge))
+            possible_num_phases, min_amps = cs.get_consign_amps_values(consign_is_minimum=True)
+            if possible_num_phases is None:
+                possible_num_phases = [cs.current_active_phase_number]
 
             # 0 is not an option to not allow to stop the charge while we got this consign, in "minimum" consign or "price" consign
             possible_amps = [i for i in range(min_amps, self.max_charge + 1)]
 
         else:
-            run_list = [i for i in range(self.min_charge, self.max_charge + 1)]
-            # check if it is on or off : can we change from off to on or on to off because of allowed changes
-            # check if we need to wait a bit before changing the state of the charger
+            max_charge = self.max_charge
+            possible_num_phases = None
+            possible_amps = None
 
-            cs.can_be_started_and_stopped = True
-            if cs.command.is_like(CMD_AUTO_PRICE):
-                cs.can_be_started_and_stopped = False
+            if cs.command.is_like(CMD_AUTO_GREEN_CAP):
 
-            if current_state is False:
-                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
-            else:
-                time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
-
-            can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
-
-            # that may force a change if can_stop False and Current_state is False
-            possible_amps = run_list
-            if cs.can_be_started_and_stopped:
-                if can_change_state:
-                    possible_amps = [0]
-                    possible_amps.extend(run_list)
-                elif current_state is False:
-                    # we are off and we can't change the state, so we can only stay off
+                if cs.command.power_consign == 0:
+                    # forbid charge in that case ...
+                    possible_num_phases = [cs.current_active_phase_number]
                     possible_amps = [0]
 
+                else:
+                    possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
 
-            # check if we have the right to change phase number
-            if self.can_do_3_to_1_phase_switch():
-                if self._expected_num_active_phases.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES):
-                    # we can change the number of phases
-                    possible_num_phases = [1,3]
+            if possible_num_phases is None:
+                possible_num_phases = [cs.current_active_phase_number]
+                # check if we have the right to change phase number
+                if self.can_do_3_to_1_phase_switch():
+                    if self._expected_num_active_phases.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES):
+                        # we can change the number of phases
+                        possible_num_phases = [1, 3]
+
+            if possible_amps is None:
+                run_list = [i for i in range(self.min_charge, max_charge + 1)]
+                # check if it is on or off : can we change from off to on or on to off because of allowed changes
+                # check if we need to wait a bit before changing the state of the charger
+
+                cs.can_be_started_and_stopped = True
+                if cs.command.is_like(CMD_AUTO_PRICE):
+                    cs.can_be_started_and_stopped = False
+
+                if current_state is False:
+                    time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
+                else:
+                    time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
+
+                can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
+
+                # that may force a change if can_stop False and Current_state is False
+                possible_amps = run_list
+                if cs.can_be_started_and_stopped:
+                    if can_change_state:
+                        possible_amps = [0]
+                        possible_amps.extend(run_list)
+                    elif current_state is False:
+                        # we are off and we can't change the state, so we can only stay off
+                        possible_amps = [0]
+
 
         cs.possible_amps = possible_amps
         cs.possible_num_phases = possible_num_phases
 
         ct = self.get_current_active_constraint(time)
         score = 0
-        # if there is a tinne constraint that is not too far away : score boost
+        # if there is a time constraint that is not too far away : score boost
         # if this constraint is mandatory of as fast as possible : score boost
         score_boost_standard_ct = 1000
         score_boost_mandatory = 100*score_boost_standard_ct
@@ -1771,6 +1815,79 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         cs.charge_score = score
 
         return cs
+
+    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int) -> float:
+        if self.car is None:
+            return 0.0
+
+        native_score_span_duration = 100
+        native_score_span_battery = 1000
+        native_score_span = native_score_span_duration * native_score_span_battery
+
+        native_score_duration = 0
+        max_duration_h = 23 # 4*max_duration_h + 3 must be < 100
+        if ct is not None:
+
+            time_to_complete_h = None
+
+
+            if ct.as_fast_as_possible:
+                time_to_complete_h = 0
+            elif ct.end_of_constraint < DATETIME_MAX_UTC:
+                # there is a true end constraint
+                time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
+
+            if time_to_complete_h is not None and time_to_complete_h <= max_duration_h - 1:
+                native_score_duration = int(max_duration_h - time_to_complete_h)
+
+                if ct.is_mandatory:
+                    native_score_duration += 2*max_duration_h + 2
+
+
+        if self.qs_bump_solar_charge_priority:
+            native_score_duration += max_duration_h + 1 # to be above non mandatory but below in case of mandatory constraints
+
+        native_score_duration = float(min(native_score_span_duration-1, int(native_score_duration)))
+
+        # give more to the ones with the lower car SOC percentage to reach their default target charge
+        car_percent = self.car.get_car_charge_percent(time)
+        if car_percent is None:
+            _LOGGER.warning(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} car_percent is None")
+            car_percent = 0.0
+
+        car_battery_capacity = self.car.car_battery_capacity
+        if car_battery_capacity is None or car_battery_capacity == 0:
+            car_battery_capacity = 100000 # (100kWh)
+
+        #convert in kwh
+        car_battery_capacity = car_battery_capacity / 1000.0
+        max_battery = 400
+        native_score_battery = float(int(max_battery - ((car_battery_capacity*car_percent)/100.0)))
+
+
+        if score_span != native_score_span:
+
+            score_span_duration = int((float(score_span) * float(native_score_span_duration))/float(native_score_span))
+            score_duration = int((float(score_span_duration) * float(native_score_duration))/float(native_score_span_duration))
+
+            score_span_battery = int((float(score_span) * float(native_score_span_battery))/float(native_score_span))
+            score_battery = int((float(score_span_battery) * float(native_score_battery))/float(native_score_span_battery))
+        else:
+            score_span_duration = native_score_span_duration
+            score_duration = native_score_duration
+
+            score_span_battery = native_score_span_battery
+            score_battery = native_score_battery
+
+        score_duration = int(max(0, min(score_duration, score_span_duration-1)))
+        score_battery = int(max(0, min(score_battery, score_span_battery-1)))
+
+        score = score_duration * score_span_battery + score_battery
+        return score
+
+
+
+
 
 
     def reset(self):

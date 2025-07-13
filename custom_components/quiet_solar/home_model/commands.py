@@ -5,6 +5,7 @@ CMD_CST_ON = "on"
 CMD_CST_OFF = "off"
 CMD_CST_IDLE = "idle"
 CMD_CST_AUTO_GREEN = "auto_green"
+CMD_CST_AUTO_GREEN_CAP = "auto_green_cap"
 CMD_CST_GREEN_CHARGE_ONLY = "green_charge-ONLY"
 CMD_CST_AUTO_CONSIGN = "auto_consign"
 CMD_CST_AUTO_PRICE = "auto_price"
@@ -16,9 +17,10 @@ commands_scores = {
     CMD_CST_AUTO_CONSIGN: 80,
     CMD_CST_AUTO_PRICE: 70,
     CMD_CST_GREEN_CHARGE_ONLY: 60,
-    CMD_CST_AUTO_GREEN: 50,
-    CMD_CST_IDLE: 40,
-    CMD_CST_OFF: 30,
+    CMD_CST_AUTO_GREEN_CAP: 50,
+    CMD_CST_AUTO_GREEN: 40,
+    CMD_CST_IDLE: 30,
+    CMD_CST_OFF: 20,
 }
 
 @dataclass
@@ -47,12 +49,15 @@ class LoadCommand:
         return self.command == "off" or self.command == "idle"
 
 
-def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand) -> LoadCommand:
+def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand, prio_on_cmd2=False) -> LoadCommand:
     """Merge two LoadCommand objects"""
     if cmd1 is None:
         return cmd2
     if cmd2 is None:
         return cmd1
+
+    if prio_on_cmd2:
+        return copy_command(cmd2)
 
     if commands_scores.get(cmd1.command, 0) >= commands_scores.get(cmd2.command, 0):
         command = cmd1.command
@@ -76,6 +81,7 @@ def copy_command_and_change_type(cmd:LoadCommand, new_type:str) -> LoadCommand:
 
 CMD_ON = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
 CMD_AUTO_GREEN_ONLY = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
+CMD_AUTO_GREEN_CAP = LoadCommand(command=CMD_CST_AUTO_GREEN_CAP, power_consign=0.0)
 CMD_AUTO_FROM_CONSIGN = LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=0.0)
 CMD_AUTO_PRICE = LoadCommand(command=CMD_CST_AUTO_PRICE, power_consign=0.0)
 CMD_OFF = LoadCommand(command=CMD_CST_OFF, power_consign=0.0)
