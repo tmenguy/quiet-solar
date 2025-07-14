@@ -391,9 +391,13 @@ class PeriodSolver(object):
 
             orig_energy_delta = energy_delta
 
-            _LOGGER.info(
-                f"_constraints_delta: trying to get/give energy delta: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
 
+            if energy_delta > 0:
+                _LOGGER.info(
+                    f"_constraints_delta: trying to consume more: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
+            else:
+                _LOGGER.info(
+                    f"_constraints_delta: trying to reclaim: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
             load_to_re_adapt = set()
 
             for ci, _ in constraints:
@@ -425,14 +429,14 @@ class PeriodSolver(object):
                     allow_change_state=allow_change_state)
                 if has_changes:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} delta: {energy_delta - init_energy_delta}Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
+                        f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
                     has_changed = True
                     constraints_evolution[ci] = out_c_adapted
                     self._available_power = self._available_power + out_delta_power
                     self._merge_commands_slots_for_load(actions, ci.load, out_commands_adapted, prio_on_new=True)
                 else:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta - init_energy_delta}Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
+                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
 
                 if ci.support_auto:
                     load_to_re_adapt.add(ci.load)
@@ -700,7 +704,6 @@ class PeriodSolver(object):
             # We may have a path here if we still do have some surplus and battery is full : we may be ok to force a bit some loads to consume more and use the battery for a time so the battery because the battery could fill itself back with solar
             # and we won't give back anything to the grid
             energy_given_back_to_grid = 0.0
-            available_power = np.zeros(len(self._available_power), dtype=np.float64)
 
             #limit this to the next 6 hours
             duration_s = 0.0
@@ -730,11 +733,11 @@ class PeriodSolver(object):
                 while True:
 
                     constraints = []
-
                     all_c = []
+                    # if possible we can bump any possible contraint has we know it is energy that we can use
                     for c in self._active_constraints:
                         c_now = constraints_evolution.get(c, c)
-                        if c.is_mandatory is False and c_now.is_constraint_met(self._start_time) is False:
+                        if c_now.is_constraint_met(self._start_time) is False:
                             constraints.append((c, c.score(self._start_time)))
                         all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
 
@@ -744,6 +747,8 @@ class PeriodSolver(object):
                     if len(constraints) == 0:
                         break
 
+                    # instead of surplus index I could go to first_surplus_index = 0 ti start now to consume battery energy
+                    # as we will get a lot more surplus ....
                     solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
                                                                                       constraints,
                                                                                       constraints_evolution,

@@ -623,9 +623,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         sorted_available_power = range(first_slot, last_slot + 1)
         if energy_delta >= 0.0:
             _LOGGER.info(
-                f"adapt_repartition: bump available energy {energy_delta} for {self.name}")
+                f"adapt_repartition: consume more energy {energy_delta}Wh for {self.name}")
         else:
             sorted_available_power = reversed(sorted_available_power)
+            _LOGGER.info(
+                f"adapt_repartition: reclaim energy {energy_delta}Wh from {self.name}")
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
@@ -652,14 +654,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # we do not want to change the state of the load, so we cannot add energy
                     continue
 
-                j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
-                if j == len(power_sorted_cmds) - 1:
-                    # we are already at the max power, we cannot add more
-                    continue
-                elif j is None:
+                if current_command_power == 0:
                     j = 0
                 else:
-                    j += 1
+                    j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
+
+                    if j == len(power_sorted_cmds) - 1:
+                        # we are already at the max power, we cannot add more, force to stay at this power
+                        pass
+                    elif j is None:
+                        j = 0
+                    else:
+                        j += 1
 
             else: # init_energy_delta < 0.0:
 
@@ -693,6 +699,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # it is ok in case of adaptation the cmd merge of the solver is taking the new one aall the time
                         base_cmd = copy_command(CMD_IDLE)
 
+                delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
+                d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
+
+                if (energy_delta + d_energy)* init_energy_delta <= 0:
+                    # sign has changed ... we are no more in over cosumme or under consume
+                    if init_energy_delta >= 0.0:
+                        #we are over consuming if we do that: don't allow this change
+                        # for under consume it is ok to underconsume a bit more
+                        break
+
                 if self.support_auto:
                     if init_energy_delta >= 0.0:
                         # it will force some use to empty a bit the battery
@@ -704,8 +720,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 else:
                     out_commands[i] = copy_command(base_cmd)
 
-                out_delta_power[i] = out_commands[i].power_consign - current_command_power
-                d_energy = (out_delta_power[i] * power_slots_duration_s[i]) / 3600.0
+                out_delta_power[i] = delta_power
                 delta_energy += d_energy
                 energy_delta -= d_energy
 
