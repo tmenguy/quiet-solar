@@ -41,7 +41,8 @@ class QSDataHandler:
         type = config_entry.data.get(DEVICE_TYPE)
         d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
         self.hass.data[DOMAIN][config_entry.entry_id] = d
-        self.home.add_device(d)
+        if d.qs_enable_device or type == "home":
+            self.home.add_device(d)
 
         return d
 

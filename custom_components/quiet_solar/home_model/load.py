@@ -151,10 +151,14 @@ class AbstractDevice(object):
     @qs_enable_device.setter
     def qs_enable_device(self, enabled:bool):
         if enabled != self._enabled:
+            self.reset()
             self._enabled = enabled
-            if enabled:
-                self.reset()
+            if enabled is False:
                 self.home.remove_device(self)
+                _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
+            else:
+                self.home.add_device(self)
+                _LOGGER.info(f"qs_enable_device: {self.name}ENABLE AND ADD")
 
             if hasattr(self, "_exposed_entities"):
                 time = datetime.now(pytz.utc)
@@ -590,6 +594,8 @@ class AbstractLoad(AbstractDevice):
             return 0.0
 
     async def do_run_check_load_activity_and_constraints(self, time: datetime)-> bool:
+        if self.qs_enable_device is False:
+            return False
         if self._externally_initialized_constraints is False:
             return False
         return  await self.check_load_activity_and_constraints(time)
@@ -628,6 +634,9 @@ class AbstractLoad(AbstractDevice):
 
     async def do_probe_state_change(self, time: datetime):
 
+        if self.qs_enable_device is False:
+            return
+
         new_hash = self.get_active_state_hash(time)
 
         if new_hash is not None:
@@ -663,6 +672,8 @@ class AbstractLoad(AbstractDevice):
         return None
 
     def is_load_active(self, time: datetime):
+        if self.qs_enable_device is False:
+            return False
         if not self._constraints:
             return False
         return True
@@ -674,6 +685,8 @@ class AbstractLoad(AbstractDevice):
         self._last_pushed_end_constraint_from_agenda = None
 
     async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
+        if self.qs_enable_device is False:
+            return
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_CHANGE_CONSTRAINT_COMPLETED)
 

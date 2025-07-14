@@ -633,6 +633,8 @@ class QSHome(QSDynamicGroup):
 
         # check for active loads
         for load in self._all_loads:
+            if load.qs_enable_device is False:
+                continue
             if await load.do_run_check_load_activity_and_constraints(time):
                 self.force_next_solve()
 
