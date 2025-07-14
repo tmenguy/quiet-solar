@@ -1712,6 +1712,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # 0 is not an option to not allow to stop the charge while we got this consign, in "minimum" consign or "price" consign
             possible_amps = [i for i in range(min_amps, self.max_charge + 1)]
 
+            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} CMD_AUTO_FROM_CONSIGN power: {cs.command.power_consign} {possible_amps}")
+
         else:
             max_charge = self.max_charge
             possible_num_phases = None
@@ -1726,6 +1728,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 else:
                     possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
+
+                _LOGGER.info(
+                    f"get_stable_dynamic_charge_status: {self.name} CMD_AUTO_GREEN_CAP power: {cs.command.power_consign} {possible_amps}")
 
             if possible_num_phases is None:
                 possible_num_phases = [cs.current_active_phase_number]
