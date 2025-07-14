@@ -556,22 +556,27 @@ class QSHome(QSDynamicGroup):
         if isinstance(device, QSBattery):
             self._battery = device
         elif isinstance(device, QSCar):
-            self._cars.append(device)
+            if device not in self._cars:
+                self._cars.append(device)
         elif isinstance(device, QSChargerGeneric):
-            self._chargers.append(device)
+            if device not in self._chargers:
+                self._chargers.append(device)
         elif isinstance(device, QSSolar):
             self._solar_plant = device
 
         if isinstance(device, AbstractLoad):
-            self._all_loads.append(device)
+            if device not in self._all_loads:
+                self._all_loads.append(device)
 
         if isinstance(device, QSDynamicGroup):
             # it can be home....
-            self._all_dynamic_groups.append(device)
+            if device not in self._all_dynamic_groups:
+                self._all_dynamic_groups.append(device)
 
         if isinstance(device, HADeviceMixin):
-            device.register_all_on_change_states()
-            self._all_devices.append(device)
+            if device not in self._all_devices:
+                device.register_all_on_change_states()
+                self._all_devices.append(device)
 
         #will redo the whole topology each time
         self._set_amps_topology()

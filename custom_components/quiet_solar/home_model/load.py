@@ -158,7 +158,7 @@ class AbstractDevice(object):
                 _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
             else:
                 self.home.add_device(self)
-                _LOGGER.info(f"qs_enable_device: {self.name}ENABLE AND ADD")
+                _LOGGER.info(f"qs_enable_device: {self.name} ENABLE AND ADD")
 
             if hasattr(self, "_exposed_entities"):
                 time = datetime.now(pytz.utc)
