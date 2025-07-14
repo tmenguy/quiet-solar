@@ -430,6 +430,9 @@ class PeriodSolver(object):
                     constraints_evolution[ci] = out_c_adapted
                     self._available_power = self._available_power + out_delta_power
                     self._merge_commands_slots_for_load(actions, ci.load, out_commands_adapted, prio_on_new=True)
+                else:
+                    _LOGGER.info(
+                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta - init_energy_delta}Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
 
                 if ci.support_auto:
                     load_to_re_adapt.add(ci.load)
