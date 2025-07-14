@@ -535,13 +535,6 @@ class HADeviceMixin:
         return vals[-1] >= max_v and max_v > min_v and len(vals) > 1
 
 
-
-
-
-
-
-
-
     def get_sensor_latest_possible_valid_value(self,
                                                entity_id,
                                                tolerance_seconds: float | None = None,

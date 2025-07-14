@@ -3135,8 +3135,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             is_growing = self.car.is_car_charge_growing(num_seconds=computed_percent_probe_window, time=time)
                             if is_growing is None:
                                 _LOGGER.info(
-                                    f"update_value_callback:{self.name} {self.car.name} use calculus because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
-                                result = result_calculus
+                                    f"update_value_callback:{self.name} {self.car.name} use sensor because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  calculus:{result_calculus} sensor:{sensor_result}")
+                                result = sensor_result
                             elif is_growing is False:
                                 # we are not growing and we should ...
                                 if computed_percent_probe_window > 5:

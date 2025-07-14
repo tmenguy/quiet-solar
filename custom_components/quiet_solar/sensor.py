@@ -355,6 +355,7 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
 class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
 
     device: AbstractLoad
+
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
@@ -364,33 +365,22 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         new_val = self.device.get_active_readable_name(time)
 
         if self._attr_native_value != new_val:
-            do_save = True
             self._attr_native_value = new_val
 
         constraints = self.device.get_active_constraints_for_storage(time)
         serialized_constraints = [ l.to_dict() for l in constraints]
 
-        old = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
+        self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_constraints
 
-        if old != serialized_constraints:
-            do_save = True
-            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_constraints
-
-        old = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
         if self.device._last_completed_constraint is None:
-            if old is not None:
-                do_save = True
-                self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = None
+            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = None
         else:
             serialized_constraint = self.device._last_completed_constraint.to_dict()
-            if old != serialized_constraint:
-                do_save = True
-                self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
+            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
 
         self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = self.device.get_to_be_saved_info()
 
-        if do_save:
-            self.async_write_ha_state()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """add back the stored constraints."""
