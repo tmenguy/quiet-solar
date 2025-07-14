@@ -392,7 +392,7 @@ class PeriodSolver(object):
             orig_energy_delta = energy_delta
 
             _LOGGER.info(
-                f"_constraints_delta: trying to get/give energy delta: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]}")
+                f"_constraints_delta: trying to get/give energy delta: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
 
             load_to_re_adapt = set()
 
