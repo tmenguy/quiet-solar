@@ -730,10 +730,16 @@ class PeriodSolver(object):
                 while True:
 
                     constraints = []
+
+                    all_c = []
                     for c in self._active_constraints:
                         c_now = constraints_evolution.get(c, c)
-                        if (c.is_before_battery is False or c.is_mandatory is False) and c_now.is_constraint_met(self._start_time) is False:
+                        if c.is_mandatory is False and c_now.is_constraint_met(self._start_time) is False:
                             constraints.append((c, c.score(self._start_time)))
+                        all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
+
+                    _LOGGER.info(
+                        f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
 
                     if len(constraints) == 0:
                         break
