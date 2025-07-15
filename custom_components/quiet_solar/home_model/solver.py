@@ -721,19 +721,20 @@ class PeriodSolver(object):
                 if duration_s > 6*3600:
                     break
 
-            probe_window_start = first_surplus_index # we may want to grab before the battery is full, take 1 or 2 hours
+            if energy_given_back_to_grid < 0.0 and first_surplus_index is not None and last_surplus_index is not None:
 
-            if first_surplus_index > 0:
-                duration_s = 0.0
-                for i in range(first_surplus_index - 1, -1, -1):
-                    duration_s += self._durations_s[i]
-                    if duration_s > 2*3600:
-                        break
-                    probe_window_start=i
+                probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
 
-            probe_window_end = last_surplus_index
+                if first_surplus_index > 0:
+                    duration_s = 0.0
+                    for i in range(first_surplus_index - 1, -1, -1):
+                        duration_s += self._durations_s[i]
+                        if duration_s > 2 * 3600:
+                            break
+                        probe_window_start = i
 
-            if energy_given_back_to_grid < 0.0:
+                probe_window_end = last_surplus_index
+
                 # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
                 # we have some energy given back to the grid, so we can try to force some loads to consume more
                 # this is only possible if the battery is full and we have some surplus
