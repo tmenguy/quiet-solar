@@ -789,18 +789,24 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         options = set()
         options.add(100)
-        if current_soc < 90:
-            first = int(current_soc // 10 + 1)
-            if first < 10:
-                for i in range(first, 10):
-                    options.add(i * 10)
+
+        if self.car_charge_percent_max_number_steps and len(self.car_charge_percent_max_number_steps) >= 1:
+            for v in self.car_charge_percent_max_number_steps:
+                if v > current_soc:
+                    options.add(v)
+        else:
+            if current_soc < 90:
+                first = int(current_soc // 10 + 1)
+                if first < 10:
+                    for i in range(first, 10):
+                        options.add(i * 10)
+
+            # 85 is a special case, as it is usefull for NMC cars
+            if current_soc < 85:
+                options.add(85)
 
         if current_soc < self.car_default_charge:
             options.add(int(self.car_default_charge))
-
-        #85 is a special case, as it is usefull for NMC cars
-        if current_soc < 85:
-            options.add(85)
 
         v = int(self.get_car_target_charge())
         #always add the current set
