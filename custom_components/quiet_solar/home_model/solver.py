@@ -721,7 +721,16 @@ class PeriodSolver(object):
                 if duration_s > 6*3600:
                     break
 
-            probe_window_start = first_surplus_index # we may want to grab before the battery is full?
+            probe_window_start = first_surplus_index # we may want to grab before the battery is full, take 1 or 2 hours
+
+            if first_surplus_index > 0:
+                duration_s = 0.0
+                for i in range(first_surplus_index - 1, -1, -1):
+                    duration_s += self._durations_s[i]
+                    if duration_s > 2*3600:
+                        break
+                    probe_window_start=i
+
             probe_window_end = last_surplus_index
 
             if energy_given_back_to_grid < 0.0:
@@ -729,7 +738,7 @@ class PeriodSolver(object):
                 # we have some energy given back to the grid, so we can try to force some loads to consume more
                 # this is only possible if the battery is full and we have some surplus
 
-                energy_to_be_spent = (-energy_given_back_to_grid/2)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                energy_to_be_spent = (-energy_given_back_to_grid)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
 
                 _LOGGER.info(
                     f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
