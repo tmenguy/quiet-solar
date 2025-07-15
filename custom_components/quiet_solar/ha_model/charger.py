@@ -1480,7 +1480,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_num_active_phases: QSStateCmd | None = None
         self.reset()
 
-        self.initial_num_in_out_immediate = 0
+        self.initial_num_in_out_immediate = 1
         self.charge_start_stop_retry_s = CHARGER_START_STOP_RETRY_S
 
 
