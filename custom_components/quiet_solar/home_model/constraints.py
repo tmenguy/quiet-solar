@@ -421,7 +421,7 @@ class LoadConstraint(object):
                                         prices_ordered_values: list[float],
                                         time_slots: list[datetime]
                                         ) -> tuple[
-        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int]:
+        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int]:
         """ Compute the best repartition of the constraint over the given period."""
 
 
@@ -614,7 +614,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                           energy_delta: float,
                           power_slots_duration_s: npt.NDArray[np.float64],
                           existing_commands: list[LoadCommand | None],
-                          allow_change_state: bool):
+                          allow_change_state: bool,
+                          time: datetime) -> tuple[Self, float, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         """ Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -639,6 +640,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         delta_energy = 0.0
 
         first_adaptation = None
+
+        do_stop_at_constraint_met = False
+        if init_energy_delta > 0.0 and self.is_constraint_met(time) is False:
+            do_stop_at_constraint_met = True
+
 
         # try to shave first the biggest free slots
         for i in sorted_available_power:
@@ -733,6 +739,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # it means they are not of the same sign, we are done
                     break
 
+                if do_stop_at_constraint_met:
+                    out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
+                    if out_constraint.is_constraint_met(time):
+                        # we are done, we have met the constraint
+                        break
+
+
         out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
 
         if first_adaptation is not None:
@@ -764,7 +777,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         prices_ordered_values: list[float],
                                         time_slots: list[datetime]
                                         ) -> tuple[
-        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int]:
+        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int]:
 
         # force to only use solar power for non mandatory constraints
         if self.is_mandatory is False:
@@ -789,6 +802,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         first_slot = 0
         last_slot = len(power_available_power) - 1
 
+        max_idx_with_energy_impact = -1
+        min_idx_with_energy_impact = len(power_available_power)
+
         if len(power_sorted_cmds) == 0:
             _LOGGER.error(f"compute_best_period_repartition: no power sorted commands {self.name}")
             final_ret = False
@@ -801,6 +817,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 last_slot = max(0, last_slot - 1)  # -1 as the last_slot index is the index of the slot not the time anchor
                 if last_slot >= len(power_available_power):
                     last_slot = len(power_available_power) - 1
+
 
             if self.as_fast_as_possible:
 
@@ -829,6 +846,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         out_power[i] = as_fast_power
                         nrj_to_be_added -= current_energy
 
+                        max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
+                        min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+
                         if nrj_to_be_added <= 0.0:
                             break
                 final_ret = nrj_to_be_added <= 0.0
@@ -850,7 +870,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     new_first_slots = bisect_left(time_slots, start_reduction)
                     first_slot = max(first_slot, new_first_slots)
-
 
                 sub_power_available_power = power_available_power[first_slot:last_slot + 1]
                 min_power_idx = np.argmin(sub_power_available_power)
@@ -893,6 +912,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     available_power = power_available_power[i]
                     j = self._get_consign_idx_for_power(power_sorted_cmds, 0.0 - available_power)
 
+
+
                     if j is not None:
 
                         if self.support_auto:
@@ -905,6 +926,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         out_power_idxs[i] = j
 
                         nrj_to_be_added -= (out_power[i] * power_slots_duration_s[i]) / 3600.0
+
+                        max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
+                        min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
 
                         if nrj_to_be_added <= 0.0:
                             break
@@ -961,6 +985,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     out_power[i] = power_to_add
                                     out_power_idxs[i] = power_to_add_idx
                                     nrj_to_be_added += prev_energy - energy_to_add
+                                    max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
+                                    min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
 
                     if nrj_to_be_added > 0.0:
 
@@ -1030,6 +1056,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     out_power[i] = price_power
                                     nrj_to_be_added -= current_energy
 
+                                    max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
+                                    min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+
                                     if nrj_to_be_added <= 0.0:
                                         break
 
@@ -1051,7 +1080,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_energy}Wh {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
 
-        return out_constraint, final_ret, out_commands, out_power, first_slot, last_slot
+        if min_idx_with_energy_impact > max_idx_with_energy_impact or max_idx_with_energy_impact < 0 or min_idx_with_energy_impact >= len(power_available_power):
+            min_idx_with_energy_impact = max_idx_with_energy_impact = -1
+
+        return out_constraint, final_ret, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):

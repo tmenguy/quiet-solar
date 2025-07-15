@@ -402,7 +402,7 @@ class PeriodSolver(object):
 
             for ci, _ in constraints:
                 out_c = constraints_evolution[ci]
-                first_slot, last_slot = constraints_bounds.get(ci, (None, None))
+                first_slot, last_slot, _, _ = constraints_bounds.get(ci, (None, None, None, None))
 
                 if first_slot is None or last_slot is None:
                     _LOGGER.warning(f"_constraints_delta: constraint {ci} has no bounds, skipping")
@@ -426,7 +426,8 @@ class PeriodSolver(object):
                     energy_delta=energy_delta,
                     power_slots_duration_s=self._durations_s,
                     existing_commands=out_commands,
-                    allow_change_state=allow_change_state)
+                    allow_change_state=allow_change_state,
+                    time=self._start_time)
                 if has_changes:
                     _LOGGER.info(
                         f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
@@ -529,7 +530,7 @@ class PeriodSolver(object):
         for ci , _ in constraints:
 
             c = constraints_evolution.get(ci,ci)
-            out_c, is_solved, out_commands, out_power, first_slot, last_slot = c.compute_best_period_repartition(
+            out_c, is_solved, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = c.compute_best_period_repartition(
                 do_use_available_power_only=not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -538,7 +539,7 @@ class PeriodSolver(object):
                 time_slots = self._time_slots
             )
             constraints_evolution[ci] = out_c
-            constraints_bounds[ci] = (first_slot, last_slot)
+            constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci.load, out_commands)
 
@@ -686,7 +687,7 @@ class PeriodSolver(object):
 
         for ci , _ in constraints:
             c = constraints_evolution.get(ci, ci)
-            out_c, is_solved, out_commands, out_power, first_slot, last_slot = c.compute_best_period_repartition(
+            out_c, is_solved, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = c.compute_best_period_repartition(
                 do_use_available_power_only=True,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
@@ -695,7 +696,7 @@ class PeriodSolver(object):
                 time_slots = self._time_slots
             )
             constraints_evolution[ci] = out_c
-            constraints_bounds[ci] = (first_slot, last_slot)
+            constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci.load, out_commands)
 
@@ -720,6 +721,9 @@ class PeriodSolver(object):
                 if duration_s > 6*3600:
                     break
 
+            probe_window_start = first_surplus_index # we may want to grab before the battery is full?
+            probe_window_end = last_surplus_index
+
             if energy_given_back_to_grid < 0.0:
                 # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
                 # we have some energy given back to the grid, so we can try to force some loads to consume more
@@ -730,35 +734,49 @@ class PeriodSolver(object):
                 _LOGGER.info(
                     f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
 
-                while True:
 
-                    constraints = []
-                    all_c = []
-                    # if possible we can bump any possible contraint has we know it is energy that we can use
-                    for c in self._active_constraints:
-                        c_now = constraints_evolution.get(c, c)
-                        if c_now.is_constraint_met(self._start_time) is False:
-                            constraints.append((c, c.score(self._start_time)))
-                        all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
 
-                    _LOGGER.info(
-                        f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
+                # if possible we can bump any possible constraint has we know it is energy that we can use
+                # even if they are already met ? in fact the only issue would be to consume energy of a met constraint that has been met before the probe_window_start!
 
-                    if len(constraints) == 0:
-                        break
+                constraints = []
+                all_c = []
+                # if possible we can bump any possible contraint has we know it is energy that we can use
+                for c in self._active_constraints:
+                    c_now = constraints_evolution.get(c, c)
+                    first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
+                    add_to_probe = True
+                    if c_now.is_constraint_met(self._start_time) and max_idx_with_energy_impact < probe_window_start:
+                        # we don't wan't to give a constraint some more energy AFTER it has been completed
+                        add_to_probe = False
 
-                    # instead of surplus index I could go to first_surplus_index = 0 ti start now to consume battery energy
-                    # as we will get a lot more surplus ....
-                    solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
-                                                                                      constraints,
-                                                                                      constraints_evolution,
-                                                                                      constraints_bounds,
-                                                                                      actions,
-                                                                                      first_surplus_index,
-                                                                                      last_surplus_index,
-                                                                                      True)
-                    if solved or has_changed is False:
-                        break
+                    if add_to_probe:
+                        constraints.append((c, c.score(self._start_time)))
+
+                    all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
+
+                _LOGGER.info(
+                    f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
+
+                if len(constraints) > 0:
+
+                    while True:
+
+                        # instead of surplus index I could go to first_surplus_index = 0 ti start now to consume battery energy
+                        # as we will get a lot more surplus ....
+                        solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
+                                                                                          constraints,
+                                                                                          constraints_evolution,
+                                                                                          constraints_bounds,
+                                                                                          actions,
+                                                                                          probe_window_start,
+                                                                                          probe_window_end,
+                                                                                          True)
+                        if solved or has_changed is False:
+                            _LOGGER.info(
+                                f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh")
+                            break
+
 
         # we have now all the constraints solved, and the battery commands computed
         # now will be time to layout the commands for the constraints and their respective loads
