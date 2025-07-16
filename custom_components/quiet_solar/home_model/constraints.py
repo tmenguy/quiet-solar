@@ -772,7 +772,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             # we should reclaim some power "from the future" to meet the constraint, we need to reclaim d_energy
                             to_be_reclaimed = d_energy
                             has_reclaimed = False
-                            for k in range(len(power_slots_duration_s), last_slot, -1 ):
+                            for k in range(len(power_slots_duration_s) - 1, last_slot, -1 ):
                                 cmd = existing_commands[k]
                                 if cmd is None or cmd.power_consign <= 0.0:
                                     continue
