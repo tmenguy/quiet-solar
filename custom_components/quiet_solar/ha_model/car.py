@@ -485,7 +485,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         lower_ratio = 0.2
         if self.can_dampen_strongly_dynamically is False:
-            lower_ratio = 0.6
+            lower_ratio = 0.7
 
         if ratio < lower_ratio:
             #if going down too much ... we do nothing vs what was there before
@@ -498,9 +498,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         do_update = False
 
-        if self.can_dampen_strongly_dynamically is False:
-            _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
-            return False
+       # if self.can_dampen_strongly_dynamically is False:
+       #     _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
+       #     return False
 
         if amperage_transition is None and amperage is None:
             return False
@@ -859,8 +859,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.charger:
             if new_target and self.charger._constraints:
                 for ct in self.charger._constraints:
-                    if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent) and ct.is_mandatory:
+                    if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent):
                         ct.target_value = new_target
+                        break
 
     def get_car_target_charge_option(self):
         return self.get_car_option_charge_from_value(self.get_car_target_charge())
