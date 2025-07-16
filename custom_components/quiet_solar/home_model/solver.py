@@ -738,6 +738,8 @@ class PeriodSolver(object):
 
             if energy_given_back_to_grid < 0.0 and first_surplus_index is not None and last_surplus_index is not None:
 
+                energy_to_be_spent = (-energy_given_back_to_grid/2.0)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+
                 probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
 
                 if first_surplus_index > 0:
@@ -750,57 +752,63 @@ class PeriodSolver(object):
 
                 probe_window_end = last_surplus_index
 
-                # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
-                # we have some energy given back to the grid, so we can try to force some loads to consume more
-                # this is only possible if the battery is full and we have some surplus
+                # we have some surplus, limit the windw to reclaim energy so what is left can fill the battery
+                nrj_to_recharge = (-energy_given_back_to_grid/2.0)
+                for i in range(last_surplus_index, -1, -1):
+                    if self._available_power[i] < 0.0:
+                        nrj_to_recharge += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0) # self._available_power[i] negative
+                    probe_window_end = i
+                    if nrj_to_recharge <= 0.0:
+                        break
 
-                energy_to_be_spent = (-energy_given_back_to_grid)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                if probe_window_end >= probe_window_start:
+                    # all the mandatory are covered as they can be, now we can try to force some loads to consume more energy
+                    # we have some energy given back to the grid, so we can try to force some loads to consume more
+                    # this is only possible if the battery is full and we have some surplus
 
-                _LOGGER.info(
-                    f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
+                    _LOGGER.info(
+                        f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
 
+                    # if possible we can bump any possible constraint has we know it is energy that we can use
+                    # even if they are already met ? in fact the only issue would be to consume energy of a met constraint that has been met before the probe_window_start!
 
+                    constraints = []
+                    all_c = []
+                    # if possible we can bump any possible contraint has we know it is energy that we can use
+                    for c in self._active_constraints:
+                        c_now = constraints_evolution.get(c, c)
+                        first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
+                        add_to_probe = True
+                        if c_now.is_constraint_met(self._start_time) and max_idx_with_energy_impact < probe_window_start:
+                            # we don't wan't to give a constraint some more energy AFTER it has been completed
+                            add_to_probe = False
 
-                # if possible we can bump any possible constraint has we know it is energy that we can use
-                # even if they are already met ? in fact the only issue would be to consume energy of a met constraint that has been met before the probe_window_start!
+                        if add_to_probe:
+                            constraints.append((c, c.score(self._start_time)))
 
-                constraints = []
-                all_c = []
-                # if possible we can bump any possible contraint has we know it is energy that we can use
-                for c in self._active_constraints:
-                    c_now = constraints_evolution.get(c, c)
-                    first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
-                    add_to_probe = True
-                    if c_now.is_constraint_met(self._start_time) and max_idx_with_energy_impact < probe_window_start:
-                        # we don't wan't to give a constraint some more energy AFTER it has been completed
-                        add_to_probe = False
+                        all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
 
-                    if add_to_probe:
-                        constraints.append((c, c.score(self._start_time)))
+                    _LOGGER.info(
+                        f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
 
-                    all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
+                    if len(constraints) > 0:
 
-                _LOGGER.info(
-                    f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
+                        while True:
 
-                if len(constraints) > 0:
-
-                    while True:
-
-                        # instead of surplus index I could go to first_surplus_index = 0 ti start now to consume battery energy
-                        # as we will get a lot more surplus ....
-                        solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
-                                                                                          constraints,
-                                                                                          constraints_evolution,
-                                                                                          constraints_bounds,
-                                                                                          actions,
-                                                                                          probe_window_start,
-                                                                                          probe_window_end,
-                                                                                          True)
-                        if solved or has_changed is False:
-                            _LOGGER.info(
-                                f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh")
-                            break
+                            # instead of surplus index I could go to first_surplus_index = 0 ti start now to consume battery energy
+                            # as we will get a lot more surplus ...
+                            solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
+                                                                                              constraints,
+                                                                                              constraints_evolution,
+                                                                                              constraints_bounds,
+                                                                                              actions,
+                                                                                              probe_window_start,
+                                                                                              probe_window_end,
+                                                                                              True)
+                            if solved or has_changed is False:
+                                _LOGGER.info(
+                                    f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh")
+                                break
 
 
         # we have now all the constraints solved, and the battery commands computed
