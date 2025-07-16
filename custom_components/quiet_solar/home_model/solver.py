@@ -228,13 +228,13 @@ class PeriodSolver(object):
             default_cmd = CMD_AUTO_GREEN_ONLY
 
         # for s in range(len(new_command_list)):
-        for s in range(first_slot, last_slot + 1):
+        for s in range(len(new_command_list)):
 
             new_cmd = new_command_list[s]
 
             prev_cmd = existing_cmds[s]
             if prev_cmd is None:
-                prev_cmd = default_cmd
+                prev_cmd = copy_command(default_cmd)
 
             cmd = None
 
@@ -416,7 +416,7 @@ class PeriodSolver(object):
 
             for ci, _ in constraints:
                 out_c = constraints_evolution[ci]
-                first_slot, last_slot, _, _ = constraints_bounds.get(ci, (None, None, None, None))
+                first_slot, last_slot, first_change_slot, last_change_slot = constraints_bounds.get(ci, (None, None, None, None))
 
                 if first_slot is None or last_slot is None:
                     _LOGGER.warning(f"_constraints_delta: constraint {ci} has no bounds, skipping")
@@ -431,6 +431,7 @@ class PeriodSolver(object):
                 nd = min(seg_end, last_slot)
                 if st > nd:
                     continue
+
 
                 # energy_delta can be negative or positive, negative means reduce the consumed energy bay the constraint
                 init_energy_delta = energy_delta

@@ -631,12 +631,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
         out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
 
-        sorted_available_power = range(first_slot, last_slot + 1)
+        #always start from teh end to adapt the commands because the future is always more uncertain
+        sorted_available_power = range(last_slot, first_slot - 1, -1)
         if energy_delta >= 0.0:
             _LOGGER.info(
                 f"adapt_repartition: consume more energy {energy_delta}Wh for {self.name}")
         else:
-            sorted_available_power = reversed(sorted_available_power)
             _LOGGER.info(
                 f"adapt_repartition: reclaim energy {energy_delta}Wh from {self.name}")
 
@@ -651,124 +651,192 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         first_adaptation = None
 
-        do_stop_at_constraint_met = False
-        if init_energy_delta > 0.0 and self.is_constraint_met(time) is False:
-            do_stop_at_constraint_met = True
+        out_constraint = self
 
+        if init_energy_delta < 0.0 and self.is_mandatory is True:
+            # do nothing
+            _LOGGER.info(f"adapt_repartition: no adaptation for {self.name} as it is mandatory and we can't reduce its consumption")
+        else:
 
-        # try to shave first the biggest free slots
-        for i in sorted_available_power:
+            # try to shave first the biggest free slots
+            for i in sorted_available_power:
 
-            current_command_power = 0.0
-            if existing_commands and existing_commands[i] is not None:
-                current_command_power = existing_commands[i].power_consign
+                current_command_power = 0.0
+                if existing_commands and existing_commands[i] is not None:
+                    current_command_power = existing_commands[i].power_consign
 
-            j = None
-            if init_energy_delta >= 0.0:
+                j = None
+                if init_energy_delta >= 0.0:
 
-                if current_command_power == 0 and allow_change_state is False:
-                    # we do not want to change the state of the load, so we cannot add energy
-                    continue
+                    if current_command_power == 0 and allow_change_state is False:
+                        # we do not want to change the state of the load, so we cannot add energy
+                        continue
 
-                if current_command_power == 0:
-                    j = 0
-                else:
-                    j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
-
-                    if j == len(power_sorted_cmds) - 1:
-                        # we are already at the max power, we cannot add more, force to stay at this power
-                        pass
-                    elif j is None:
+                    if current_command_power == 0:
                         j = 0
                     else:
-                        j += 1
+                        j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
 
-            else: # init_energy_delta < 0.0:
-
-                # for reduction: reduce strongly
-                if current_command_power == 0:
-                    # we won't be able to reduce...cap at 0 to force stay this way
-                    j = -1
-                else:
-                    j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
-
-                    if (j is None or j == 0):
-                        if allow_change_state is False:
-                            # we won't be able to go below
-                            continue
+                        if j == len(power_sorted_cmds) - 1:
+                            # we are already at the max power, we cannot add more, force to stay at this power
+                            pass
+                        elif j is None:
+                            # lowest possible ON value
+                            j = 0
                         else:
-                            j = -1
+                            j += 1
+
+                        if j is not None and power_sorted_cmds[j].power_consign <= current_command_power:
+                           if j == len(power_sorted_cmds) - 1:
+                               j = None #do nothing, we are already at the max power
+                           else:
+                               j += 1
+
+                else: # init_energy_delta < 0.0:
+
+                    # for reduction: reduce strongly
+                    if current_command_power == 0:
+                        # we won't be able to reduce...cap at 0 to force stay this way
+                        j = -1
                     else:
-                        # go to the minimum power load
-                        j = 0
+                        j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
+
+                        if (j is None or j == 0):
+                            if allow_change_state is False:
+                                # we won't be able to go below
+                                continue
+                            else:
+                                j = -1
+                        else:
+                            # go to the minimum power load
+                            j = 0
+
+                        if j is not None and j >= 0 and power_sorted_cmds[j].power_consign >= current_command_power:
+                           if j == 0:
+                               if allow_change_state is False:
+                                   j = None #do nothing, we are already at the min power
+                               else:
+                                   j = -1
+                           else:
+                               j -= 1
+
+                        if current_command_power == 0 and j < 0:
+                            # we are already consuming nothing, we cannot reduce more
+                            j = None
 
 
-            if j is not None:
+                if j is not None:
 
-                if j >= 0:
-                    base_cmd = power_sorted_cmds[j]
-                else:
+                    if j >= 0:
+                        base_cmd = power_sorted_cmds[j]
+                    else:
+                        if self.support_auto:
+                            base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                        else:
+                            base_cmd = copy_command(CMD_IDLE)
+
+                    delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
+                    d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
+
+                    if (energy_delta + d_energy)* init_energy_delta <= 0:
+                        # sign has changed ... we are no more in over cosumme or under consume
+                        if init_energy_delta >= 0.0:
+                            #we are over consuming if we do that: don't allow this change
+                            # for under consume it is ok to underconsume a bit more
+                            break
+
                     if self.support_auto:
-                        base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-                    else:
-                        # it is ok in case of adaptation the cmd merge of the solver is taking the new one aall the time
-                        base_cmd = copy_command(CMD_IDLE)
-
-                delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
-                d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
-
-                if (energy_delta + d_energy)* init_energy_delta <= 0:
-                    # sign has changed ... we are no more in over cosumme or under consume
-                    if init_energy_delta >= 0.0:
-                        #we are over consuming if we do that: don't allow this change
-                        # for under consume it is ok to underconsume a bit more
-                        break
-
-                if self.support_auto:
-                    if init_energy_delta >= 0.0:
-                        # it will force some use to empty a bit the battery
-                        out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
-                                                                       new_type=CMD_AUTO_FROM_CONSIGN.command)
-                    else:
-                        out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
-                                                                       new_type=CMD_AUTO_GREEN_CAP.command)
-                else:
-                    out_commands[i] = copy_command(base_cmd)
-
-                out_delta_power[i] = delta_power
-                delta_energy += d_energy
-                energy_delta -= d_energy
-
-                num_changes += 1
-
-                if first_adaptation is None:
-                    first_adaptation = i
-                else:
-                    first_adaptation = min(first_adaptation, i)
-
-                if energy_delta * init_energy_delta <= 0.0:
-                    # it means they are not of the same sign, we are done
-                    break
-
-                if do_stop_at_constraint_met:
-                    out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
-                    if out_constraint.is_constraint_met(time):
-                        # we are done, we have met the constraint
-                        break
-
-
-        out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
-
-        if first_adaptation is not None:
-            if init_energy_delta < 0.0 and self.support_auto:
-                # CAP the whole segment to what has been comouted ....
-                for i in range(first_slot, last_slot + 1):
-                    if out_commands[i] is None:
-                        if existing_commands[i] is None:
-                            out_commands[i] = copy_command(CMD_AUTO_GREEN_CAP)
+                        if init_energy_delta >= 0.0:
+                            # it will force some use to empty a bit the battery
+                            out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
+                                                                           new_type=CMD_AUTO_FROM_CONSIGN.command)
                         else:
-                            out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                            out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
                                                                            new_type=CMD_AUTO_GREEN_CAP.command)
+                    else:
+                        out_commands[i] = copy_command(base_cmd)
+
+                    out_delta_power[i] = delta_power
+                    delta_energy += d_energy
+                    energy_delta -= d_energy
+
+                    num_changes += 1
+
+                    if first_adaptation is None:
+                        first_adaptation = i
+                    else:
+                        first_adaptation = min(first_adaptation, i)
+
+                    if init_energy_delta > 0.0:
+                        if out_constraint.is_constraint_met(time):
+                            # we should reclaim some power "from the future" to meet the constraint, we need to reclaim d_energy
+                            to_be_reclaimed = d_energy
+                            has_reclaimed = False
+                            for k in range(len(power_slots_duration_s), last_slot, -1 ):
+                                cmd = existing_commands[k]
+                                if cmd is None or cmd.power_consign <= 0.0:
+                                    continue
+
+                                reclaimed_energy = (cmd.power_consign * power_slots_duration_s[k]) / 3600.0
+
+                                do_reclaim = False
+                                if reclaimed_energy < to_be_reclaimed:
+                                    to_be_reclaimed -= reclaimed_energy
+                                    do_reclaim = True
+                                elif self.is_mandatory is False:
+                                    do_reclaim = True
+
+                                if do_reclaim:
+                                    has_reclaimed = True
+                                    to_be_reclaimed -= reclaimed_energy
+
+                                    out_delta_power[k] -= cmd.power_consign
+                                    if self.support_auto:
+                                        out_commands[k] = copy_command(CMD_AUTO_GREEN_CAP)
+                                    else:
+                                        out_commands[k] = copy_command(CMD_IDLE)
+
+                                    if to_be_reclaimed < 0:
+                                        break
+
+                            if has_reclaimed:
+                                # cool we do have successfully reclaimed some energy for a met constraint...
+                                delta_energy -= (d_energy - to_be_reclaimed)
+                                _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {to_be_reclaimed}Wh from the future")
+                            else:
+                                # the constraint was met and we can't reduce the futur: stop here
+                                break
+
+
+                    if energy_delta * init_energy_delta <= 0.0:
+                        # it means they are not of the same sign, we are done
+                        break
+
+                    if init_energy_delta >= 0.0:
+                        out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
+
+            out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
+
+            if first_adaptation is not None:
+                if self.support_auto:
+                    # CAP the whole segment to what has been computed ....or force some consumption
+                    for i in range(first_slot, last_slot + 1):
+
+                        if init_energy_delta >= 0.0:
+                            default_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
+                        else:
+                            default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+
+                        if out_commands[i] is None:
+                            if existing_commands[i] is None:
+                                out_commands[i] = copy_command(default_cmd)
+                            else:
+                                if init_energy_delta >= 0.0 and out_commands[i].power_consign > 0:
+                                    out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                                                                   new_type=CMD_AUTO_FROM_CONSIGN.commad)
+                                else:
+                                    out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                                                                   new_type=default_cmd.command)
 
         return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
 
