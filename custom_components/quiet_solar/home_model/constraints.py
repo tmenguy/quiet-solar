@@ -424,6 +424,16 @@ class LoadConstraint(object):
         Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int]:
         """ Compute the best repartition of the constraint over the given period."""
 
+    @abstractmethod
+    def adapt_repartition(self,
+                          first_slot:int,
+                          last_slot:int,
+                          energy_delta: float,
+                          power_slots_duration_s: npt.NDArray[np.float64],
+                          existing_commands: list[LoadCommand | None],
+                          allow_change_state: bool,
+                          time: datetime) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        """ Adapt the power repartition of the constraint over the given period."""
 
 class MultiStepsPowerLoadConstraint(LoadConstraint):
 
@@ -615,7 +625,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                           power_slots_duration_s: npt.NDArray[np.float64],
                           existing_commands: list[LoadCommand | None],
                           allow_change_state: bool,
-                          time: datetime) -> tuple[Self, float, bool, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                          time: datetime) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         """ Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -700,7 +710,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 else:
                     if self.support_auto:
                         base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-                        base_cmd.power_consign = 0.0
                     else:
                         # it is ok in case of adaptation the cmd merge of the solver is taking the new one aall the time
                         base_cmd = copy_command(CMD_IDLE)
@@ -734,6 +743,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 if first_adaptation is None:
                     first_adaptation = i
+                else:
+                    first_adaptation = min(first_adaptation, i)
 
                 if energy_delta * init_energy_delta <= 0.0:
                     # it means they are not of the same sign, we are done
@@ -750,9 +761,14 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if first_adaptation is not None:
             if init_energy_delta < 0.0 and self.support_auto:
-                for i in range(first_adaptation, last_slot + 1):
-                    out_commands[i] = copy_command_and_change_type(cmd=out_commands[i] ,
-                                                                   new_type=CMD_AUTO_GREEN_CAP.command)
+                # CAP the whole segment to what has been comouted ....
+                for i in range(first_slot, last_slot + 1):
+                    if out_commands[i] is None:
+                        if existing_commands[i] is None:
+                            out_commands[i] = copy_command(CMD_AUTO_GREEN_CAP)
+                        else:
+                            out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                                                           new_type=CMD_AUTO_GREEN_CAP.command)
 
         return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
 

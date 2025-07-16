@@ -10,7 +10,7 @@ from homeassistant.components import number
 from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_APERAGE, \
+    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
@@ -37,7 +37,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
         self._conf_car_charger_min_charge = self.car_charger_min_charge
-        self.car_charger_max_charge : int = min(MAX_POSSIBLE_APERAGE, int(max(0,kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE,32))))
+        self.car_charger_max_charge : int = min(MAX_POSSIBLE_AMPERAGE, int(max(0, kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE, 32))))
         self._conf_car_charger_max_charge = self.car_charger_max_charge
         self.car_use_custom_power_charge_values = kwargs.pop(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
         if self.car_use_custom_power_charge_values is False:
@@ -45,19 +45,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             self.car_is_custom_power_charge_values_3p = kwargs.pop(CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, False)
 
-        self.amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
-        self.amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.amp_to_power_1p = [-1] * (MAX_POSSIBLE_AMPERAGE)
+        self.amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
         self._last_dampening_update = None
 
 
-        self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
-        self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_AMPERAGE)
+        self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
 
-        self.customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
-        self.customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_AMPERAGE)
+        self.customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
 
-        self.conf_customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_APERAGE)
-        self.conf_customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_APERAGE)
+        self.conf_customized_amp_to_power_1p = [-1] * (MAX_POSSIBLE_AMPERAGE)
+        self.conf_customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
 
         self.car_charge_percent_max_number_steps = []
         if self._conf_car_charge_percent_max_number_steps and isinstance(self._conf_car_charge_percent_max_number_steps, str):
@@ -496,9 +496,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
 
-
-
-        updated = False
+        do_update = False
 
         if self.can_dampen_strongly_dynamically is False:
             _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
@@ -521,13 +519,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 orig_delta = self.get_delta_dampened_power(amperage_transition[0][0], amperage_transition[0][1], amperage_transition[1][0], amperage_transition[1][1])
 
                 if orig_delta is not None:
+
                     if self._can_accept_new_dampen_values(orig_delta, power_value_or_delta) is False:
                         _LOGGER.info(f"Car {self.name} cannot accept new dampening value for amperage_transition {amperage_transition} with power_value_or_delta {power_value_or_delta} orig_delta {orig_delta} - ignoring this value")
                         return False
 
                     if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
                         return False
-                    updated = True
+
+                    do_update = True
 
 
         if amperage is not None:
@@ -557,14 +557,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 return False
 
 
-            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph(
-                    (0.0, amperage[1]),
-                    (amperage[0], amperage[1]),
-                    power_value_or_delta,
-            ) is False:
+            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph((0.0, amperage[1]),
+                                                                                            (amperage[0],
+                                                                                             amperage[1]),
+                                                                                            power_value_or_delta) is False:
                 return False
-            if power_value_or_delta >= MIN_CHARGE_POWER_W:
-                updated = True
 
             can_be_saved = False
 
@@ -593,8 +590,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     do_recompute_min_charge = True
 
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
-            updated = True
-
+            do_update = True
             if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
 
                 if self.car_is_custom_power_charge_values_3p is None:
@@ -616,7 +612,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         data.update(self._salvable_dampening)
                         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
-        return updated
+        return do_update
 
     def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power) -> int|float:
 

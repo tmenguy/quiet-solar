@@ -1,4 +1,4 @@
-MAX_POSSIBLE_APERAGE = 64
+MAX_POSSIBLE_AMPERAGE = 64
 
 DOMAIN = "quiet_solar"
 MANUFACTURER = "QuietSolarAbstraction"

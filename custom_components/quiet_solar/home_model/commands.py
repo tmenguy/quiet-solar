@@ -35,7 +35,7 @@ class LoadCommand:
         return asdict(self) #self.__dict_
 
     def is_auto(self) -> bool:
-        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE]
+        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE, CMD_CST_AUTO_GREEN_CAP]
 
     def is_like(self, other) -> bool:
         if other is None:
@@ -49,15 +49,12 @@ class LoadCommand:
         return self.command == "off" or self.command == "idle"
 
 
-def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand, prio_on_cmd2=False) -> LoadCommand:
+def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand) -> LoadCommand:
     """Merge two LoadCommand objects"""
     if cmd1 is None:
         return cmd2
     if cmd2 is None:
         return cmd1
-
-    if prio_on_cmd2:
-        return copy_command(cmd2)
 
     if commands_scores.get(cmd1.command, 0) >= commands_scores.get(cmd2.command, 0):
         command = cmd1.command

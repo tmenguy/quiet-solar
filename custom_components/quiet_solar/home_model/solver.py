@@ -210,27 +210,41 @@ class PeriodSolver(object):
 
 
 
-    def _merge_commands_slots_for_load(self, loads, load, new_command_list, prio_on_new=False):
+    def _merge_commands_slots_for_load(self, loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False):
 
         if new_command_list is None:
             return
+
+        load = constraint.load
 
         existing_cmds = loads.get(load, None)
         if existing_cmds is None:
             existing_cmds = new_command_list
             loads[load] = new_command_list
 
-        for s in range(len(new_command_list)):
+        default_cmd = CMD_IDLE
+        if constraint.support_auto:
+            # if the constraint supports auto, we should use the auto green command as default
+            default_cmd = CMD_AUTO_GREEN_ONLY
+
+        # for s in range(len(new_command_list)):
+        for s in range(first_slot, last_slot + 1):
 
             new_cmd = new_command_list[s]
-            if new_cmd is None:
-                new_cmd = CMD_IDLE
 
             prev_cmd = existing_cmds[s]
             if prev_cmd is None:
-                prev_cmd = CMD_IDLE
+                prev_cmd = default_cmd
 
-            cmd = merge_commands(prev_cmd, new_cmd, prio_on_cmd2=prio_on_new)
+            cmd = None
+
+            if new_cmd is None:
+                cmd = prev_cmd
+            elif prio_on_new:
+                cmd = new_cmd
+
+            if cmd is None:
+                cmd = merge_commands(prev_cmd, new_cmd)
 
             existing_cmds[s] = cmd
 
@@ -434,7 +448,7 @@ class PeriodSolver(object):
                     has_changed = True
                     constraints_evolution[ci] = out_c_adapted
                     self._available_power = self._available_power + out_delta_power
-                    self._merge_commands_slots_for_load(actions, ci.load, out_commands_adapted, prio_on_new=True)
+                    self._merge_commands_slots_for_load(actions, ci, st, nd, out_commands_adapted, prio_on_new=True)
                 else:
                     _LOGGER.info(
                         f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
@@ -541,7 +555,7 @@ class PeriodSolver(object):
             constraints_evolution[ci] = out_c
             constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
             self._available_power = self._available_power + out_power
-            self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+            self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
 
         constraints = []
         for c in self._active_constraints:
@@ -698,7 +712,7 @@ class PeriodSolver(object):
             constraints_evolution[ci] = out_c
             constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
             self._available_power = self._available_power + out_power
-            self._merge_commands_slots_for_load(actions, ci.load, out_commands)
+            self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
 
 
         if self._battery is not None and battery_charge is not None:

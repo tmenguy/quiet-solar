@@ -795,7 +795,8 @@ class AbstractLoad(AbstractDevice):
                 if k.score(time) > keep.score(time):
                     keep = k
             keep.end_of_constraint = end_ctr
-            self._constraints = [keep].extend(new_constraints)
+            self._constraints = [keep]
+            self._constraints.extend(new_constraints)
 
         #check all the constraints that have teh same end time, keep the highest score
         current_end = DATETIME_MIN_UTC
