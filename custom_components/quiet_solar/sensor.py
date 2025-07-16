@@ -224,7 +224,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Netatmo switch platform."""
+    """Set up the Quiet Solar sensor platform."""
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
@@ -251,13 +251,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 @dataclass(frozen=True, kw_only=True)
 class QSSensorEntityDescription(SensorEntityDescription):
-    """Describes Netatmo sensor entity."""
+    """Describes Quiet Solar sensor entity."""
     qs_is_none_unavailable: bool  = False
     value_fn: Callable[[AbstractDevice, str], Any] | None = None
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
-    """Implementation of a Netatmo sensor."""
+    """Implementation of a Quiet Solar sensor."""
 
     entity_description: QSSensorEntityDescription
 

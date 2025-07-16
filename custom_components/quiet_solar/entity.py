@@ -107,7 +107,7 @@ class QSDeviceEntity(QSBaseEntity):
     device : AbstractDevice
 
     def __init__(self, data_handler, device: AbstractDevice, description) -> None:
-        """Set up Netatmo entity base."""
+        """Set up Quiet Solar entity base."""
         super().__init__(data_handler=data_handler, description=description)
         self.device = device
         self._attr_device_info = DeviceInfo(
