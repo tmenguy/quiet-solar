@@ -633,12 +633,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         #always start from teh end to adapt the commands because the future is always more uncertain
         sorted_available_power = range(last_slot, first_slot - 1, -1)
+        log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
         if energy_delta >= 0.0:
             _LOGGER.info(
-                f"adapt_repartition: consume more energy {energy_delta}Wh for {self.name}")
+                f"adapt_repartition: consume more energy {energy_delta}Wh for {log_msg}")
         else:
             _LOGGER.info(
-                f"adapt_repartition: reclaim energy {energy_delta}Wh from {self.name}")
+                f"adapt_repartition: reclaim energy {energy_delta}Wh from {log_msg}")
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
@@ -741,7 +742,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if (energy_delta + d_energy)* init_energy_delta <= 0:
                         # sign has changed ... we are no more in over cosumme or under consume
                         if init_energy_delta >= 0.0:
-                            #we are over consuming if we do that: don't allow this change
+                            #we are overconsuming if we do that: don't allow this change
                             # for under consume it is ok to underconsume a bit more
                             break
 
@@ -755,6 +756,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                                            new_type=CMD_AUTO_GREEN_CAP.command)
                     else:
                         out_commands[i] = copy_command(base_cmd)
+
+                    _LOGGER.info(
+                        f"adapt_repartition: adapted {self.name} with command {out_commands[i]} / {i} effective in {int(np.sum(power_slots_duration_s[:i]))}s")
 
                     out_delta_power[i] = delta_power
                     delta_energy += d_energy
