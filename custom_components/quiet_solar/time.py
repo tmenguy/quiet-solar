@@ -80,7 +80,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Netatmo switch platform."""
+    """Set up the Quiet Solar time platform."""
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
