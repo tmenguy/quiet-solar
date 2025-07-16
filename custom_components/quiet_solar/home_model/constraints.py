@@ -831,7 +831,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             if existing_commands[i] is None:
                                 out_commands[i] = copy_command(default_cmd)
                             else:
-                                if init_energy_delta >= 0.0 and out_commands[i].power_consign > 0:
+                                if init_energy_delta >= 0.0 and existing_commands[i].power_consign > 0:
                                     out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
                                                                                    new_type=CMD_AUTO_FROM_CONSIGN.commad)
                                 else:
