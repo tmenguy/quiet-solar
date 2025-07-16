@@ -631,15 +631,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
         out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
 
-        # start from the start to consume a bit more energy soon
-        sorted_available_power = range(first_slot, last_slot + 1)
+        # start from the end as futur is more uncertain, so take actions far from now, and we will see later if it was worth it
+        sorted_available_power = range(last_slot, first_slot - 1, -1)
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
         if energy_delta >= 0.0:
             _LOGGER.info(
                 f"adapt_repartition: consume more energy {energy_delta}Wh for {log_msg}")
         else:
-            # start from the end to cap the commands
-            sorted_available_power = reversed(sorted_available_power)
             _LOGGER.info(
                 f"adapt_repartition: reclaim energy {energy_delta}Wh from {log_msg}")
 
