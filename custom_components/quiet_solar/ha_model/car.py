@@ -6,7 +6,6 @@ from typing import Any
 import pytz
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
 from homeassistant.components import number
-from virtualenv.seed.wheels.periodic_update import do_update
 
 from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
@@ -499,6 +498,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
 
+        updated = False
+
         if self.can_dampen_strongly_dynamically is False:
             _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
             return False
@@ -526,6 +527,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
                     if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
                         return False
+                    updated = True
 
 
         if amperage is not None:
@@ -555,11 +557,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 return False
 
 
-            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph((0.0, amperage[1]),
-                                                                                            (amperage[0],
-                                                                                             amperage[1]),
-                                                                                            power_value_or_delta) is False:
+            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph(
+                    (0.0, amperage[1]),
+                    (amperage[0], amperage[1]),
+                    power_value_or_delta,
+            ) is False:
                 return False
+            if power_value_or_delta >= MIN_CHARGE_POWER_W:
+                updated = True
 
             can_be_saved = False
 
@@ -588,6 +593,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     do_recompute_min_charge = True
 
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
+            updated = True
 
             if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
 
@@ -610,7 +616,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         data.update(self._salvable_dampening)
                         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
-        return do_update
+        return updated
 
     def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power) -> int|float:
 
