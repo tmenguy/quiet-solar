@@ -780,6 +780,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         min_charge = self.config_entry.data.get(CONF_CAR_CHARGER_MIN_CHARGE, 6)
         max_charge = self.config_entry.data.get(CONF_CAR_CHARGER_MAX_CHARGE, 32)
 
+        _LOGGER.info(f"async_step_car:for  {self.config_entry.entry_id} user_input {user_input} orig_dampening {orig_dampening}")
+
         if user_input is not None:
 
             if "force_dampening" in user_input:

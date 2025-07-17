@@ -3277,31 +3277,36 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def _do_update_charger_state(self, time):
         if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL_S:
 
-            state = self.hass.states.get(self.charger_max_charging_current_number)
+            entity_to_probe = []
+            if self.charger_plugged is not None:
+                entity_to_probe.append(self.charger_plugged)
+            if self.charger_pause_resume_switch is not None:
+                entity_to_probe.append(self.charger_pause_resume_switch)
+            if self.charger_max_charging_current_number is not None:
+                entity_to_probe.append(self.charger_max_charging_current_number)
 
-            if state is not None:
-                state_time = state.last_updated
+            state_time = self._last_charger_state_prob_time
+            for entity in entity_to_probe:
+                state = self.hass.states.get(entity)
+                if state is not None:
+                    state_last_update = state.last_updated
+                    if state_last_update > state_time:
+                        state_time = state_last_update
 
-                if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL_S:
-                    self._last_charger_state_prob_time = state_time
-                else:
-                    _LOGGER.warning(f"Forcing a charger state update!")
 
-                    entity_to_probe = []
-                    if self.charger_plugged is not None:
-                        entity_to_probe.append(self.charger_plugged)
-                    if self.charger_pause_resume_switch is not None:
-                        entity_to_probe.append(self.charger_pause_resume_switch)
-                    if self.charger_max_charging_current_number is not None:
-                        entity_to_probe.append(self.charger_max_charging_current_number)
+            if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL_S:
+                # do nothing
+                self._last_charger_state_prob_time = state_time
+            else:
+                _LOGGER.warning(f"Forcing a charger state update!")
 
-                    await self.hass.services.async_call(
-                        homeassistant.DOMAIN,
-                        homeassistant.SERVICE_UPDATE_ENTITY,
-                        {ATTR_ENTITY_ID: entity_to_probe},
-                        blocking=False
-                    )
-                    self._last_charger_state_prob_time = time
+                await self.hass.services.async_call(
+                    homeassistant.DOMAIN,
+                    homeassistant.SERVICE_UPDATE_ENTITY,
+                    {ATTR_ENTITY_ID: entity_to_probe},
+                    blocking=False
+                )
+                self._last_charger_state_prob_time = time
 
     def _find_charger_entity_id(self, device, entries, prefix, suffix):
 
