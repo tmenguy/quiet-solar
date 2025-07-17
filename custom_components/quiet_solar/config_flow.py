@@ -780,12 +780,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         min_charge = self.config_entry.data.get(CONF_CAR_CHARGER_MIN_CHARGE, 6)
         max_charge = self.config_entry.data.get(CONF_CAR_CHARGER_MAX_CHARGE, 32)
 
-        _LOGGER.info(f"async_step_car:for  {self.config_entry.entry_id} user_input {user_input} orig_dampening {orig_dampening}")
-
         if user_input is not None:
 
             if "force_dampening" in user_input:
-                _LOGGER.info(f"async_step_car: Forced dampening redisplay for {self.config_entry.entry_id}")
                 do_force_dampening = True
             else:
                 #do some stuff to update
@@ -810,19 +807,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     #)
                     # or more simply:
                     self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
-                    _LOGGER.info(f"async_step_car: Force dampening redisplay for {self.config_entry.entry_id} due to charge values change.")
                     return await self.async_step_car({"force_dampening": True})
 
-
-                try:
-                    r =  await self.async_entry_next(user_input, TYPE)
-
-                    _LOGGER.info(
-                        f"async_step_car: Save {self.config_entry.entry_id} with {r}")
-                    return r
-                except Exception as ex:
-                    _LOGGER.error(f"async_step_car: Error {ex}")
-
+                r =  await self.async_entry_next(user_input, TYPE)
+                return r
 
 
         sc_dict = self.get_common_schema(type=TYPE, add_calendar=True, add_mobile_app=True, add_efficiency_selector=True)
@@ -846,12 +834,21 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if len(num_percent_entity) > 0 :
             self.add_entity_selector(sc_dict, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, False, entity_list=num_percent_entity)
 
-            sc_dict.update(
-                {
-                    vol.Optional(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, default=self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, None)):
-                        cv.string,
-                }
-            )
+            if self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS) is None or self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS) == "":
+                sc_dict.update(
+                    {
+                        vol.Optional(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS):
+                            cv.string,
+                    }
+                )
+
+            else:
+                sc_dict.update(
+                    {
+                        vol.Optional(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, default=self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, "")):
+                            cv.string,
+                    }
+                )
 
 
 

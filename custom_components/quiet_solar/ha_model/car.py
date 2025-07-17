@@ -31,6 +31,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
         self.car_charge_percent_max_number = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, None)
         self._conf_car_charge_percent_max_number_steps = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, None)
+        if self._conf_car_charge_percent_max_number_steps == "":
+            self._conf_car_charge_percent_max_number_steps = None
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
