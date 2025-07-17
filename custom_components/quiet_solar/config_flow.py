@@ -786,24 +786,28 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 do_force_dampening = True
             else:
                 #do some stuff to update
-                new_dampeneing = user_input.get(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
+                new_dampening = user_input.get(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
                 user_input[DEVICE_TYPE] = TYPE
 
-                if new_dampeneing is True and (user_input.get(CONF_CAR_CHARGER_MIN_CHARGE, 0) != min_charge or user_input.get(CONF_CAR_CHARGER_MAX_CHARGE, 0) != max_charge):
-                    #force dampening
-                    orig_dampening = False
+                # Check if we need to regenerate dampening fields
+                charge_values_changed = (user_input.get(CONF_CAR_CHARGER_MIN_CHARGE, 0) != min_charge or 
+                                       user_input.get(CONF_CAR_CHARGER_MAX_CHARGE, 0) != max_charge)
+                
+                # Only force dampening redisplay if:
+                # 1. Dampening is being newly enabled, OR
+                # 2. Dampening was already enabled AND charge values changed (need new range)
+                need_dampening_redisplay = (
+                    (orig_dampening is False and new_dampening is True) or
+                    (orig_dampening is True and new_dampening is True and charge_values_changed)
+                )
 
-                if orig_dampening is False and new_dampeneing is True:
-
+                if need_dampening_redisplay:
                     #self.hass.config_entries.async_update_entry(
                     #    self.config_entry, data=user_input, options=self.config_entry.options
                     #)
                     # or more simply:
                     self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
-                    # self.config_entry.data = user_input
-
                     return await self.async_step_car({"force_dampening": True})
-
 
                 r =  await self.async_entry_next(user_input, TYPE)
                 return r
