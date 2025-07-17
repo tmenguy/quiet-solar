@@ -783,6 +783,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if user_input is not None:
 
             if "force_dampening" in user_input:
+                _LOGGER.info(f"async_step_car: Forced dampening redisplay for {self.config_entry.entry_id}")
                 do_force_dampening = True
             else:
                 #do some stuff to update
@@ -807,10 +808,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     #)
                     # or more simply:
                     self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
+                    _LOGGER.info(f"async_step_car: Force dampening redisplay for {self.config_entry.entry_id} due to charge values change.")
                     return await self.async_step_car({"force_dampening": True})
 
-                r =  await self.async_entry_next(user_input, TYPE)
-                return r
+
+                try:
+                    r =  await self.async_entry_next(user_input, TYPE)
+
+                    _LOGGER.info(
+                        f"async_step_car: Save {self.config_entry.entry_id} with {r}")
+                    return r
+                except Exception as ex:
+                    _LOGGER.error(f"async_step_car: Error {ex}")
+
 
 
         sc_dict = self.get_common_schema(type=TYPE, add_calendar=True, add_mobile_app=True, add_efficiency_selector=True)
