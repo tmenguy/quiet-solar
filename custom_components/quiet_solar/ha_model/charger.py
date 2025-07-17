@@ -3285,16 +3285,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.charger_max_charging_current_number is not None:
                 entity_to_probe.append(self.charger_max_charging_current_number)
 
+
             state_time = self._last_charger_state_prob_time
             for entity in entity_to_probe:
                 state = self.hass.states.get(entity)
                 if state is not None:
                     state_last_update = state.last_updated
-                    if state_last_update > state_time:
+                    if state_time is None or state_last_update > state_time:
                         state_time = state_last_update
 
 
-            if (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL_S:
+            if state_time is not None and (time - state_time).total_seconds() <= CHARGER_STATE_REFRESH_INTERVAL_S:
                 # do nothing
                 self._last_charger_state_prob_time = state_time
             else:
