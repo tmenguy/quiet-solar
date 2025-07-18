@@ -650,8 +650,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         delta_energy = 0.0
 
-        first_adaptation = None
-
         out_constraint = self
 
         if init_energy_delta < 0.0 and self.is_mandatory is True:
@@ -770,11 +768,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     num_changes += 1
 
-                    if first_adaptation is None:
-                        first_adaptation = i
-                    else:
-                        first_adaptation = min(first_adaptation, i)
-
                     if init_energy_delta > 0.0:
                         if out_constraint.is_constraint_met(time):
                             # we should reclaim some power "from the future" to meet the constraint, we need to reclaim d_energy
@@ -825,26 +818,26 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
 
-            if first_adaptation is not None:
-                if self.support_auto:
-                    # CAP the whole segment to what has been computed ....or force some consumption
-                    for i in range(first_slot, last_slot + 1):
 
-                        if init_energy_delta >= 0.0:
-                            default_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
+            if self.support_auto:
+                # CAP the whole segment to what has been computed ...or force some consumption
+                for i in range(first_slot, last_slot + 1):
+
+                    if init_energy_delta >= 0.0:
+                        default_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
+                    else:
+                        default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+
+                    if out_commands[i] is None:
+                        if existing_commands[i] is None:
+                            out_commands[i] = copy_command(default_cmd)
                         else:
-                            default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-
-                        if out_commands[i] is None:
-                            if existing_commands[i] is None:
-                                out_commands[i] = copy_command(default_cmd)
+                            if init_energy_delta >= 0.0 and existing_commands[i].power_consign > 0:
+                                out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                                                               new_type=CMD_AUTO_FROM_CONSIGN.command)
                             else:
-                                if init_energy_delta >= 0.0 and existing_commands[i].power_consign > 0:
-                                    out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
-                                                                                   new_type=CMD_AUTO_FROM_CONSIGN.command)
-                                else:
-                                    out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
-                                                                                   new_type=default_cmd.command)
+                                out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                                                               new_type=default_cmd.command)
 
         return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
 

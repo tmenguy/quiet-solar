@@ -73,6 +73,12 @@ class PeriodSolver(object):
         self._prices, self._durations_s, self._available_power = self.create_power_slots(self._time_slots)
 
 
+        if pv_forecast is None:
+            LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
+        elif np.sum(self._available_power) == 0.0:
+            _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST 0 SUM")
+
+
     def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
         """
         Create the time slots for the forecast.
