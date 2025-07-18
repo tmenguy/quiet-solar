@@ -143,7 +143,7 @@ class LoadConstraint(object):
 
     @property
     def is_before_battery(self) -> bool:
-        return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+        return self.support_auto or self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
     def score(self, time:datetime):
 
@@ -698,7 +698,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # for reduction: reduce strongly
                     if current_command_power == 0:
                         # we won't be able to reduce...cap at 0 to force stay this way
-                        j = -1
+                        j = None
                     else:
                         j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
 

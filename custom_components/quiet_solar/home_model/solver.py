@@ -424,7 +424,7 @@ class PeriodSolver(object):
 
                 out_commands = actions.get(ci.load, None)
 
-                if seg_start > last_slot or first_slot > seg_end:
+                if seg_start > last_slot or first_slot > seg_end or out_commands is None:
                     # segment is not in the range of the constraint, skip it
                     continue
                 st = max(seg_start, first_slot)

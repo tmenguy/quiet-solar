@@ -77,7 +77,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
     CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
-    CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, FORCE_CAR_NO_CHARGER_CONNECTED
+    CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
+    FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -2468,9 +2469,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if realized_charge_target is None:
 
-                # make car charging after the battery, as it is a bets effort one
+                # make car charging after the battery, as it is a best effort one
                 # well no really after battery in fact
-                type = CONSTRAINT_TYPE_FILLER # slightly higher priority than CONSTRAINT_TYPE_FILLER_AUTO, not CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN # well as it is an auto constraint it will have to be before the battery consumption
                 realized_charge_target = car_initial_percent
 
                 car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
