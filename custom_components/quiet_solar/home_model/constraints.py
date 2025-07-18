@@ -689,7 +689,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         if j is not None and power_sorted_cmds[j].power_consign <= current_command_power:
                            if j == len(power_sorted_cmds) - 1:
-                               j = None #do nothing, we are already at the max power
+                               continue #do nothing, we are already at the max power
                            else:
                                j += 1
 
@@ -698,7 +698,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # for reduction: reduce strongly
                     if current_command_power == 0:
                         # we won't be able to reduce...cap at 0 to force stay this way
-                        j = None
+                        continue
                     else:
                         j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
 
@@ -715,7 +715,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         if j is not None and j >= 0 and power_sorted_cmds[j].power_consign >= current_command_power:
                            if j == 0:
                                if allow_change_state is False:
-                                   j = None #do nothing, we are already at the min power
+                                   continue #do nothing, we are already at the min power
                                else:
                                    j = -1
                            else:
@@ -723,7 +723,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         if current_command_power == 0 and j < 0:
                             # we are already consuming nothing, we cannot reduce more
-                            j = None
+                            continue
 
 
                 if j is not None:
@@ -737,6 +737,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             base_cmd = copy_command(CMD_IDLE)
 
                     delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
+
+                    if delta_power == 0.0:
+                        continue # no change in power, nothing to do
+
                     d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
 
                     if (energy_delta + d_energy)* init_energy_delta <= 0:
