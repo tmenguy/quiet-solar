@@ -342,7 +342,7 @@ class PeriodSolver(object):
         for i in range(len(self._available_power)):
 
             current_charge = float(battery_charge[i])
-            if self._battery.is_value_empty(current_charge*0.9): #be a bit pessimistic it too ... 10%
+            if self._battery.is_value_empty(current_charge*0.9): #be a bit pessimistic here too ... 10%
                 if empty_segments[-1][0] is None:
                     empty_segments[-1][0] = i
                 else:
@@ -387,7 +387,7 @@ class PeriodSolver(object):
                 if init_battery_charge is None:
                     init_battery_charge = self._battery.get_value_empty()
 
-                energy_delta = -min(self._battery.get_value_full() - min(float(battery_charge[to_shave_segment[0]]), init_battery_charge), energy_to_get_back[s_idx]*1.1) # should I bump a bit what need to be reclaimed, 10% here ...
+                energy_delta = -min(self._battery.get_value_full() - min(float(battery_charge[to_shave_segment[0]]), init_battery_charge), energy_to_get_back[s_idx]*1.1) # bump a bit what need to be reclaimed, 10% here ...
                 break
 
         return to_shave_segment, energy_delta
