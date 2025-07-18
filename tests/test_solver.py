@@ -14,7 +14,7 @@ from datetime import datetime
 from datetime import timedelta
 
 from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE, \
-    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN
+    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN
 
 
 def _util_constraint_save_dump(time, cs):
@@ -646,7 +646,7 @@ class TestSolver(TestCase):
         
         # Check for CMD_AUTO_FROM_CONSIGN commands
         has_auto_from_consign = any(
-            cmd[1].command == CMD_AUTO_FROM_CONSIGN.command for cmd in car_cmds
+            cmd[1].command == CMD_AUTO_GREEN_CONSIGN.command for cmd in car_cmds
         )
         
         # Check for battery supplementing behavior
@@ -662,7 +662,7 @@ class TestSolver(TestCase):
         print(f"Has AUTO_FROM_CONSIGN: {has_auto_from_consign}")
         
         # Assert that we have AUTO_FROM_CONSIGN commands (the main test goal)
-        assert has_auto_from_consign, "Expected CMD_AUTO_FROM_CONSIGN commands for battery supplement scenario"
+        assert has_auto_from_consign, "Expected CMD_AUTO_GREEN_CONSIGN commands for battery supplement scenario"
         
         # Look for periods where car runs at/near minimum power during declining solar
         has_min_power_periods = any(

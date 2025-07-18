@@ -14,7 +14,7 @@ from datetime import datetime
 from datetime import timedelta
 
 from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE, \
-    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN
+    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN
 
 
 def _util_constraint_save_dump(time, cs):
@@ -1172,9 +1172,9 @@ class TestSolver2(TestCase):
                             print(f"  Command type: {cmd.command}")
 
         # Check for CMD_AUTO_FROM_CONSIGN during supplement periods
-        has_auto_from_consign = any(cmd[1].is_like(CMD_AUTO_FROM_CONSIGN) for cmd in car_cmds)
+        has_auto_from_consign = any(cmd[1].is_like(CMD_AUTO_GREEN_CONSIGN) for cmd in car_cmds)
         has_auto_from_consign_in_supplement = any(
-            cmd.is_like(CMD_AUTO_FROM_CONSIGN)
+            cmd.is_like(CMD_AUTO_GREEN_CONSIGN)
             for _, cmd, _, _ in supplement_periods
         )
 
