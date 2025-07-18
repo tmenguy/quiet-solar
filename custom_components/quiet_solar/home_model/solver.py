@@ -382,7 +382,7 @@ class PeriodSolver(object):
                     continue
 
                 to_shave_segment = [s[0], empty_segments[s_idx][1]]
-                energy_delta = -min(self._battery.get_value_full(), energy_to_get_back[s_idx]) # should I bump a bit what need to be reclaimed?
+                energy_delta = -min(self._battery.get_value_full(), energy_to_get_back[s_idx]*1.2) # should I bump a bit what need to be reclaimed?
                 break
 
         return to_shave_segment, energy_delta
