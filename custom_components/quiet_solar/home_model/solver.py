@@ -805,9 +805,13 @@ class PeriodSolver(object):
                                                                                               probe_window_start,
                                                                                               probe_window_end,
                                                                                               True)
+                            if has_changed:
+                                _LOGGER.info(
+                                    f"solve: succeeded in consuming more for surplus {energy_to_be_spent} Wh {solved} / {has_changed}")
+
                             if solved or has_changed is False:
                                 _LOGGER.info(
-                                    f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh")
+                                    f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}")
                                 break
 
 
