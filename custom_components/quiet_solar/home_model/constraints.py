@@ -636,10 +636,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
         if energy_delta >= 0.0:
             _LOGGER.info(
-                f"adapt_repartition: consume more energy {energy_delta}Wh for {log_msg}")
+                f"adapt_repartition: for {self.name} consume more energy {energy_delta}Wh for {log_msg}")
         else:
             _LOGGER.info(
-                f"adapt_repartition: reclaim energy {energy_delta}Wh from {log_msg}")
+                f"adapt_repartition: for {self.name} reclaim energy {energy_delta}Wh from {log_msg}")
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
@@ -692,6 +692,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                j += 1
 
                 else: # init_energy_delta < 0.0:
+
+                    if existing_commands and existing_commands[i] is not None:
+                        _LOGGER.info(f"adapt_repartition: negative for {self.name} command {existing_commands[i]}")
+                    else:
+                        _LOGGER.info(f"adapt_repartition: negative for {self.name} NO EXISTING COMMAND")
 
                     # for reduction: reduce strongly
                     if current_command_power == 0:

@@ -75,8 +75,23 @@ class PeriodSolver(object):
 
         if pv_forecast is None:
             _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
-        elif np.sum(self._available_power) == 0.0:
-            _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST 0 SUM")
+        else:
+            s  = sum([v for v,t in pv_forecast])
+            if s == 0.0:
+                _LOGGER.warning("PeriodSolver: NO AVAILABLE SOLAR 0 SUM")
+
+        if unavoidable_consumption_forecast is None:
+            _LOGGER.warning("PeriodSolver: NO UA FORECAST FROM INPUT")
+        else:
+            s  = sum([v for v,t in unavoidable_consumption_forecast])
+            if s == 0.0:
+                _LOGGER.warning("PeriodSolver: NO AVAILABLE UA 0 SUM")
+
+
+        if np.sum(self._available_power) == 0.0:
+            _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER 0 SUM")
+        elif np.min(self._available_power) >= 0:
+            _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER ... MINIMUM IS POSITIVE, NO POWER TO CONSUME")
 
 
     def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
