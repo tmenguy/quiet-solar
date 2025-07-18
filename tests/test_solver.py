@@ -3,7 +3,8 @@ from unittest import TestCase
 
 import pytz
 
-from custom_components.quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, FLOATING_PERIOD_S
+from custom_components.quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
+    FLOATING_PERIOD_S, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
     LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
 from custom_components.quiet_solar.home_model.load import TestLoad
@@ -68,7 +69,7 @@ class TestSolver(TestCase):
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
             time=dt,
             load = car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint = None,
             initial_value = None,
             target_value=22000,
@@ -198,7 +199,7 @@ class TestSolver(TestCase):
 
             car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                 time=time,
-                type=CONSTRAINT_TYPE_FILLER_AUTO,
+                type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
                 total_capacity_wh=car_capacity,
                 load=charger,
                 initial_value=None,
@@ -262,7 +263,7 @@ class TestSolver(TestCase):
         car_charge = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=15000,  # 15kWh target - big demand
@@ -373,7 +374,7 @@ class TestSolver(TestCase):
         car_charge_best_effort = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=10000,  # 10kWh target
@@ -474,7 +475,7 @@ class TestSolver(TestCase):
         car_charge_greedy = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=8000,  # 8kWh target
@@ -593,7 +594,7 @@ class TestSolver(TestCase):
         car_charge = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=10000,  # 10kWh target
@@ -787,7 +788,7 @@ class TestSolver(TestCase):
         car_charge = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=6000,  # 6kWh
@@ -905,7 +906,7 @@ class TestSolver(TestCase):
         car_charge = MultiStepsPowerLoadConstraint(
             time=dt,
             load=car,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
             initial_value=None,
             target_value=5000,  # 5kWh (reduced)
@@ -918,7 +919,7 @@ class TestSolver(TestCase):
         water_heater_constraint = TimeBasedSimplePowerLoadConstraint(
             time=dt,
             load=water_heater,
-            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=dt + timedelta(hours=4),
             initial_value=0,
             target_value=2*3600,  # 2 hours

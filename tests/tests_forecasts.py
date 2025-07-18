@@ -8,9 +8,11 @@ import pytz
 
 import numpy as np
 
-from custom_components.quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
+from custom_components.quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TYPE_MANDATORY_END_TIME, \
+    CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
-    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE
+    CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 from custom_components.quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
     BUFFER_SIZE_DAYS, QSHome
 from custom_components.quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
@@ -183,7 +185,7 @@ class TestForecast(TestCase):
                 _util_constraint_save_dump(time, car_charge_mandatory)
                 car_charge_as_best = MultiStepsPowerLoadConstraintChargePercent(
                     time=time,
-                    type=CONSTRAINT_TYPE_FILLER_AUTO,
+                    type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
                     total_capacity_wh=car_capacity,
                     load=charger,
                     initial_value=None,

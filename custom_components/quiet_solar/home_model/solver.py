@@ -76,14 +76,14 @@ class PeriodSolver(object):
         if pv_forecast is None:
             _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
         else:
-            s  = sum([v for v,t in pv_forecast])
+            s  = sum([v for t,v in pv_forecast])
             if s == 0.0:
                 _LOGGER.warning("PeriodSolver: NO AVAILABLE SOLAR 0 SUM")
 
         if unavoidable_consumption_forecast is None:
             _LOGGER.warning("PeriodSolver: NO UA FORECAST FROM INPUT")
         else:
-            s  = sum([v for v,t in unavoidable_consumption_forecast])
+            s  = sum([v for t,v in unavoidable_consumption_forecast])
             if s == 0.0:
                 _LOGGER.warning("PeriodSolver: NO AVAILABLE UA 0 SUM")
 

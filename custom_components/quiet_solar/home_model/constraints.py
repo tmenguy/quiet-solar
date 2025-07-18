@@ -652,6 +652,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         out_constraint = self
 
+        num_non_zero_exisitng_commands = 0
+
         if init_energy_delta < 0.0 and self.is_mandatory is True:
             # do nothing
             _LOGGER.info(f"adapt_repartition: no adaptation for {self.name} as it is mandatory and we can't reduce its consumption")
@@ -663,6 +665,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 current_command_power = 0.0
                 if existing_commands and existing_commands[i] is not None:
                     current_command_power = existing_commands[i].power_consign
+
+                if current_command_power > 0.0:
+                    num_non_zero_exisitng_commands += 1
 
                 j = None
                 if init_energy_delta >= 0.0:
@@ -692,11 +697,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                j += 1
 
                 else: # init_energy_delta < 0.0:
-
-                    if existing_commands and existing_commands[i] is not None:
-                        _LOGGER.info(f"adapt_repartition: negative for {self.name} command {existing_commands[i]}")
-                    else:
-                        _LOGGER.info(f"adapt_repartition: negative for {self.name} NO EXISTING COMMAND")
 
                     # for reduction: reduce strongly
                     if current_command_power == 0:
@@ -823,6 +823,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             out_constraint = self.shallow_copy_for_delta_energy(delta_energy)
 
+            if num_non_zero_exisitng_commands == 0:
+                _LOGGER.info(
+                    f"adapt_repartition: for {self.name} THERE WERE NO NON ZERO EXISTING COMMANDS")
 
             if self.support_auto:
                 # CAP the whole segment to what has been computed ...or force some consumption
