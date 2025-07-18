@@ -591,7 +591,14 @@ class PeriodSolver(object):
                                                                                 to_shave_segment[0],
                                                                                 to_shave_segment[1],
                                                                                 allow_change_state=True)
-                    if solved is False or has_changed is False:
+
+                    if has_changed:
+                        _LOGGER.info(
+                            f"solve: cap succeeded in saving some battery, left to save: {energy_delta} Wh {solved} / {has_changed}")
+
+                    if solved or has_changed is False:
+                        _LOGGER.info(
+                            f"solve: cap no more constraints to adapt, energy left to save: {energy_delta} Wh {solved} / {has_changed}")
                         break
 
 
@@ -807,11 +814,11 @@ class PeriodSolver(object):
                                                                                               True)
                             if has_changed:
                                 _LOGGER.info(
-                                    f"solve: succeeded in consuming more for surplus {energy_to_be_spent} Wh {solved} / {has_changed}")
+                                    f"solve: Surplus succeeded in consuming more for surplus {energy_to_be_spent} Wh {solved} / {has_changed}")
 
                             if solved or has_changed is False:
                                 _LOGGER.info(
-                                    f"solve: No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}")
+                                    f"solve: Surplus No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}")
                                 break
 
 
