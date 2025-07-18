@@ -9,7 +9,7 @@ import pytz
 
 from .commands import LoadCommand, CMD_ON, CMD_AUTO_GREEN_ONLY, CMD_AUTO_FROM_CONSIGN, copy_command, \
     copy_command_and_change_type, CMD_IDLE, \
-    CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP
+    CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN
 import numpy.typing as npt
 import numpy as np
 from bisect import bisect_left
@@ -654,6 +654,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         num_non_zero_exisitng_commands = 0
 
+        first_modified_slot = None
+
+        start_solved_frontier = first_slot
+
         if init_energy_delta < 0.0 and self.is_mandatory is True:
             # do nothing
             _LOGGER.info(f"adapt_repartition: no adaptation for {self.name} as it is mandatory and we can't reduce its consumption")
@@ -757,7 +761,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         if init_energy_delta >= 0.0:
                             # it will force some use to empty a bit the battery
                             out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
-                                                                           new_type=CMD_AUTO_FROM_CONSIGN.command)
+                                                                           new_type=CMD_AUTO_GREEN_CONSIGN.command)
                         else:
                             out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
                                                                            new_type=CMD_AUTO_GREEN_CAP.command)
@@ -770,6 +774,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     out_delta_power[i] = delta_power
                     delta_energy += d_energy
                     energy_delta -= d_energy
+
+                    if first_modified_slot is None:
+                        first_modified_slot = i
+                    else:
+                        first_modified_slot = min(first_modified_slot, i)
 
                     num_changes += 1
 
@@ -811,11 +820,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {to_be_reclaimed}Wh from the future")
                             else:
                                 # the constraint was met and we can't reduce the futur: stop here
+                                start_solved_frontier = i
                                 break
 
 
                     if energy_delta * init_energy_delta <= 0.0:
                         # it means they are not of the same sign, we are done
+                        start_solved_frontier = i
                         break
 
                     if init_energy_delta >= 0.0:
@@ -827,9 +838,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 _LOGGER.info(
                     f"adapt_repartition: for {self.name} THERE WERE NO NON ZERO EXISTING COMMANDS")
 
-            if self.support_auto:
-                # CAP the whole segment to what has been computed ...or force some consumption
-                for i in range(first_slot, last_slot + 1):
+            if self.support_auto and num_changes > 0:
+                # CAP the modified segment to what has been computed ...or force some consumption
+                # we may in fact do that "all the time" but we are not sure of the futue, so limit
+                # the forced caps to where they are important? use first_modified_slot instead?
+
+                for i in range(start_solved_frontier, last_slot + 1):
 
                     if init_energy_delta >= 0.0:
                         default_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
@@ -842,7 +856,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         else:
                             if init_energy_delta >= 0.0 and existing_commands[i].power_consign > 0:
                                 out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
-                                                                               new_type=CMD_AUTO_FROM_CONSIGN.command)
+                                                                               new_type=CMD_AUTO_GREEN_CONSIGN.command)
                             else:
                                 out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
                                                                                new_type=default_cmd.command)

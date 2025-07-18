@@ -7,6 +7,7 @@ CMD_CST_IDLE = "idle"
 CMD_CST_AUTO_GREEN = "auto_green"
 CMD_CST_AUTO_GREEN_CAP = "auto_green_cap"
 CMD_CST_GREEN_CHARGE_ONLY = "green_charge-ONLY"
+CMD_CST_AUTO_GREEN_CONSIGN = "auto_green_consign"
 CMD_CST_AUTO_CONSIGN = "auto_consign"
 CMD_CST_AUTO_PRICE = "auto_price"
 CMD_CST_FORCE_CHARGE = "force_charge"
@@ -16,11 +17,12 @@ commands_scores = {
     CMD_CST_FORCE_CHARGE: 90,
     CMD_CST_AUTO_CONSIGN: 80,
     CMD_CST_AUTO_PRICE: 70,
-    CMD_CST_GREEN_CHARGE_ONLY: 60,
-    CMD_CST_AUTO_GREEN_CAP: 50,
-    CMD_CST_AUTO_GREEN: 40,
-    CMD_CST_IDLE: 30,
-    CMD_CST_OFF: 20,
+    CMD_CST_AUTO_GREEN_CONSIGN: 60,
+    CMD_CST_GREEN_CHARGE_ONLY: 50,
+    CMD_CST_AUTO_GREEN_CAP: 40,
+    CMD_CST_AUTO_GREEN: 30,
+    CMD_CST_IDLE: 20,
+    CMD_CST_OFF: 10,
 }
 
 @dataclass
@@ -79,6 +81,7 @@ def copy_command_and_change_type(cmd:LoadCommand, new_type:str) -> LoadCommand:
 CMD_ON = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
 CMD_AUTO_GREEN_ONLY = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
 CMD_AUTO_GREEN_CAP = LoadCommand(command=CMD_CST_AUTO_GREEN_CAP, power_consign=0.0)
+CMD_AUTO_GREEN_CONSIGN = LoadCommand(command=CMD_CST_AUTO_GREEN_CONSIGN, power_consign=0.0)
 CMD_AUTO_FROM_CONSIGN = LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=0.0)
 CMD_AUTO_PRICE = LoadCommand(command=CMD_CST_AUTO_PRICE, power_consign=0.0)
 CMD_OFF = LoadCommand(command=CMD_CST_OFF, power_consign=0.0)

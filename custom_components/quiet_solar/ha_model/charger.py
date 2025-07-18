@@ -84,7 +84,7 @@ from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstrai
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP
+    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN
 from ..home_model.load import AbstractLoad, diff_amps, add_amps, is_amps_zero, are_amps_equal
 
 _LOGGER = logging.getLogger(__name__)
@@ -899,7 +899,7 @@ class QSChargerGroup(object):
                 for cs in actionable_chargers:
 
                     local_stop_on_first_change = stop_on_first_change
-                    if cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
+                    if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                         local_stop_on_first_change = False
 
                     num_changes = 0
@@ -982,13 +982,13 @@ class QSChargerGroup(object):
         # optimize cost usage in case battery won't be used
         if full_available_home_power > 0:
 
-            best_global_command = CMD_AUTO_GREEN_ONLY
+            do_price_check = False
             for cs in actionable_chargers:
-                if cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE,CMD_AUTO_FROM_CONSIGN]):
-                    best_global_command = CMD_AUTO_PRICE
+                if cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
+                    do_price_check = True
                     break
 
-            if best_global_command == CMD_AUTO_PRICE and self.home.battery_can_discharge() is False:
+            if do_price_check and self.home.battery_can_discharge() is False:
 
                 diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
@@ -1703,6 +1703,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.can_be_started_and_stopped = False
 
+        if current_state is False:
+            time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
+        else:
+            time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
+
+        can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
+
+
         # we need to force a charge here from a given minimum
         if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
 
@@ -1717,21 +1725,35 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         else:
             max_charge = self.max_charge
+            min_charge = self.min_charge
             possible_num_phases = None
             possible_amps = None
+
+            cs.can_be_started_and_stopped = True  # true for CMD_AUTO_GREEN_CONSIGN and CMD_AUTO_GREEN_ONLY and CMD_AUTO_GREEN_CAP
+            if cs.command.is_like(CMD_AUTO_PRICE):
+                cs.can_be_started_and_stopped = False
+
 
             if cs.command.is_like(CMD_AUTO_GREEN_CAP):
 
                 if cs.command.power_consign == 0:
                     # forbid charge in that case ...
                     possible_num_phases = [cs.current_active_phase_number]
-                    possible_amps = [0]
+                    if current_state is True and can_change_state is False:
+                        # we charge and we should stop but we can't ... stay at minimum
+                        possible_amps = [self.min_charge]
+                    else:
+                        possible_amps = [0]
 
                 else:
                     possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
 
-                _LOGGER.info(
-                    f"get_stable_dynamic_charge_status: {self.name} CMD_AUTO_GREEN_CAP power: {cs.command.power_consign} {possible_amps}")
+            elif cs.command.is_like(CMD_AUTO_GREEN_CONSIGN):
+
+                possible_num_phases, min_charge = cs.get_consign_amps_values(consign_is_minimum=True)
+                if possible_num_phases is None:
+                    possible_num_phases = [cs.current_active_phase_number]
+
 
             if possible_num_phases is None:
                 possible_num_phases = [cs.current_active_phase_number]
@@ -1742,20 +1764,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         possible_num_phases = [1, 3]
 
             if possible_amps is None:
-                run_list = [i for i in range(self.min_charge, max_charge + 1)]
+                run_list = [i for i in range(min_charge, max_charge + 1)]
                 # check if it is on or off : can we change from off to on or on to off because of allowed changes
                 # check if we need to wait a bit before changing the state of the charger
-
-                cs.can_be_started_and_stopped = True
-                if cs.command.is_like(CMD_AUTO_PRICE):
-                    cs.can_be_started_and_stopped = False
-
-                if current_state is False:
-                    time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S
-                else:
-                    time_to_check = TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
-
-                can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
 
                 # that may force a change if can_stop False and Current_state is False
                 possible_amps = run_list
@@ -1766,6 +1777,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     elif current_state is False:
                         # we are off and we can't change the state, so we can only stay off
                         possible_amps = [0]
+
+            if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]):
+                _LOGGER.info(
+                    f"get_stable_dynamic_charge_status: {self.name} CAP/GREEN_CONSIGN {cs.command} {possible_amps} (can_change_state: {can_change_state} current_state: {current_state})")
 
 
         cs.possible_amps = possible_amps
