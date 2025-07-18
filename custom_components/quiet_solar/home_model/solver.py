@@ -74,7 +74,7 @@ class PeriodSolver(object):
 
 
         if pv_forecast is None:
-            LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
+            _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
         elif np.sum(self._available_power) == 0.0:
             _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST 0 SUM")
 
