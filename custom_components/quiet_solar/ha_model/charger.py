@@ -95,7 +95,7 @@ CHARGER_MAX_POWER_AMPS_PRECISION_W = 100  # 100W precision for power
 CHARGER_MIN_REBOOT_DURATION_S = 120
 
 
-CHARGER_STATE_REFRESH_INTERVAL_S = 7
+CHARGER_STATE_REFRESH_INTERVAL_S = 14
 CHARGER_ADAPTATION_WINDOW_S = 30
 CHARGER_CHECK_STATE_WINDOW_S = 15
 
@@ -3291,16 +3291,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result
 
     async def _do_update_charger_state(self, time):
+
+        entity_to_probe = []
+        if self.charger_plugged is not None:
+            entity_to_probe.append(self.charger_plugged)
+        if self.charger_pause_resume_switch is not None:
+            entity_to_probe.append(self.charger_pause_resume_switch)
+        if self.charger_max_charging_current_number is not None:
+            entity_to_probe.append(self.charger_max_charging_current_number)
+
+        if len(entity_to_probe) == 0:
+            return
+
         if self._last_charger_state_prob_time is None or (time - self._last_charger_state_prob_time).total_seconds() > CHARGER_STATE_REFRESH_INTERVAL_S:
-
-            entity_to_probe = []
-            if self.charger_plugged is not None:
-                entity_to_probe.append(self.charger_plugged)
-            if self.charger_pause_resume_switch is not None:
-                entity_to_probe.append(self.charger_pause_resume_switch)
-            if self.charger_max_charging_current_number is not None:
-                entity_to_probe.append(self.charger_max_charging_current_number)
-
 
             state_time = self._last_charger_state_prob_time
             for entity in entity_to_probe:
