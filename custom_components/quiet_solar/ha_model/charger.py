@@ -3111,9 +3111,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if max_charging_current == self._expected_amperage.value:
                 await self._expected_amperage.success(time=time)
                 if probe_only is False:
-                    if (time - self._expected_amperage.last_ping_time_success).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY_S:
+                    duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S*2
+                    if self._expected_amperage.last_ping_time_success == self._expected_amperage.first_time_success:
+                        duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S
+                    if (time - self._expected_amperage.last_ping_time_success).total_seconds() > duration_check_s:
                         if is_charge_disabled is False or is_charge_enabled:
-                            _LOGGER.debug(f"Ensure State:{self.name} amperage already set to {max_charging_current}A ... but reset it")
+                            _LOGGER.debug(f"Ensure State:{self.name} set amperage already set to {max_charging_current}A ... but reset it")
                             await self.set_max_charging_current(current=self._expected_amperage.value, time=time, force=True)
                         self._expected_amperage.last_ping_time_success = time
             else:
@@ -3123,7 +3126,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if probe_only is False:
                     if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
                         if is_charge_disabled is False or is_charge_enabled:
-                            _LOGGER.info(f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A LAUNCH set_max_charging_current")
+                            _LOGGER.info(f"Ensure State:{self.name} set amperage {max_charging_current}A expected {self._expected_amperage.value}A LAUNCH set_max_charging_current")
                             await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
                     else:
                         _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {max_charging_current}A expected {self._expected_amperage.value}A")
