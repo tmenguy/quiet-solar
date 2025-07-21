@@ -141,6 +141,8 @@ class QSStateCmd():
         self.last_change_asked = None
         self.on_success_action_cb : Callable[[datetime, dict], Awaitable] | None = None
         self.on_success_action_cb_kwargs : dict | None = None
+        self.first_time_success = None
+        self.last_ping_time_success = None
 
     def register_success_cb(self, on_success_action_cb : Callable[[datetime, dict], Awaitable], on_success_action_cb_kwargs : dict | None):
         self.on_success_action_cb = on_success_action_cb
@@ -182,6 +184,11 @@ class QSStateCmd():
         self._num_launched = 0
         self.last_time_set = None
 
+        if self.first_time_success is None:
+            self.first_time_success = time
+            self.last_ping_time_success = time
+
+        # launch only on first success call
         if self.on_success_action_cb is not None:
             await self.on_success_action_cb(time=time, **self.on_success_action_cb_kwargs)
 
@@ -2902,13 +2909,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return self.dampening_power_value_for_car_consumption(val) == 0.0  # 70 W of consumption for the charger for ex
 
 
-    async def set_max_charging_current(self, current, time: datetime, for_default_when_unplugged=False):
+    async def set_max_charging_current(self, current, time: datetime, for_default_when_unplugged=False, force=False) -> bool:
 
         has_done_change = False
         if for_default_when_unplugged is False:
             self._expected_amperage.register_launch(value=current, time=time)
 
-        if self.get_max_charging_amp_per_phase() != current:
+        if self.get_max_charging_amp_per_phase() != current or force:
             has_done_change = await self.low_level_set_max_charging_current(current, time)
 
         # await self.hass.services.async_call(
@@ -3097,20 +3104,27 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             amps_bad_set = True
             if self._expected_charge_state.value is False and is_charge_disabled:
-                # ok we are in a good stopped state : even if the amperage is not set, we can say that the result will be good
+                # ok we are in a good stopped state: even if the amperage is not set, we can say that the result will be good
                 amps_bad_set = False
 
             max_charging_current = self.get_max_charging_amp_per_phase()
             if max_charging_current == self._expected_amperage.value:
                 await self._expected_amperage.success(time=time)
+                if probe_only is False:
+                    if (time - self._expected_amperage.last_ping_time_success).total_seconds() > STATE_CMD_TIME_BETWEEN_RETRY_S:
+                        if is_charge_disabled is False or is_charge_enabled:
+                            _LOGGER.debug(f"Ensure State:{self.name} amperage already set to {max_charging_current}A ... but reset it")
+                            await self.set_max_charging_current(current=self._expected_amperage.value, time=time, force=True)
+                        self._expected_amperage.last_ping_time_success = time
             else:
                 one_bad = amps_bad_set
                 _LOGGER.info(
                     f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A")
                 if probe_only is False:
                     if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                        _LOGGER.info(f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A LAUNCH set_max_charging_current")
-                        await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
+                        if is_charge_disabled is False or is_charge_enabled:
+                            _LOGGER.info(f"Ensure State:{self.name} current {max_charging_current}A expected {self._expected_amperage.value}A LAUNCH set_max_charging_current")
+                            await self.set_max_charging_current(current=self._expected_amperage.value, time=time)
                     else:
                         _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {max_charging_current}A expected {self._expected_amperage.value}A")
 
