@@ -520,7 +520,7 @@ class AbstractLoad(AbstractDevice):
 
         return res
 
-    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int) -> float:
+    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int=0) -> float:
         return 0.0
 
     def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:

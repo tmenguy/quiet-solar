@@ -169,6 +169,7 @@ class TestChargersSetup(unittest.TestCase):
             result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
                 full_available_home_power,
+                full_available_home_power,
                 False,
                 self.current_time
             )
@@ -209,6 +210,7 @@ class TestChargersSetup(unittest.TestCase):
             result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
                 3000.0,# Only 3kW available
+                3000.0,
                 False,
                 self.current_time
             )
@@ -244,6 +246,7 @@ class TestChargersSetup(unittest.TestCase):
             # Test with 10kW available (should trigger redistribution)
             result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(
                 actionable_chargers,
+                10000.0,
                 10000.0,
                 False,
                 self.current_time
@@ -371,6 +374,7 @@ class TestBudgetingAlgorithm:
         result, _ , _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             full_available_home_power,
+            full_available_home_power,
             False,
             self.current_time
         )
@@ -414,6 +418,7 @@ class TestBudgetingAlgorithm:
         result, _ , _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             2000.0,  # Only 2kW available
+            1000.0,
             False,
             self.current_time
         )
@@ -429,6 +434,7 @@ class TestBudgetingAlgorithm:
         """Test algorithm with no actionable chargers."""
         result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(
             [],  # No chargers
+            5000.0,
             5000.0,
             False,
             self.current_time
@@ -454,6 +460,7 @@ class TestBudgetingAlgorithm:
         result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             0.0, # No power available
+            0.0,
             False,
             self.current_time
         )
@@ -481,6 +488,7 @@ class TestBudgetingAlgorithm:
         result, _ , _ = await self.charger_group.budgeting_algorithm_minimize_diffs(
             actionable_chargers,
             -2000.0,  # Exporting 2kW
+            -2000.0,
             False,
             self.current_time
         )
@@ -576,6 +584,7 @@ class TestBudgetingAlgorithm:
             
             result, _ , _ = await self.charger_group_3p.budgeting_algorithm_minimize_diffs(
                 current_chargers,
+                full_available_home_power,
                 full_available_home_power,
                 False,
                 self.current_time

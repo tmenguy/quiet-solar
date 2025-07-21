@@ -245,7 +245,7 @@ class TestQSStateCmd(unittest.TestCase):
         """Test is_ok_to_launch with time-based retry logic."""
         time1 = datetime.now(pytz.UTC)
         time2 = time1 + timedelta(seconds=5)
-        time3 = time1 + timedelta(seconds=25)  # Beyond command_retries_s
+        time3 = time1 + timedelta(seconds=self.state_cmd.command_retries_s + 1)  # Beyond command_retries_s
         
         # First launch
         self.state_cmd.register_launch(True, time1)

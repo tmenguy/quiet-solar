@@ -9,8 +9,8 @@ from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
 from .load import AbstractLoad
 from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
-    CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type
-
+    CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type, \
+    CMD_FORCE_CHARGE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -269,12 +269,15 @@ class PeriodSolver(object):
 
             existing_cmds[s] = cmd
 
-    def _battery_get_charging_power(self, limited_discharge_per_price = None):
+    def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None):
 
         available_power_list = self._available_power
         battery_charge_power = np.zeros(len(available_power_list), dtype=np.float64)
         battery_charge = np.zeros(len(available_power_list), dtype=np.float64)
-        battery_commands = [CMD_GREEN_CHARGE_AND_DISCHARGE] * len(available_power_list)
+        if existing_battery_commands is None:
+            battery_commands = [None] * len(available_power_list)
+        else:
+            battery_commands = existing_battery_commands
         prices_discharged_energy_buckets = {}
         prices_remaining_grid_energy_buckets = {}
         remaining_grid_price = 0
@@ -294,26 +297,42 @@ class PeriodSolver(object):
                 charging_power = 0.0
                 available_power = available_power_list[i]
 
-                if available_power < 0.0:
+                if battery_commands[i] is None:
+                    battery_commands[i] = copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE)
 
-                    charging_power = self._battery.get_best_charge_power(0.0 - available_power,
+
+                if battery_commands[i].is_like(CMD_FORCE_CHARGE):
+
+                    charging_power = self._battery.get_best_charge_power(battery_commands[i].power_consign,
                                                                          float(self._durations_s[i]),
                                                                          current_charge=prev_battery_charge)
                     if charging_power < 0.0:
                         charging_power = 0.0
+                else:
 
-                elif available_power > 0.0:
+                    if available_power < 0.0:
 
-                    # discharge....
-                    charging_power = self._battery.get_best_discharge_power(float(available_power),
-                                                                            float(self._durations_s[i]),
-                                                                            current_charge=float(prev_battery_charge))
-                    if charging_power > 0:
-                        charging_power = 0.0 - charging_power
-                    else:
-                        charging_power = 0.0
+                        charging_power = self._battery.get_best_charge_power(0.0 - available_power,
+                                                                             float(self._durations_s[i]),
+                                                                             current_charge=prev_battery_charge)
+                        if charging_power < 0.0:
+                            charging_power = 0.0
+
+                    elif available_power > 0.0:
+
+                        # discharge....
+                        charging_power = self._battery.get_best_discharge_power(float(available_power),
+                                                                                float(self._durations_s[i]),
+                                                                                current_charge=float(prev_battery_charge))
+                        if charging_power > 0:
+                            charging_power = 0.0 - charging_power
+                        else:
+                            charging_power = 0.0
 
                 battery_charge_power[i] = charging_power
+
+
+
 
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
 
@@ -324,9 +343,14 @@ class PeriodSolver(object):
                             # we need to ... forbid discharge to keep it when we will need it for bigger prices
                             charged_energy = max(0.0, charged_energy)
                             charging_power = max(0.0, charging_power)
-                            battery_commands[i] = CMD_GREEN_CHARGE_ONLY
+                            battery_commands[i] = copy_command(CMD_GREEN_CHARGE_ONLY)
 
                         limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy, 0.0))
+
+                if battery_commands[i].is_like(CMD_FORCE_CHARGE):
+                    battery_commands[i].power_consign = max(charging_power, battery_commands[i].power_consign)
+                else:
+                    battery_commands[i].power_consign = charging_power
 
                 if charged_energy < 0.0:
                     prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(
@@ -350,7 +374,7 @@ class PeriodSolver(object):
         return battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy
 
 
-    def _prepare_battery_segmentation(self):
+    def _prepare_battery_segmentation(self, over_budget=0.2):
 
         to_shave_segment = None
         energy_delta = None
@@ -363,7 +387,7 @@ class PeriodSolver(object):
         for i in range(len(self._available_power)):
 
             current_charge = float(battery_charge[i])
-            if self._battery.is_value_empty(current_charge*0.9): #be a bit pessimistic here too ... 10%
+            if self._battery.is_value_empty(current_charge*(1.0 - over_budget)): # be a bit pessimistic here too ... 20%
                 if empty_segments[-1][0] is None:
                     empty_segments[-1][0] = i
                 else:
@@ -408,7 +432,23 @@ class PeriodSolver(object):
                 if init_battery_charge is None:
                     init_battery_charge = self._battery.get_value_empty()
 
-                energy_delta = -min(self._battery.get_value_full() - min(float(battery_charge[to_shave_segment[0]]), init_battery_charge), energy_to_get_back[s_idx]*1.1) # bump a bit what need to be reclaimed, 10% here ...
+                reclaim_energy = self._battery.get_value_full() - (1.0 - over_budget)*min(float(battery_charge[to_shave_segment[0]]), init_battery_charge)
+                reclaim_energy = min(reclaim_energy, energy_to_get_back[s_idx])*(1.0+over_budget)
+                reclaim_energy = min(self._battery.get_value_full(), reclaim_energy)
+
+                _LOGGER.info(f"_prepare_battery_segmentation: at {self._time_slots[empty_segments[s_idx][0]]} battery is expected to be empty")
+                _LOGGER.info(
+                    f"_prepare_battery_segmentation: need to reclaim {reclaim_energy} Wh from {self._time_slots[to_shave_segment[0]]} to {self._time_slots[to_shave_segment[1]]}")
+
+                max_charge_in_segment = np.max(battery_charge_power[to_shave_segment[0]:to_shave_segment[1]+1]) + energy_to_get_back[s_idx]
+                _LOGGER.info(
+                    f"_prepare_battery_segmentation: raw computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)")
+
+                max_charge_in_segment = np.max(battery_charge_power[to_shave_segment[0]:to_shave_segment[1] + 1]) + reclaim_energy
+                _LOGGER.info(
+                    f"_prepare_battery_segmentation: 2nd computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)")
+
+                energy_delta = -reclaim_energy
                 break
 
         return to_shave_segment, energy_delta
@@ -631,6 +671,7 @@ class PeriodSolver(object):
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
         battery_commands = None
         battery_charge = None
+        battery_charge_power = None
 
         if self._battery is not None:
 
@@ -847,6 +888,11 @@ class PeriodSolver(object):
                                     f"solve: Surplus No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}")
                                 break
 
+        if battery_commands is not None:
+            # recompute all battery charge and so on after all the adaptation
+            self._available_power = self._available_power - battery_charge_power
+            battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(existing_battery_commands=battery_commands)
+            self._available_power = self._available_power + battery_charge_power
 
         # we have now all the constraints solved, and the battery commands computed
         # now will be time to layout the commands for the constraints and their respective loads
@@ -859,7 +905,7 @@ class PeriodSolver(object):
             for s in range(num_slots):
                 s_cmd = command_list[s]
                 if s_cmd is None:
-                    s_cmd = CMD_IDLE
+                    s_cmd = copy_command(CMD_IDLE)
 
                 if s_cmd != current_command or (s_cmd.power_consign != current_command.power_consign):
                     lcmd.append((self._time_slots[s], s_cmd))
@@ -869,16 +915,18 @@ class PeriodSolver(object):
 
         bcmd = []
         if self._battery is not None and battery_commands is not None:
-            # setup battery comands
+            # setup battery commands
             current_command = None
             for s in range(num_slots):
                 cmd = battery_commands[s]
+                if cmd is None:
+                    cmd = copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE)
                 if cmd != current_command or (cmd.power_consign != current_command.power_consign):
                     bcmd.append((self._time_slots[s], cmd))
                     current_command = cmd
 
         if len(bcmd) == 0:
-            bcmd = [(self._time_slots[0], CMD_GREEN_CHARGE_AND_DISCHARGE)]
+            bcmd = [(self._time_slots[0], copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE))]
 
         # cmds are correctly ordered by time for each load by construction
         return output_cmds, bcmd

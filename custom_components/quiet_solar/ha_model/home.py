@@ -19,7 +19,7 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
     CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
-    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -143,6 +143,7 @@ class QSHome(QSDynamicGroup):
         self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
         self.home_available_power_sensor = HOME_AVAILABLE_POWER_SENSOR
         self.home_consumption_sensor = HOME_CONSUMPTION_SENSOR
+        self.grid_consumption_power_sensor = GRID_CONSUMPTION_SENSOR
 
         self.home_non_controlled_power_forecast_sensor_values = {}
         self.home_solar_forecast_sensor_values = {}
@@ -165,6 +166,7 @@ class QSHome(QSDynamicGroup):
         self.home_non_controlled_consumption = None
         self.home_consumption = None
         self.home_available_power = None
+        self.grid_consumption_power = None
         self.home_mode = None
 
         self._last_active_load_time = None
@@ -179,6 +181,9 @@ class QSHome(QSDynamicGroup):
 
         self.attach_power_to_probe(self.home_available_power_sensor,
                                       non_ha_entity_get_state=self.home_available_power_sensor_state_getter)
+
+        self.attach_power_to_probe(self.grid_consumption_power_sensor,
+                                      non_ha_entity_get_state=self.grid_consumption_power_sensor_state_getter)
 
         self.attach_power_to_probe(self.home_non_controlled_consumption_sensor,
                                       non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter)
@@ -365,6 +370,13 @@ class QSHome(QSDynamicGroup):
 
         return (time, self.home_available_power, {})
 
+    def grid_consumption_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (
+            tuple[datetime | None, float | str | None, dict | None] | None):
+
+        if self.grid_consumption_power is None:
+            return None
+
+        return (time, self.grid_consumption_power, {})
 
 
     def home_non_controlled_consumption_sensor_state_getter(self,
@@ -413,6 +425,7 @@ class QSHome(QSDynamicGroup):
             self.home_non_controlled_consumption = None
             self.home_consumption = None
             self.home_available_power = None
+            self.grid_consumption_power = None
         else:
             if solar_production_minus_battery is not None:
                 home_consumption = solar_production_minus_battery - grid_consumption
@@ -430,10 +443,13 @@ class QSHome(QSDynamicGroup):
             else:
                 self.home_available_power = grid_consumption
 
+            self.grid_consumption_power = grid_consumption
+
         val = self.home_non_controlled_consumption
 
         # slight hack to push the value to history:
         self.add_to_history(self.home_available_power_sensor, time)
+        self.add_to_history(self.grid_consumption_power_sensor, time)
 
         if val is None:
             return None
@@ -446,6 +462,9 @@ class QSHome(QSDynamicGroup):
     def get_available_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
+
+    def get_grid_consumption_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+        return self.get_state_history_data(self.grid_consumption_power_sensor, duration_before_s, time)
 
     def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
         # first check if we do have an amp sensor for the phases

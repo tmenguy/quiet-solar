@@ -84,7 +84,7 @@ from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstrai
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
-    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN
+    CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN, copy_command_and_change_type
 from ..home_model.load import AbstractLoad, diff_amps, add_amps, is_amps_zero, are_amps_equal
 
 _LOGGER = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ STATE_CMD_TIME_BETWEEN_RETRY_S = CHARGER_STATE_REFRESH_INTERVAL_S * 3
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 30
-TIME_OK_BETWEEN_BUDGET_RESET_S = 30 * 60 # to check if a car is now really more important than others and is not charging
+TIME_OK_BETWEEN_BUDGET_RESET_S = 20 * 60 # to check if a car is now really more important than others and is not charging
 TIME_OK_SHOULD_BUDGET_RESET_S = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
 
 
@@ -228,6 +228,8 @@ class QSChargerStatus(object):
         self.budgeted_num_phases = None
         self.charge_score = 0
         self.can_be_started_and_stopped = False
+        self.is_before_battery = False
+        self.bump_solar = False
 
     def duplicate(self):
         d = QSChargerStatus(self.charger)
@@ -242,6 +244,8 @@ class QSChargerStatus(object):
         d.budgeted_num_phases = self.budgeted_num_phases
         d.charge_score = self.charge_score
         d.can_be_started_and_stopped = self.can_be_started_and_stopped
+        d.is_before_battery = self.is_before_battery
+        d.bump_solar = self.bump_solar
 
     @property
     def name(self) -> str:
@@ -595,6 +599,19 @@ class QSChargerGroup(object):
                 available_power = self.home.get_available_power_values(CHARGER_ADAPTATION_WINDOW_S, time)
                 # the battery is normally adapting itself to the solar production, so if it is charging ... we will say that this power is available to the car
 
+                grid_available_power = self.home.get_grid_consumption_power_values(CHARGER_ADAPTATION_WINDOW_S, time)
+
+                full_available_home_power = None
+                grid_available_home_power = None
+
+                if grid_available_power:
+                    last_p_mean = get_average_sensor(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
+                    all_p_mean = get_average_sensor(grid_available_power, last_timing=time)
+                    last_p_median = get_median_sensor(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
+                    all_p_median = get_median_sensor(grid_available_power, last_timing=time)
+
+                    grid_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+
                 if available_power:
 
                     last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
@@ -602,10 +619,18 @@ class QSChargerGroup(object):
                     last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                     all_p_median = get_median_sensor(available_power, last_timing=time)
 
-                    full_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+                    full_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar and/or to battery , negative we are importing from the grid
+
+
+                if full_available_home_power is None:
+                    full_available_home_power = grid_available_home_power
+                if grid_available_home_power is None:
+                    grid_available_home_power = full_available_home_power
+
+                if full_available_home_power is not None:
 
                     _LOGGER.info(
-                        f"dyn_handle: full_available_home_power {full_available_home_power}W, {last_p_mean}, {all_p_mean}, {last_p_median}, {all_p_median}")
+                        f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W")
 
                     dampened_chargers = {}
 
@@ -723,7 +748,7 @@ class QSChargerGroup(object):
                     if self._last_time_should_reset_budget_received is not None and (time - self._last_time_should_reset_budget_received).total_seconds() > TIME_OK_SHOULD_BUDGET_RESET_S:
                         allow_budget_reset = True
 
-                    success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, allow_budget_reset, time)
+                    success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, grid_available_home_power, allow_budget_reset, time)
                     if done_reset_budget:
                         self._last_time_reset_budget_done = time
                         self._last_time_should_reset_budget_received = None
@@ -764,7 +789,12 @@ class QSChargerGroup(object):
             return False, False
 
 
-    async def budgeting_algorithm_minimize_diffs(self, actionable_chargers, full_available_home_power, allow_budget_reset, time:datetime) -> (bool, bool, bool):
+    async def budgeting_algorithm_minimize_diffs(self,
+                                                 actionable_chargers,
+                                                 full_available_home_power,
+                                                 grid_available_home_power,
+                                                 allow_budget_reset,
+                                                 time:datetime) -> (bool, bool, bool):
 
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
 
@@ -849,7 +879,42 @@ class QSChargerGroup(object):
         # ok we do have the "best" possible base for the chargers
         diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
-        power_budget = full_available_home_power - diff_power_budget
+        battery_asked_charge = 0.0
+        do_block_after_battery = False
+        if full_available_home_power != grid_available_home_power and self.home._battery is not None:
+
+            battery_current_charge = full_available_home_power - grid_available_home_power
+            if  self.home._battery.current_command:
+                battery_asked_charge = self.home._battery.power_consign
+
+            has_one_before_battery = False
+            has_one_after_battery = False
+            for cs in actionable_chargers:
+                if cs.is_before_battery:
+                    has_one_before_battery = True
+                else:
+                    has_one_after_battery = True
+
+            if has_one_before_battery is False:
+                # we want to charge the battery at minimum wit the battery_asked_charge or more
+                power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+            elif has_one_after_battery is False:
+                power_budget = full_available_home_power - diff_power_budget
+            else:
+                # both are true: we do have some that are before and after the battery
+                if do_reset_allocation is True:
+                    do_block_after_battery = True
+                    power_budget = full_available_home_power - diff_power_budget
+                else:
+                    if actionable_chargers[0].current_real_max_charging_amp == 0:
+                        # the main one is not charging ... try to have the other one stopped to charge the battery
+                        power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                    else:
+                        # the main one charge ... continue
+                        power_budget = full_available_home_power - diff_power_budget
+        else:
+            power_budget = full_available_home_power - diff_power_budget
+
         # in case of "no reset" allocation, we will try to minimize the diffs
         # this algorithm will only try to move "a bit" the chargers to reach the power budget
         # if power_budget is negative : we need to go down and find the best charger to go down
@@ -891,12 +956,15 @@ class QSChargerGroup(object):
 
 
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
+            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
 
         do_stop = False
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
                 for cs in actionable_chargers:
+
+                    if do_block_after_battery and cs.is_before_battery is False:
+                        continue
 
                     local_stop_on_first_change = stop_on_first_change
                     if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
@@ -980,7 +1048,7 @@ class QSChargerGroup(object):
                 break
 
         # optimize cost usage in case battery won't be used
-        if full_available_home_power > 0:
+        if max(grid_available_home_power, full_available_home_power) > 0:
 
             do_price_check = False
             for cs in actionable_chargers:
@@ -1056,7 +1124,7 @@ class QSChargerGroup(object):
                         _LOGGER.info(
                             f"dyn_handle: auto-price extended charge {smallest_power_increment}")
                         additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
-                        cost = (((diff_power_budget + smallest_power_increment - full_available_home_power) * durations_eval_s) / 3600.0) * current_price
+                        cost = (((diff_power_budget + smallest_power_increment - max(grid_available_home_power, full_available_home_power)) * durations_eval_s) / 3600.0) * current_price
                         cost_per_watt_h = cost / additional_added_energy
 
                         if cost_per_watt_h < best_price:
@@ -1525,6 +1593,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def qs_bump_solar_charge_priority(self, value: bool):
         if self.car is not None:
             self.car.qs_bump_solar_charge_priority = value
+            if value:
+                ct = self.get_current_active_constraint()
+                if ct is not None:
+                    if ct.is_before_battery is False:
+                        ct.is_before_battery = True
 
     @property
     def current_num_phases(self) -> int:
@@ -1787,49 +1860,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         cs.possible_num_phases = possible_num_phases
 
         ct = self.get_current_active_constraint(time)
-        score = 0
-        # if there is a time constraint that is not too far away : score boost
-        # if this constraint is mandatory of as fast as possible : score boost
-        score_boost_standard_ct = 1000
-        score_boost_mandatory = 100*score_boost_standard_ct
-        score_boost_as_fast_as_possible = 100*score_boost_mandatory
-        if ct is not None:
 
-            time_to_complete_h = None
-            score_boost = score_boost_standard_ct
-            if ct.as_fast_as_possible:
-                score_boost = score_boost_as_fast_as_possible
-            elif ct.is_mandatory:
-                score_boost = score_boost_mandatory
+        cs.is_before_battery = self._compute_is_before_battery(ct, time)
 
-            if ct.as_fast_as_possible:
-                time_to_complete_h = 0
-            elif ct.end_of_constraint < DATETIME_MAX_UTC:
-                # there is a true end constraint
-                time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
+        cs.bump_solar = self.qs_bump_solar_charge_priority
+        if cs.bump_solar:
+            if cs.command.is_like(CMD_AUTO_GREEN_CAP):
+                cs.command = copy_command_and_change_type(cs.command, CMD_AUTO_GREEN_ONLY.command)
 
-            if time_to_complete_h is not None and time_to_complete_h <= 24:
-                score += (25 - time_to_complete_h) * score_boost
-
-
-        if self.qs_bump_solar_charge_priority:
-            score += score_boost_standard_ct * 50 # to be below any mandatory constraint for solar and as fast as possible constraint
-
-        # give more to the ones with the lower car SOC percentage to reach their default target charge
-        car_percent = self.car.get_car_charge_percent(time)
-        if car_percent is None:
-            _LOGGER.warning(f"get_stable_dynamic_charge_status: charging score: {self.name} for {self.car.name} car_percent is None")
-            car_percent = 0.0
-
-        car_battery_capacity = self.car.car_battery_capacity
-        if car_battery_capacity is None or car_battery_capacity == 0:
-            car_battery_capacity = 100000 # (100kWh)
-
-        #convert in kwh
-        car_battery_capacity = car_battery_capacity / 1000.0
-        max_battery = 300
-        score += max_battery - ((car_battery_capacity*car_percent)/100.0)
-
+        score = self.get_normalized_score(ct, time)
 
         _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} for {self.car.name} score:{score} possible_amps:{cs.possible_amps} possible_num_phases:{cs.possible_num_phases} current_amps:{cs.get_current_charging_amps()} command:{cs.command}")
 
@@ -1837,20 +1876,56 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return cs
 
-    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int) -> float:
+    def _compute_is_before_battery(self, ct:LoadConstraint, time:datetime) -> bool:
+
+        if ct is None:
+            return False
+
+        is_before_battery = ct.is_before_battery
+
+        current_ct = self.get_current_active_constraint(time)
+
+        if current_ct is not None and current_ct is ct:
+            command = self.current_command
+            if command is not None:
+                if is_before_battery is True:
+
+                    if command.is_like(CMD_AUTO_GREEN_CAP):
+                        # if we are in a CAP, we don't want to have a score that is too high
+                        # so we will not take into account the time to complete
+                        is_before_battery = False
+                elif command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
+                    is_before_battery = True
+
+                _LOGGER.info(f"_compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
+
+            if self.qs_bump_solar_charge_priority:
+                is_before_battery = True
+
+        return is_before_battery
+
+
+    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int = 0) -> float:
         if self.car is None:
             return 0.0
 
-        native_score_span_duration = 100
-        native_score_span_battery = 1000
+        native_score_span_duration = 1000
+        native_score_span_battery  = 1000
         native_score_span = native_score_span_duration * native_score_span_battery
 
+        if score_span <= 0:
+            score_span = native_score_span
+
         native_score_duration = 0
-        max_duration_h = 23 # 4*max_duration_h + 3 must be < 100
+        max_duration_h = 23 # 5*max_duration_h + 3 must be < native_score_span_duration
         if ct is not None:
 
             time_to_complete_h = None
 
+            is_before_battery = self._compute_is_before_battery(ct, time)
+
+            if is_before_battery:
+                native_score_duration = max_duration_h
 
             if ct.as_fast_as_possible:
                 time_to_complete_h = 0
@@ -1859,14 +1934,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
 
             if time_to_complete_h is not None and time_to_complete_h <= max_duration_h - 1:
-                native_score_duration = int(max_duration_h - time_to_complete_h)
+                native_score_duration += int(max_duration_h - time_to_complete_h)
 
                 if ct.is_mandatory:
-                    native_score_duration += 2*max_duration_h + 2
+                    native_score_duration += 3*max_duration_h + 2
 
 
         if self.qs_bump_solar_charge_priority:
-            native_score_duration += max_duration_h + 1 # to be above non mandatory but below in case of mandatory constraints
+            native_score_duration += 2*max_duration_h + 1 # to be above non mandatory but below in case of mandatory constraints
 
         native_score_duration = float(min(native_score_span_duration-1, int(native_score_duration)))
 
@@ -1905,10 +1980,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         score = score_duration * score_span_battery + score_battery
         return score
-
-
-
-
 
 
     def reset(self):

@@ -143,14 +143,20 @@ class LoadConstraint(object):
 
     @property
     def is_before_battery(self) -> bool:
-        return self.support_auto or self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+        return self.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+
+    @is_before_battery.setter
+    def is_before_battery(self, value: bool):
+        if value:
+            if self.type < CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
+                self.type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
     def score(self, time:datetime):
 
         energy_score_span = 1000000.0 # 1000kwh
-        type_score_span = 100.0
+        type_score_span = 10.0
 
-        reserved_load_score_span = 100000.0
+        reserved_load_score_span = 1000000.0
         load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
 
         energy_score = float(min(max(0, int(self.convert_target_value_to_energy(self.target_value))), int(energy_score_span) - 1))

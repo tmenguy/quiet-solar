@@ -39,7 +39,7 @@ class Battery(AbstractDevice):
 
         charging_power = min(power_in, self.max_charging_power)
 
-        available_power = max(0.0, ((self.max_soc * self.capacity) - current_charge) * 3600 / duration_s)
+        available_power = max(0.0, ((self.get_value_full()) - current_charge) * 3600 / duration_s)
 
         charging_power = min(charging_power, available_power)
 
