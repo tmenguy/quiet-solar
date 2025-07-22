@@ -809,8 +809,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if current_soc < 85:
                 options.add(85)
 
-        if current_soc < self.car_default_charge:
-            options.add(int(self.car_default_charge))
+        # if current_soc < self.car_default_charge:
+        # always add the default
+        options.add(int(self.car_default_charge))
 
         v = int(self.get_car_target_charge())
         #always add the current set
