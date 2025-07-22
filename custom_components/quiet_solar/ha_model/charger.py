@@ -504,7 +504,7 @@ class QSChargerGroup(object):
 
             res, handled_static, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
 
-            _LOGGER.info(f"ensure_correct_state dyn group: {charger.name} {res}/{handled_static}")
+            _LOGGER.info(f"ensure_correct_state dyn group: {charger.name}  correct_state: {res} handled_static: {handled_static}")
 
             if handled_static:
                 continue
@@ -529,33 +529,6 @@ class QSChargerGroup(object):
                 actionable_chargers.append(cs)
 
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
-
-        # we will know check the ones that had a possible state change blocked or approved, and be sure to align a bit better
-        # those possible changes to not allow a more important one to be stopped because of a negative power budget
-        # if a less important one will continue charging
-
-        for i, cs in enumerate(actionable_chargers):
-
-            if (cs.can_be_started_and_stopped
-                    and i < len(actionable_chargers) - 1
-                    and cs.possible_amps[0] == 0
-                    and len(cs.possible_amps) > 1
-                    and cs.current_real_max_charging_amp > 0):
-                # ok this one may be stopped  .... check if all the "lower ones" can be stopped too, if not forbid its possible stop
-                can_stop = True
-                for j in range(i + 1, len(actionable_chargers)):
-                    next_cs = actionable_chargers[j]
-                    if next_cs.can_be_started_and_stopped and next_cs.possible_amps[0] > 0:
-                        can_stop = False
-                        break
-
-                if can_stop is False:
-                    # we can stop this one, so we will allow it to be stopped
-                    # remove the 0 to not allow to stop it
-                    cs.possible_amps = cs.possible_amps[1:]
-
-
-
 
         return actionable_chargers, verified_correct_state_time
 
@@ -892,7 +865,7 @@ class QSChargerGroup(object):
 
             battery_current_charge = full_available_home_power - grid_available_home_power
             if  self.home._battery.current_command:
-                battery_asked_charge = self.home._battery.power_consign
+                battery_asked_charge = self.home._battery.current_command.power_consign
 
             has_one_before_battery = False
             has_one_after_battery = False
@@ -3587,6 +3560,8 @@ class QSChargerOCPP(QSChargerGeneric):
 
             self.charger_ocpp_current_import = self._find_charger_entity_id(device, entries, "sensor.", "_current_import")
 
+            self.charger_ocpp_transaction_id = self._find_charger_entity_id(device, entries, "sensor.", "_transaction_id")
+
         super().__init__(**kwargs)
 
         self.secondary_power_sensor = self.charger_ocpp_current_import # it is total amps (3 phases sum)
@@ -3688,6 +3663,58 @@ class QSChargerOCPP(QSChargerGeneric):
                 _LOGGER.info(f"General OCPP notification for charger {self.name}: {message}")
         except Exception as e:
             _LOGGER.error(f"Error handling OCPP notification for charger {self.name}: {e}")
+
+
+
+    async def A_TRY_low_level_set_max_charging_current(self, current, time: datetime) -> bool:
+
+        # check : https://github.com/lbbrhzn/ocpp/blob/main/docs/Charge_automation.md  seems to be tehright way
+        # but it seems that in fact the OCPP stuff is implemented like this already, seeing teh logs ...
+
+        if self.charger_ocpp_transaction_id is None:
+            return await super().low_level_set_max_charging_current(current, time)
+
+        state = self.hass.states.get(self.charger_ocpp_transaction_id )
+
+
+
+
+
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            _LOGGER.warning(f"low_level_set_max_charging_current: OCPP transaction ID not available or in unknown state")
+            return False
+
+        try:
+
+            data: dict[str, Any] = {"conn_id": 1}
+            data["custom_profile"] = {
+                "transactionId": int(state.state),
+                "chargingProfileId": 1,
+                "stackLevel": 0,
+                "chargingProfilePurpose": "TxProfile",
+                "chargingProfileKind": "Relative",
+                "chargingSchedule": {
+                    "chargingRateUnit": "A",
+                    "chargingSchedulePeriod": [
+                        {"startPeriod": 0, "limit": int(current)}
+                    ]
+                }
+            }
+
+            # data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
+            service = "set_charge_rate"
+            # data[number.ATTR_VALUE] = int(min(max_value, max(min_value, range_value)))
+            domain = "ocpp"
+
+            await self.hass.services.async_call(
+                domain, service, data, blocking=False
+            )
+            done = True
+        except Exception as e:
+            _LOGGER.warning(f"low_level_set_max_charging_current: Error {e}")
+            done = False
+        return done
+
 
     def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
 
