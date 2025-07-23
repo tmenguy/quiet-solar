@@ -756,8 +756,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
 
-                    if (energy_delta + d_energy)* init_energy_delta <= 0:
-                        # sign has changed ... we are no more in over cosumme or under consume
+                    if (energy_delta - d_energy)* init_energy_delta <= 0:
+                        # sign has changed ... we are no more in over consume or under consume
                         if init_energy_delta >= 0.0:
                             #we are overconsuming if we do that: don't allow this change
                             # for under consume it is ok to underconsume a bit more

@@ -728,14 +728,14 @@ class PeriodSolver(object):
                                 if energy_can_still_be_discharged > 0.0:
                                     # we have some energy to cover
                                     if energy_can_still_be_discharged >= energy_to_cover:
-                                        _LOGGER.info(f"solve:==> Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
+                                        _LOGGER.info(f"solve: Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
                                         # we can cover it
                                         energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                         energy_to_cover = 0
 
                                         
                                     else:
-                                        _LOGGER.info(f"solve:==> Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
+                                        _LOGGER.info(f"solve: Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
                                         energy_can_still_be_discharged = 0
                                         energy_to_cover -= energy_can_still_be_discharged
 

@@ -178,7 +178,7 @@ class AbstractDevice(object):
 
         self.device_phase_amps_budget = copy.copy(allocate_budget)
 
-        _LOGGER.info(f"allocate_phase_amps_budget for load {self.name} from_father_budget {from_father_budget} => {self.device_phase_amps_budget}")
+        _LOGGER.debug(f"allocate_phase_amps_budget for load {self.name} from_father_budget {from_father_budget} => {self.device_phase_amps_budget}")
 
         return self.device_phase_amps_budget
 

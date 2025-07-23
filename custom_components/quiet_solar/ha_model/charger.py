@@ -2027,16 +2027,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if attached_car is not None and car is not None:
                     if attached_car.name != car.name:
                         score = 0.0
-                        _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score} when {attached_car.name} user attached to charger")
+                        _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score} when {attached_car.name} user attached to charger")
 
                     else:
                         score = max_sore
-                        _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, Best Car from user selection")
+                        _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score}, Best Car from user selection")
 
 
         if is_long_time_attached:
             score = max_sore - 1.0
-            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger")
+            _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger")
 
 
         if score is None and car.car_is_invited is False:
@@ -2112,12 +2112,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only if plugged .... then if home or a very compatible plug time
                 score = score_plug_bump + plug_span*score_plug_time_bump + plug_span*plug_time_span*score_dist_bump
 
-            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist*100)/100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}")
+            _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist*100)/100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}")
 
 
         if score is None:
             score = -1.0
-            _LOGGER.info(f"get_car_score: {car.name} for {self.name} score: {score}, score was None ... no chance to be selected")
+            _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score}, score was None ... no chance to be selected")
 
         return score
 
