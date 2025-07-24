@@ -3379,8 +3379,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # do nothing
                 self._last_charger_state_prob_time = state_time
             else:
-                _LOGGER.warning(f"Forcing a charger state update!")
-
                 await self.hass.services.async_call(
                     homeassistant.DOMAIN,
                     homeassistant.SERVICE_UPDATE_ENTITY,
