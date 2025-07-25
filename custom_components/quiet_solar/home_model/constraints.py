@@ -984,38 +984,48 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     new_first_slots = bisect_left(time_slots, start_reduction)
                     first_slot = max(first_slot, new_first_slots)
 
-                sub_power_available_power = power_available_power[first_slot:last_slot + 1]
-                min_power_idx = np.argmin(sub_power_available_power)
-                left = min_power_idx
-                right = min_power_idx
-                sorted_available_power = [min_power_idx]
-                for i in range(len(sub_power_available_power) - 1):
-                    if left == 0:
-                        right = right + 1
-                        if right >= len(sub_power_available_power):
-                            # should never happen
-                            break
-                        sorted_available_power.append(right)
-                    elif right == len(sub_power_available_power) - 1:
-                        left = left - 1
-                        if left < 0:
-                            # should never happen
-                            break
-                        sorted_available_power.append(left)
-                    else:
-                        left_val = sub_power_available_power[left - 1]
-                        right_val = sub_power_available_power[right + 1]
 
-                        if left_val < right_val:
+                if self.support_auto:
+                    # if we do support automatic filling: we will get all the available power, as soon as we get it:
+                    # so consume it greedily
+                    sorted_available_power = range(last_slot + 1 - first_slot)
+                else:
+                    sub_power_available_power = power_available_power[first_slot:last_slot + 1]
+
+                    # We do want to order the available power in a way that we can use the best available power first
+                    # ...but not too far from now: else, especially in case of
+
+                    min_power_idx = np.argmin(sub_power_available_power)
+                    left = min_power_idx
+                    right = min_power_idx
+                    sorted_available_power = [min_power_idx]
+                    for i in range(len(sub_power_available_power) - 1):
+                        if left == 0:
+                            right = right + 1
+                            if right >= len(sub_power_available_power):
+                                # should never happen
+                                break
+                            sorted_available_power.append(right)
+                        elif right == len(sub_power_available_power) - 1:
                             left = left - 1
+                            if left < 0:
+                                # should never happen
+                                break
                             sorted_available_power.append(left)
                         else:
-                            right = right + 1
-                            sorted_available_power.append(right)
+                            left_val = sub_power_available_power[left - 1]
+                            right_val = sub_power_available_power[right + 1]
 
-                if len(sorted_available_power) != len(sub_power_available_power):
-                    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
-                    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
+                            if left_val < right_val:
+                                left = left - 1
+                                sorted_available_power.append(left)
+                            else:
+                                right = right + 1
+                                sorted_available_power.append(right)
+
+                    if len(sorted_available_power) != len(sub_power_available_power):
+                        _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                        sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
 
                 # try to shave first the biggest free slots

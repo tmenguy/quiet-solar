@@ -268,7 +268,7 @@ class TestSolver2(TestCase):
         unavoidable_consumption_forecast = []
         for h in range(8):
             hour = dt + timedelta(hours=h)
-            consumption = 800  # Low steady consumption to maximize solar surplus
+            consumption = 800
             unavoidable_consumption_forecast.append((hour, consumption))
 
         s = PeriodSolver(
@@ -339,20 +339,20 @@ class TestSolver2(TestCase):
 
         # CRITICAL ASSERTION: This scenario should generate CAP commands
         # When battery is nearly full and massive solar is coming, we've seen CAP commands generated
-        has_cap_car = any(cmd[1].is_like(CMD_AUTO_GREEN_CAP) for cmd in car_cmds)
-        has_cap_water = any(cmd[1].is_like(CMD_AUTO_GREEN_CAP) for cmd in water_heater_cmds)
-        has_any_cap = has_cap_car or has_cap_water
+        has_surplus_consume_car = any(cmd[1].is_like(CMD_AUTO_GREEN_CONSIGN) for cmd in car_cmds)
+        has_surplus_consume_water = any(cmd[1].is_like(CMD_AUTO_GREEN_CONSIGN) for cmd in water_heater_cmds)
+        has_any_surplus_consume = has_surplus_consume_car or has_surplus_consume_water
 
         print(f"\n📊 CAP COMMAND VERIFICATION:")
-        print(f"Car has CAP commands: {has_cap_car}")
-        print(f"Water heater has CAP commands: {has_cap_water}")
+        print(f"Car has CAP commands: {has_surplus_consume_car}")
+        print(f"Water heater has CAP commands: {has_surplus_consume_water}")
         print(f"Battery room available: {available_battery_room / 1000:.1f}kWh")
         print(f"Peak solar power: {max(power for _, power in pv_forecast) / 1000:.1f}kW")
 
         # With only 0.5kWh battery room and 12kW peak solar, CAP commands should be generated
         if available_battery_room < 1000 and max(
                 power for _, power in pv_forecast) > 8000:  # Very limited battery room + high solar
-            assert has_any_cap, f"Expected CAP commands with battery nearly full ({available_battery_room / 1000:.1f}kWh room) and high solar ({max(power for _, power in pv_forecast) / 1000:.1f}kW peak). This scenario has previously generated CAP commands."
+            assert has_any_surplus_consume, f"Expected CAP commands with battery nearly full ({available_battery_room / 1000:.1f}kWh room) and high solar ({max(power for _, power in pv_forecast) / 1000:.1f}kW peak). This scenario has previously generated CAP commands."
 
         # More flexible assertions - just verify solver is working intelligently
         assert len(car_cmds) > 0, "Car should have some commands"

@@ -238,15 +238,15 @@ class PeriodSolver(object):
 
         load = constraint.load
 
-        existing_cmds = loads.get(load, None)
-        if existing_cmds is None:
-            existing_cmds = new_command_list
-            loads[load] = new_command_list
-
         default_cmd = CMD_IDLE
         if constraint.support_auto:
             # if the constraint supports auto, we should use the auto green command as default
             default_cmd = CMD_AUTO_GREEN_ONLY
+
+        existing_cmds = loads.get(load, None)
+
+        if existing_cmds is None:
+            existing_cmds = [None]*len(new_command_list)
 
         # for s in range(len(new_command_list)):
         for s in range(len(new_command_list)):
@@ -254,6 +254,7 @@ class PeriodSolver(object):
             new_cmd = new_command_list[s]
 
             prev_cmd = existing_cmds[s]
+
             if prev_cmd is None:
                 prev_cmd = copy_command(default_cmd)
 
@@ -267,7 +268,10 @@ class PeriodSolver(object):
             if cmd is None:
                 cmd = merge_commands(prev_cmd, new_cmd)
 
-            existing_cmds[s] = cmd
+            existing_cmds[s] = copy_command(cmd)
+
+        loads[load] = existing_cmds
+
 
     def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None):
 
