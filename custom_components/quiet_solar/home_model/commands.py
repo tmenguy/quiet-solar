@@ -37,7 +37,7 @@ class LoadCommand:
         return asdict(self) #self.__dict_
 
     def is_auto(self) -> bool:
-        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE, CMD_CST_AUTO_GREEN_CAP]
+        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE, CMD_CST_AUTO_GREEN_CAP, CMD_CST_AUTO_GREEN_CONSIGN]
 
     def is_like(self, other) -> bool:
         if other is None:
