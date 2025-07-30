@@ -109,7 +109,7 @@ STATE_CMD_TIME_BETWEEN_RETRY_S = CHARGER_STATE_REFRESH_INTERVAL_S * 3
 
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
-TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 30
+TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 20
 TIME_OK_BETWEEN_BUDGET_RESET_S = 20 * 60 # to check if a car is now really more important than others and is not charging
 TIME_OK_SHOULD_BUDGET_RESET_S = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
 
@@ -1971,10 +1971,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.qs_bump_solar_priority = False
 
     def reset_load_only(self):
-        _LOGGER.info(f"Charger reset only load {self.name}")
+        _LOGGER.info(f"reset_load_only: Charger {self.name}")
         super().reset()
 
     def _reset_state_machine(self):
+        _LOGGER.info(f"_reset_state_machine: {self.name}")
         self._verified_correct_state_time = None
         self._inner_expected_charge_state = None
         self._inner_amperage = None
