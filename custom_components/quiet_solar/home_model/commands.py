@@ -19,8 +19,8 @@ commands_scores = {
     CMD_CST_AUTO_PRICE: 70,
     CMD_CST_AUTO_GREEN_CONSIGN: 60,
     CMD_CST_GREEN_CHARGE_ONLY: 50,
-    CMD_CST_AUTO_GREEN_CAP: 40,
-    CMD_CST_AUTO_GREEN: 30,
+    CMD_CST_AUTO_GREEN: 40,
+    CMD_CST_AUTO_GREEN_CAP: 30, # this one is less "free style" and is more constrained than the AUTO GREEN
     CMD_CST_IDLE: 20,
     CMD_CST_OFF: 10,
 }

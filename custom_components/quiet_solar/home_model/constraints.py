@@ -637,15 +637,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
         out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
 
-        # start from the end as futur is more uncertain, so take actions far from now, and we will see later if it was worth it
-        sorted_available_power = range(last_slot, first_slot - 1, -1)
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
         if energy_delta >= 0.0:
             _LOGGER.info(
                 f"adapt_repartition: for {self.name} consume more energy {energy_delta}Wh for {log_msg}")
+            # start from the end as futur is more uncertain, so take actions far from now, and we will see later if it was worth it
+            sorted_available_power = range(last_slot, first_slot - 1, -1)
         else:
             _LOGGER.info(
                 f"adapt_repartition: for {self.name} reclaim energy {energy_delta}Wh from {log_msg}")
+            # try to reclaim energy to fill the battery as requested by the energy delta
+            # start as soon as possible to get a chance to fill the battery as needed 
+            sorted_available_power = range(first_slot, last_slot + 1)
 
         # first get to the available power slots (ie with negative power available, fill it at best in a greedy way
         min_power, power_sorted_cmds  = self.adapt_power_steps_budgeting()
@@ -922,6 +925,14 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             _LOGGER.error(f"compute_best_period_repartition: no power sorted commands {self.name}")
             final_ret = False
         else:
+            
+            default_cmd = None
+            if self.support_auto:
+                # fill all with green only command, to fill everything with the best power available
+                if self.is_before_battery:
+                    default_cmd = CMD_AUTO_GREEN_ONLY
+                else:
+                    default_cmd = CMD_AUTO_GREEN_CAP
 
             # find the constraint last slot
             if has_a_proper_end_time:
@@ -1036,12 +1047,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     j = self._get_consign_idx_for_power(power_sorted_cmds, 0.0 - available_power)
 
 
-
                     if j is not None:
 
                         if self.support_auto:
                             out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
-                                                                               new_type=CMD_AUTO_GREEN_ONLY.command)
+                                                                               new_type=default_cmd.command)
                         else:
                             out_commands[i] = copy_command(power_sorted_cmds[j])
 
@@ -1192,10 +1202,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 final_ret = nrj_to_be_added <= 0.0
 
         if self.support_auto:
-            # fill all with green only command, to fill everything with the best power available
+            # fill all with green only command, to fill everything with the best power available    
             for i in range(first_slot, last_slot + 1):
                 if out_commands[i] is None:
-                    out_commands[i] = copy_command(CMD_AUTO_GREEN_ONLY)
+                    out_commands[i] = copy_command(default_cmd)
                     out_power[i] = 0.0
 
         added_energy = initial_energy_to_be_added - nrj_to_be_added

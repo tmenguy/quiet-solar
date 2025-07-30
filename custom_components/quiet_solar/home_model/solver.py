@@ -816,7 +816,7 @@ class PeriodSolver(object):
 
             if energy_given_back_to_grid < 0.0 and first_surplus_index is not None and last_surplus_index is not None:
 
-                energy_to_be_spent = (-energy_given_back_to_grid/2.0)*0.8 # try to reuse 80% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                energy_to_be_spent = (-energy_given_back_to_grid)*0.7 # try to reuse 70% of the estimated energy given back to the grid, so we can try to force some loads to consume more
 
                 probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
 

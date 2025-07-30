@@ -876,7 +876,7 @@ class QSChargerGroup(object):
                     has_one_after_battery = True
 
             if has_one_before_battery is False:
-                # we want to charge the battery at minimum wit the battery_asked_charge or more
+                # we want to charge the battery at minimum with the battery_asked_charge or more
                 power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
             elif has_one_after_battery is False:
                 power_budget = full_available_home_power - diff_power_budget
