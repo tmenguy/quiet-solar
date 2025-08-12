@@ -7,6 +7,7 @@ import pytest
 # Import from Home Assistant
 from homeassistant.const import CONF_NAME
 
+from custom_components.quiet_solar.ha_model.car import QSCar
 # Import the necessary classes
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
@@ -27,7 +28,8 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_MAX_CHARGE,
     CONF_IS_3P,
     DOMAIN,
-    DATA_HANDLER
+    DATA_HANDLER, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
+    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, CONF_CAR_CHARGER_MAX_CHARGE
 )
 
 
@@ -285,6 +287,106 @@ class TestChargersSetup(unittest.TestCase):
         phase_currents = self.wallboxes_group.dyn_group_max_phase_current
         self.assertIsInstance(phase_currents, list)
         self.assertEqual(len(phase_currents), 3)
+
+
+class TestChargersBasics(unittest.TestCase):
+    """Test the budgeting_algorithm_minimize_diffs method with minimal setup."""
+    def setUp(self):
+        """Set up the test environment."""
+        common_setup(self)
+
+        # Add the dynamic group to home
+        self.home.add_device(self.dynamic_group)
+
+        # Create the charger group for testing
+        self.charger_group = QSChargerGroup(self.dynamic_group)
+
+        # Create real QSChargerWallbox instances with different phase assignments
+        self.chargers = []
+        self.cars = []
+
+        # Mock entity_registry for charger creation
+        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry') as mock_entity_reg:
+            # Mock the async_get function
+            mock_entity_reg.async_get = MagicMock()
+            # Mock the async_entries_for_device function to return empty list
+            mock_entity_reg.async_entries_for_device = MagicMock(return_value=[])
+
+            for idx in [1, 2, 3]:
+                charger_config = {
+                    CONF_NAME: f"Wallbox_idx_{idx}",
+                    CONF_CHARGER_DEVICE_WALLBOX: f"device_wallbox_{idx}",
+                    CONF_CHARGER_MIN_CHARGE: 6,
+                    CONF_CHARGER_MAX_CHARGE: 32,
+                    CONF_IS_3P: True,
+                    "dynamic_group_name": self.dynamic_group.name,
+                    "home": self.home,
+                    "hass": self.hass,
+                    "config_entry": self.config_entry
+                }
+                charger = QSChargerWallbox(**charger_config)
+                if idx == 2:
+                    car_conf = {
+                        "hass": self.hass,
+                        "home": self.home,
+                        "config_entry": None,
+                        "name": f"test car {idx}",
+                        CONF_CAR_CHARGER_MIN_CHARGE: 7,
+                        CONF_CAR_CHARGER_MAX_CHARGE: 32,
+                        CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+                        CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
+                        "charge_7": 1325,
+                        "charge_8": 4450,
+                        "charge_9": 5883,
+                        "charge_10": 6620,
+                    }
+                else:
+                    car_conf = {
+                        "hass": self.hass,
+                        "home": self.home,
+                        "config_entry": None,
+                        "name": f"test car idx {idx}",
+                        CONF_CAR_CHARGER_MIN_CHARGE: 5 + idx,
+                        CONF_CAR_CHARGER_MAX_CHARGE: 16,
+                        CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+                        CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
+                    }
+
+                car = QSCar(**car_conf)
+
+                # Attach the default generic car to make charger operational
+                charger.attach_car(car, datetime.now(pytz.UTC))
+                self.chargers.append(charger)
+                self.cars.append(car)
+                self.home.add_device(charger)
+
+        # Set current time
+        self.current_time = datetime.now(pytz.UTC)
+
+    #@pytest.mark.asyncio
+    def test_get_phase_amps_from_power_3p_2(self):
+        """Test get_phase_amps_from_power for 3-phase."""
+        charger = self.chargers[1]
+
+        result = charger.get_phase_amps_from_power(22080, is_3p=True)
+
+        self.assertEqual(result, [32, 32, 32])
+
+        result = charger.get_phase_amps_from_power(4460, is_3p=True)
+
+        self.assertEqual(result, [8, 8, 8])
+
+        result = charger.get_phase_amps_from_power(4450, is_3p=True)
+
+        self.assertEqual(result, [8, 8, 8])
+
+        result = charger.get_phase_amps_from_power(4440, is_3p=True)
+
+        self.assertEqual(result, [8, 8, 8])
+
+        result = charger.get_phase_amps_from_power(1350, is_3p=True)
+
+        self.assertEqual(result, [7, 7, 7])
 
 
 @pytest.mark.asyncio

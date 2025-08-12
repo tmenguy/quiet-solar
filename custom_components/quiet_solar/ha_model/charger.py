@@ -422,7 +422,7 @@ class QSChargerStatus(object):
 
                 # if we can have "both" 1 and 3 phases, we will try to see if the current phase setup is compatible, if so
                 # no need to phase switch and we keep the current need
-                current_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number == 3)
+                current_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number == 3)[0]
 
                 res_current = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=False)
 
@@ -431,7 +431,7 @@ class QSChargerStatus(object):
                     consign_amp = res_current
                 else:
                     # need to phase switch to get the minimum asked power (either up or down)
-                    switch_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number != 3)
+                    switch_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number != 3)[0]
                     res_switch = self.charger._get_amps_from_power_steps(switch_steps, power, safe_border=False)
 
                     if res_switch is None:
@@ -446,7 +446,7 @@ class QSChargerStatus(object):
                             possible_num_phases = [3]
 
             else:
-                native_power_steps = self.charger.car.get_charge_power_per_phase_A(self.charger.physical_3p)
+                native_power_steps = self.charger.car.get_charge_power_per_phase_A(self.charger.physical_3p)[0]
                 consign_amp = self.charger._get_amps_from_power_steps(native_power_steps, power, safe_border=True)
         else:
             if consign_is_minimum:
@@ -1599,7 +1599,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
-        steps = self.car.get_charge_power_per_phase_A(is_3p)
+        steps = self.car.get_charge_power_per_phase_A(is_3p)[0]
         resp = self._get_amps_from_power_steps(steps, power, safe_border=True)
 
         if is_3p:
@@ -1736,7 +1736,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.current_active_phase_number = self._expected_num_active_phases.value
 
-        native_power_steps, _, _ = self.car.get_charge_power_per_phase_A(self.physical_3p)
+        native_power_steps = self.car.get_charge_power_per_phase_A(self.physical_3p)[0]
 
         cs.command = self.current_command
         if cs.command.is_like(CMD_ON):
