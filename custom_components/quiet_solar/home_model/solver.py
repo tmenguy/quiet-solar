@@ -394,8 +394,7 @@ class PeriodSolver(object):
             if self._battery.is_value_empty(current_charge*(1.0 - over_budget)): # be a bit pessimistic here too ... 20%
                 if empty_segments[-1][0] is None:
                     empty_segments[-1][0] = i
-                else:
-                    empty_segments[-1][1] = i
+                empty_segments[-1][1] = i
             else:
                 if empty_segments[-1][0] is not None:
                     empty_segments.append([None, num_slots - 1])
@@ -419,7 +418,8 @@ class PeriodSolver(object):
                     if s[0] > 0:
                         segments_to_shave[s_idx] = [0, s[0] - 1]
                 else:
-                    segments_to_shave[s_idx] = [empty_segments[s_idx - 1][1] + 1, s[0] - 1]
+                    if empty_segments[s_idx - 1][1] < num_slots - 1: # by construction should never happen, only for the last segement
+                        segments_to_shave[s_idx] = [empty_segments[s_idx - 1][1] + 1, s[0] - 1]
 
                 if segments_to_shave[s_idx] is not None:
                     for i in range(segments_to_shave[s_idx][0], segments_to_shave[s_idx][1] + 1):
