@@ -1,21 +1,18 @@
 import copy
 import logging
-import math
 from bisect import bisect_left
 from datetime import datetime, timedelta
-from collections.abc import Generator
 from operator import itemgetter
 import random
 
 import pytz
 
-from .commands import LoadCommand, copy_command, CMD_OFF, CMD_IDLE, CMD_ON
-from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC, TimeBasedSimplePowerLoadConstraint
+from .commands import LoadCommand, copy_command, CMD_IDLE
+from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
-from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
+from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
     DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_NUM_MAX_ON_OFF
 
 import slugify
@@ -27,70 +24,6 @@ NUM_MAX_INVALID_PROBES_COMMANDS = 3
 
 
 _LOGGER = logging.getLogger(__name__)
-
-def is_amps_zero(amps: list[float | int]) -> bool:
-    if amps is None:
-        return True
-
-    for a in amps:
-        if a != 0.0:
-            return False
-
-    return True
-
-def are_amps_equal(left_amps: list[float | int], right_amps: list[float | int]) -> bool:
-    for i in [0,1,2]:
-        if left_amps[i] != right_amps[i]:
-            return False
-    return True
-
-def is_amps_greater(left_amps: list[float | int], right_amps: list[float | int]):
-    for i in range(3):
-        if left_amps[i] > right_amps[i]:
-            return True
-    return False
-
-
-def add_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
-    if left_amps is None and right_amps is None:
-        return [0.0, 0.0, 0.0]
-    elif left_amps is None:
-        return copy.copy(right_amps)
-    elif right_amps is None:
-        return copy.copy(left_amps)
-
-    adds = [left_amps[i] + right_amps[i] for i in range(3)]
-    return adds
-
-
-def diff_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
-    if left_amps is None or right_amps is None:
-        return [0.0, 0.0, 0.0]
-
-    diff = [left_amps[i] - right_amps[i] for i in range(3)]
-    return diff
-
-def min_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
-    if left_amps is None and right_amps is None:
-        return [0.0, 0.0, 0.0]
-    elif left_amps is None:
-        return copy.copy(right_amps)
-    elif right_amps is None:
-        return copy.copy(left_amps)
-
-    mins = [min(left_amps[i], right_amps[i]) for i in range(3)]
-    return mins
-
-def max_amps(left_amps: list[float | int], right_amps: list[float | int]) -> list[float | int]:
-    if left_amps is None and right_amps is None:
-        return [0.0, 0.0, 0.0]
-    elif left_amps is None:
-        return copy.copy(right_amps)
-    elif right_amps is None:
-        return copy.copy(left_amps)
-
-    maxs = [max(left_amps[i], right_amps[i]) for i in range(3)]
-    return maxs
 
 
 class AbstractDevice(object):
@@ -124,6 +57,19 @@ class AbstractDevice(object):
 
         self.father_device : QSDynamicGroup = self.home
 
+    @property
+    def voltage(self) -> float:
+        """Return the voltage of the home."""
+        if self.home is not None:
+            return self.home.voltage
+        return 230.0
+
+    def update_available_amps_for_group(self, idx:int, amps:list[float | int], add:bool):
+        """Update the available amps for the group based on the device's configuration."""
+        if self.father_device is not None:
+            return self.father_device.update_available_amps_for_group(idx, amps, add)
+
+
     def _local_reset(self):
         _LOGGER.info(f"Reset device {self.name}")
         self._constraints: list[LoadConstraint | None] = []
@@ -136,8 +82,6 @@ class AbstractDevice(object):
         self.running_command_num_relaunch : int = 0
         self.running_command_num_relaunch_after_invalid: int = 0
         self.num_on_off : int = 0
-        self.device_phase_amps_budget : list[float|int] | None = None
-        self.to_budget: bool = False
         self.reset_daily_load_datas()
 
     # for class overcharging reset
@@ -166,21 +110,8 @@ class AbstractDevice(object):
                     ha_object.async_update_callback(time)
 
 
-    def allocate_phase_amps_budget(self, time:datetime, from_father_budget: list[float|int]|None) -> list[float|int]:
-
-        if self.qs_enable_device is False:
-            return [0.0, 0.0, 0.0]
-
-        if from_father_budget is None:
-            allocate_budget, _ = self.get_min_max_phase_amps_for_budgeting()
-        else:
-            allocate_budget = from_father_budget
-
-        self.device_phase_amps_budget = copy.copy(allocate_budget)
-
-        _LOGGER.debug(f"allocate_phase_amps_budget for load {self.name} from_father_budget {from_father_budget} => {self.device_phase_amps_budget}")
-
-        return self.device_phase_amps_budget
+    def prepare_slots_for_amps_budget(self, time:datetime, num_slots:int, from_father_budget: list[float | int] | None):
+        _LOGGER.debug(f"prepare_slots_for_amps_budget for load {self.name} from_father_budget {from_father_budget}")
 
     @property
     def device_type(self):
@@ -250,22 +181,18 @@ class AbstractDevice(object):
     def get_min_max_power(self) -> (float, float):
         return 0.0, 0.0
 
-    def get_min_max_phase_amps_for_budgeting(self) -> ( list[float|int],  list[float|int]):
-        min_p, max_p = self.get_min_max_power()
-        return self.get_phase_amps_from_power_for_budgeting(min_p), self.get_phase_amps_from_power_for_budgeting(max_p)
-
-    def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> list[float|int]:
-        return [0.0, 0.0, 0.0]
-
 
     def get_phase_amps_from_power_for_budgeting(self, power:float) -> list[float | int]:
         return self.get_phase_amps_from_power(power, is_3p=self.physical_3p)
 
     def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
+        if power == 0:
+            return [0.0, 0.0, 0.0]
+
         if is_3p:
             power = power / 3.0
-        p = power / self.home.voltage
+        p = power / self.voltage
         if is_3p:
             return [p, p, p]
         else:
@@ -289,25 +216,6 @@ class AbstractDevice(object):
                 return c
         return None
 
-    def is_as_fast_as_possible_constraint_active_for_budgeting(self, time:datetime) -> bool:
-        if self.qs_enable_device is False:
-            self._constraints = []
-
-        if self.to_budget is False:
-            return False
-
-        if not self._constraints:
-            self._constraints = []
-        for c in self._constraints:
-            if c.is_constraint_active_for_time_period(time) and c.as_fast_as_possible:
-                return True
-        return False
-
-    def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
-        ct = self.get_current_active_constraint(time)
-        if ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
-            return False
-        return True
 
     def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
 
@@ -523,35 +431,11 @@ class AbstractLoad(AbstractDevice):
     def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int=0) -> float:
         return 0.0
 
-    def is_consumption_optional_for_budgeting(self, time:datetime) -> bool:
-        if self.load_is_auto_to_be_boosted or  self.qs_best_effort_green_only:
-            return True
-        return super().is_consumption_optional_for_budgeting(time)
 
     def get_min_max_power(self) -> (float, float):
         if self.power_use is None:
             return 0.0, 0.0
         return self.power_use, self.power_use
-
-    def get_evaluated_needed_phase_amps_for_budgeting(self, time: datetime) -> list[float|int]:
-        device_needed_amp = [0.0, 0.0, 0.0]
-        if self.to_budget:
-            ct = self.get_current_active_constraint(time)
-            min_a, max_a = self.get_min_max_phase_amps_for_budgeting()
-            if ct:
-                load_power = ct.evaluate_needed_mean_power(time)
-                device_needed_amp = self.get_phase_amps_from_power_for_budgeting(load_power)
-                ret = copy.copy(device_needed_amp)
-                for i in range(3):
-                    if ret[i] < min_a[i]:
-                        ret[i] = min_a[i]
-                    elif ret[i] > max_a[i]:
-                        ret[i] = max_a[i]
-                device_needed_amp = ret
-            else:
-                device_needed_amp = copy.copy(max_a)
-
-        return device_needed_amp
 
     def support_green_only_switch(self) -> bool:
         return False
@@ -650,22 +534,6 @@ class AbstractLoad(AbstractDevice):
 
     async def on_device_state_change(self, time: datetime, device_change_type:str):
         pass
-
-
-    def is_cmd_compatible_with_load_budget(self, cmd : LoadCommand) -> bool:
-
-        if  self.device_phase_amps_budget is None:
-            return True
-
-        if cmd.power_consign is not None and cmd.power_consign > 0:
-            # it is for budgeting device_phase_amps_budget has been comouted with "static" 3p devices
-            # compare only budgeting value together
-            amps = self.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
-            # shave by one amp to allow a bit more commands
-            amps = [ max(0, a-1) for a in amps]
-            return not is_amps_greater(amps, self.device_phase_amps_budget)
-
-        return True
 
 
     def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
@@ -1091,10 +959,6 @@ class TestLoad(AbstractLoad):
 
     def get_min_max_power(self) -> (float, float):
         return self.min_p, self.max_p
-
-    def get_min_max_phase_amps_for_budgeting(self)-> ( list[float|int],  list[float|int]):
-        return [self.min_a, 0, 0], [self.max_a, 0, 0]
-
 
 def align_time_series_and_values(
         tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],

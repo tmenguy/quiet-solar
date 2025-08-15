@@ -243,17 +243,21 @@ class PeriodSolver(object):
             # if the constraint supports auto, we should use the auto green command as default
             default_cmd = CMD_AUTO_GREEN_ONLY
 
-        existing_cmds = loads.get(load, None)
+        existing_cmds: list[LoadCommand | None] = loads.get(load, None)
 
         if existing_cmds is None:
             existing_cmds = [None]*len(new_command_list)
 
-        # for s in range(len(new_command_list)):
         for s in range(len(new_command_list)):
 
             new_cmd = new_command_list[s]
 
             prev_cmd = existing_cmds[s]
+
+            if prev_cmd is not None:
+                prev_cmd_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
+                # put back the amps in the available amps
+                load.update_available_amps_for_group(s, prev_cmd_amps, add=True)
 
             if prev_cmd is None:
                 prev_cmd = copy_command(default_cmd)
@@ -267,6 +271,10 @@ class PeriodSolver(object):
 
             if cmd is None:
                 cmd = merge_commands(prev_cmd, new_cmd)
+
+            cmd_amps = load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
+            # consume the amps in the available amps
+            load.update_available_amps_for_group(s, cmd_amps, add=False)
 
             existing_cmds[s] = copy_command(cmd)
 
@@ -559,8 +567,6 @@ class PeriodSolver(object):
 
         return solved, has_changed, energy_delta
 
-
-
     def solve(self) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
         """
         Solve the day for the given loads and constraints.
@@ -588,14 +594,9 @@ class PeriodSolver(object):
 
         if self._loads and len(self._loads) > 0:
             home = self._loads[0].home
-            # propagate amps limits to the topology
-
+            # prepare available amps in teh group graph
             if home:
-                load_set = set()
-                for c in self._active_constraints:
-                    load_set.add(c.load)
-
-                home.budget_for_loads(self._start_time, list(load_set))
+                home.prepare_slots_for_amps_budget(self._start_time, num_slots=len(self._available_power))
         else:
             _LOGGER.info(f"solve: NO LOADS!")
 

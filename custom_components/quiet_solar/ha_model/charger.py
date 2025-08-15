@@ -85,7 +85,8 @@ from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
     CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN, copy_command_and_change_type
-from ..home_model.load import AbstractLoad, diff_amps, add_amps, is_amps_zero, are_amps_equal
+from ..home_model.load import AbstractLoad
+from ..home_model.home_utils import is_amps_zero, are_amps_equal, add_amps, diff_amps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1599,6 +1600,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
+        if power == 0:
+            return [0,0,0]
+
         steps = self.car.get_charge_power_per_phase_A(is_3p)[0]
         resp = self._get_amps_from_power_steps(steps, power, safe_border=True)
 
@@ -2659,16 +2663,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return self._power_steps[0].power_consign, self._power_steps[-1].power_consign
 
-    def get_min_max_phase_amps_for_budgeting(self) -> ( list[float|int],  list[float|int]):
-        if self.physical_3p:
-            return [self.min_charge, self.min_charge, self.min_charge], [self.max_charge, self.max_charge, self.max_charge]
-        else:
-            min_c = [0.0, 0.0, 0.0]
-            max_c = [0.0, 0.0, 0.0]
-            min_c[self.mono_phase_index] = self.min_charge
-            max_c[self.mono_phase_index] = self.max_charge
 
-            return min_c, max_c
 
     async def stop_charge(self, time: datetime):
 
@@ -3717,7 +3712,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
     def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
 
-        val = amps * self.home.voltage
+        val = amps * self.voltage
 
         new_attr = {}
         if attr is not None:

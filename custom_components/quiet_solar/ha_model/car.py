@@ -86,7 +86,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         for a in range(len(self.theoretical_amp_to_power_1p)):
 
-            val_1p = float(self.home.voltage * a)
+            val_1p = float(self.voltage * a)
             val_3p = 3*val_1p
 
             self.amp_to_power_1p[a] = self.theoretical_amp_to_power_1p[a] = val_1p
@@ -409,7 +409,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def _theoretical_max_power(self, amperage:tuple[float,int] | tuple[int,int], delta_amp:float) -> float:
         if amperage[0] == 0:
             return 0.0
-        theoretical_power = float(self.home.voltage * max(0.0, amperage[0] + delta_amp))
+        theoretical_power = float(self.voltage * max(0.0, amperage[0] + delta_amp))
         if amperage[1] == 3:
             theoretical_power = theoretical_power * 3
         return theoretical_power

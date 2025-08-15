@@ -490,28 +490,6 @@ class QSHome(QSDynamicGroup):
 
         return self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
 
-
-
-    def budget_for_loads(self, time: datetime, loads:list[AbstractDevice]) -> float | None:
-
-
-        for d in self._all_devices:
-            if isinstance(d, AbstractDevice):
-                d.to_budget = False
-
-        for l in self._all_loads:
-            l.to_budget = False
-
-        for l in loads:
-            l.to_budget = True
-
-        for d in self._all_dynamic_groups:
-            d.to_budget = True
-
-        self.to_budget = True
-
-        self.allocate_phase_amps_budget(time)
-
     def battery_can_discharge(self):
 
         if self._battery is None:

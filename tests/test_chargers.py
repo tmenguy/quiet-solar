@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, Mock, patch
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import pytest
 
@@ -18,7 +18,7 @@ from custom_components.quiet_solar.ha_model.charger import (
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_GREEN_ONLY
+    CMD_AUTO_GREEN_ONLY, copy_command
 )
 from custom_components.quiet_solar.const import (
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
@@ -29,8 +29,11 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     DOMAIN,
     DATA_HANDLER, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
-    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, CONF_CAR_CHARGER_MAX_CHARGE
+    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, CONF_CAR_CHARGER_MAX_CHARGE,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONSTRAINT_TYPE_MANDATORY_END_TIME
 )
+from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+from custom_components.quiet_solar.home_model.solver import PeriodSolver
 
 
 def common_setup(self):
@@ -347,7 +350,7 @@ class TestChargersBasics(unittest.TestCase):
                         "config_entry": None,
                         "name": f"test car idx {idx}",
                         CONF_CAR_CHARGER_MIN_CHARGE: 5 + idx,
-                        CONF_CAR_CHARGER_MAX_CHARGE: 16,
+                        CONF_CAR_CHARGER_MAX_CHARGE: 16 + idx,
                         CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
                         CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
                     }
@@ -387,6 +390,126 @@ class TestChargersBasics(unittest.TestCase):
         result = charger.get_phase_amps_from_power(1350, is_3p=True)
 
         self.assertEqual(result, [7, 7, 7])
+
+    def test_get_phase_amps_from_power_3p_4(self):
+
+        dt = datetime(year=2024, month=6, day=1, hour=14, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=10)  # Until midnight to include night
+
+        tariffs = 0.27 / 1000.0
+
+        car = self.cars[1]
+        car2_charge = MultiStepsPowerLoadConstraint(
+            time=dt,
+            load=self.chargers[1],
+            type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+            end_of_constraint=dt + timedelta(seconds=45*60),
+            initial_value=0,
+            target_value=15000,  # 15kWh target
+            power_steps=self.chargers[1]._power_steps,
+            support_auto=True
+        )
+        self.chargers[1].push_live_constraint(dt, car2_charge)
+
+        car = self.cars[0]
+        car1_charge = MultiStepsPowerLoadConstraint(
+            time=dt,
+            load=self.chargers[0],
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=2),
+            initial_value=0,
+            target_value=15000,  # 15kWh target
+            power_steps=self.chargers[0]._power_steps,
+            support_auto=True
+        )
+        self.chargers[0].push_live_constraint(dt, car1_charge)
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[self.chargers[0], self.chargers[1]],  # Multiple flexible loads
+            # battery=battery,
+            # pv_forecast=pv_forecast,
+            # unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands, battery_commands = s.solve()
+
+        cmds = {self.chargers[0]: [], self.chargers[1]: []}
+        for load, commands in load_commands:
+            cmds[load].extend(commands)
+
+        # Verify that the load commands are correctly budgeted
+        cmd_c0 = cmds.get(self.chargers[0])[0][1]
+        cmd_c1 = cmds.get(self.chargers[1])[0][1]
+
+        self.assertTrue(cmd_c0.is_like(CMD_AUTO_GREEN_ONLY))
+        self.assertTrue(cmd_c1.is_like(CMD_AUTO_FROM_CONSIGN))
+        self.assertEqual(cmd_c0.power_consign, 0)
+        self.assertEqual(cmd_c1.power_consign, self.chargers[1]._power_steps[-1].power_consign)
+
+    def test_limit_amps_budget(self):
+
+        dt = datetime(year=2024, month=6, day=1, hour=14, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=10)  # Until midnight to include night
+
+        tariffs = 0.27 / 1000.0
+
+        loads = [self.chargers[0], self.chargers[2]]
+
+        # Mock the car charge percent to simulate a SOC vs the other car to have a worse score
+        with patch.object(self.chargers[0].car, 'get_car_charge_percent', return_value=10):
+
+            for charger in loads:
+                car_charge = MultiStepsPowerLoadConstraint(
+                    time=dt,
+                    load=charger,
+                    type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+                    end_of_constraint=dt + timedelta(seconds=45*60),
+                    initial_value=0,
+                    target_value=15000,  # 15kWh target
+                    power_steps=charger._power_steps,
+                    support_auto=True
+                )
+                charger.push_live_constraint(dt, car_charge)
+
+            s = PeriodSolver(
+                start_time=start_time,
+                end_time=end_time,
+                tariffs=tariffs,
+                actionable_loads=loads,  # Multiple flexible loads
+                # battery=battery,
+                # pv_forecast=pv_forecast,
+                # unavoidable_consumption_forecast=unavoidable_consumption_forecast
+            )
+
+            load_commands, battery_commands = s.solve()
+
+            cmds = {loads[0]:[], loads[1]:[] }
+            for load, commands in load_commands:
+                cmds[load].extend(commands)
+
+            # Verify that the load commands are correctly budgeted
+            cmd_c0 = cmds.get(self.chargers[0])[0][1]
+            cmd_c2 = cmds.get(self.chargers[2])[0][1]
+
+            self.assertTrue(cmd_c0.is_like(CMD_AUTO_FROM_CONSIGN))
+            self.assertTrue(cmd_c2.is_like(CMD_AUTO_FROM_CONSIGN))
+            self.assertTrue(cmd_c2.power_consign > 0)
+            self.assertTrue(cmd_c0.power_consign > 0)
+
+            self.assertEqual(cmd_c2.power_consign, self.chargers[2]._power_steps[-1].power_consign)
+            self.assertTrue(cmd_c0.power_consign < self.chargers[0]._power_steps[-1].power_consign)
+
+            self.assertTrue(cmd_c2.power_consign > cmds.get(self.chargers[0])[0][1].power_consign)
+
+            self.assertTrue(cmd_c0.power_consign + cmd_c2.power_consign <= 32*3*230)
+
+
+
 
 
 @pytest.mark.asyncio
