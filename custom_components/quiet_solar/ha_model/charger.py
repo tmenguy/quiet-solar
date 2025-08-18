@@ -2448,10 +2448,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
-                car = best_car
-                _LOGGER.info(f"check_load_activity_and_constraints: plugging car {car.name} not connected: reset and attach car")
+                _LOGGER.info(f"check_load_activity_and_constraints: plugging car {best_car.name} not connected: reset and attach car")
                 self.clean_constraints_for_load_param(time, load_param=best_car.name, do_full_reset=True)
-
                 self.attach_car(best_car, time)
 
             target_charge = await self.car.setup_car_charge_target_if_needed()
