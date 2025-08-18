@@ -2452,6 +2452,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"check_load_activity_and_constraints: plugging car {car.name} not connected: reset and attach car")
                 self.clean_constraints_for_load_param(time, load_param=best_car.name, do_full_reset=True)
 
+                self.attach_car(best_car, time)
+
             target_charge = await self.car.setup_car_charge_target_if_needed()
 
             car_current_charge_percent = car_initial_percent = self.car.get_car_charge_percent(time)
