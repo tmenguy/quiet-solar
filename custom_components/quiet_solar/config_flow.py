@@ -375,7 +375,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 default = self.config_entry.data.get(CONF_MOBILE_APP)
 
                 if default:
-                    keysc = vol.Optional(CONF_MOBILE_APP, default=default)
+                    keysc = vol.Optional(CONF_MOBILE_APP, description={"suggested_value": default})
                 else:
                     keysc = vol.Optional(CONF_MOBILE_APP, default=CONF_MOBILE_APP_NOTHING)
 
@@ -394,7 +394,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     })
                 else:
                     sc.update({
-                        vol.Optional(CONF_MOBILE_APP_URL, default=default): cv.string,
+                        vol.Optional(CONF_MOBILE_APP_URL, description={"suggested_value": default}): cv.string,
                     })
 
 
@@ -412,18 +412,21 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                                     add_power_group_selector=True,
                                     add_phase_number=True)
 
-        if self.config_entry.data.get(CONF_CHARGER_LATITUDE, None) is None:
+        default = self.config_entry.data.get(CONF_CHARGER_LATITUDE)
+        if default is None:
             sc.update( {
                 vol.Optional(CONF_CHARGER_LATITUDE):
                     vol.Maybe(vol.Coerce(float)),
             })
         else:
+
             sc.update( {
-                vol.Optional(CONF_CHARGER_LATITUDE, default=self.config_entry.data.get(CONF_CHARGER_LATITUDE)):
+                vol.Optional(CONF_CHARGER_LATITUDE, description={"suggested_value": default}):
                     vol.Maybe(vol.Coerce(float)),
             })
 
-        if self.config_entry.data.get(CONF_CHARGER_LONGITUDE, None) is None:
+        default = self.config_entry.data.get(CONF_CHARGER_LONGITUDE)
+        if default is None:
 
             sc.update( {
                 vol.Optional(CONF_CHARGER_LONGITUDE):
@@ -431,7 +434,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             })
         else:
             sc.update( {
-                vol.Optional(CONF_CHARGER_LONGITUDE, default=self.config_entry.data.get(CONF_CHARGER_LONGITUDE)):
+                vol.Optional(CONF_CHARGER_LONGITUDE, description={"suggested_value": default}):
                     vol.Maybe(vol.Coerce(float)),
             })
 
@@ -531,24 +534,24 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         sc_dict.update({
             vol.Required(CONF_HOME_PEAK_PRICE,
-                         default=self.config_entry.data.get(CONF_HOME_PEAK_PRICE,
-                                                            0.27)): float,
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_PEAK_PRICE,
+                                                            0.27)}): float,
             vol.Required(CONF_HOME_OFF_PEAK_PRICE,
-                         default=self.config_entry.data.get(CONF_HOME_OFF_PEAK_PRICE,
-                                                            0.2068)): float,
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_OFF_PEAK_PRICE,
+                                                            0.2068)}): float,
 
             vol.Required(CONF_HOME_START_OFF_PEAK_RANGE_1,
-                         default=self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_1,
-                                                            "00:00:00")): selector.TimeSelector(),
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_1,
+                                                            "00:00:00")}): selector.TimeSelector(),
             vol.Required(CONF_HOME_END_OFF_PEAK_RANGE_1,
-                         default=self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_1,
-                                                            "00:00:00")): selector.TimeSelector(),
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_1,
+                                                            "00:00:00")}): selector.TimeSelector(),
             vol.Required(CONF_HOME_START_OFF_PEAK_RANGE_2,
-                         default=self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_2,
-                                                            "00:00:00")): selector.TimeSelector(),
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_START_OFF_PEAK_RANGE_2,
+                                                            "00:00:00")}): selector.TimeSelector(),
             vol.Required(CONF_HOME_END_OFF_PEAK_RANGE_2,
-                         default=self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_2,
-                                                            "00:00:00")): selector.TimeSelector(),
+                         description={"suggested_value":self.config_entry.data.get(CONF_HOME_END_OFF_PEAK_RANGE_2,
+                                                            "00:00:00")}): selector.TimeSelector(),
 
         })
 
@@ -589,7 +592,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             default = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
 
             if default:
-                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER, default=default)
+                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER, description={"suggested_value":default})
             else:
                 keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER)
 
@@ -644,7 +647,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if default is None:
             key_sc = vol.Required(CONF_CHARGER_DEVICE_OCPP)
         else:
-            key_sc = vol.Required(CONF_CHARGER_DEVICE_OCPP, default=default)
+            key_sc = vol.Required(CONF_CHARGER_DEVICE_OCPP, description={"suggested_value":default})
 
         sc_dict[key_sc] = selector.DeviceSelector(
                             selector.DeviceSelectorConfig(
@@ -671,7 +674,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if default is None:
             key_sc = vol.Required(CONF_CHARGER_DEVICE_WALLBOX)
         else:
-            key_sc = vol.Required(CONF_CHARGER_DEVICE_WALLBOX, default=default)
+            key_sc = vol.Required(CONF_CHARGER_DEVICE_WALLBOX, description={"suggested_value":default})
 
         sc_dict[key_sc] = selector.DeviceSelector(
                             selector.DeviceSelectorConfig(
@@ -833,7 +836,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         num_percent_entity = selectable_percent_number_entities(self.hass)
         if len(num_percent_entity) > 0 :
             self.add_entity_selector(sc_dict, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, False, entity_list=num_percent_entity)
-
             if self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS) is None or self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS) == "":
                 sc_dict.update(
                     {
@@ -845,7 +847,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             else:
                 sc_dict.update(
                     {
-                        vol.Optional(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, default=self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, "")):
+                        vol.Optional(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, description={"suggested_value":self.config_entry.data.get(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, "")}):
                             cv.string,
                     }
                 )
