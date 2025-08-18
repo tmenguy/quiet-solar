@@ -392,7 +392,7 @@ class AbstractLoad(AbstractDevice):
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
         self.current_constraint_current_percent_completion: float | None = None
-        self._externally_initialized_constraints = False
+        self.externally_initialized_constraints = False
 
         self.qs_best_effort_green_only = False
 
@@ -445,27 +445,27 @@ class AbstractLoad(AbstractDevice):
 
     def push_unique_and_current_end_of_constraint_from_agenda(self, time: datetime, new_ct: LoadConstraint):
 
-        new_end_constraint = new_ct.end_of_constraint
+        new_end_time = new_ct.end_of_constraint
 
-        if new_end_constraint is None or new_end_constraint == DATETIME_MAX_UTC or new_end_constraint == DATETIME_MIN_UTC:
+        if new_end_time is None or new_end_time == DATETIME_MAX_UTC or new_end_time == DATETIME_MIN_UTC:
             return False
 
         if self._last_pushed_end_constraint_from_agenda is None:
-            self._last_pushed_end_constraint_from_agenda = new_end_constraint
+            self._last_pushed_end_constraint_from_agenda = new_ct
         else:
             # if the agenda has changed ... we should remove an existing uneeded constraint
-            if self._last_pushed_end_constraint_from_agenda != new_end_constraint:
+            if self._last_pushed_end_constraint_from_agenda.end_of_constraint != new_end_time:
                 for i, ct in enumerate(self._constraints):
                     if (isinstance(ct, new_ct.__class__)
                             and ct.type == new_ct.type
-                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda):
+                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda.end_of_constraint):
                         self._constraints[i] = None
                         break
 
                 self._constraints = [c for c in self._constraints if c is not None]
 
         res = self.push_live_constraint(time, new_ct)
-        self._last_pushed_end_constraint_from_agenda = new_end_constraint
+        self._last_pushed_end_constraint_from_agenda = new_ct
 
         return res
 
@@ -480,13 +480,15 @@ class AbstractLoad(AbstractDevice):
     async def do_run_check_load_activity_and_constraints(self, time: datetime)-> bool:
         if self.qs_enable_device is False:
             return False
-        if self._externally_initialized_constraints is False:
+        if self.externally_initialized_constraints is False:
             return False
         return  await self.check_load_activity_and_constraints(time)
 
+    async def check_load_activity_and_constraints(self, time: datetime) -> bool:
+        return False
 
 
-    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_load_info: dict | None):
+    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_load_info: dict | None, stored_from_agenda: dict | None):
         self.reset()
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
@@ -500,6 +502,11 @@ class AbstractLoad(AbstractDevice):
         else:
             self._last_completed_constraint = None
 
+        if stored_from_agenda is not None:
+            self._last_pushed_end_constraint_from_agenda = LoadConstraint.new_from_saved_dict(time, self, stored_from_agenda)
+        else:
+            self._last_pushed_end_constraint_from_agenda = None
+
         if stored_load_info:
             self.num_on_off =  stored_load_info.get("num_on_off", 0)
 
@@ -511,10 +518,14 @@ class AbstractLoad(AbstractDevice):
                 if self.num_max_on_off - self.num_on_off <= 2:
                     self.num_on_off = self.num_max_on_off - 2
 
-        self._externally_initialized_constraints = True
+        self.externally_initialized_constraints = True
 
-    async def check_load_activity_and_constraints(self, time: datetime) -> bool:
-        return False
+    def load_post_home_init(self, time:datetime):
+        """This method is called after the constraints have been loaded from storage.
+        It can be overridden by subclasses to perform additional initialization."""
+        pass
+
+
 
     async def do_probe_state_change(self, time: datetime):
 
@@ -546,11 +557,73 @@ class AbstractLoad(AbstractDevice):
             return False
         return True
 
-    def reset(self):
-        _LOGGER.info(f"Reset load {self.name}")
+
+    def reset_load_only(self):
         super().reset()
         self._last_completed_constraint = None
         self._last_pushed_end_constraint_from_agenda = None
+
+
+    def clean_constraints_for_load_param(self, time:datetime, load_param: str | None, do_full_reset=True):
+        existing_constraints = []
+        last_completed_constraint = None
+        last_pushed_end_constraint_from_agenda = None
+
+        found_one_bad = False
+
+        if self._last_pushed_end_constraint_from_agenda is not None:
+
+            if self._last_pushed_end_constraint_from_agenda.load_param == load_param:
+                # we have a last pushed end constraint that is still valid
+                _LOGGER.info(
+                    f"clean_constraints_for_load_param: Found a stored last pushed end constraint to be kept with {self._last_pushed_end_constraint_from_agenda.load_param}  {self._last_pushed_end_constraint_from_agenda.name}")
+                last_pushed_end_constraint_from_agenda = self._last_pushed_end_constraint_from_agenda
+            else:
+                found_one_bad = True
+
+
+        if self._last_completed_constraint is not None:
+            if self._last_completed_constraint.load_param == load_param:
+                # we have a last completed constraint that is still valid
+                _LOGGER.info(
+                    f"clean_constraints_for_load_param: Found a stored last completed constraint to be kept with {self._last_completed_constraint.load_param}  {self._last_completed_constraint.name}")
+                last_completed_constraint = self._last_completed_constraint
+            else:
+                found_one_bad = True
+
+
+        for ct in self._constraints:
+
+            if ct.load_param != load_param:
+                # this constraint is not compatible with the load_param we are looking for
+                found_one_bad = True
+                continue
+
+            _LOGGER.info(
+                f"clean_constraints_for_load_param: Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+
+            existing_constraints.append(ct)
+
+        if found_one_bad is False and do_full_reset is False:
+            # no need to reset, we have all the constraints we need
+            _LOGGER.info(f"clean_constraints_for_load_param: No bad constraint found for {load_param}, no reset needed")
+            return
+
+        if do_full_reset:
+            self.reset()
+        else:
+            self.reset_load_only()
+
+        self._last_completed_constraint = last_completed_constraint
+        self._last_pushed_end_constraint_from_agenda = last_pushed_end_constraint_from_agenda
+        for ct in existing_constraints:
+            if ct is not None:
+                self.push_live_constraint(time, ct)
+
+
+    def reset(self):
+        _LOGGER.info(f"Reset load {self.name}")
+        self.reset_load_only()
 
     async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
         if self.qs_enable_device is False:
@@ -607,8 +680,14 @@ class AbstractLoad(AbstractDevice):
 
         return new_val
 
-    def get_active_constraints_for_storage(self, time:datetime) -> list[LoadConstraint]:
-        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time) and c.end_of_constraint < DATETIME_MAX_UTC]
+    def get_active_constraints(self, time:datetime) -> list[LoadConstraint]:
+        if self.qs_enable_device is False:
+            self._constraints = []
+
+        if not self._constraints:
+            self._constraints = []
+
+        return [c for c in self._constraints if c.is_constraint_active_for_time_period(time)]
 
     def set_live_constraints(self, time: datetime, constraints: list[LoadConstraint]):
 

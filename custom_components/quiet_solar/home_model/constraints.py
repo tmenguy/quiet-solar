@@ -167,24 +167,6 @@ class LoadConstraint(object):
 
         return energy_score + energy_score_span*load_score + energy_score_span*reserved_load_score_span*type_score + energy_score_span*reserved_load_score_span*type_score_span*user_score
 
-    def evaluate_needed_mean_power(self, time:datetime) -> float:
-
-        if self.is_constraint_active_for_time_period(time) is False:
-            return 0.0
-
-        min_p, max_p = self.load.get_min_max_power()
-
-        if self.end_of_constraint == DATETIME_MAX_UTC:
-            # no timed hard constraint ... no need to have a high importance
-            return min_p
-        elif self.as_fast_as_possible:
-            return max_p
-        else:
-            td = self.end_of_constraint - time
-
-        remaining_energy = self.get_energy_to_be_added()/3600.0
-        return max(min_p, remaining_energy / td.total_seconds())
-
 
     @classmethod
     def new_from_saved_dict(cls, time, load, data: dict) -> Self:

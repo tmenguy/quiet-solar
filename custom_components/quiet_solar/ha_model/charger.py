@@ -99,6 +99,7 @@ CHARGER_MIN_REBOOT_DURATION_S = 120
 CHARGER_STATE_REFRESH_INTERVAL_S = 14
 CHARGER_ADAPTATION_WINDOW_S = 30
 CHARGER_CHECK_STATE_WINDOW_S = 15
+CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 60
 
 CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S = 5 * 60 # to be sure the car is not asking for current anymore
 CHARGER_LONG_CONNECTION_S = 60 * 10
@@ -775,7 +776,7 @@ class QSChargerGroup(object):
                                                  full_available_home_power,
                                                  grid_available_home_power,
                                                  allow_budget_reset,
-                                                 time:datetime) -> (bool, bool, bool):
+                                                 time:datetime) -> tuple[bool, bool, bool]:
 
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
 
@@ -1505,10 +1506,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._asked_for_reboot_at_time :datetime | None = None
 
-
-
-
-
         self.minimum_reboot_duration_s = CHARGER_MIN_REBOOT_DURATION_S
 
         super().__init__(**kwargs)
@@ -1965,6 +1962,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         score = score_duration * score_span_battery + score_battery
         return score
 
+    def reset_boot_data(self):
+        self._boot_time = None
+        self._boot_car = None
 
     def reset(self):
         _LOGGER.info(f"Charger reset {self.name}")
@@ -1973,10 +1973,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._reset_state_machine()
         self._asked_for_reboot_at_time = None
         self.qs_bump_solar_priority = False
-
-    def reset_load_only(self):
-        _LOGGER.info(f"reset_load_only: Charger {self.name}")
-        super().reset()
+        self.reset_boot_data()
 
     def _reset_state_machine(self):
         _LOGGER.info(f"_reset_state_machine: {self.name}")
@@ -2138,6 +2135,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     car = self.home.get_car_by_name(self.user_attached_car_name)
 
+                if car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
+                    car = None
+
                 if car is not None:
                     _LOGGER.info(f"get_best_car:Best Car from user selection: {car.name}")
 
@@ -2159,22 +2159,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"get_best_car: NO GOOD CAR BECAUSE:CHARGER_NO_CAR_CONNECTED")
                 return None
 
-        cars_to_charger = {}
         active_chargers = [self]
         for charger in self.home._chargers:
 
             if charger.qs_enable_device is False:
                 continue
 
+            if charger == self:
+                continue
+
             if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
-
-                car = charger.car
-                if car is not None and car.name != charger._default_generic_car.name:
-                    cars_to_charger[car] = charger
-
-                if charger != self:
-                    active_chargers.append(charger)
-
+                active_chargers.append(charger)
 
         cache = {}
 
@@ -2244,26 +2239,35 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         best_car = assigned_chargers.get(self)
 
         if best_car is None:
-            # there is no good car for this charger: get an invited car that is not already assigned to another charger
-            if self.car is not None and self.car.car_is_invited:
-                best_car = self.car
-            else:
-                for car in self.home._cars:
-                    if car.car_is_invited and cars_to_charger.get(car) is None:
-                        best_car = car
-                        _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name}")
-                        break
-            if best_car is None:
-                best_car = self._default_generic_car
-                _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
-        else:
-            _LOGGER.info(f"Best Car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}")
 
-        existing_charger = cars_to_charger.get(best_car)
-        if existing_charger is not None and existing_charger != self:
+            if self._boot_car is not None and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
+                best_car = self._boot_car
+                _LOGGER.info(f"get_best_car: Best Car from boot data: {best_car.name}")
+            else:
+                # there is no good car for this charger: get an invited car that is not already assigned to another charger
+                if self.car is not None and self.car.car_is_invited:
+                    best_car = self.car
+                else:
+                    for car in self.home._cars:
+                        if car.car_is_invited and car.charger is None:
+                            best_car = car
+                            _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name}")
+                            break
+                if best_car is None:
+                    best_car = self._default_generic_car
+                    _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
+        else:
+            if self._boot_car is not None and self._boot_car.name != best_car.name and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
+                # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
+                _LOGGER.info(f"get_best_car: Use Best Car from boot data: {self._boot_car.name} instead of computed one {best_car.name}")
+                best_car = self._boot_car
+            else:
+                _LOGGER.info(f"get_best_car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}")
+
+        if  best_car.charger is not None and  best_car.charger != self:
             # will force a reset of everything
-            _LOGGER.info(f"Best Car for charger {self.name}: removed from another charger {existing_charger.name}")
-            existing_charger.detach_car()
+            _LOGGER.info(f"get_best_car: for charger {self.name}: removed from another charger { best_car.charger.name}")
+            best_car.charger.detach_car()
             # hoping we won't have back and forth between chargers
 
         return best_car
@@ -2330,18 +2334,43 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.can_force_a_charge_now():
             await self.car.force_charge_now()
 
-    def get_and_adapt_existing_constraints(self, time: datetime) -> list[LoadConstraint]:
-        existing_constraints = []
+
+    def load_post_home_init(self, time:datetime):
+        """This method is called after the constraints have been loaded from storage."""
+        # if there was an active constraint, we are here just after a reboot
+        self.reset_boot_data()
+
+        self._boot_time = time
+        self._boot_car = None
+
+        old_connected_car_name = None
+        if self._constraints is not None and len(self._constraints) > 0:
+            for ct in self._constraints:
+                old_connected_car_name = ct.load_param
+                _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+                break
+        if old_connected_car_name is None and self._last_completed_constraint is not None:
+            old_connected_car_name = self._last_completed_constraint.load_param
+            _LOGGER.info(f"load_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
+
+        if old_connected_car_name is None and self._last_pushed_end_constraint_from_agenda is not None:
+            old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
+            _LOGGER.info(f"load_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
+
+        if old_connected_car_name is not None:
+            self._boot_car = self.home.get_car_by_name(old_connected_car_name)
+
+        # clean a bit the non user constraints we only need to keep those ones, as the other ones will be recomputed
+        to_be_kept = []
         for ct in self._constraints:
+            if ct.from_user is True:
+                to_be_kept.append(ct)
 
-            if ct.from_user is False or ct.as_fast_as_possible is False:
-                continue
+        self._constraints = []
 
-            _LOGGER.info(f"Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+        for ct in to_be_kept:
+            self.push_live_constraint(time, ct)
 
-            existing_constraints.append(ct)
-
-        return existing_constraints
 
 
 
@@ -2362,16 +2391,33 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 await self.reboot(time)
                 return False
 
+        # the problem is that just after a reboot we don't know in which state the charger is really
+        # and we don't know if we are in fact plugged and we need to use the available constraints to attach
+        # a car to the charger for example
+        if self._boot_time is not None:
+            if (time - self._boot_time).total_seconds() < 2*CHARGER_CHECK_STATE_WINDOW_S:
+                # do nothing until we do have a proper window of time to check the charger state
+                return False
+            else:
+                # we can check the states on the charger and cars ... but prepare a bit for the constraints that should be kept
+                # to know on which car we should be for example
+
+                # by construction if we are here : not car could have been attached to the charger
+                # get best car would use the car coming from the boot data
+                pass
+
+
+            # after a time th eboot time data is deprecated : kill it
+            if (time - self._boot_time).total_seconds() < CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
+                self.reset_boot_data()
+
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
             if self.car:
                 _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
-                existing_constraints = self.get_and_adapt_existing_constraints(time)
                 self.reset()
                 self.user_attached_car_name = None
                 do_force_solve = True
-                for ct in existing_constraints:
-                    self.push_live_constraint(time, ct)
 
             # set_charging_num_phases will check that this switch is possible
             # force single phase charge by default
@@ -2381,16 +2427,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
-            existing_constraints = []
             best_car = self.get_best_car(time)
 
             # user forced a "deconnection"
             if best_car is None:
                 _LOGGER.info("check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option")
-                existing_constraints = self.get_and_adapt_existing_constraints(time)
                 self.reset()
-                for ct in existing_constraints:
-                    self.push_live_constraint(time, ct)
                 return True
 
             elif self.car:
@@ -2398,24 +2440,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 #change car we have a better one ...
                 if best_car.name != self.car.name:
                     _LOGGER.info("check_load_activity_and_constraints: CHANGE CONNECTED CAR!")
-                    self.detach_car()
+                    self.detach_car() # it will reset constraints and do what is needed, has self.car will be None
+                else:
+                    # check constraints
+                    self.clean_constraints_for_load_param(time, load_param=self.car.name, do_full_reset=False)
 
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
-
                 car = best_car
                 _LOGGER.info(f"check_load_activity_and_constraints: plugging car {car.name} not connected: reset and attach car")
-
-                # only keep user constraints...well in fact getting the as fast as possible one is enough
-                existing_constraints = self.get_and_adapt_existing_constraints(time)
-
-                # this reset is key it removes the constraint, the self._last_completed_constraint, etc
-                # it will detach the car, etc
-                self.reset()
-
-                # find the best car ... for now
-                self.attach_car(car, time)
+                self.clean_constraints_for_load_param(time, load_param=self.car.name, do_full_reset=True)
 
             target_charge = await self.car.setup_car_charge_target_if_needed()
 
@@ -2456,15 +2491,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_charge()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
-                for ct in existing_constraints:
+                # by construction all the constraints are applicable here
+                update_constraints = False
+                for ct in self._constraints:
                     if ct.target_value != target_charge:
                         do_force_solve = True
-                    if ct.load_param != self.car.name:
-                        _LOGGER.info(
-                            f"check_load_activity_and_constraints: Found a stored car constraint with {ct.load_param} for {self.car.name}, forcing to current car")
-                        ct.reset_load_param(self.car.name)
-                    ct.target_value = target_charge
-                    self.push_live_constraint(time, ct)
+                        update_constraints = True
+                        ct.target_value = target_charge
+
+                if update_constraints:
+                    self.set_live_constraints(time, self._constraints)
+
 
                 # we may have a as fast as possible constraint still active ... if so we need to update it
                 for ct in self._constraints:
@@ -3273,6 +3310,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         handled = False
         if self.is_car_stopped_asking_current(time):
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} stopped asking current ... do nothing")
+
             handled = True
         elif command is None or command.is_off_or_idle():
             handled = True

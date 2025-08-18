@@ -195,6 +195,8 @@ class QSHome(QSDynamicGroup):
 
         self.add_device(self)
 
+        self._init_completed = False
+
     def get_best_tariff(self, time: datetime) -> float:
         if self.price_off_peak == 0:
             return self.price_peak
@@ -623,6 +625,41 @@ class QSHome(QSDynamicGroup):
         #will redo the whole topology each time
         self._set_amps_topology()
 
+    def finished_setup(self, time: datetime) -> bool:
+        """
+        Check if the home setup is finished.
+        This is used to determine if the home is ready to be used.
+        """
+
+        if self._init_completed:
+            return True
+
+        # check if we have all devices
+        if not self._all_devices:
+            return False
+
+        # check if we have a battery
+        if self._battery is None:
+            return False
+
+        # check if we have a solar plant
+        if self._solar_plant is None:
+            return False
+
+        # check if we have at least one load
+        if not self._all_loads:
+            return False
+
+
+        for load in self._all_loads:
+            if load.externally_initialized_constraints is False:
+                return False
+
+        for load in self._all_loads:
+            load.load_post_home_init(time)
+
+        self._init_completed = True
+        return True
 
 
     async def update_loads_constraints(self, time: datetime):
@@ -631,6 +668,10 @@ class QSHome(QSDynamicGroup):
             QSHomeMode.HOME_MODE_OFF.value,
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value
             ]:
+            return
+
+        if self.finished_setup(time) is False:
+            _LOGGER.info("update_loads_constraints: Home not finished setup, skipping")
             return
 
         # check for active loads
@@ -648,6 +689,10 @@ class QSHome(QSDynamicGroup):
             ]:
             return
 
+        if self.finished_setup(time) is False:
+            _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
+            return
+
         for name, prober in self.home_non_controlled_power_forecast_sensor_values_providers.items():
             self.home_non_controlled_power_forecast_sensor_values[name] = prober.push_and_get(time)
 
@@ -660,6 +705,10 @@ class QSHome(QSDynamicGroup):
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             ]:
+            return
+
+        if self.finished_setup(time) is False:
+            _LOGGER.info("update_all_states: Home not finished setup, skipping")
             return
 
         if self._solar_plant:
@@ -693,6 +742,11 @@ class QSHome(QSDynamicGroup):
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value
             ]:
             return
+
+        if self.finished_setup(time) is False:
+            _LOGGER.info("update_loads: Home not finished setup, skipping")
+            return
+
 
         try:
             await self.update_loads_constraints(time)
@@ -789,9 +843,6 @@ class QSHome(QSDynamicGroup):
                 await self._battery.launch_command(time, command, ctxt=f"launch command battery true launch at {cmd_time}")
                 # only launch one at a time for a given load
                 break
-
-
-
 
         for load, commands in self._commands:
 
