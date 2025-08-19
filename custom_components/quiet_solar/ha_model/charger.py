@@ -2348,8 +2348,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
                 if self._boot_car is not None and self._boot_car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
                     self._boot_car = None
+                    old_connected_car_name = None
                     continue
                 if self._boot_car is None:
+                    old_connected_car_name = None
                     _LOGGER.warning(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name} but the car is not available, so we will not use it")
                     continue
                 _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
@@ -2362,6 +2364,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
             _LOGGER.info(f"load_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
 
+        self._boot_car = None
         if old_connected_car_name is not None:
             self._boot_car = self.home.get_car_by_name(old_connected_car_name)
             if self._boot_car is not None and self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
