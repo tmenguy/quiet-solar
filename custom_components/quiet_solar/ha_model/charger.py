@@ -2364,7 +2364,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if old_connected_car_name is not None:
             self._boot_car = self.home.get_car_by_name(old_connected_car_name)
-            if self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
+            if self._boot_car is not None and self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
                 _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
                 self._boot_car = None
 
