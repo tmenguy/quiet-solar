@@ -57,7 +57,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
     CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
     CONF_CLIMATE_HVAC_MODE_ON, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, \
-    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
+    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
+    CONF_MINIMUM_OK_CAR_CHARGE
 from .ha_model.climate_controller import get_hvac_modes
 from .ha_model.home import QSHome
 
@@ -883,7 +884,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                         )
                     ),
-                vol.Optional(CONF_DEFAULT_CAR_CHARGE, description={"suggested_value":self.config_entry.data.get(CONF_DEFAULT_CAR_CHARGE, 100)}):
+                vol.Optional(CONF_DEFAULT_CAR_CHARGE, description={"suggested_value":int(self.config_entry.data.get(CONF_DEFAULT_CAR_CHARGE, 100))}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -893,7 +894,17 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=PERCENTAGE,
                         )
                     ),
-
+                vol.Optional(CONF_MINIMUM_OK_CAR_CHARGE,
+                             description={"suggested_value": int(self.config_entry.data.get(CONF_MINIMUM_OK_CAR_CHARGE, 50))}):
+                    selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement=PERCENTAGE,
+                        )
+                    ),
                 vol.Optional(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
                              default=self.config_entry.data.get(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)):
                     cv.boolean,

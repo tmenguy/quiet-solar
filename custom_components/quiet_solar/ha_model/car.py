@@ -11,7 +11,8 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
-    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS
+    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
 from ..home_model.load import AbstractDevice
@@ -35,6 +36,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._conf_car_charge_percent_max_number_steps = None
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
+        self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 50.0)
+
+
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
         self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
@@ -775,7 +779,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         target_charge = asked_target_charge
 
         if target_charge is None:
-            target_charge = self.get_car_target_charge()
+            target_charge = self.get_car_target_SOC()
 
         if target_charge is not None:
             await self.adapt_max_charge_limit(target_charge)
@@ -813,7 +817,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # always add the default
         options.add(int(self.car_default_charge))
 
-        v = int(self.get_car_target_charge())
+        v = int(self.get_car_target_SOC())
         #always add the current set
         options.add(v)
 
@@ -867,12 +871,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         break
 
     def get_car_target_charge_option(self):
-        return self.get_car_option_charge_from_value(self.get_car_target_charge())
+        return self.get_car_option_charge_from_value(self.get_car_target_SOC())
 
-    def get_car_target_charge(self):
+    def get_car_target_SOC(self) -> int | float:
         if self._next_charge_target is None:
             self._next_charge_target = self.car_default_charge
         return self._next_charge_target
+
+    def get_car_minimum_ok_SOC(self) -> int | float:
+        return self.car_minimum_ok_charge
+
 
 
     @property

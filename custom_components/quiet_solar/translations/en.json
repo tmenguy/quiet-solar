@@ -76,6 +76,7 @@
                     "charge_9": "Charge Power in W for a  9A charge (per phase), clear for default",
                     "default_car_charge": "Default car charge in %",
                     "device_efficiency": "Car charging power efficiency in %",
+                    "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
                     "mobile_app": "Select a mobile app send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name"
@@ -475,6 +476,7 @@
                     "charge_9": "Charge Power in W for a  9A charge (per phase), clear for default",
                     "default_car_charge": "Default car charge in %",
                     "device_efficiency": "Car charging power efficiency in %",
+                    "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
                     "mobile_app": "Select a mobile app send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name"

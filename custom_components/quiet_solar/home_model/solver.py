@@ -324,6 +324,7 @@ class PeriodSolver(object):
 
                     if available_power < 0.0:
 
+                        # charge
                         charging_power = self._battery.get_best_charge_power(0.0 - available_power,
                                                                              float(self._durations_s[i]),
                                                                              current_charge=prev_battery_charge)

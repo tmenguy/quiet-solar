@@ -60,6 +60,7 @@ CONF_CHARGER_MIN_CHARGE = "charger_min_charge"
 
 CONF_CHARGER_CONSUMPTION = "charger_consumption"
 CONF_DEFAULT_CAR_CHARGE = "default_car_charge"
+CONF_MINIMUM_OK_CAR_CHARGE = "minimum_ok_car_charge"
 CONF_CHARGER_LATITUDE = "charger_latitude"
 CONF_CHARGER_LONGITUDE = "charger_longitude"
 

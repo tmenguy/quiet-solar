@@ -863,11 +863,17 @@ class QSChargerGroup(object):
 
         battery_asked_charge = 0.0
         do_block_after_battery = False
-        if full_available_home_power != grid_available_home_power and self.home._battery is not None:
 
-            battery_current_charge = full_available_home_power - grid_available_home_power
-            if  self.home._battery.current_command:
-                battery_asked_charge = self.home._battery.current_command.power_consign
+
+
+        battery_current_charge = full_available_home_power - grid_available_home_power
+        if self.home._battery is not None and self.home._battery.current_command:
+            battery_asked_charge = self.home._battery.current_command.power_consign
+            # battery_asked_charge > 0 : the battery needs to charge
+            # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
+
+        initial_power_budget = full_available_home_power - diff_power_budget
+        if full_available_home_power != grid_available_home_power and battery_asked_charge > 0 and do_reset_allocation is False:
 
             has_one_before_battery = False
             has_one_after_battery = False
@@ -879,23 +885,21 @@ class QSChargerGroup(object):
 
             if has_one_before_battery is False:
                 # we want to charge the battery at minimum with the battery_asked_charge or more
-                power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-            elif has_one_after_battery is False:
-                power_budget = full_available_home_power - diff_power_budget
-            else:
+                initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+            elif has_one_after_battery is True and actionable_chargers[0].current_real_max_charging_amp == 0:
                 # both are true: we do have some that are before and after the battery
-                if do_reset_allocation is True:
-                    do_block_after_battery = True
-                    power_budget = full_available_home_power - diff_power_budget
-                else:
-                    if actionable_chargers[0].current_real_max_charging_amp == 0:
-                        # the main one is not charging ... try to have the other one stopped to charge the battery
-                        power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                    else:
-                        # the main one charge ... continue
-                        power_budget = full_available_home_power - diff_power_budget
+                # the main one is not charging ... try to have the other one stopped to charge the battery
+                initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+
+        if do_reset_allocation:
+            do_more_important_charger_first = True
         else:
-            power_budget = full_available_home_power - diff_power_budget
+            do_more_important_charger_first = initial_power_budget >= 0
+
+        # sort the charger according to their score, if increase put the most important to finish the charge first
+        # if decrease: remove charging from less important first (lower score)
+        actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=do_more_important_charger_first)
+
 
         # in case of "no reset" allocation, we will try to minimize the diffs
         # this algorithm will only try to move "a bit" the chargers to reach the power budget
@@ -918,39 +922,33 @@ class QSChargerGroup(object):
             check_phase_change = [False]
 
 
-        if power_budget < 0:
-            increase = False
-            stop_on_first_change = False
-        else:
-            increase = True
-            if do_reset_allocation:
-                stop_on_first_change = False
-            else:
-                stop_on_first_change = True
-
-
-        # sort the charger according to their score, if increase put the most important to finish the charge first
-        # if decrease: remove charging from less important first (lower score)
-        if do_reset_allocation:
-            actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
-        else:
-            actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=increase)
-
-
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {power_budget}, increase {increase}, budget_alloted_amps {alloted_amps}")
+            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget}, increase {do_more_important_charger_first}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
 
         do_stop = False
+        global_diff_power = 0
+
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
                 for cs in actionable_chargers:
 
-                    if do_block_after_battery and cs.is_before_battery is False:
-                        continue
+                    if battery_asked_charge > 0 and cs.is_before_battery is False:
+                        power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                    else:
+                        power_budget = full_available_home_power - diff_power_budget
 
-                    local_stop_on_first_change = stop_on_first_change
+                    if power_budget < 0:
+                        increase = False
+                        stop_on_first_change = False
+                    else:
+                        increase = True
+                        stop_on_first_change = True
+
+                    if do_reset_allocation:
+                        stop_on_first_change = False
+
                     if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
-                        local_stop_on_first_change = False
+                        stop_on_first_change = False
 
                     num_changes = 0
                     while True:
@@ -968,19 +966,19 @@ class QSChargerGroup(object):
                             if diff_power is None:
                                 next_possible_budgeted_amp = None
                                 _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of diff_power None power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                                    f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of diff_power None power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
                             else:
                                 new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
                                 new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
                                 if increase:
-                                    if power_budget - diff_power >= 0:
+                                    if power_budget - global_diff_power - diff_power >= 0:
                                         # ok good change, we still have some power to give
                                         pass
                                     else:
                                         # no we exhausted too far the available solar budget
                                         _LOGGER.info(
-                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
 
                                         next_possible_budgeted_amp = None
 
@@ -996,24 +994,24 @@ class QSChargerGroup(object):
 
                                 if next_possible_budgeted_amp is not None:
 
-                                    power_budget -= diff_power
+                                    global_diff_power += diff_power
                                     alloted_amps = new_alloted_amps
 
                                     _LOGGER.info(
-                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
+                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget - global_diff_power}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
                                     cs.budgeted_amp = next_possible_budgeted_amp
                                     cs.budgeted_num_phases = next_possible_num_phases
 
                                     num_changes += 1
 
-                                    if local_stop_on_first_change:
-                                        do_stop = True
+                                    if stop_on_first_change:
+                                        next_possible_budgeted_amp = None # to break while the loop
 
-                                    if increase is False and power_budget >= 0:
+                                    if increase is False and power_budget - global_diff_power >= 0:
                                         # we are back on track for solar or we reduced enough
-                                        do_stop = True
+                                        next_possible_budgeted_amp = None # to break while the loop
 
-                        if do_stop or next_possible_budgeted_amp is None:
+                        if next_possible_budgeted_amp is None:
                             # we can't change this charger anymore ... just stop here
                             break
 
@@ -2488,7 +2486,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_charge()} pushed forces constraint {force_constraint.name}")
+                        f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_SOC()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
                 # by construction all the constraints are applicable here
@@ -2577,10 +2575,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if realized_charge_target is None:
 
-                # make car charging after the battery, as it is a best effort one
-                # well no really after battery in fact
+
                 type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN # well as it is an auto constraint it will have to be before the battery consumption
                 realized_charge_target = car_initial_percent
+
+                intermediate_target_charge = None
+                if self.qs_bump_solar_charge_priority is False:
+                    intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
+
+                if intermediate_target_charge is not None and intermediate_target_charge < target_charge:
+                    if car_initial_percent >= intermediate_target_charge:
+                        type = CONSTRAINT_TYPE_FILLER # charge after the minimum is more optional than before
+                    else:
+                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                        target_charge = intermediate_target_charge
 
                 car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=self.car.car_battery_capacity,
