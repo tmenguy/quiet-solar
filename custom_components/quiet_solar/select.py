@@ -57,7 +57,8 @@ def create_ha_select_for_QSCar(device: QSCar):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_charger_by_name(option),
 
     )
-    entities.append(QSUserOverrideSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+    # use QSBaseSelect as it needs to be recomputed every time
+    entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
 
 
 
@@ -158,7 +159,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         super().__init__(data_handler=data_handler, device=device, description=description)
         self._attr_options = self.get_available_options(description, device)
         self._set_availabiltiy()
-        self._do_restore_default = True
+        self._do_restore_default = False
 
     def get_available_options(self, description:QSSelectEntityDescription|None = None, device:AbstractDevice|None=None) -> list[str] | None:
         """Return the available options."""
@@ -219,11 +220,6 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
         self._set_availabiltiy()
 
-        if self._do_restore_default:
-            if self.entity_description.qs_default_option:
-                new_option = self.entity_description.qs_default_option.value
-                await self.async_select_option(new_option)
-
 
 class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
     """Entity."""
@@ -235,9 +231,7 @@ class QSBaseSelectRestore(QSBaseSelect, RestoreEntity):
         description: QSSelectEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        self._do_restore_default = False
         super().__init__(data_handler=data_handler, device=device, description=description)
-        self._do_restore_default = False
 
 
 class QSSimpleSelectRestore(QSBaseSelectRestore):
