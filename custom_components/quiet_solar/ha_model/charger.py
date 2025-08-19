@@ -2346,8 +2346,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             for ct in self._constraints:
                 old_connected_car_name = ct.load_param
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
-                if self._boot_car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
+                if self._boot_car is not None and self._boot_car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
                     self._boot_car = None
+                    continue
+                if self._boot_car is None:
+                    _LOGGER.warning(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name} but the car is not available, so we will not use it")
                     continue
                 _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
                 break
@@ -2365,7 +2368,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
                 self._boot_car = None
 
-
         # clean a bit the non user constraints we only need to keep those ones, as the other ones will be recomputed
         to_be_kept = []
         for ct in self._constraints:
@@ -2376,8 +2378,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         for ct in to_be_kept:
             self.push_live_constraint(time, ct)
-
-
 
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
