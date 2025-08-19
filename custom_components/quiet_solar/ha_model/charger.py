@@ -2345,6 +2345,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self._constraints is not None and len(self._constraints) > 0:
             for ct in self._constraints:
                 old_connected_car_name = ct.load_param
+                self._boot_car = self.home.get_car_by_name(old_connected_car_name)
+                if self._boot_car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
+                    self._boot_car = None
+                    continue
                 _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
                 break
         if old_connected_car_name is None and self._last_completed_constraint is not None:
@@ -2357,6 +2361,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if old_connected_car_name is not None:
             self._boot_car = self.home.get_car_by_name(old_connected_car_name)
+            if self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
+                _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
+                self._boot_car = None
+
 
         # clean a bit the non user constraints we only need to keep those ones, as the other ones will be recomputed
         to_be_kept = []
