@@ -1896,31 +1896,30 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             score_span = native_score_span
 
         native_score_duration = 0
-        max_duration_h = 23 # 5*max_duration_h + 3 must be < native_score_span_duration
+        max_duration_h = 23 # 10*max_duration_h + 10 must be < native_score_span_duration
         if ct is not None:
 
-            time_to_complete_h = None
-
-            is_before_battery = self._compute_is_before_battery(ct, time)
-
-            if is_before_battery:
-                native_score_duration = max_duration_h
-
             if ct.as_fast_as_possible:
-                time_to_complete_h = 0
-            elif ct.end_of_constraint < DATETIME_MAX_UTC:
-                # there is a true end constraint
-                time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
+                native_score_duration += 8*max_duration_h + 8
+            else:
+                is_before_battery = self._compute_is_before_battery(ct, time)
 
-            if time_to_complete_h is not None and time_to_complete_h <= max_duration_h - 1:
-                native_score_duration += int(max_duration_h - time_to_complete_h)
+                if is_before_battery:
+                    native_score_duration += max_duration_h + 1
 
-                if ct.is_mandatory:
-                    native_score_duration += 3*max_duration_h + 2
+                if ct.end_of_constraint < DATETIME_MAX_UTC:
+                    # there is a true end constraint
+                    time_to_complete_h = (ct.end_of_constraint - time).total_seconds()/3600.0
+
+                    if time_to_complete_h < max_duration_h:
+                        native_score_duration += int(max_duration_h - time_to_complete_h)
+
+                        if ct.is_mandatory:
+                            native_score_duration += 4*max_duration_h + 4
 
 
         if self.qs_bump_solar_charge_priority:
-            native_score_duration += 2*max_duration_h + 1 # to be above non mandatory but below in case of mandatory constraints
+            native_score_duration += 2*max_duration_h + 2 # to be above non mandatory but below in case of mandatory constraints
 
         native_score_duration = float(min(native_score_span_duration-1, int(native_score_duration)))
 
