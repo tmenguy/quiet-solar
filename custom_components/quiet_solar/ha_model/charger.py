@@ -1884,7 +1884,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return is_before_battery
 
 
-    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int = 0) -> float:
+    def get_normalized_score(self, ct:LoadConstraint|None, time:datetime, score_span:int = 0) -> float:
         if self.car is None:
             return 0.0
 
