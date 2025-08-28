@@ -185,9 +185,11 @@ class AbstractDevice(object):
             self._enabled = enabled
             if enabled is False:
                 self.home.remove_device(self)
+                self.home.add_disabled_device(self)
                 _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
             else:
                 self.home.add_device(self)
+                self.home.remove_disabled_device(self)
                 _LOGGER.info(f"qs_enable_device: {self.name} ENABLE AND ADD")
 
             if hasattr(self, "_exposed_entities"):

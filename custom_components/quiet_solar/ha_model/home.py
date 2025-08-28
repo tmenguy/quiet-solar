@@ -115,6 +115,7 @@ class QSHome(QSDynamicGroup):
     _cars: list[QSCar] = []
 
     _all_devices : list[HADeviceMixin] = []
+    _disabled_devices : list[HADeviceMixin] = []
     _solar_plant: QSSolar | None = None
     _all_loads : list[AbstractLoad] = []
     _all_dynamic_groups : list[QSDynamicGroup] = []
@@ -230,10 +231,12 @@ class QSHome(QSDynamicGroup):
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 
         found = []
-        for d in self._all_devices:
-            if isinstance(d, AbstractDevice):
-                if d.dashboard_section == section_name:
-                    found.append(d)
+
+        for list in [self._all_devices, self._disabled_devices]:
+            for d in list:
+                if isinstance(d, AbstractDevice):
+                    if d.dashboard_section == section_name:
+                        found.append(d)
 
         found = sorted(found, key=lambda device: device.dashboard_sort_string)
         return found
@@ -666,6 +669,19 @@ class QSHome(QSDynamicGroup):
 
         #will redo the whole topology each time
         self._set_topology()
+
+    def add_disabled_device(self, device):
+        if device not in self._disabled_devices:
+            self._disabled_devices.append(device)
+
+    def remove_disabled_device(self, device):
+        try:
+            self._disabled_devices.remove(device)
+        except ValueError:
+            _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices")
+
+
+
 
     def finished_setup(self, time: datetime) -> bool:
         """
