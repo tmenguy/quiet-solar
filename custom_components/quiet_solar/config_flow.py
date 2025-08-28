@@ -299,7 +299,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if add_power_group_selector:
             data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
-            if len(data_handler.home._all_dynamic_groups) > 1:
+            if data_handler.home is not None and len(data_handler.home._all_dynamic_groups) > 1:
                 # ok we can add it there is more than the home in the list
                 # we will allow to select in the list of dynamic groups names
                 default_group : str = "HOME"
