@@ -1478,6 +1478,8 @@ class QSChargerGroup(object):
 
 class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
+    conf_type_name = "charger_generic"
+
     def __init__(self, **kwargs):
         self.charger_plugged = kwargs.pop(CONF_CHARGER_PLUGGED, None)
         self.charger_max_charging_current_number = kwargs.pop(CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, None)
@@ -1879,7 +1881,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 elif command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                     is_before_battery = True
 
-                _LOGGER.info(f"_compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
+                _LOGGER.debug(f"_compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
 
             if self.qs_bump_solar_charge_priority:
                 is_before_battery = True
@@ -3586,6 +3588,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 class QSChargerOCPP(QSChargerGeneric):
 
+    conf_type_name = "charger_ocpp"
+
     def __init__(self, **kwargs):
         self.charger_device_ocpp = kwargs.pop(CONF_CHARGER_DEVICE_OCPP, None)
         self.charger_ocpp_current_import = None
@@ -3825,7 +3829,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
 class QSChargerWallbox(QSChargerGeneric):
 
-
+    conf_type_name = "charger_wallbox"
 
     def __init__(self, **kwargs):
         self.charger_device_wallbox = kwargs.pop(CONF_CHARGER_DEVICE_WALLBOX, None)

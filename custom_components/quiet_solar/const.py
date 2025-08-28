@@ -13,6 +13,17 @@ HOME_NON_CONTROLLED_CONSUMPTION_SENSOR = "home_non_controlled_consumption_sensor
 HOME_AVAILABLE_POWER_SENSOR = "home_available_power_sensor"
 GRID_CONSUMPTION_SENSOR = "grid_consumption_sensor"
 
+DASHBOARD_NUM_SECTION_MAX = 8
+
+DASHBOARD_DEFAULT_SECTIONS = [("cars","mdi:car"), ("climates","mdi:home-thermometer"), ("pools","mdi:pool"), ("others","mdi:home"), ("settings","mdi:cog-outline")]
+DASHBOARD_DEFAULT_SECTIONS_DICT ={v[0]:v[1] for v in DASHBOARD_DEFAULT_SECTIONS}
+DASHBOARD_NO_SECTION = "Not in dashboard"
+DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY = "dashboard_device_section"
+
+CONF_DASHBOARD_SECTION_NAME = "dashboard_section_name"
+CONF_DASHBOARD_SECTION_ICON = "dashboard_section_icon"
+
+
 CONF_POWER = "power"
 CONF_ACCURATE_POWER_SENSOR = "accurate_power_sensor"
 CONF_PHASE_1_AMPS_SENSOR = "phase_1_amps_sensor"
@@ -28,6 +39,7 @@ CONF_LOAD_IS_BOOST_ONLY = "load_is_boost_only"
 CONF_DEVICE_EFFICIENCY = "device_efficiency"
 CONF_DEVICE_DYNAMIC_GROUP_NAME = "dynamic_group_name"
 CONF_NUM_MAX_ON_OFF = "num_max_on_off"
+CONF_DEVICE_DASHBOARD_SECTION = "device_dashboard_section"
 
 CONF_HOME_VOLTAGE = "home_voltage"
 
@@ -158,6 +170,7 @@ CONF_HOME_OFF_PEAK_PRICE = "home_off_peak_price"
 
 BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
+BUTTON_HOME_GENERATE_YAML_DASHBOARD = "qs_home_generate_yaml_dashboard"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"

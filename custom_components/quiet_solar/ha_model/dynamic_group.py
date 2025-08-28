@@ -16,6 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
+    conf_type_name = "dynamic_group"
+
     # this class will allow to group Loads togther so the sum of their current can be limited below
     # a setting CONF_DYN_GROUP_MAX_CURRENT
     # It will also allow budgeting of Loads under this same constraint at planning/solving phase

@@ -18,6 +18,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSSolar(HADeviceMixin, AbstractDevice):
 
+    conf_type_name = "solar"
+
     def __init__(self, **kwargs) -> None:
         self.solar_inverter_active_power = kwargs.pop(CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, None)
         self.solar_inverter_input_active_power = kwargs.pop(CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, None)

@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSBattery(HADeviceMixin, Battery):
 
+    conf_type_name = "battery"
 
     def __init__(self, **kwargs) -> None:
         self.charge_discharge_sensor = kwargs.pop(CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, None)

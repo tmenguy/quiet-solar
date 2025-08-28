@@ -1,3 +1,4 @@
+import copy
 import logging
 import pickle
 from enum import StrEnum
@@ -19,7 +20,8 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
     CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
-    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR
+    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
+    CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -27,11 +29,15 @@ from ..ha_model.charger import QSChargerGeneric
 from ..ha_model.device import HADeviceMixin, get_average_sensor, convert_power_to_w
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_serie
+from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_serie, \
+    extract_name_and_index_from_dashboard_section_option
 from ..home_model.solver import PeriodSolver
 
 import numpy as np
 import numpy.typing as npt
+
+from ..ui.dashboard import generate_dashboard_yaml
+
 
 class QSHomeMode(StrEnum):
     HOME_MODE_OFF = "home_mode_off"
@@ -41,9 +47,6 @@ class QSHomeMode(StrEnum):
 
 
 _LOGGER = logging.getLogger(__name__)
-
-
-
 
 MAX_SENSOR_HISTORY_S = 60*60*24*7
 
@@ -103,6 +106,8 @@ class QSforecastValueSensor:
 
 class QSHome(QSDynamicGroup):
 
+    conf_type_name = "home"
+
     _battery: QSBattery | None = None
     voltage: int = 230
 
@@ -139,6 +144,30 @@ class QSHome(QSDynamicGroup):
             self.price_peak = 0.2
         self.price_peak = self.price_peak / 1000.0
         self.price_off_peak = kwargs.pop(CONF_HOME_OFF_PEAK_PRICE, 0.0) / 1000.0
+
+
+        self.dashboard_sections: list[tuple[str, str]] = []
+        num_found_sections = 0
+        for i in range(0, DASHBOARD_NUM_SECTION_MAX):
+            key_section_name = f"{CONF_DASHBOARD_SECTION_NAME}_{i}"
+            key_section_icon = f"{CONF_DASHBOARD_SECTION_ICON}_{i}"
+
+            s_name: str | None = kwargs.pop(key_section_name, None)
+            s_icon: str | None = kwargs.pop(key_section_icon, None)
+
+            if s_name is None and s_icon is None:
+                continue
+
+            num_found_sections += 1
+            if s_name is None:
+                s_name = f"section_{num_found_sections}"
+            else:
+                s_name, found_index = extract_name_and_index_from_dashboard_section_option(s_name)
+
+            self.dashboard_sections.append((s_name, s_icon))
+
+        if num_found_sections == 0:
+            self.dashboard_sections = copy.deepcopy(DASHBOARD_DEFAULT_SECTIONS)
 
         self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
         self.home_available_power_sensor = HOME_AVAILABLE_POWER_SENSOR
@@ -196,6 +225,19 @@ class QSHome(QSDynamicGroup):
         self.add_device(self)
 
         self._init_completed = False
+
+
+    def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
+
+        found = []
+        for d in self._all_devices:
+            if isinstance(d, AbstractDevice):
+                if d.dashboard_section == section_name:
+                    found.append(d)
+
+        found = sorted(found, key=lambda device: device.dashboard_sort_string, reverse=True)
+        return found
+
 
     def get_best_tariff(self, time: datetime) -> float:
         if self.price_off_peak == 0:
@@ -513,7 +555,7 @@ class QSHome(QSDynamicGroup):
         if self._battery is not None:
             await self._battery.set_max_charging_power(power, blocking)
 
-    def _set_amps_topology(self):
+    def _set_topology(self):
 
         self._name_to_groups = {}
         for group in self._all_dynamic_groups:
@@ -527,11 +569,11 @@ class QSHome(QSDynamicGroup):
                 father._childrens.append(group)
                 group.father_device = father
 
-
         for load in self._all_loads:
             if isinstance(load, QSDynamicGroup):
                 continue
             load.father_device = None
+
 
         for load in self._all_loads:
             if isinstance(load, QSDynamicGroup):
@@ -539,10 +581,10 @@ class QSHome(QSDynamicGroup):
             father = self._name_to_groups.get(load.dynamic_group_name, self)
             if load.father_device == father:
                 # already in the group
-                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in its froup {father.name}")
+                _LOGGER.warning( f"_set_topology Load {load.name} already in its froup {father.name}")
                 continue
             if load.father_device is not None:
-                _LOGGER.warning( f"_set_amps_topology Load {load.name} already in added elsewhere in {load.father_device} we wanted {father.name}")
+                _LOGGER.warning( f"_set_topology Load {load.name} already in added elsewhere in {load.father_device} we wanted {father.name}")
                 continue
 
             father._childrens.append(load)
@@ -578,7 +620,7 @@ class QSHome(QSDynamicGroup):
                 self._all_devices.append(device)
 
         #will redo the whole topology each time
-        self._set_amps_topology()
+        self._set_topology()
 
     def remove_device(self, device):
 
@@ -623,7 +665,7 @@ class QSHome(QSDynamicGroup):
                 _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
 
         #will redo the whole topology each time
-        self._set_amps_topology()
+        self._set_topology()
 
     def finished_setup(self, time: datetime) -> bool:
         """
@@ -894,6 +936,8 @@ class QSHome(QSDynamicGroup):
             _pickle_save, file_path, debugs
         )
 
+    async def generate_yaml_for_dashboard(self):
+        await generate_dashboard_yaml(self)
 
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
 BUFFER_SIZE_DAYS = 80*7

@@ -26,6 +26,8 @@ MIN_CHARGE_POWER_W = 70
 
 class QSCar(HADeviceMixin, AbstractDevice):
 
+    conf_type_name = "car"
+
     def __init__(self, **kwargs):
         self.car_plugged = kwargs.pop(CONF_CAR_PLUGGED, None)
         self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
@@ -140,6 +142,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._qs_bump_solar_priority = False
 
         self.reset()
+
+
+
+    @property
+    def dashboard_sort_string_in_type(self) -> str:
+        if self.car_is_invited:
+            return "ZZZ"
+        return "AAA"
 
     def get_platforms(self):
         parent = super().get_platforms()

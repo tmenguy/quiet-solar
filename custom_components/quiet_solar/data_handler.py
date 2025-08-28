@@ -41,7 +41,7 @@ class QSDataHandler:
         type = config_entry.data.get(DEVICE_TYPE)
         d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
         self.hass.data[DOMAIN][config_entry.entry_id] = d
-        if d.qs_enable_device or type == "home":
+        if d.qs_enable_device or type == QSHome.conf_type_name:
             self.home.add_device(d)
 
         return d
@@ -53,7 +53,7 @@ class QSDataHandler:
         config_entry_to_forward = []
 
         if self.home is None:
-            if type == "home":
+            if type == QSHome.conf_type_name:
                 self.home = create_device_from_type(hass=self.hass, home=None, type=type, config_entry=config_entry)
                 self.hass.data[DOMAIN][config_entry.entry_id] = self.home
                 do_home_register = True

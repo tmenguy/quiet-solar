@@ -185,6 +185,22 @@
             },
             "home": {
                 "data": {
+                    "dashboard_section_icon_0": "Icon of Dashboard section #1 (empty for default)",
+                    "dashboard_section_icon_1": "Icon of Dashboard section #2 (empty for default)",
+                    "dashboard_section_icon_2": "Icon of Dashboard section #3 (empty for default)",
+                    "dashboard_section_icon_3": "Icon of Dashboard section #4 (empty for default)",
+                    "dashboard_section_icon_4": "Icon of Dashboard section #5 (empty for default)",
+                    "dashboard_section_icon_5": "Icon of Dashboard section #6 (empty for default)",
+                    "dashboard_section_icon_6": "Icon of Dashboard section #7 (empty for default)",
+                    "dashboard_section_icon_7": "Icon of Dashboard section #8 (empty for default)",
+                    "dashboard_section_name_0": "Name of Dashboard section #1 (empty to not use it)",
+                    "dashboard_section_name_1": "Name of Dashboard section #2 (empty to not use it)",
+                    "dashboard_section_name_2": "Name of Dashboard section #3 (empty to not use it)",
+                    "dashboard_section_name_3": "Name of Dashboard section #4 (empty to not use it)",
+                    "dashboard_section_name_4": "Name of Dashboard section #5 (empty to not use it)",
+                    "dashboard_section_name_5": "Name of Dashboard section #6 (empty to not use it)",
+                    "dashboard_section_name_6": "Name of Dashboard section #7 (empty to not use it)",
+                    "dashboard_section_name_7": "Name of Dashboard section #8 (empty to not use it)",
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
@@ -241,7 +257,8 @@
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
-                    "name": "Name"
+                    "name": "Name",
+                    "solar_forecast_provider": "Preferred solar forecast provider"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
                 "title": "Edit your solar panel plant"
@@ -264,6 +281,9 @@
     },
     "entity": {
         "button": {
+            "qs_home_generate_yaml_dashboard": {
+                "name": "Re-Generate YAML Dashboard"
+            },
             "qs_home_reset_history": {
                 "name": "Reset Quiet Solar History"
             },
@@ -575,6 +595,22 @@
             },
             "home": {
                 "data": {
+                    "dashboard_section_icon_0": "Icon of Dashboard section #1 (empty for default)",
+                    "dashboard_section_icon_1": "Icon of Dashboard section #2 (empty for default)",
+                    "dashboard_section_icon_2": "Icon of Dashboard section #3 (empty for default)",
+                    "dashboard_section_icon_3": "Icon of Dashboard section #4 (empty for default)",
+                    "dashboard_section_icon_4": "Icon of Dashboard section #5 (empty for default)",
+                    "dashboard_section_icon_5": "Icon of Dashboard section #6 (empty for default)",
+                    "dashboard_section_icon_6": "Icon of Dashboard section #7 (empty for default)",
+                    "dashboard_section_icon_7": "Icon of Dashboard section #8 (empty for default)",
+                    "dashboard_section_name_0": "Name of Dashboard section #1 (empty to not use it)",
+                    "dashboard_section_name_1": "Name of Dashboard section #2 (empty to not use it)",
+                    "dashboard_section_name_2": "Name of Dashboard section #3 (empty to not use it)",
+                    "dashboard_section_name_3": "Name of Dashboard section #4 (empty to not use it)",
+                    "dashboard_section_name_4": "Name of Dashboard section #5 (empty to not use it)",
+                    "dashboard_section_name_5": "Name of Dashboard section #6 (empty to not use it)",
+                    "dashboard_section_name_6": "Name of Dashboard section #7 (empty to not use it)",
+                    "dashboard_section_name_7": "Name of Dashboard section #8 (empty to not use it)",
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
@@ -631,10 +667,23 @@
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
-                    "name": "Name"
+                    "name": "Name",
+                    "solar_forecast_provider": "Preferred solar forecast provider"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
                 "title": "Edit your solar panel plant"
+            }
+        }
+    },
+    "selector": {
+        "dashboard_device_section": {
+            "options": {
+                "#1 - cars": "#1 - cars",
+                "#2 - climates": "#2 - climates",
+                "#3 - pools": "#3 - pools",
+                "#4 - others": "#4 - others",
+                "#5 - settings": "#5 - settings",
+                "Not in dashboard": "Not in dashboard"
             }
         }
     }

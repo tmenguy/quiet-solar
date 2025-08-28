@@ -13,6 +13,19 @@ logger:
     custom_components.quiet-solar.home_model: debug
     custom_components.hacs: debug
     aiogithubapi: debug
+
+
+lovelace:
+  mode: storage
+  # Add yaml dashboards
+  dashboards:
+    quiet-solar-yaml:
+      mode: yaml
+      title: Quiet Solar
+      icon: mdi:solar-power
+      show_in_sidebar: true
+      filename: quiet_solar/quiet_solar_dashboard.yaml
+
 # If you need to debug uncommment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
 #debugpy:
   #start: true

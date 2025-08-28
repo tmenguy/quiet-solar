@@ -34,7 +34,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     entities = []
 
     load_current_command = QSSensorEntityDescription(
-        key="current_constraint",
+        key="current_constraint_car",
         translation_key=SENSOR_CONSTRAINT_SENSOR_CHARGE,
         value_fn=lambda device, key: "NO CHARGE" if device.charger is None else device.charger.get_active_readable_name(),
     )

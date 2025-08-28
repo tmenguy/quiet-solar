@@ -11,6 +11,8 @@ from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 
 class QSPool(QSOnOffDuration):
 
+    conf_type_name = "pool"
+
     def __init__(self, **kwargs):
 
 

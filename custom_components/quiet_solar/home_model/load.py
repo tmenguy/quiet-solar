@@ -12,8 +12,10 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
-from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_NUM_MAX_ON_OFF
+from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
+    CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
+    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
+    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION
 
 import slugify
 
@@ -22,8 +24,51 @@ if TYPE_CHECKING:
 
 NUM_MAX_INVALID_PROBES_COMMANDS = 3
 
-
 _LOGGER = logging.getLogger(__name__)
+
+def extract_name_and_index_from_dashboard_section_option(section_option: str) -> tuple[str, int | None]:
+    name = section_option
+    vals = section_option.split(" - ")
+    found_index = None
+    if len(vals) > 0 and vals[0].startswith("#"):
+        try:
+            idx = int(vals[0][1:])
+            if idx >= 1:
+                found_index = idx - 1
+        except:
+            found_index = None
+
+        if found_index is not None:
+            name = section_option[len(vals[0]) + 3:]
+
+    return name, found_index
+
+def map_section_selected_name_in_section_list(section_stored_name: str, section_list: list[tuple[str, str]], compute_options:bool=False) -> tuple[int | None, list[str] | None]:
+
+    options: list[str] | None = None
+    if compute_options:
+        options = [DASHBOARD_NO_SECTION]
+        for i, sn in enumerate(section_list):
+            options.append(f"#{i + 1} - {sn[0]}")
+
+    ret = None
+    if section_stored_name != DASHBOARD_NO_SECTION:
+        # no need to adapt
+        name, found_index = extract_name_and_index_from_dashboard_section_option(section_stored_name)
+
+        found_name_idx = None
+        for i, sn in enumerate(section_list):
+            if sn[0] == name:
+                found_name_idx = i
+                break
+
+        # give more weight to a name match than an index match
+        if found_name_idx is not None and found_name_idx < len(section_list):
+            ret = found_name_idx
+        elif found_index is not None and found_index < len(section_list):
+            ret = found_index
+
+    return ret, options
 
 
 class AbstractDevice(object):
@@ -33,12 +78,14 @@ class AbstractDevice(object):
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
-        self._mono_phase_conf = kwargs.pop(CONF_MONO_PHASE, None)
+        self._mono_phase_conf : str | None = kwargs.pop(CONF_MONO_PHASE, None)
         if self._mono_phase_conf is None:
             # at random allocate phase on 0, 1, or 2
             self._mono_phase_default = random.randint(0,2)
         else:
             self._mono_phase_default = int(self._mono_phase_conf) - 1
+
+        self._conf_dashboard_section_option = kwargs.pop(CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_NO_SECTION)
 
         self.name = name
         self._device_type = device_type
@@ -49,13 +96,46 @@ class AbstractDevice(object):
 
         self._ack_command(None, None)
 
-        self.num_max_on_off = kwargs.pop(CONF_NUM_MAX_ON_OFF, None)
+        self.num_max_on_off: str | None | int = kwargs.pop(CONF_NUM_MAX_ON_OFF, None)
         if self.num_max_on_off is not None:
             self.num_max_on_off = int(self.num_max_on_off)
             if self.num_max_on_off % 2 == 1:
                 self.num_max_on_off += 1
 
         self.father_device : QSDynamicGroup = self.home
+
+        self._computed_dashboard_section = None
+
+    @property
+    def dashboard_section(self) -> str | None:
+        if self._computed_dashboard_section is None and self.home is not None and self.home.dashboard_sections is not None and len(self.home.dashboard_sections) > 0:
+            idx, _ = map_section_selected_name_in_section_list(self._conf_dashboard_section_option, self.home.dashboard_sections, compute_options=False)
+            if idx is not None:
+                self._computed_dashboard_section = self.home.dashboard_sections[idx][0]
+            else:
+                self._computed_dashboard_section = DASHBOARD_NO_SECTION
+
+        if self._computed_dashboard_section == DASHBOARD_NO_SECTION:
+            return None
+
+        return self._computed_dashboard_section
+
+    @property
+    def dashboard_sort_string_in_type(self) -> str:
+        return "ZZZ"
+
+    @property
+    def dashboard_sort_string(self) -> int:
+        ret = ""
+        for s in [self.device_type, self.dashboard_sort_string_in_type, self.name]:
+
+            if len(s) >= 255:
+                ret += s[:255]
+            else:
+                ret += s
+                ret += ' ' * (255 - len(s))
+
+        return ret
 
     @property
     def voltage(self) -> float:
@@ -1203,3 +1283,5 @@ def get_slots_from_time_serie(time_serie, start_time: datetime, end_time: dateti
             end_idx += 1
 
     return time_serie[start_idx:end_idx + 1]
+
+

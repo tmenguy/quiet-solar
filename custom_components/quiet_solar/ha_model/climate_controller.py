@@ -24,6 +24,8 @@ def get_hvac_modes(hass, entity_id):
 _LOGGER = logging.getLogger(__name__)
 class QSClimateDuration(QSBiStateDuration):
 
+    conf_type_name = "climate"
+
     def __init__(self, **kwargs):
 
         super().__init__(**kwargs)

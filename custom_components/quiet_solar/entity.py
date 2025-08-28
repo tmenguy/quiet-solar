@@ -19,37 +19,27 @@ from .home_model.load import AbstractDevice
 from .const import (
     DEFAULT_ATTRIBUTION,
     DOMAIN,
-    MANUFACTURER, ENTITY_ID_FORMAT,
-)
+    MANUFACTURER, ENTITY_ID_FORMAT, )
 from .ha_model.device import HADeviceMixin
 
-LOAD_TYPES = {
-    "home": QSHome,
-    "battery": QSBattery,
-    "solar": QSSolar,
-    "charger": {"charger_ocpp": QSChargerOCPP, "charger_wallbox": QSChargerWallbox, "charger_generic": QSChargerGeneric},
-    "car": QSCar,
-    "pool": QSPool,
-    "on_off_duration": QSOnOffDuration,
-    "climate": QSClimateDuration,
-    "dynamic_group": QSDynamicGroup
-}
+
+LOAD_TYPE_LIST = [QSHome, QSBattery, QSSolar, QSChargerOCPP, QSChargerWallbox, QSChargerGeneric, QSCar, QSPool, QSOnOffDuration, QSClimateDuration, QSDynamicGroup]
+LOAD_TYPE__DICT = {t.conf_type_name:t for t in LOAD_TYPE_LIST}
 
 LOAD_NAMES = {
-    "home" : "home",
-    "battery": "battery",
-    "solar": "solar",
+    QSHome.conf_type_name : "home",
+    QSBattery.conf_type_name: "battery",
+    QSSolar.conf_type_name: "solar",
     "charger": "charger",
-    "charger_wallbox": "charger",
-    "charger_ocpp": "charger",
-    "charger_generic": "charger",
-    "car" : "car",
-    "pool":"pool",
-    "on_off_duration": "on/off",
-    "climate":"climate",
-    "dynamic_group":"group"
+    QSChargerOCPP.conf_type_name: "charger",
+    QSChargerWallbox.conf_type_name: "charger",
+    QSChargerGeneric.conf_type_name: "charger",
+    QSCar.conf_type_name : "car",
+    QSPool.conf_type_name:"pool",
+    QSOnOffDuration.conf_type_name: "on/off",
+    QSClimateDuration.conf_type_name:"climate",
+    QSDynamicGroup.conf_type_name:"group"
 }
-
 
 
 def create_device_from_type(hass, home, type, config_entry: ConfigEntry):
@@ -60,14 +50,8 @@ def create_device_from_type(hass, home, type, config_entry: ConfigEntry):
         data = config_entry.data
     d = None
     if type is not None:
-        if type in LOAD_TYPES:
-            d = LOAD_TYPES[type](hass=hass, home=home, config_entry=config_entry, **data)
-        else:
-            for t in LOAD_TYPES.values():
-                # if t is a dict, then we can iterate on it ... only one level :)
-                if isinstance(t, dict) and type in t:
-                    d = t[type](hass=hass, home=home, config_entry=config_entry, **data)
-                    break
+        if type in LOAD_TYPE__DICT:
+            d = LOAD_TYPE__DICT[type](hass=hass, home=home, config_entry=config_entry, **data)
     return d
 
 
@@ -85,8 +69,8 @@ class QSBaseEntity(Entity):
 
         if not (self.entity_description.name is UNDEFINED or self.entity_description.name is None):
             self._attr_has_entity_name = False
-       # if not (self.entity_description.translation_key is UNDEFINED):
-       #     _attr_has_entity_name = True
+        if not (self.entity_description.translation_key is UNDEFINED or self.entity_description.translation_key is None):
+           _attr_has_entity_name = True
 
     def _set_availabiltiy(self):
         self._attr_available = True
@@ -95,10 +79,6 @@ class QSBaseEntity(Entity):
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
         self._set_availabiltiy()
-
-
-
-
 
 
 # this one is to be used for 'exported" HA entities that are describing a load, and so passthrough control of it
@@ -112,15 +92,14 @@ class QSDeviceEntity(QSBaseEntity):
         self.device = device
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_id)},
-            name=f"{LOAD_NAMES.get(device.device_type,device.device_type)} {device.name}",
+            name=f"{LOAD_NAMES.get(device.device_type, device.device_type)} {device.name}",
             manufacturer=MANUFACTURER,
             model=device.device_type
         )
         self._attr_unique_id = f"{self.device.device_id}-{description.key}"
-        if self._attr_has_entity_name:
-            self.entity_id = async_generate_entity_id(
-                ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass
-            )
+        self.entity_id = async_generate_entity_id(
+            ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass
+        )
 
     @property
     def device_type(self) -> str:

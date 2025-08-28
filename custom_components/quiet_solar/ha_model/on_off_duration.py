@@ -12,6 +12,8 @@ from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF
 _LOGGER = logging.getLogger(__name__)
 class QSOnOffDuration(QSBiStateDuration):
 
+    conf_type_name = "on_off_duration"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 

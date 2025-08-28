@@ -35,7 +35,7 @@ from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
 
 from . import async_reload_quiet_solar
-from .entity import LOAD_TYPES, LOAD_NAMES
+from .entity import LOAD_NAMES
 from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_CAPACITY, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
@@ -58,11 +58,50 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
     CONF_CLIMATE_HVAC_MODE_ON, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, \
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
-    CONF_MINIMUM_OK_CAR_CHARGE
-from .ha_model.climate_controller import get_hvac_modes
+    CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
+    DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
+    DASHBOARD_NO_SECTION
+from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
+from .home_model.load import map_section_selected_name_in_section_list
+from .ha_model.dynamic_group import QSDynamicGroup
+
 from .ha_model.home import QSHome
+from .ha_model.battery import QSBattery
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
+from .ha_model.on_off_duration import QSOnOffDuration
+from .ha_model.pool import QSPool
+from .ha_model.solar import QSSolar
 
 _LOGGER = logging.getLogger(__name__)
+
+LOAD_TYPES_MENU = {
+    QSHome.conf_type_name:None,
+    QSBattery.conf_type_name:None,
+    QSSolar.conf_type_name:None,
+    "charger": {QSChargerOCPP.conf_type_name: None, QSChargerWallbox.conf_type_name:None, QSChargerGeneric.conf_type_name:None},
+    QSCar.conf_type_name:None,
+    QSPool.conf_type_name:None,
+    QSOnOffDuration.conf_type_name:None,
+    QSClimateDuration.conf_type_name:None,
+    QSDynamicGroup.conf_type_name:None
+}
+
+LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
+    QSHome.conf_type_name:"settings",
+    QSBattery.conf_type_name:None,
+    QSSolar.conf_type_name:None,
+    "charger": None,
+    QSChargerOCPP.conf_type_name: None,
+    QSChargerWallbox.conf_type_name:None,
+    QSChargerGeneric.conf_type_name:None,
+    QSCar.conf_type_name:"cars",
+    QSPool.conf_type_name:"pools",
+    QSOnOffDuration.conf_type_name:"others",
+    QSClimateDuration.conf_type_name:"climates",
+    QSDynamicGroup.conf_type_name:None
+}
+
 
 def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
     """Return an entity selector which compatible entities."""
@@ -165,6 +204,11 @@ def _get_entity_key_from_selector_key(key:str):
 
 class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING else object):
 
+    """Common methods for Quiet Solar config flows."""
+    @abstractmethod
+    def is_creation_flow(self)-> bool:
+        """Return True if this is a creation flow, False if it is an options flow."""
+
 
     def add_entity_selector(self, sc_dict, key, is_required, entity_list=None, domain=None):
 
@@ -228,6 +272,44 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 vol.Required(CONF_NAME, default=default_name): cv.string,
             }
 
+        default_section = LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.get(type)
+
+        if default_section is not None:
+
+            data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+            home: QSHome | None = None
+            if data_handler and data_handler.home:
+                home = data_handler.home
+
+            options_raw_list = None
+            if home is not None and home.dashboard_sections is not None and len(home.dashboard_sections) > 0:
+                # we can have the list of sections
+                options_raw_list = home.dashboard_sections
+
+            if options_raw_list is None:
+                options_raw_list = DASHBOARD_DEFAULT_SECTIONS
+
+            # ok we want a section for those ones
+            good_value = self.config_entry.data.get(CONF_DEVICE_DASHBOARD_SECTION, default_section)
+            found_idx, options = map_section_selected_name_in_section_list(section_stored_name=good_value, section_list=options_raw_list, compute_options=True)
+
+            if found_idx is None:
+                good_value = DASHBOARD_NO_SECTION
+            else:
+                good_value = options[found_idx+1]
+
+            dashboard_section = {
+                vol.Required(CONF_DEVICE_DASHBOARD_SECTION, default=good_value): selector.SelectSelector(
+                    SelectSelectorConfig(
+                        options=options,
+                        mode=SelectSelectorMode.DROPDOWN,
+                        translation_key=DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY
+                    )
+                )
+            }
+            sc.update(dashboard_section)
+
+
         if add_power_group_selector:
             data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
             if len(data_handler.home._all_dynamic_groups) > 1:
@@ -239,7 +321,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     if isinstance(group, QSHome):
                         default_group = f"default home root - {group.name}"
                     else:
-                        if default_name == group.name and type=="dynamic_group":
+                        if default_name == group.name and type==QSDynamicGroup.conf_type_name:
                             # do not add yourself...
                             pass
                         else:
@@ -500,9 +582,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         return f"{name}: {data.get(CONF_NAME, "device")}"
     async def async_step_home(self, user_input=None):
 
-        TYPE = "home"
+        TYPE = QSHome.conf_type_name
         if user_input is not None:
-            #do sotme stuff to update
+            #do some stuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
@@ -556,6 +638,26 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         })
 
+        for i in range(0, DASHBOARD_NUM_SECTION_MAX):
+            key_section_name = f"{CONF_DASHBOARD_SECTION_NAME}_{i}"
+            key_section_icon = f"{CONF_DASHBOARD_SECTION_ICON}_{i}"
+
+            default_section_name = None
+            default_section_icon = None
+            if i < len(DASHBOARD_DEFAULT_SECTIONS):
+                default_section_name = DASHBOARD_DEFAULT_SECTIONS[i][0]
+                default_section_icon = DASHBOARD_DEFAULT_SECTIONS[i][1]
+
+            sc_dict.update({
+                vol.Optional(key_section_name,
+                             description={"suggested_value":self.config_entry.data.get(key_section_name,
+                                                                default_section_name)}): cv.string,
+                vol.Optional(key_section_icon,
+                             description={
+                                 "suggested_value": self.config_entry.data.get(key_section_icon,
+                                                                               default_section_icon)}): cv.string,
+            })
+
         schema = vol.Schema(sc_dict)
 
         return self.async_show_form(
@@ -566,7 +668,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_solar(self, user_input=None):
 
-        TYPE = "solar"
+        TYPE = QSSolar.conf_type_name
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -615,7 +717,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_charger_generic(self, user_input=None):
 
-        TYPE = "charger_generic"
+        TYPE = QSChargerGeneric.conf_type_name
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -636,7 +738,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_charger_ocpp(self, user_input=None):
 
-        TYPE = "charger_ocpp"
+        TYPE = QSChargerOCPP.conf_type_name
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -664,7 +766,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_charger_wallbox(self, user_input=None):
 
-        TYPE = "charger_wallbox"
+        TYPE = QSChargerWallbox.conf_type_name
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -690,7 +792,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         )
     async def async_step_battery(self, user_input=None):
 
-        TYPE = "battery"
+        TYPE = QSBattery.conf_type_name
+
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -778,7 +881,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         orig_dampening = self.config_entry.data.get(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
 
-        TYPE = "car"
+        TYPE = QSCar.conf_type_name
         do_force_dampening = False
 
         min_charge = self.config_entry.data.get(CONF_CAR_CHARGER_MIN_CHARGE, 6)
@@ -938,7 +1041,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_pool(self, user_input=None):
 
-        TYPE = "pool"
+        TYPE = QSPool.conf_type_name
         if user_input is not None:
             #do some stuff to update
             for min_temp, max_temp, default in POOL_TEMP_STEPS:
@@ -984,7 +1087,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_on_off_duration(self, user_input=None):
 
-        TYPE = "on_off_duration"
+        TYPE = QSOnOffDuration.conf_type_name
         if user_input is not None:
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -1011,7 +1114,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_climate(self, user_input=None):
 
-        TYPE = "climate"
+        TYPE = QSClimateDuration.conf_type_name
 
         orig_climate_entity = self.config_entry.data.get(CONF_CLIMATE)
 
@@ -1079,7 +1182,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
     async def async_step_dynamic_group(self, user_input=None):
 
-        TYPE = "dynamic_group"
+        TYPE = QSDynamicGroup.conf_type_name
         if user_input is not None:
             #do somestuff to update
             r = await self.async_entry_next(user_input, TYPE)
@@ -1119,18 +1222,21 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
          """Get the options flow for this handler."""
          return QSOptionsFlowHandler(config_entry)
 
+    def is_creation_flow(self)-> bool:
+        return True
+
     async def async_step_user(self, user_input=None):
         """initial step (menu) for user initiated flows"""
 
-        possible_menus = ["home"]
+        possible_menus = [QSHome.conf_type_name]
         data_handler = self.hass.data.get(DOMAIN, {}). get(DATA_HANDLER)
         if data_handler is not None:
             if data_handler.home is not None:
-                possible_menus = [t for t in LOAD_TYPES if t != "home"]
+                possible_menus = [t for t in LOAD_TYPES_MENU if t != QSHome.conf_type_name]
                 if data_handler.home._battery is not None:
-                    possible_menus.remove("battery")
+                    possible_menus.remove(QSBattery.conf_type_name)
                 if data_handler.home._solar_plant is not None:
-                    possible_menus.remove("solar")
+                    possible_menus.remove(QSSolar.conf_type_name)
 
 
 
@@ -1160,7 +1266,7 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
 
         return self.async_show_menu(
             step_id="charger",
-            menu_options=[t for t in LOAD_TYPES["charger"]],
+            menu_options=[t for t in LOAD_TYPES_MENU["charger"]],
         )
 
     async def _async_entry_next(self, data):
@@ -1190,6 +1296,8 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
 
         self._errors = {}
 
+    def is_creation_flow(self)-> bool:
+        return False
 
     async def _async_entry_next(self, data):
         """Handle the next step based on user input."""

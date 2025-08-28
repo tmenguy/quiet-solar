@@ -15,8 +15,7 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, \
-    CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR
+    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR
 from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
@@ -24,6 +23,7 @@ import numpy as np
 UNAVAILABLE_STATE_VALUES = [STATE_UNKNOWN, STATE_UNAVAILABLE]
 
 _LOGGER = logging.getLogger(__name__)
+
 
 def compute_energy_Wh_rieman_sum(
         power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
@@ -200,6 +200,8 @@ MAX_STATE_HISTORY_S = 7200
 
 class HADeviceMixin:
 
+    conf_type_name = "device_mixin"
+
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
 
         self.calendar = kwargs.pop(CONF_CALENDAR, None)
@@ -211,7 +213,6 @@ class HADeviceMixin:
 
 
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
-
 
 
         if self.mobile_app is None or self.mobile_app == CONF_MOBILE_APP_NOTHING:
@@ -257,6 +258,7 @@ class HADeviceMixin:
         self._entity_on_change = set()
 
         self._exposed_entities = set()
+        self.ha_entities = {}
 
         self.attach_power_to_probe(self.accurate_power_sensor)
 
@@ -268,6 +270,8 @@ class HADeviceMixin:
                                    non_ha_entity_get_state=self.command_power_state_getter)
 
         self._unsub = None
+
+        self._computed_dashboard_section = None
 
 
     async def set_next_scheduled_event(self, start_time:datetime, end_time:datetime, description:str):
@@ -383,6 +387,7 @@ class HADeviceMixin:
 
     def attach_exposed_has_entity(self, ha_object):
         self._exposed_entities.add(ha_object)
+        self.ha_entities[ha_object.entity_description.key] = ha_object
 
     def command_power_state_getter(self, entity_id: str, time: datetime | None) -> (
             tuple[datetime | None, float | str | None, dict | None] | None):
