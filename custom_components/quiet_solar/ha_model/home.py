@@ -235,7 +235,7 @@ class QSHome(QSDynamicGroup):
                 if d.dashboard_section == section_name:
                     found.append(d)
 
-        found = sorted(found, key=lambda device: device.dashboard_sort_string, reverse=True)
+        found = sorted(found, key=lambda device: device.dashboard_sort_string)
         return found
 
 

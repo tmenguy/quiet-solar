@@ -74,7 +74,7 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("car_soc_percentage") %}
+              {%- set ha_entity = device.car_charge_percent_sensor %}
               {%- if  ha_entity != None %}
               {%-    set badges_list.badges = badges_list.badges + [(ha_entity, device.name)] %}
               {{ "- entity: " + ha_entity.entity_id }}
