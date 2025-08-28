@@ -7,6 +7,21 @@ DATA_HANDLER = "quiet_solar_data_handler"
 DATA_DEVICE_IDS = "quiet_solar_device_ids"
 
 DEVICE_TYPE = "device_type"
+
+CONF_TYPE_NAME_QSHome = "home"
+CONF_TYPE_NAME_QSBattery = "battery"
+CONF_TYPE_NAME_QSSolar = "solar"
+CONF_TYPE_NAME_QSChargerOCPP = "charger_ocpp"
+CONF_TYPE_NAME_QSChargerWallbox = "charger_wallbox"
+CONF_TYPE_NAME_QSChargerGeneric = "charger_generic"
+CONF_TYPE_NAME_QSCar = "car"
+CONF_TYPE_NAME_QSPool = "pool"
+CONF_TYPE_NAME_QSOnOffDuration = "on_off_duration"
+CONF_TYPE_NAME_QSClimateDuration = "climate"
+CONF_TYPE_NAME_QSDynamicGroup = "dynamic_group"
+CONF_TYPE_NAME_HADeviceMixin = "ha_device_mixin"
+
+
 COMMAND_BASED_POWER_SENSOR = "command_based_power_sensor"
 HOME_CONSUMPTION_SENSOR = "home_consumption_sensor"
 HOME_NON_CONTROLLED_CONSUMPTION_SENSOR = "home_non_controlled_consumption_sensor"
@@ -19,6 +34,22 @@ DASHBOARD_DEFAULT_SECTIONS = [("cars","mdi:car"), ("climates","mdi:home-thermome
 DASHBOARD_DEFAULT_SECTIONS_DICT ={v[0]:v[1] for v in DASHBOARD_DEFAULT_SECTIONS}
 DASHBOARD_NO_SECTION = "Not in dashboard"
 DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY = "dashboard_device_section"
+
+LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
+    CONF_TYPE_NAME_QSHome:"settings",
+    CONF_TYPE_NAME_QSBattery:None,
+    CONF_TYPE_NAME_QSSolar:None,
+    "charger": None,
+    CONF_TYPE_NAME_QSChargerOCPP: None,
+    CONF_TYPE_NAME_QSChargerWallbox:None,
+    CONF_TYPE_NAME_QSChargerGeneric:None,
+    CONF_TYPE_NAME_QSCar:"cars",
+    CONF_TYPE_NAME_QSPool:"pools",
+    CONF_TYPE_NAME_QSOnOffDuration:"others",
+    CONF_TYPE_NAME_QSClimateDuration:"climates",
+    CONF_TYPE_NAME_QSDynamicGroup:None
+}
+
 
 CONF_DASHBOARD_SECTION_NAME = "dashboard_section_name"
 CONF_DASHBOARD_SECTION_ICON = "dashboard_section_icon"
@@ -205,4 +236,5 @@ ENTITY_ID_FORMAT = DOMAIN + ".{}"
 
 DEVICE_CHANGE_CONSTRAINT = "change_constraint"
 DEVICE_CHANGE_CONSTRAINT_COMPLETED = "change_constraint_completed"
+
 

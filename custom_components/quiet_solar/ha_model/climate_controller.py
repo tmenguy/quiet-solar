@@ -6,7 +6,8 @@ from homeassistant.components import climate
 from homeassistant.components.climate import HVACMode
 
 from .bistate_duration import QSBiStateDuration, bistate_modes
-from ..const import SENSOR_CONSTRAINT_SENSOR_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF, CONF_CLIMATE
+from ..const import SENSOR_CONSTRAINT_SENSOR_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF, \
+    CONF_CLIMATE, CONF_TYPE_NAME_QSClimateDuration
 
 from ..home_model.commands import LoadCommand, CMD_ON
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE, \
@@ -24,7 +25,7 @@ def get_hvac_modes(hass, entity_id):
 _LOGGER = logging.getLogger(__name__)
 class QSClimateDuration(QSBiStateDuration):
 
-    conf_type_name = "climate"
+    conf_type_name = CONF_TYPE_NAME_QSClimateDuration
 
     def __init__(self, **kwargs):
 

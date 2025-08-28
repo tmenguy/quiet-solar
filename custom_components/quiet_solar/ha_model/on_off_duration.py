@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 
 from .bistate_duration import QSBiStateDuration
-from ..const import  SENSOR_CONSTRAINT_SENSOR_ON_OFF
+from ..const import SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
 from ..home_model.commands import LoadCommand, CMD_ON
 from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF
 
@@ -12,7 +12,7 @@ from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF
 _LOGGER = logging.getLogger(__name__)
 class QSOnOffDuration(QSBiStateDuration):
 
-    conf_type_name = "on_off_duration"
+    conf_type_name = CONF_TYPE_NAME_QSOnOffDuration
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

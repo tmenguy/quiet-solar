@@ -60,7 +60,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
     CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
-    DASHBOARD_NO_SECTION
+    DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -87,20 +87,7 @@ LOAD_TYPES_MENU = {
     QSDynamicGroup.conf_type_name:None
 }
 
-LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
-    QSHome.conf_type_name:"settings",
-    QSBattery.conf_type_name:None,
-    QSSolar.conf_type_name:None,
-    "charger": None,
-    QSChargerOCPP.conf_type_name: None,
-    QSChargerWallbox.conf_type_name:None,
-    QSChargerGeneric.conf_type_name:None,
-    QSCar.conf_type_name:"cars",
-    QSPool.conf_type_name:"pools",
-    QSOnOffDuration.conf_type_name:"others",
-    QSClimateDuration.conf_type_name:"climates",
-    QSDynamicGroup.conf_type_name:None
-}
+
 
 
 def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from typing import Any
 
-from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS
+from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_TYPE_NAME_QSDynamicGroup
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice
 from ..home_model.home_utils import is_amps_zero, are_amps_equal, is_amps_greater, add_amps, diff_amps, min_amps, \
@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
-    conf_type_name = "dynamic_group"
+    conf_type_name = CONF_TYPE_NAME_QSDynamicGroup
 
     # this class will allow to group Loads togther so the sum of their current can be limited below
     # a setting CONF_DYN_GROUP_MAX_CURRENT

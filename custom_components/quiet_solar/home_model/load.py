@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
     DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
-    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION
+    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
 
 import slugify
 
@@ -85,7 +85,13 @@ class AbstractDevice(object):
         else:
             self._mono_phase_default = int(self._mono_phase_conf) - 1
 
-        self._conf_dashboard_section_option = kwargs.pop(CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_NO_SECTION)
+        self._conf_dashboard_section_option = kwargs.pop(CONF_DEVICE_DASHBOARD_SECTION, None)
+
+        if self._conf_dashboard_section_option is None and device_type is not None:
+            self._conf_dashboard_section_option = LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.get(type)
+
+        if self._conf_dashboard_section_option is None:
+            self._conf_dashboard_section_option = DASHBOARD_NO_SECTION
 
         self.name = name
         self._device_type = device_type

@@ -15,7 +15,8 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR
+    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, \
+    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin
 from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
@@ -200,7 +201,7 @@ MAX_STATE_HISTORY_S = 7200
 
 class HADeviceMixin:
 
-    conf_type_name = "device_mixin"
+    conf_type_name = CONF_TYPE_NAME_HADeviceMixin
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
 

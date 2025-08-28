@@ -10,7 +10,8 @@ import aiofiles.os
 import pytz
 
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
-    SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S
+    SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S, \
+    CONF_TYPE_NAME_QSSolar
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_serie
 
@@ -18,7 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSSolar(HADeviceMixin, AbstractDevice):
 
-    conf_type_name = "solar"
+    conf_type_name = CONF_TYPE_NAME_QSSolar
 
     def __init__(self, **kwargs) -> None:
         self.solar_inverter_active_power = kwargs.pop(CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, None)

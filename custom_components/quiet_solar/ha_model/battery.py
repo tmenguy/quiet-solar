@@ -9,7 +9,8 @@ from homeassistant.components import number
 
 
 from ..const import CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, \
-    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
+    CONF_TYPE_NAME_QSBattery
 from ..ha_model.device import HADeviceMixin, convert_power_to_w
 from ..home_model.battery import Battery
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_IDLE, CMD_AUTO_GREEN_ONLY, CMD_GREEN_CHARGE_AND_DISCHARGE, \
@@ -19,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class QSBattery(HADeviceMixin, Battery):
 
-    conf_type_name = "battery"
+    conf_type_name = CONF_TYPE_NAME_QSBattery
 
     def __init__(self, **kwargs) -> None:
         self.charge_discharge_sensor = kwargs.pop(CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, None)

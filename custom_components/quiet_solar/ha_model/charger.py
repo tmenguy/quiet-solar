@@ -78,7 +78,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
     CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
-    FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+    FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
+    CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -1478,7 +1479,7 @@ class QSChargerGroup(object):
 
 class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
-    conf_type_name = "charger_generic"
+    conf_type_name = CONF_TYPE_NAME_QSChargerGeneric
 
     def __init__(self, **kwargs):
         self.charger_plugged = kwargs.pop(CONF_CHARGER_PLUGGED, None)
@@ -3588,7 +3589,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 class QSChargerOCPP(QSChargerGeneric):
 
-    conf_type_name = "charger_ocpp"
+    conf_type_name = CONF_TYPE_NAME_QSChargerOCPP
 
     def __init__(self, **kwargs):
         self.charger_device_ocpp = kwargs.pop(CONF_CHARGER_DEVICE_OCPP, None)
@@ -3829,7 +3830,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
 class QSChargerWallbox(QSChargerGeneric):
 
-    conf_type_name = "charger_wallbox"
+    conf_type_name = CONF_TYPE_NAME_QSChargerWallbox
 
     def __init__(self, **kwargs):
         self.charger_device_wallbox = kwargs.pop(CONF_CHARGER_DEVICE_WALLBOX, None)
