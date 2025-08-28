@@ -322,10 +322,6 @@ views:
       {%-      endfor %}
       {{ "      theme_mode: auto" }}
       {%- endif %}
-      - type: grid
-        cards:
-          - type: heading
-            heading: New section
     {%- if badges_list.badges|length > 0 %}
     {{ "badges:" }}
     {%-     for badge_entity, badge_name in badges_list.badges %}
