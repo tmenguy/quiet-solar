@@ -54,7 +54,7 @@ POWER_ALIGNEMENT_TOLERANCE_S = 120
 
 class QSforecastValueSensor:
 
-    _stored_values: list[tuple[datetime, float]] = []
+    _stored_values: list[tuple[datetime, float]]
 
     @classmethod
     def get_probers(cls, getter, names_and_duration):
@@ -65,8 +65,6 @@ class QSforecastValueSensor:
             probers[name] = cls(name, duration_s, getter)
 
         return probers
-
-
 
 
     def __init__(self, name, duration_s, forecast_getter):
@@ -108,31 +106,33 @@ class QSHome(QSDynamicGroup):
 
     conf_type_name = CONF_TYPE_NAME_QSHome
 
-    _battery: QSBattery | None = None
-    voltage: int = 230
-
-    _chargers : list[QSChargerGeneric] = []
-    _cars: list[QSCar] = []
-
-    _all_devices : list[HADeviceMixin] = []
-    _disabled_devices : list[HADeviceMixin] = []
-    _solar_plant: QSSolar | None = None
-    _all_loads : list[AbstractLoad] = []
-    _all_dynamic_groups : list[QSDynamicGroup] = []
-    _name_to_groups : dict[str, QSDynamicGroup] = {}
-
-    _period : timedelta = timedelta(seconds=FLOATING_PERIOD_S)
-    _commands : list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
-    _battery_commands: list[tuple[datetime, LoadCommand]] = []
-    _solver_step_s : timedelta = timedelta(seconds=900)
-    _update_step_s : timedelta = timedelta(seconds=5)
-
-    grid_active_power_sensor: str | None = None
-    grid_active_power_sensor_inverted: bool = False
-
     def __init__(self, **kwargs) -> None:
 
-        self.voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
+        self._battery: QSBattery | None = None
+        self._voltage: int = 230
+
+        self._chargers: list[QSChargerGeneric] = []
+        self._cars: list[QSCar] = []
+
+        self._all_devices: list[HADeviceMixin] = []
+        self._disabled_devices: list[HADeviceMixin] = []
+        self._solar_plant: QSSolar | None = None
+        self._all_loads: list[AbstractLoad] = []
+        self._all_dynamic_groups: list[QSDynamicGroup] = []
+        self._name_to_groups: dict[str, QSDynamicGroup] = {}
+
+        self._period: timedelta = timedelta(seconds=FLOATING_PERIOD_S)
+        self._commands: list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
+        self._battery_commands: list[tuple[datetime, LoadCommand]] = []
+        self._solver_step_s: timedelta = timedelta(seconds=900)
+        self._update_step_s: timedelta = timedelta(seconds=5)
+
+        self.grid_active_power_sensor: str | None = None
+        self.grid_active_power_sensor_inverted: bool = False
+
+
+
+        self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230.0)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
 
@@ -228,15 +228,21 @@ class QSHome(QSDynamicGroup):
         self._init_completed = False
 
 
+    @property
+    def voltage(self) -> float:
+        """Return the voltage of the home."""
+        return self._voltage
+
+
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 
-        found = []
+        found = set()
 
         for list in [self._all_devices, self._disabled_devices]:
             for d in list:
                 if isinstance(d, AbstractDevice):
                     if d.dashboard_section == section_name:
-                        found.append(d)
+                        found.add(d)
 
         found = sorted(found, key=lambda device: device.dashboard_sort_string)
         return found

@@ -70,7 +70,7 @@ class QSBaseEntity(Entity):
         if not (self.entity_description.name is UNDEFINED or self.entity_description.name is None):
             self._attr_has_entity_name = False
         if not (self.entity_description.translation_key is UNDEFINED or self.entity_description.translation_key is None):
-           _attr_has_entity_name = True
+            self._attr_has_entity_name = True
 
     def _set_availabiltiy(self):
         self._attr_available = True
