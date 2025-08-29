@@ -15,6 +15,8 @@ async def generate_dashboard_yaml(home):
     base_dir = os.path.join(os.path.dirname(__file__))
     base_dir = os.path.join(base_dir, "quiet_solar_dashboard_template.yaml.j2")
 
+    _LOGGER.warning("generate_dashboard_yaml: regenerating dashboard YAML file")
+
     with open(base_dir, "r") as f:
         template_content = f.read()
 
