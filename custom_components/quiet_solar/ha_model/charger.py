@@ -866,9 +866,6 @@ class QSChargerGroup(object):
         diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
         battery_asked_charge = 0.0
-        do_block_after_battery = False
-
-
 
         battery_current_charge = full_available_home_power - grid_available_home_power
         if self.home._battery is not None and self.home._battery.current_command:
@@ -879,26 +876,23 @@ class QSChargerGroup(object):
         initial_power_budget = full_available_home_power - diff_power_budget
         if full_available_home_power != grid_available_home_power and battery_asked_charge > 0 and do_reset_allocation is False:
 
+            actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
             has_one_before_battery = False
-            has_one_after_battery = False
             for cs in actionable_chargers:
                 if cs.is_before_battery:
                     has_one_before_battery = True
-                else:
-                    has_one_after_battery = True
+                    break
 
             if has_one_before_battery is False:
                 # we want to charge the battery at minimum with the battery_asked_charge or more
-                initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-            elif has_one_after_battery is True and actionable_chargers[0].current_real_max_charging_amp == 0:
-                # both are true: we do have some that are before and after the battery
-                # the main one is not charging ... try to have the other one stopped to charge the battery
                 initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
 
         if do_reset_allocation:
             do_more_important_charger_first = True
         else:
             do_more_important_charger_first = initial_power_budget >= 0
+
+        initial_increase = initial_power_budget >= 0
 
         # sort the charger according to their score, if increase put the most important to finish the charge first
         # if decrease: remove charging from less important first (lower score)
@@ -925,16 +919,15 @@ class QSChargerGroup(object):
         else:
             check_phase_change = [False]
 
-
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget}, increase {do_more_important_charger_first}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
+            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget}, increase {initial_increase}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
 
         do_stop = False
         global_diff_power = 0
 
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
-                for cs in actionable_chargers:
+                for charger_idx, cs in enumerate(actionable_chargers):
 
                     if battery_asked_charge > 0 and cs.is_before_battery is False:
                         power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
@@ -948,13 +941,18 @@ class QSChargerGroup(object):
                         increase = True
                         stop_on_first_change = True
 
-                    if do_reset_allocation:
+                    if do_reset_allocation or cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                         stop_on_first_change = False
 
-                    if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
-                        stop_on_first_change = False
+                    if increase is False and power_budget - global_diff_power >= 0:
+                        # we are back on track for solar or we reduced enough
+                        continue
+                    elif increase is True and power_budget - global_diff_power <= 0:
+                        # we are back on track for solar or we increased enough
+                        continue
 
                     num_changes = 0
+
                     while True:
 
                         next_possible_budgeted_amp, next_possible_num_phases = cs.can_change_budget(allow_state_change=allow_state_change,
@@ -983,7 +981,6 @@ class QSChargerGroup(object):
                                         # no we exhausted too far the available solar budget
                                         _LOGGER.info(
                                             f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
-
                                         next_possible_budgeted_amp = None
 
                                 if next_possible_budgeted_amp is not None:
@@ -1008,14 +1005,23 @@ class QSChargerGroup(object):
 
                                     num_changes += 1
 
-                                    if stop_on_first_change:
-                                        next_possible_budgeted_amp = None # to break while the loop
-
                                     if increase is False and power_budget - global_diff_power >= 0:
                                         # we are back on track for solar or we reduced enough
                                         next_possible_budgeted_amp = None # to break while the loop
+                                    elif increase is True and power_budget - global_diff_power <= 0:
+                                        # we are back on track for solar or we increased enough
+                                        next_possible_budgeted_amp = None
 
-                        if next_possible_budgeted_amp is None:
+                                    if initial_increase is False and initial_power_budget - global_diff_power >= 0:
+                                        # we reached the initial goal of reduction
+                                        next_possible_budgeted_amp = None # to break while the loop
+                                        do_stop = True
+                                    elif initial_increase is True and initial_power_budget - global_diff_power <= 0:
+                                        # we reached the initial goal of increase
+                                        next_possible_budgeted_amp = None # to break while the loop
+                                        do_stop = True
+
+                        if do_stop or next_possible_budgeted_amp is None or (num_changes > 0 and stop_on_first_change):
                             # we can't change this charger anymore ... just stop here
                             break
 
