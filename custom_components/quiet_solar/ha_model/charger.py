@@ -828,7 +828,10 @@ class QSChargerGroup(object):
 
                     if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
 
-                        time_to_check = int(min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)*0.9)
+                        min_s = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
+                        max_s = max(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
+
+                        time_to_check = int(max(min_s, (max_s + min_s) // 2))
 
                         can_change_state = cs_to_stop_by_forcing_it.charger._expected_charge_state.is_ok_to_set(time, time_to_check)
 

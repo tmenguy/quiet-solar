@@ -660,18 +660,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # do nothing
             _LOGGER.info(f"adapt_repartition: no adaptation for {self.name} as it is mandatory and we can't reduce its consumption")
         else:
-            default_cmd = None
-
-            do_not_touch_commands = []
-
-            if self.support_auto:
-                if init_energy_delta >= 0.0:
-                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP]
-                    default_cmd = copy_command(CMD_AUTO_GREEN_CONSIGN)
-                else:
-                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE]
-                    default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-
 
             for i in sorted_available_power:
 
@@ -753,14 +741,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if j >= 0:
                         base_cmd = power_sorted_cmds[j]
                     else:
-                        # can't be init_energy_delta >= 0.0 in this case
+                        # can't be init_energy_delta >= 0.0 in this case, so CAP only ....
                         if self.support_auto:
                             base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
                         else:
                             base_cmd = copy_command(CMD_IDLE)
 
                     if not self.support_auto:
-                        default_cmd = base_cmd
+                        pass_through_command = base_cmd
+                    else:
+                        pass_through_command = copy_command(CMD_AUTO_GREEN_CAP)
 
                     delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
 
@@ -777,7 +767,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             break
 
                     out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
-                                                                   new_type=default_cmd.command)
+                                                                   new_type=pass_through_command.command)
                     _LOGGER.info(
                         f"adapt_repartition: adapted {self.name} with command {out_commands[i]} / {i} effective in {int(np.sum(power_slots_duration_s[:i]))}s")
 
@@ -849,6 +839,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     f"adapt_repartition: for {self.name} THERE WERE NO NON ZERO EXISTING COMMANDS")
 
             if self.support_auto and num_changes > 0:
+
+                if init_energy_delta >= 0.0:
+                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP]
+                    default_cmd = copy_command(CMD_AUTO_GREEN_CONSIGN)
+                    empty_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
+                else:
+                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE]
+                    default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                    empty_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+
                 # CAP the modified segment to what has been computed ...or force some consumption
                 # we may in fact do that "all the time" but we are not sure of the futue, so limit
                 # the forced caps to where they are important? use first_modified_slot instead?
@@ -856,13 +856,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     if out_commands[i] is None:
                         if existing_commands[i] is None:
-                            out_commands[i] = copy_command(default_cmd)
+                            out_commands[i] = copy_command(empty_cmd)
                         else:
                             if existing_commands[i].is_like_one_of_cmds(do_not_touch_commands):
                                 # we do not want to change the state of the load, so we cannot change energy
                                 out_commands[i] = existing_commands[i]
                             else:
-                                out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
+                                if existing_commands[i].power_consign == 0:
+                                    out_commands[i] = copy_command(empty_cmd)
+                                else:
+                                    out_commands[i] = copy_command_and_change_type(cmd=existing_commands[i],
                                                                                 new_type=default_cmd.command)
 
         return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
