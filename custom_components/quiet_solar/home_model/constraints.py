@@ -639,9 +639,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # start as soon as possible to get a chance to fill the battery as needed 
             sorted_available_power = range(first_slot, last_slot + 1)
 
-
-
-
         init_energy_delta = energy_delta
 
         num_changes = 0
@@ -660,6 +657,21 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # do nothing
             _LOGGER.info(f"adapt_repartition: no adaptation for {self.name} as it is mandatory and we can't reduce its consumption")
         else:
+
+            do_not_touch_commands = []
+            default_cmd = None
+            empty_cmd = None
+
+            if self.support_auto:
+
+                if init_energy_delta >= 0.0:
+                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP]
+                    default_cmd = copy_command(CMD_AUTO_GREEN_CONSIGN)
+                    empty_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
+                else:
+                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE]
+                    default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                    empty_cmd = copy_command(CMD_AUTO_GREEN_CAP)
 
             for i in sorted_available_power:
 
@@ -839,15 +851,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     f"adapt_repartition: for {self.name} THERE WERE NO NON ZERO EXISTING COMMANDS")
 
             if self.support_auto and num_changes > 0:
-
-                if init_energy_delta >= 0.0:
-                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP]
-                    default_cmd = copy_command(CMD_AUTO_GREEN_CONSIGN)
-                    empty_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
-                else:
-                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE]
-                    default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-                    empty_cmd = copy_command(CMD_AUTO_GREEN_CAP)
 
                 # CAP the modified segment to what has been computed ...or force some consumption
                 # we may in fact do that "all the time" but we are not sure of the futue, so limit
