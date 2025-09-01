@@ -762,7 +762,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if not self.support_auto:
                         pass_through_command = base_cmd
                     else:
-                        pass_through_command = copy_command(CMD_AUTO_GREEN_CAP)
+                        pass_through_command = copy_command(default_cmd)
 
                     delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
 
