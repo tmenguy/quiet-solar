@@ -29,6 +29,7 @@ class LoadConstraint(object):
                  load = None,
                  load_param: str | None = None,
                  from_user: bool = False,
+                 artificial_intermediate: bool = False,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
@@ -54,6 +55,7 @@ class LoadConstraint(object):
         self.load = load
         self.load_param = load_param
         self.from_user = from_user
+        self.artificial_intermediate = artificial_intermediate
         self.type = type
         self.support_auto = support_auto
 
@@ -200,6 +202,7 @@ class LoadConstraint(object):
             "type": self.type,
             "load_param": self.load_param,
             "from_user": self.from_user,
+            "artificial_intermediate": self.artificial_intermediate,
             "initial_value": self.initial_value,
             "current_value": self.current_value,
             "target_value": self.target_value,

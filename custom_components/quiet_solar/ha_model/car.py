@@ -916,8 +916,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if new_target and self.charger._constraints:
                 for ct in self.charger._constraints:
                     if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent):
-                        ct.target_value = new_target
-                        break
+                        if ct.artificial_intermediate:
+                            # it was an intermediate for solar charge to bump a bit some priorities, leave it as it is
+                            continue
+                        else:
+                            ct.target_value = new_target
+                            break
 
     def get_car_target_charge_option(self):
         return self.get_car_option_charge_from_value(self.get_car_target_SOC())

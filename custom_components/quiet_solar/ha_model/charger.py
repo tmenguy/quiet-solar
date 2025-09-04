@@ -2607,13 +2607,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 intermediate_target_charge = None
                 if self.qs_bump_solar_charge_priority is False:
                     intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
+                    if intermediate_target_charge <= 10:
+                        intermediate_target_charge = None
 
+                artificial_intermediate = False
                 if intermediate_target_charge is not None and intermediate_target_charge < target_charge:
                     if car_initial_percent >= intermediate_target_charge:
                         type = CONSTRAINT_TYPE_FILLER # charge after the minimum is more optional than before
                     else:
                         type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                         target_charge = intermediate_target_charge
+                        artificial_intermediate = True
 
                 car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=self.car.car_battery_capacity,
@@ -2622,6 +2626,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     load=self,
                     load_param=self.car.name,
                     from_user=False,
+                    artificial_intermediate=artificial_intermediate,
                     initial_value=realized_charge_target,
                     target_value=target_charge,
                     power_steps=self._power_steps,
