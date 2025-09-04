@@ -840,9 +840,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def get_car_next_charge_values_options(self):
         time = datetime.now(pytz.UTC)
-        current_soc = self.get_car_charge_percent(time)
-        if current_soc is None:
-            current_soc = 0
+        #current_soc = self.get_car_charge_percent(time)
+        #if current_soc is None:
+        current_soc = 0
 
         options = set()
         options.add(100)

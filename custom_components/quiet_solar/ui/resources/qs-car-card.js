@@ -271,10 +271,14 @@ class QsCarCard extends HTMLElement {
                   <stop offset="0%" stop-color="#ff9800"/>
                   <stop offset="100%" stop-color="#f44336"/>
                 </linearGradient>
+                <linearGradient id="${gradDisabledId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#6b6b6b" stop-opacity="0.65"/>
+                  <stop offset="100%" stop-color="#a0a0a0" stop-opacity="0.75"/>
+                </linearGradient>
               </defs>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" />
-              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="var(--primary-color)" stroke-width="3" style="cursor: grab; pointer-events: all;" />
+              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)'}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
             </svg>
             <div class="center">
               <div class="stack">
