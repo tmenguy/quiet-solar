@@ -19,7 +19,7 @@ class QsCarCard extends HTMLElement {
     this._hass = hass;
     if (!this._root) return;
     // Avoid re-rendering while user is interacting with selects or a modal is open
-    if (this._isInteracting || this._isInteractingCharger || this._modalOpen) return;
+    if (this._isInteracting || this._isInteractingCharger || this._modalOpen || this._isInteractingTarget) return;
     this._render();
   }
 
@@ -240,7 +240,9 @@ class QsCarCard extends HTMLElement {
     const pctToDeg = (p) => startDeg + (Math.max(0, Math.min(100, p)) / 100) * rangeDeg;
 
     const socEndDeg = pctToDeg(soc);
-    const handlePct = this._targetDragPct != null ? this._targetDragPct : (targetPct ?? soc);
+    const handlePct =
+      this._targetDragPct != null ? this._targetDragPct :
+      (this._localTargetPct != null ? this._localTargetPct : (targetPct ?? soc));
     const handleDeg = pctToDeg(handlePct);
     // Enlarge gauge
     const center = { cx: 160, cy: 160 };
@@ -251,6 +253,14 @@ class QsCarCard extends HTMLElement {
     const gradChargeId = `gradC-${Math.floor(Math.random()*1e6)}`;
     const gradDisabledId = `gradD-${Math.floor(Math.random()*1e6)}`;
     const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
+    const chargerOptions = selCharger?.attributes?.options || [];
+    const chargerState = (selCharger?.state || '').trim();
+    const stateLc = chargerState.toLowerCase();
+    const invalidStates = ['unavailable', 'unknown', 'none', 'not plugged', 'not_plugged', 'not connected', 'not_connected'];
+    const shouldShowPlaceholder = isDisconnected || !chargerState || invalidStates.includes(stateLc) || !chargerOptions.includes(chargerState);
+    const chargerOptionsHtml = shouldShowPlaceholder
+      ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
+      : chargerOptions.map(o => `<option ${o===chargerState?'selected':''}>${o}</option>`).join('');
     const activeGradId = isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId);
 
     this._root.innerHTML = `
@@ -305,7 +315,7 @@ class QsCarCard extends HTMLElement {
           <div class="pill">
             <ha-icon icon="mdi:ev-station"></ha-icon>
             <select id="charger">
-              ${selCharger?.attributes?.options?.map(o => `<option ${o===selCharger.state?'selected':''}>${o}</option>`).join('') || ''}
+              ${chargerOptionsHtml}
             </select>
           </div>
         </div>
@@ -343,8 +353,11 @@ class QsCarCard extends HTMLElement {
       chargerSel?.addEventListener('blur', endC);
       chargerSel?.addEventListener('change', (ev) => {
         const option = ev.target.value;
+        if (!option) return; // ignore placeholder
         this._select(e.charger_select, option);
       });
+      // In disconnected mode, force placeholder selection and disable the control
+      // Do not force selection index; placeholder is marked selected in markup and remains interactive
     }
 
     if (selLimit) {
@@ -497,6 +510,7 @@ class QsCarCard extends HTMLElement {
         const list = allowedOrDefault;
         const pct = list.reduce((best, v) => Math.abs(v - rawPct) < Math.abs(best - rawPct) ? v : best, list[0]);
         this._targetDragPct = pct;
+        this._isInteractingTarget = true;
         // Update handle and target label without full render to keep it smooth
         const angSnap = startDeg + (pct/100)*rangeDeg;
         const pos = polar(center.cx , center.cy, ringCirc, angSnap);
@@ -513,11 +527,20 @@ class QsCarCard extends HTMLElement {
         if (this._targetDragPct != null) {
           const opt = findOptionByPercent(this._targetDragPct);
           if (opt) await this._select(e.next_limit, opt);
+          // optimistic: keep local until HA pushes the new state
+          this._localTargetPct = this._targetDragPct;
+          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
+          this._pendingClearLocalTarget = setTimeout(() => {
+            this._localTargetPct = null; this._pendingClearLocalTarget = null; this._render();
+          }, 2000);
         }
         this._targetDragPct = null;
+        // allow re-rendering now
+        this._isInteractingTarget = false;
       };
       const onDown = (ev) => {
         ev.preventDefault();
+        this._isInteractingTarget = true;
         document.addEventListener('mousemove', onMove);
         document.addEventListener('touchmove', onMove, { passive: false });
         document.addEventListener('mouseup', onUp);
