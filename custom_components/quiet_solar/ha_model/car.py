@@ -12,9 +12,12 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
+    CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, \
+    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BUMPED, \
+    CAR_CHARGE_TYPE_SOLAR
 from ..ha_model.device import HADeviceMixin
-from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
+from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
 from datetime import time as dt_time
 
@@ -144,6 +147,48 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.reset()
 
 
+    def get_car_charge_type(self) -> str:
+        if self.charger is None:
+            return CAR_CHARGE_TYPE_NOT_PLUGGED
+
+        # set time as now
+        time = datetime.now(pytz.UTC)
+
+        type = CAR_CHARGE_TYPE_NOT_CHARGING
+
+        constraints : list[LoadConstraint] = self.charger._constraints
+        for ct in constraints:
+            if ct.is_constraint_active_for_time_period(time):
+                if ct.as_fast_as_possible:
+                    type =CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
+                else:
+                    if ct.end_of_constraint < DATETIME_MAX_UTC:
+                        type = CAR_CHARGE_TYPE_SCHEDULE
+                    elif self.qs_bump_solar_charge_priority:
+                        type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BUMPED
+                    else:
+                        type = CAR_CHARGE_TYPE_SOLAR
+                break
+
+            elif ct.is_constraint_met(time=time):
+                type = CAR_CHARGE_TYPE_TARGET_MET
+
+        return type
+
+    def get_car_charge_time_readable_name(self):
+
+        if self.charger is None:
+            return "--:--"
+
+        # set time as now
+        time = datetime.now(pytz.UTC)
+
+        current_constraint = self.charger.get_current_active_constraint(time)
+
+        if current_constraint is None:
+            return "--:--"
+
+        return current_constraint.get_readable_next_target_date_string(for_small_standalone=True)
 
     @property
     def dashboard_sort_string_in_type(self) -> str:
@@ -755,13 +800,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
 
         # compute the next occurrence of the default charge time
-        dt_now = datetime.now(tz=None)
-        next_time = datetime(year=dt_now.year, month=dt_now.month, day=dt_now.day, hour=default_charge_time.hour,
-                             minute=default_charge_time.minute, second=default_charge_time.second)
-        if next_time < dt_now:
-            next_time = next_time + timedelta(days=1)
-
-        next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        next_time = self.get_next_time_from_hours(local_hours=default_charge_time, output_in_utc=True)
 
         await self.add_default_charge_at_datetime(next_time)
 

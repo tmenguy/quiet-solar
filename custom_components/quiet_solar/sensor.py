@@ -23,6 +23,7 @@ from .const import (
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT, HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT,
+    SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -57,6 +58,22 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda device, key: device.get_car_charge_percent(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+
+    load_current_command = QSSensorEntityDescription(
+        key="car_charge_type",
+        translation_key=SENSOR_CAR_CHARGE_TYPE,
+        value_fn=lambda device, key: device.get_car_charge_type(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+
+    load_current_command = QSSensorEntityDescription(
+        key="car_charge_time",
+        translation_key=SENSOR_CAR_CHARGE_TIME,
+        value_fn=lambda device, key: device.get_car_charge_time_readable_name(),
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 

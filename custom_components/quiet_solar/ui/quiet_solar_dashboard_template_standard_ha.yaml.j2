@@ -21,38 +21,8 @@ views:
       {%- endif %}
       - type: grid
         cards:
-          - {%- if  device.device_type == "car" %} type: custom:qs-car-card{%- else %} type: entities{%- endif %}
-            title: {{ device.name }}
+          - type: entities
             entities:
-            {%- if  device.device_type == "car" %}
-              {%- set car_tracker = device.car_tracker %}
-              {%- if  car_tracker != None %}
-              {%-    set trackers_list.trackers = trackers_list.trackers + [(car_tracker, device.name)] %}
-              {%- endif %}
-              {%- set ha = device.ha_entities %}
-              {%- set e = ha.get("selected_charger_for_car") %}
-              {% if e %}charger_select: {{ e.entity_id }}{% endif %}
-              {%- set e = ha.get("qs_bump_solar_charge_priority") %}
-              {% if e %}bump_priority: {{ e.entity_id }}{% endif %}
-              {%- set e = ha.get("selected_next_charge_limit_for_car") %}
-              {% if e %}next_limit: {{ e.entity_id }}{% endif %}
-              {%- set e = ha.get("default_charge_time") %}
-              {% if e %}next_time: {{ e.entity_id }}{% endif %}
-              {%- set e = ha.get("qs_next_car_charge_force_now") %}
-              {% if e %}force_now: {{ e.entity_id }}{% endif %}
-              {%- set e = ha.get("qs_next_car_charge_add_default") %}
-              {% if e %}schedule: {{ e.entity_id }}{% endif %}
-              {%- set sensor_id = device.car_charge_percent_sensor %}
-              {%- set ha_entity = device.ha_entities.get("car_soc_percentage") %}
-              {%- if sensor_id != None and ha_entity != None %}
-              {%-    set badges_list.badges = badges_list.badges + [(sensor_id, device.name)] %}
-              {{ "soc: " + sensor_id }}
-              {%- endif %}
-              {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}
-              {% if ha.get("qs_load_clean_and_reset") %}reset: {{ ha.get("qs_load_clean_and_reset").entity_id }}{% endif %}
-              {% if ha.get("car_charge_type") %}charge_type: {{ ha.get("car_charge_type").entity_id }}{% endif %}
-              {% if ha.get("car_charge_time") %}charge_time: {{ ha.get("car_charge_time").entity_id }}{% endif %}
-            {%- else %}
             {%- if  device.device_type == "car" %}
               {%- set car_tracker = device.car_tracker %}
               {%- if  car_tracker != None %}
@@ -326,9 +296,9 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
             {% endif -%}
+            title: {{ device.name }}
             show_header_toggle: false
             state_color: true
-          {%- endif %}
     {%- endfor %}
       {%- if calendars_list.calendars|length > 0 %}
       {{ "- type: grid" }}

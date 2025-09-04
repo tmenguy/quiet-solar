@@ -243,20 +243,30 @@ class LoadConstraint(object):
         else:
             return 100.0 * (self.current_value - init_val) / (target_val - init_val)
 
-
-    def _get_target_date_string(self) -> str:
+    def get_readable_next_target_date_string(self, for_small_standalone:bool=False) -> str:
         if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
-            target = ""
+            if for_small_standalone:
+                return "--:--"
+            else:
+                return ""
         else:
             local_target_date = self.end_of_constraint.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
             local_today = date.today()
             local_today = datetime(local_today.year, local_today.month, local_today.day)
             local_tomorrow = local_today + timedelta(days=1)
-            if local_constraint_day == local_today:
-                target = "by today " + local_target_date.strftime("%H:%M")
+            local_now = datetime.now(tz=pytz.UTC).replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
+            if for_small_standalone:
+                if local_now +  timedelta(days=1) > local_target_date:
+                    # the target hour/mn/ss is enough to describe unambiguously the target date vs now
+                    target = local_target_date.strftime("%H:%M")
+                else:
+                    target = local_target_date.strftime("%y-%m-%d\n%H:%M")
+            elif local_constraint_day == local_today:
+                target = "today " + local_target_date.strftime("%H:%M")
             elif local_constraint_day == local_tomorrow:
-                target = "by tomorrow " + local_target_date.strftime("%H:%M")
+                target = "tomorrow " + local_target_date.strftime("%H:%M")
             else:
                 target = local_target_date.strftime("%Y-%m-%d %H:%M")
 
@@ -269,7 +279,7 @@ class LoadConstraint(object):
         return target_string
 
     def get_readable_name_for_load(self) -> str:
-        target_date = self._get_target_date_string()
+        target_date = self.get_readable_next_target_date_string()
         target_string = self._get_readable_target_value_string()
 
         postfix = ""

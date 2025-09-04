@@ -1,6 +1,7 @@
 import logging
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 from operator import itemgetter
 from typing import Mapping, Any, Callable
 
@@ -274,6 +275,28 @@ class HADeviceMixin:
 
         self._computed_dashboard_section = None
 
+
+    def get_next_time_from_hours(self, local_hours:dt_time, time_utc_now:datetime | None = None, output_in_utc=True) -> datetime | None:
+
+        if time_utc_now is None:
+            time_utc_now = datetime.now(tz=pytz.UTC)
+
+        dt_now = time_utc_now.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
+        next_time = datetime(year=dt_now.year,
+                             month=dt_now.month,
+                             day=dt_now.day,
+                             hour=local_hours.hour,
+                             minute=local_hours.minute,
+                             second=local_hours.second)
+        next_time = next_time.astimezone(tz=None)
+        if next_time < dt_now:
+            next_time = next_time + timedelta(days=1)
+
+        if output_in_utc:
+            next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        return next_time
 
     async def set_next_scheduled_event(self, start_time:datetime, end_time:datetime, description:str):
         if self.calendar is None:

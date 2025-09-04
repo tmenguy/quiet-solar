@@ -230,27 +230,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 do_add_constraint = True
             elif bistate_mode == "bistate_mode_default":
                 if self.default_on_duration is not None and  self.default_on_finish_time is not None:
-                    dt_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-                    next_time = datetime(year=dt_now.year,
-                                         month=dt_now.month,
-                                         day=dt_now.day,
-                                         hour=self.default_on_finish_time.hour,
-                                         minute=self.default_on_finish_time.minute,
-                                         second=self.default_on_finish_time.second)
-                    next_time = next_time.astimezone(tz=None)
-                    if next_time < dt_now:
-                        next_time = next_time + timedelta(days=1)
-
-
+                    end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
                     target_value = self.default_on_duration * 3600.0
-
-                    # the code below is commented as can be very wrong : will push the end time to the next day even if not finished!
-                    # if (next_time - dt_now).total_seconds() < target_value:
-                        # we need to adapt the end time to the next day
-                    #    next_time = next_time + timedelta(days=1)
-
-                    end_schedule = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-
                     do_add_constraint = True
             else:
                 start_schedule, end_schedule = await self.get_next_scheduled_event(time)
