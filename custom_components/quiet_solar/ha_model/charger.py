@@ -2180,7 +2180,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     car = None
 
                 if car is not None:
-                    _LOGGER.info(f"get_best_car:Best Car from user selection: {car.name}")
+                    _LOGGER.info(f"get_best_car: Best Car from user selection: {car.name} for charger {self.name}")
 
                     for charger in self.home._chargers:
 
@@ -2226,6 +2226,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             for car in self.home._cars:
 
                 if car.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
+                    _LOGGER.info(f"get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: {car.name}")
                     continue
 
                 score = charger.get_car_score(car, time, cache)
@@ -2283,16 +2284,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             if self._boot_car is not None and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
                 best_car = self._boot_car
-                _LOGGER.info(f"get_best_car: Best Car from boot data: {best_car.name}")
+                _LOGGER.info(f"get_best_car: Best Car from boot data: {best_car.name} for charger {self.name}")
             else:
                 # there is no good car for this charger: get an invited car that is not already assigned to another charger
                 if self.car is not None and self.car.car_is_invited:
                     best_car = self.car
+                    _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name} for charger {self.name}")
                 else:
                     for car in self.home._cars:
                         if car.car_is_invited and car.charger is None:
                             best_car = car
-                            _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name}")
+                            _LOGGER.info(f"get_best_car: first time best invited car used: {best_car.name} for charger {self.name}")
                             break
                 if best_car is None:
                     best_car = self._default_generic_car
@@ -2300,14 +2302,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             if self._boot_car is not None and self._boot_car.name != best_car.name and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
-                _LOGGER.info(f"get_best_car: Use Best Car from boot data: {self._boot_car.name} instead of computed one {best_car.name}")
+                _LOGGER.info(f"get_best_car: Use Best Car from boot data: {self._boot_car.name} instead of computed one {best_car.name} for charger {self.name}")
                 best_car = self._boot_car
             else:
                 _LOGGER.info(f"get_best_car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}")
 
         if  best_car.charger is not None and  best_car.charger != self:
             # will force a reset of everything
-            _LOGGER.info(f"get_best_car: for charger {self.name}: removed from another charger { best_car.charger.name}")
+            _LOGGER.info(f"get_best_car: for charger {self.name}: removed from another charger { best_car.charger.name} and select for charger {self.name}")
             best_car.charger.detach_car()
             # hoping we won't have back and forth between chargers
 
