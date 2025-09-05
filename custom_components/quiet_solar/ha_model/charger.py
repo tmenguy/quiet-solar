@@ -877,10 +877,12 @@ class QSChargerGroup(object):
         diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
         battery_asked_charge = 0.0
+        battery_can_discharge = True
 
         battery_current_charge = full_available_home_power - grid_available_home_power
         if self.home._battery is not None and self.home._battery.current_command:
             battery_asked_charge = self.home._battery.current_command.power_consign
+            battery_can_discharge = self.home.battery_can_discharge()
             # battery_asked_charge > 0 : the battery needs to charge
             # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
@@ -945,8 +947,10 @@ class QSChargerGroup(object):
                     else:
                         if (battery_asked_charge < 0 and
                                 cs.is_before_battery and
-                                self.home.battery_can_discharge() and
-                                cs.command.is_like(CMD_AUTO_GREEN_CONSIGN)):
+                                battery_can_discharge and
+                                cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
+                                cs.command.power_consign > 0
+                        ):
                             power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                         else:
                             power_budget = full_available_home_power - diff_power_budget
@@ -1812,7 +1816,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             cs.can_be_started_and_stopped = True  # true for CMD_AUTO_GREEN_CONSIGN and CMD_AUTO_GREEN_ONLY and CMD_AUTO_GREEN_CAP
             if cs.command.is_like(CMD_AUTO_PRICE):
-                cs.can_be_started_and_stopped = False
+                cs.can_be_started_and_stopped = False # for CMD_AUTO_GREEN_CONSIGN see below a bit more complex in some cases
 
 
             if cs.command.is_like(CMD_AUTO_GREEN_CAP):
@@ -1854,8 +1858,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 possible_amps = run_list
                 if cs.can_be_started_and_stopped:
                     if can_change_state:
-                        possible_amps = [0]
-                        possible_amps.extend(run_list)
+                        do_add_0 = True
+                        if cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and cs.command.power_consign > 0:
+                            if self.home._battery is not None and self.home._battery.current_command:
+                                battery_asked_charge = self.home._battery.current_command.power_consign
+                                battery_can_discharge = self.home.battery_can_discharge()
+                                if battery_can_discharge and battery_asked_charge < 0:
+                                    do_add_0 = False
+
+                        if do_add_0:
+                            possible_amps = [0]
+                            possible_amps.extend(run_list)
+
                     elif current_state is False:
                         # we are off and we can't change the state, so we can only stay off
                         possible_amps = [0]

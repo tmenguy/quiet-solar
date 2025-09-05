@@ -16,7 +16,7 @@ from bisect import bisect_left
 
 import importlib
 
-from .home_utils import is_amps_greater, min_amps
+from .home_utils import is_amps_greater, min_amps, add_amps
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
@@ -596,7 +596,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return nrj_to_be_added
 
-    def adapt_power_steps_budgeting(self, slot_idx: int | None=None):
+    def adapt_power_steps_budgeting(self, slot_idx: int | None=None, existing_amps: list[float|int]| None=None ):
 
         out_sorted_commands = []
 
@@ -605,6 +605,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         # first compute the minium available amps on the slots
         smaller_budget = self.load.father_device.available_amps_for_group[slot_idx]
+
+        if existing_amps is not None:
+            smaller_budget = add_amps(smaller_budget, existing_amps)
+
 
         last_cmd_idx_ok = len(self._power_sorted_cmds)  - 1
         for i in range(len(self._power_sorted_cmds)-1, -1, -1):
@@ -643,8 +647,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if energy_delta >= 0.0:
             _LOGGER.info(
                 f"adapt_repartition: for {self.name} consume more energy {energy_delta}Wh for {log_msg}")
-            # start from the end as futur is more uncertain, so take actions far from now, and we will see later if it was worth it
-            sorted_available_power = range(last_slot, first_slot - 1, -1)
+            # start from the end as future is more uncertain, so take actions far from now, and we will see later if it was worth it
+            # sorted_available_power = range(last_slot, first_slot - 1, -1)
+
+            # well not sure of the statement above as the solver will assess stuff differenty depending on what we consumed
+            sorted_available_power = range(first_slot, last_slot + 1)
         else:
             _LOGGER.info(
                 f"adapt_repartition: for {self.name} reclaim energy {energy_delta}Wh from {log_msg}")
@@ -689,18 +696,20 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             for i in sorted_available_power:
 
                 current_command_power = 0.0
+                existing_cmd_amps = None
                 if existing_commands and existing_commands[i] is not None:
 
                     if existing_commands[i].is_like_one_of_cmds(do_not_touch_commands):
                         continue
 
                     current_command_power = existing_commands[i].power_consign
+                    existing_cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(current_command_power)
 
                 if current_command_power > 0.0:
                     num_non_zero_exisitng_commands += 1
 
                 j = None
-                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i)
+                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i, existing_amps=existing_cmd_amps)
                 if init_energy_delta >= 0.0:
 
                     if current_command_power == 0 and allow_change_state is False:
@@ -713,12 +722,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     else:
                         j = self._get_consign_idx_for_power(power_sorted_cmds, current_command_power)
 
-                        if j == len(power_sorted_cmds) - 1:
-                            # we are already at the max power, we cannot add more, force to stay at this power
-                            pass
-                        elif j is None:
+                        if j is None:
                             # lowest possible ON value
                             j = 0
+                        elif j == len(power_sorted_cmds) - 1:
+                            # we are already at the max power, we cannot add more, force to stay at this power
+                            continue
                         else:
                             j += 1
 
@@ -790,6 +799,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             #we are overconsuming if we do that: don't allow this change
                             # for under consume it is ok to underconsume a bit more
                             break
+
+                    if init_energy_delta >= 0.0:
+                        # we want to consume a bit more if possible so we should add energy
+                        if j < len(power_sorted_cmds) - 1:
+                            new_base_cmd = power_sorted_cmds[j+1]
+                            new_delta_power = new_base_cmd.power_consign - current_command_power
+                            new_d_energy = (new_delta_power* power_slots_duration_s[i]) / 3600.0
+                            if (energy_delta - new_d_energy) * init_energy_delta >= 0:
+                                j += 1
+                                delta_power = new_delta_power
+                                d_energy = new_d_energy
+                                base_cmd = new_base_cmd
 
                     out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
                                                                    new_type=pass_through_command.command)
@@ -1099,7 +1120,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if power_available_power[i] + out_power[i] < 0:
                         # there is still some solar to get
 
-                        power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i)
+                        existing_cmd_amps = None
+                        if out_power[i] > 0:
+                            existing_cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(out_power[i])
+
+                        power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i, existing_amps=existing_cmd_amps)
 
                         if len(power_sorted_cmds) == 0:
                             continue
@@ -1196,7 +1221,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                             if prices[i] == price:
 
-                                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i)
+                                existing_cmd_amps = None
+                                if out_power[i] > 0:
+                                    existing_cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(out_power[i])
+
+                                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i, existing_amps=existing_cmd_amps)
 
                                 if len(power_sorted_cmds) == 0:
                                     continue

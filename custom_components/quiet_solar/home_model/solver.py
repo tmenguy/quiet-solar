@@ -475,7 +475,7 @@ class PeriodSolver(object):
         if energy_delta != 0:
 
             if energy_delta > 0:
-                # mor consumption, start with the more important ones
+                # more consumption, start with the more important ones
                 constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
             else:
                 # energy to reclaim
@@ -818,7 +818,7 @@ class PeriodSolver(object):
 
             if energy_given_back_to_grid < 0.0 and first_surplus_index is not None and last_surplus_index is not None:
 
-                energy_to_be_spent = (-energy_given_back_to_grid)*0.7 # try to reuse 70% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                energy_to_be_spent = min(self._battery.get_value_full() , (-energy_given_back_to_grid)*0.9) # try to reuse 90% of the estimated energy given back to the grid, so we can try to force some loads to consume more
 
                 probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
 
@@ -832,8 +832,8 @@ class PeriodSolver(object):
 
                 probe_window_end = last_surplus_index
 
-                # we have some surplus, limit the windw to reclaim energy so what is left can fill the battery
-                nrj_to_recharge = (-energy_given_back_to_grid/2.0)
+                # we have some surplus, limit the window to reclaim energy so what is left can fill the battery
+                nrj_to_recharge = energy_to_be_spent
                 for i in range(last_surplus_index, -1, -1):
                     if self._available_power[i] < 0.0:
                         nrj_to_recharge += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0) # self._available_power[i] negative
