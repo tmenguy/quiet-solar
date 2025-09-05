@@ -612,8 +612,16 @@ class QSChargerGroup(object):
 
                 if full_available_home_power is not None:
 
+                    battery_asked_charge = 0.0
+
+                    #battery_current_charge = full_available_home_power - grid_available_home_power
+                    if self.home._battery is not None and self.home._battery.current_command:
+                        battery_asked_charge = self.home._battery.current_command.power_consign
+                        # battery_asked_charge > 0 : the battery needs to charge
+                        # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
+
                     _LOGGER.info(
-                        f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W")
+                        f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W battery_asked_charge {battery_asked_charge}W" )
 
                     dampened_chargers = {}
 
@@ -923,7 +931,7 @@ class QSChargerGroup(object):
             check_phase_change = [False]
 
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget}, increase {initial_increase}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
+            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget} battery_asked_charge {battery_asked_charge}, increase {initial_increase}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
 
         do_stop = False
         global_diff_power = 0
@@ -935,7 +943,13 @@ class QSChargerGroup(object):
                     if battery_asked_charge > 0 and cs.is_before_battery is False:
                         power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                     else:
-                        power_budget = full_available_home_power - diff_power_budget
+                        if (battery_asked_charge < 0 and
+                                cs.is_before_battery and
+                                self.home.battery_can_discharge() and
+                                cs.command.is_like(CMD_AUTO_GREEN_CONSIGN)):
+                            power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                        else:
+                            power_budget = full_available_home_power - diff_power_budget
 
                     if power_budget < 0:
                         increase = False
@@ -963,7 +977,7 @@ class QSChargerGroup(object):
                                                                                                     increase=increase)
                         if next_possible_budgeted_amp is None:
                             _LOGGER.info(
-                                f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of can_change_budget possible_amps {cs.possible_amps} current_amps {cs.get_current_charging_amps()} budgeted_amp {cs.get_budget_amps()} increase {increase}")
+                                f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): forbid change because of can_change_budget possible_amps {cs.possible_amps} current_amps {cs.get_current_charging_amps()} budgeted_amp {cs.get_budget_amps()} increase {increase}")
                         else:
 
                             diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases, next_possible_budgeted_amp, next_possible_num_phases)
@@ -971,7 +985,7 @@ class QSChargerGroup(object):
                             if diff_power is None:
                                 next_possible_budgeted_amp = None
                                 _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of diff_power None power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                                    f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): forbid change because of diff_power None power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
                             else:
                                 new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
                                 new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
@@ -983,7 +997,7 @@ class QSChargerGroup(object):
                                     else:
                                         # no we exhausted too far the available solar budget
                                         _LOGGER.info(
-                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
+                                            f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): forbid change because of power_budget {power_budget - global_diff_power} diff_power {diff_power} battery_asked_charge {battery_asked_charge} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
                                         next_possible_budgeted_amp = None
 
                                 if next_possible_budgeted_amp is not None:
@@ -994,7 +1008,7 @@ class QSChargerGroup(object):
                                     ) is False:
                                         next_possible_budgeted_amp = None
                                         _LOGGER.info(
-                                            f"budgeting_algorithm_minimize_diffs ({cs.name}): forbid change because of dynamic_group new_amps {new_alloted_amps} estimated_current_amps {current_amps}")
+                                            f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): forbid change because of dynamic_group new_amps {new_alloted_amps} estimated_current_amps {current_amps}")
 
                                 if next_possible_budgeted_amp is not None:
 
@@ -1002,7 +1016,7 @@ class QSChargerGroup(object):
                                     alloted_amps = new_alloted_amps
 
                                     _LOGGER.info(
-                                        f"budgeting_algorithm_minimize_diffs ({cs.name}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget - global_diff_power}, diff_power {diff_power}, increase {increase}, new alloted_amps {alloted_amps}")
+                                        f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget - global_diff_power}, diff_power {diff_power} battery_asked_charge {battery_asked_charge}, increase {increase}, new alloted_amps {alloted_amps}")
                                     cs.budgeted_amp = next_possible_budgeted_amp
                                     cs.budgeted_num_phases = next_possible_num_phases
 
@@ -1814,12 +1828,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 else:
                     possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
-
-            elif cs.command.is_like(CMD_AUTO_GREEN_CONSIGN):
-
-                possible_num_phases, min_charge = cs.get_consign_amps_values(consign_is_minimum=True)
-                if possible_num_phases is None:
-                    possible_num_phases = [cs.current_active_phase_number]
+            # below is not needed as teh auto green consign is made to consume battery, but still being really auto green, so no minimum amps here
+            # the battery discharge will added to teh power budget in that case
+            # elif cs.command.is_like(CMD_AUTO_GREEN_CONSIGN):
+            #
+            #     possible_num_phases, min_charge = cs.get_consign_amps_values(consign_is_minimum=True)
+            #     if possible_num_phases is None:
+            #         possible_num_phases = [cs.current_active_phase_number]
 
 
             if possible_num_phases is None:

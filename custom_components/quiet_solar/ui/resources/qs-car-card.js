@@ -391,10 +391,18 @@ class QsCarCard extends HTMLElement {
 
     if (swPriority) {
       const togglePriority = async () => {
-        if (swPriority.state === 'on') await this._turnOff(e.bump_priority); else await this._turnOn(e.bump_priority);
-        // optimistically toggle class for instant feedback; HA state will re-render soon
         const btn = ids('sun_btn');
-        if (btn) btn.classList.toggle('on');
+        try {
+          if (swPriority.state === 'on') {
+            await this._turnOff(e.bump_priority);
+            btn?.classList.remove('on');
+          } else {
+            await this._turnOn(e.bump_priority);
+            btn?.classList.add('on');
+          }
+        } catch (_) {
+          // ignore errors; HA state will resync UI on next render
+        }
       };
       ids('priority')?.addEventListener('click', togglePriority);
       const sbtn = ids('sun_btn');
