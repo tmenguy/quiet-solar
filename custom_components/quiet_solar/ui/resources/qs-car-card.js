@@ -246,6 +246,20 @@ class QsCarCard extends HTMLElement {
     const handleDeg = pctToDeg(handlePct);
     // Enlarge gauge
     const center = { cx: 160, cy: 160 };
+    const arcLen = 2 * Math.PI * ringCirc * (rangeDeg/360);
+    const segLen = arcLen * (Math.max(0, Math.min(100, soc)) / 100);
+    let dashLen = Math.round(segLen * 0.22);
+    let gapLen = Math.round(segLen * 0.28);
+    dashLen = Math.max(6, dashLen);
+    gapLen = Math.max(6, gapLen);
+    const patternLen = dashLen + gapLen;
+    // Ensure pattern repeats within the segment for visible motion
+    if (patternLen >= segLen - 4) {
+      const scale = (segLen - 4) / patternLen;
+      dashLen = Math.max(4, Math.round(dashLen * scale));
+      gapLen = Math.max(4, Math.round(gapLen * scale));
+    }
+    // showAnimation will be defined after connection state is resolved
     const handlePos = polar(center.cx, center.cy, ringCirc, handleDeg);
     const bgPath = arcPath(center.cx, center.cy, ringCirc, startDeg, endDeg);
     const socPath = arcPath(center.cx, center.cy, ringCirc, startDeg, socEndDeg);
@@ -262,6 +276,7 @@ class QsCarCard extends HTMLElement {
       ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
       : chargerOptions.map(o => `<option ${o===chargerState?'selected':''}>${o}</option>`).join('');
     const activeGradId = isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId);
+    const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
     this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''}">
@@ -278,16 +293,33 @@ class QsCarCard extends HTMLElement {
                   <stop offset="100%" stop-color="#8bc34a"/>
                 </linearGradient>
                 <linearGradient id="${gradChargeId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#ff9800"/>
-                  <stop offset="100%" stop-color="#f44336"/>
+                  <stop offset="0%" stop-color="#00e1ff"/>
+                  <stop offset="100%" stop-color="#0066ff"/>
                 </linearGradient>
                 <linearGradient id="${gradDisabledId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="#6b6b6b" stop-opacity="0.65"/>
                   <stop offset="100%" stop-color="#a0a0a0" stop-opacity="0.75"/>
                 </linearGradient>
+                <filter id="chargeGlow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="2" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
               </defs>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
-              <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" />
+              <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
+              ${showAnimation ? `
+              <path d="${socPath}"
+                    stroke="url(#${gradChargeId})"
+                    stroke-width="16"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-dasharray="${dashLen} ${gapLen}" stroke-opacity="1" filter="url(#chargeGlow)" style="mix-blend-mode:screen">
+                <animate attributeName="stroke-dashoffset" begin="0s" from="0" to="-${dashLen + gapLen}" dur="1.3s" repeatCount="indefinite" />
+              </path>
+              ` : ''}
               <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)'}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
             </svg>
             <div class="center">

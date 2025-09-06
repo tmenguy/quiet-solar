@@ -926,7 +926,7 @@ class AbstractLoad(AbstractDevice):
                         return False
                     else:
                         self._constraints[i] = None
-                        _LOGGER.info(f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one")
+                        _LOGGER.info(f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one)")
                         # the problem here is that we can loose .... the current value
                         if c.current_value > constraint.current_value:
                             constraint.current_value = min(c.current_value, constraint.target_value)
