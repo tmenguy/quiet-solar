@@ -4,6 +4,30 @@
 */
 
 class QsCarCard extends HTMLElement {
+  connectedCallback() {
+    if (this._animRaf != null) return;
+    const step = (ts) => {
+      if (!this.isConnected) { this._animRaf = null; return; }
+      if (this._lastAnimTs == null) this._lastAnimTs = ts;
+      const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      this._lastAnimTs = ts;
+      const patternLen = Math.max(8, this._animPatternLen || 64);
+      const speed = 80; // dash units per second
+      this._animOffset = ((this._animOffset || 0) + speed * dt) % patternLen;
+      const p = this._root?.getElementById('charge_anim');
+      if (p) {
+        p.setAttribute('stroke-dashoffset', String(-this._animOffset));
+      }
+      this._animRaf = requestAnimationFrame(step);
+    };
+    this._animRaf = requestAnimationFrame(step);
+  }
+
+  disconnectedCallback() {
+    if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
+    this._animRaf = null;
+    this._lastAnimTs = null;
+  }
   static getStubConfig() {
     return { name: "QS Car", entities: {} };
   }
@@ -259,6 +283,8 @@ class QsCarCard extends HTMLElement {
       dashLen = Math.max(4, Math.round(dashLen * scale));
       gapLen = Math.max(4, Math.round(gapLen * scale));
     }
+    // Persist animation pattern for smoothness across re-renders
+    this._animPatternLen = Math.max(8, dashLen + gapLen);
     // showAnimation will be defined after connection state is resolved
     const handlePos = polar(center.cx, center.cy, ringCirc, handleDeg);
     const bgPath = arcPath(center.cx, center.cy, ringCirc, startDeg, endDeg);
@@ -311,14 +337,17 @@ class QsCarCard extends HTMLElement {
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `
-              <path d="${socPath}"
+              <path id="charge_anim"
+                    d="${socPath}"
                     stroke="url(#${gradChargeId})"
                     stroke-width="16"
                     fill="none"
                     stroke-linecap="round"
-                    stroke-dasharray="${dashLen} ${gapLen}" stroke-opacity="1" filter="url(#chargeGlow)" style="mix-blend-mode:screen">
-                <animate attributeName="stroke-dashoffset" begin="0s" from="0" to="-${dashLen + gapLen}" dur="1.3s" repeatCount="indefinite" />
-              </path>
+                    stroke-dasharray="${dashLen} ${gapLen}"
+                    stroke-opacity="1"
+                    filter="url(#chargeGlow)"
+                    style="mix-blend-mode:screen; will-change: stroke-dashoffset"
+              />
               ` : ''}
               <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)'}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
             </svg>
