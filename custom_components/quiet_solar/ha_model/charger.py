@@ -2151,9 +2151,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if car_home_res and score_dist_bump == 0:
                 score_dist_bump = 1.0
 
-            if (score_plug_bump > 0 and (score_dist_bump > 0 or score_plug_time_bump > 0)) or score_dist_bump > 0:
+            if score_plug_bump > 0 and (score_dist_bump > 0 or score_plug_time_bump > 0):
                 # only if plugged .... then if home or a very compatible plug time
-                score =  score_plug_time_bump + plug_time_span*score_dist_bump + dist_span*plug_time_span*score_plug_bump
+                score = score_plug_bump + plug_span*score_plug_time_bump + plug_span*plug_time_span*score_dist_bump
 
             _LOGGER.debug(f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist*100)/100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}")
 
