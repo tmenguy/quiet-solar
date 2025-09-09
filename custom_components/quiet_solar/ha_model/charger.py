@@ -3492,11 +3492,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def _find_charger_entity_id(self, device, entries, prefix, suffix):
 
-        found = None
+        found = []
         for entry in entries:
-            if entry.entity_id.startswith(prefix) and entry.entity_id.endswith(suffix):
-                found = entry.entity_id
-                break
+            if entry.entity_id.startswith(prefix) and suffix in entry.entity_id:
+                found.append(entry)
+
+        if len(found) == 0:
+            found = None
+        elif len(found) == 1:
+            found = found[0].entity_id
+        else:
+            _LOGGER.warning(f"Multiple entity_id found for device {device.id} with prefix {prefix} and suffix {suffix}: {[e.entity_id for e in found]}")
+            # select the longest entity_id string
+            found.sort(key=lambda x: len(x.entity_id), reverse=True)
+            found = found[0].entity_id
 
         if device is not None:
             device_name = device.name_by_user or device.name
