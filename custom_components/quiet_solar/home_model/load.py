@@ -833,7 +833,7 @@ class AbstractLoad(AbstractDevice):
             self._constraints = [keep]
             self._constraints.extend(new_constraints)
 
-        #check all the constraints that have teh same end time, keep the highest score
+        #check all the constraints that have the same end time, keep the highest score
         current_end = DATETIME_MIN_UTC
 
         current_cluster : list[tuple[int, LoadConstraint]] = []

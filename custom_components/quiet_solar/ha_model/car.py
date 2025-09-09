@@ -339,7 +339,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
 
         percent= asked_percent
-        # in fact stop the charge only at the "default charge" of the carelse ... continue to charge
+        # in fact stop the charge only at the "default charge" of the car else ... continue to charge
         if asked_percent <= self.car_default_charge:
             percent = self.car_default_charge
 
@@ -912,16 +912,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         new_target = await self.setup_car_charge_target_if_needed()
 
-        if self.charger:
-            if new_target and self.charger._constraints:
-                for ct in self.charger._constraints:
-                    if isinstance(ct, MultiStepsPowerLoadConstraintChargePercent):
-                        if ct.artificial_intermediate:
-                            # it was an intermediate for solar charge to bump a bit some priorities, leave it as it is
-                            continue
-                        else:
-                            ct.target_value = new_target
-                            break
+        if self.charger and new_target:
+            time = datetime.now(pytz.UTC)
+            if await self.charger.do_run_check_load_activity_and_constraints(time):
+                self.home.force_next_solve()
 
     def get_car_target_charge_option(self):
         return self.get_car_option_charge_from_value(self.get_car_target_SOC())

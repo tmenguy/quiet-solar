@@ -79,7 +79,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
     FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
-    CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox
+    CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -1923,7 +1923,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.debug(f"_compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
 
             if self.qs_bump_solar_charge_priority:
-                is_before_battery = True
+                if is_before_battery is False:
+                    # respect the constraint in case it was GREEN_CAP overridden as we may have a bump solar constraint
+                    # but with a target that is higher than the user car target charge
+                    is_before_battery = ct.is_before_battery
 
         return is_before_battery
 
@@ -2344,7 +2347,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.car is not None and self.car.name != car_name:
             self.detach_car()
             time = datetime.now(pytz.UTC)
-            if await self.check_load_activity_and_constraints(time):
+            if await self.do_run_check_load_activity_and_constraints(time):
                 self.home.force_next_solve()
 
     @property
@@ -2545,27 +2548,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_SOC()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
             else:
-                # by construction all the constraints are applicable here
-                update_constraints = False
-                for ct in self._constraints:
-                    if ct.target_value != target_charge:
-                        do_force_solve = True
-                        update_constraints = True
-                        ct.target_value = target_charge
-
-                if update_constraints:
-                    self.set_live_constraints(time, self._constraints)
-
-
-                # we may have a as fast as possible constraint still active ... if so we need to update it
+                # we may have an as fast as possible constraint still active ... if so we need to update it
                 for ct in self._constraints:
                     if ct.is_constraint_active_for_time_period(time):
                         if ct.as_fast_as_possible:
                             force_constraint = ct
                             ct.reset_load_param(self.car.name)
                             if force_constraint.target_value != target_charge:
+                                force_constraint.target_value = target_charge
                                 do_force_solve = True
-                            force_constraint.target_value = target_charge
+                                # update the constraints to follow the new as fast target
+                                self.set_live_constraints(time, self._constraints)
                             break
 
             if force_constraint is not None:
@@ -2629,26 +2622,34 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     realized_charge_target = target_charge
 
-            if realized_charge_target is None:
+            if realized_charge_target is None or realized_charge_target < self.car.car_default_charge:
 
+                if realized_charge_target is None:
+                    realized_charge_target = car_initial_percent
 
-                type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN # well as it is an auto constraint it will have to be before the battery consumption
-                realized_charge_target = car_initial_percent
+                intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
+                if intermediate_target_charge <= 10:
+                    intermediate_target_charge = 0.0
 
-                intermediate_target_charge = None
-                if self.qs_bump_solar_charge_priority is False:
-                    intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
-                    if intermediate_target_charge <= 10:
-                        intermediate_target_charge = None
+                if intermediate_target_charge > target_charge:
+                    intermediate_target_charge = 0.0
 
-                artificial_intermediate = False
-                if intermediate_target_charge is not None and intermediate_target_charge < target_charge:
-                    if car_initial_percent >= intermediate_target_charge:
-                        type = CONSTRAINT_TYPE_FILLER # charge after the minimum is more optional than before
-                    else:
-                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                        target_charge = intermediate_target_charge
-                        artificial_intermediate = True
+                max_target_charge = max(intermediate_target_charge, max(max(target_charge, realized_charge_target), self.car.car_default_charge))
+
+                if self.qs_bump_solar_charge_priority:
+                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                else:
+                    type = CONSTRAINT_TYPE_FILLER
+
+                if realized_charge_target <= intermediate_target_charge and intermediate_target_charge > 0:
+                    # priority before we reach the minimum of the battery for this car
+                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    target_charge = intermediate_target_charge
+                elif realized_charge_target > target_charge and target_charge < max_target_charge:
+                    # after the desired target ... do as if it was not really bump priority anymore
+                    # and be after battery, lowest priority
+                    type = CONSTRAINT_TYPE_FILLER_AUTO
+                    target_charge = max_target_charge
 
                 car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=self.car.car_battery_capacity,
@@ -2657,7 +2658,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     load=self,
                     load_param=self.car.name,
                     from_user=False,
-                    artificial_intermediate=artificial_intermediate,
                     initial_value=realized_charge_target,
                     target_value=target_charge,
                     power_steps=self._power_steps,
