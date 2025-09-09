@@ -3542,7 +3542,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return res_charge_check
 
-    def low_level_plug_check_now(self, time: datetime) -> tuple[None, datetime] | tuple[bool, datetime]:
+    def low_level_plug_check_now(self, time: datetime) -> tuple[bool|None, datetime]:
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:
@@ -3669,7 +3669,9 @@ class QSChargerOCPP(QSChargerGeneric):
 
             kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(device, entries, "number.", "_maximum_current")
             kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_charge_control")
-            kwargs[CONF_CHARGER_PLUGGED] = self._find_charger_entity_id(device, entries, "switch.", "_availability")
+
+
+            # kwargs[CONF_CHARGER_PLUGGED] = self._find_charger_entity_id(device, entries, "switch.", "_availability")
 
             # if entry.entity_id.startswith("sensor.") and entry.entity_id.endswith("_power_active_import"):
             #    self.charger_ocpp_power_active_import = entry.entity_id
@@ -3846,9 +3848,13 @@ class QSChargerOCPP(QSChargerGeneric):
 
         return val, new_attr
 
-    def low_level_plug_check_now(self, time: datetime) -> (bool|None, datetime):
+    def low_level_plug_check_now(self, time: datetime) -> tuple[bool|None, datetime]:
 
-        state = self.hass.states.get(self.charger_plugged)
+        if self.charger_plugged is not None:
+            state = self.hass.states.get(self.charger_plugged)
+        else:
+            state = None
+
         if state is not None:
             state_time = state.last_updated
         else:
@@ -3923,7 +3929,7 @@ class QSChargerWallbox(QSChargerGeneric):
         self.initial_num_in_out_immediate = 2
         # self.do_reboot_on_phase_switch = True
 
-    def low_level_plug_check_now(self, time: datetime) -> (bool|None, datetime):
+    def low_level_plug_check_now(self, time: datetime) -> tuple[bool|None, datetime]:
 
         state = self.hass.states.get(self.charger_pause_resume_switch)
         if state is not None:
