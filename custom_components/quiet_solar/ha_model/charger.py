@@ -3502,7 +3502,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         elif len(found) == 1:
             found = found[0].entity_id
         else:
-            _LOGGER.warning(f"Multiple entity_id found for device {device.id} with prefix {prefix} and suffix {suffix}: {[e.entity_id for e in found]}")
+            _LOGGER.warning(f"_find_charger_entity_id: Multiple entity_id found for device {device.id} with prefix {prefix} and suffix {suffix}: {[e.entity_id for e in found]}")
             # select the longest entity_id string
             found.sort(key=lambda x: len(x.entity_id), reverse=True)
             found = found[0].entity_id
@@ -3512,13 +3512,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             computed = prefix + slugify(device_name) + suffix
 
             if found is not None and found != computed:
-                _LOGGER.warning(f"Entity ID {found} does not match expected {computed} for device {device.id}")
+                _LOGGER.warning(f"_find_charger_entity_id: Entity ID {found} does not match expected {computed} for device {device.id}")
                 # we could rename it here if needed
 
             if found is None:
                 _LOGGER.warning(
-                    f"Entity ID for {device_name} not found with prefix {prefix} and suffix {suffix}, expected {computed}")
+                    f"_find_charger_entity_id: Entity ID for {device_name} not found with prefix {prefix} and suffix {suffix}, expected {computed}")
                 found = computed
+
+        if found is None:
+            _LOGGER.warning(f"_find_charger_entity_id: Entity ID not found with prefix {prefix} and suffix {suffix}")
 
         return found
 
@@ -3656,6 +3659,9 @@ class QSChargerOCPP(QSChargerGeneric):
 
             device_registry_instance = device_registry.async_get(hass)
             device = device_registry_instance.async_get(self.charger_device_ocpp)
+
+            if device is None:
+                _LOGGER.warning(f"QSChargerOCPP: Device with ID {self.charger_device_ocpp} not found in device registry.")
 
             entity_reg = entity_registry.async_get(hass)
             entries = entity_registry.async_entries_for_device(entity_reg, self.charger_device_ocpp)
