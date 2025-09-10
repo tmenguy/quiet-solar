@@ -476,8 +476,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         sc = self.get_common_schema(type=type,
                                     add_load_power_sensor=True,
                                     add_load_power_sensor_mandatory=add_load_power_sensor_mandatory,
-                                    add_calendar=True,
-                                    add_efficiency_selector=True,
+                                    add_calendar=False,
+                                    add_efficiency_selector=False,
                                     add_is_3p=True,
                                     add_power_group_selector=True,
                                     add_phase_number=True)
