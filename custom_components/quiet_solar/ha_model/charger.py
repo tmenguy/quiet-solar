@@ -2641,11 +2641,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     type = CONSTRAINT_TYPE_FILLER
 
-                if realized_charge_target <= intermediate_target_charge and intermediate_target_charge > 0:
+                if realized_charge_target + 1.5 < intermediate_target_charge and intermediate_target_charge > 0:
                     # priority before we reach the minimum of the battery for this car
                     type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                     target_charge = intermediate_target_charge
-                elif realized_charge_target > target_charge and target_charge < max_target_charge:
+                elif realized_charge_target + 1.5 >= target_charge and target_charge < max_target_charge:
                     # after the desired target ... do as if it was not really bump priority anymore
                     # and be after battery, lowest priority
                     type = CONSTRAINT_TYPE_FILLER_AUTO

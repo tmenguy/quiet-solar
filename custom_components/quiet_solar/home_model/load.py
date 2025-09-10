@@ -911,8 +911,8 @@ class AbstractLoad(AbstractDevice):
 
             if (self._last_completed_constraint is not None and
                 self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
-                self._last_completed_constraint.score(time) >= constraint.score(time)):
-                _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as last completed one")
+                self._last_completed_constraint.target_value == constraint.target_value):
+                _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date and same target value as last completed one")
                 return False
 
 
