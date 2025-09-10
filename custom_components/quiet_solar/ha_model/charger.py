@@ -943,6 +943,7 @@ class QSChargerGroup(object):
                 for charger_idx, cs in enumerate(actionable_chargers):
 
                     if battery_asked_charge > 0 and cs.is_before_battery is False:
+                        # if we are AFTER battery : we shouldn't consume what the solver computed for teh battery
                         power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                     else:
                         if (battery_asked_charge < 0 and
@@ -951,6 +952,7 @@ class QSChargerGroup(object):
                                 cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
                                 cs.command.power_consign > 0
                         ):
+                            # case where solver asked to overconsume battery power
                             power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                         else:
                             power_budget = full_available_home_power - diff_power_budget

@@ -85,11 +85,11 @@
                 "title": "Edit an Electric vehicle"
             },
             "charger": {
-                "description": "OCPP and Wallbox are natively supported now, or a generic one",
+                "description": "OCPP is natively supported (requires the HACS OCPP integration) or a generic one",
                 "menu_options": {
-                    "charger_generic": "Create a Generic based charger, need tto have the proper entities to be up and running",
-                    "charger_ocpp": "Create a OCPP based charger, need the OCPP integration to be setup and running",
-                    "charger_wallbox": "Create a Wallbox based charger, need the Wallbox integration to be setup and running"
+                    "charger_generic": "Create a Generic based charger",
+                    "charger_ocpp": "Create an OCPP based charger",
+                    "charger_wallbox": "Create a Wallbox based charger"
                 },
                 "title": "Create your electrical vehicle charger"
             },
@@ -108,7 +108,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -126,7 +126,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -145,7 +145,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
