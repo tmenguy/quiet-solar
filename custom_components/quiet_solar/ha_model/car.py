@@ -14,8 +14,8 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, \
-    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BUMPED, \
-    CAR_CHARGE_TYPE_SOLAR
+    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, \
+    CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
@@ -164,10 +164,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 else:
                     if ct.end_of_constraint < DATETIME_MAX_UTC:
                         type = CAR_CHARGE_TYPE_SCHEDULE
-                    elif self.qs_bump_solar_charge_priority:
-                        type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BUMPED
+                    elif self.charger.compute_is_before_battery(ct, time):
+                        type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
                     else:
-                        type = CAR_CHARGE_TYPE_SOLAR
+                        type = CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
                 break
 
             elif ct.is_constraint_met(time=time):

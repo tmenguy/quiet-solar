@@ -29,6 +29,7 @@ class LoadConstraint(object):
                  load = None,
                  load_param: str | None = None,
                  from_user: bool = False,
+                 artificial_step_to_final_value: None|int|float = None,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
@@ -54,6 +55,7 @@ class LoadConstraint(object):
         self.load = load
         self.load_param = load_param
         self.from_user = from_user
+        self.artificial_step_to_final_value = artificial_step_to_final_value
         self.type = type
         self.support_auto = support_auto
 
@@ -117,8 +119,18 @@ class LoadConstraint(object):
 
     @property
     def name(self):
-        return f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{self.target_value}/{self.type})"
+        target_s = f"{self.target_value}"
+        if self.artificial_step_to_final_value is not None:
+            target_s = f"{self.target_value} -> {self.artificial_step_to_final_value}"
+        return f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{target_s}/{self.type})"
 
+    @property
+    def stable_name(self):
+        target_value = self.target_value
+        if self.artificial_step_to_final_value is not None:
+            target_value = self.artificial_step_to_final_value
+
+        return f"Constraint for {self.load.name} ({self.load_param} {target_value}/{self.type})"
 
     def __eq__(self, other):
         if other is None:
@@ -200,6 +212,7 @@ class LoadConstraint(object):
             "type": self.type,
             "load_param": self.load_param,
             "from_user": self.from_user,
+            "artificial_step_to_final_value": self.artificial_step_to_final_value,
             "initial_value": self.initial_value,
             "current_value": self.current_value,
             "target_value": self.target_value,

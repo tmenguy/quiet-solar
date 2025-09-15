@@ -1886,7 +1886,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         ct = self.get_current_active_constraint(time)
 
-        cs.is_before_battery = self._compute_is_before_battery(ct, time)
+        cs.is_before_battery = self.compute_is_before_battery(ct, time)
 
         cs.bump_solar = self.qs_bump_solar_charge_priority
         if cs.bump_solar:
@@ -1901,7 +1901,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return cs
 
-    def _compute_is_before_battery(self, ct:LoadConstraint, time:datetime) -> bool:
+    def compute_is_before_battery(self, ct:LoadConstraint, time:datetime|None=None) -> bool:
 
         if ct is None:
             return False
@@ -1922,7 +1922,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 elif command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                     is_before_battery = True
 
-                _LOGGER.debug(f"_compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
+                _LOGGER.debug(f"compute_is_before_battery: is_before_battery {is_before_battery} command overcharge {command} for {self.name} car {self.car.name}")
 
             if self.qs_bump_solar_charge_priority:
                 if is_before_battery is False:
@@ -1951,7 +1951,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if ct.as_fast_as_possible:
                 native_score_duration += 8*max_duration_h + 8
             else:
-                is_before_battery = self._compute_is_before_battery(ct, time)
+                is_before_battery = self.compute_is_before_battery(ct, time)
 
                 if is_before_battery:
                     native_score_duration += max_duration_h + 1
@@ -2629,8 +2629,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if realized_charge_target is None:
                     realized_charge_target = car_initial_percent
 
-                intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
-                if intermediate_target_charge <= 10:
+                if self.qs_bump_solar_charge_priority:
+                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    intermediate_target_charge = 0
+                else:
+                    type = CONSTRAINT_TYPE_FILLER
+                    intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
+
+                if intermediate_target_charge <= 5:
                     intermediate_target_charge = 0.0
 
                 if intermediate_target_charge > target_charge:
@@ -2638,15 +2644,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 max_target_charge = max(intermediate_target_charge, max(max(target_charge, realized_charge_target), self.car.car_default_charge))
 
-                if self.qs_bump_solar_charge_priority:
-                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                else:
-                    type = CONSTRAINT_TYPE_FILLER
+                artificial_step_to_final_value = None
 
                 if realized_charge_target + 1.5 < intermediate_target_charge and intermediate_target_charge > 0:
                     # priority before we reach the minimum of the battery for this car
                     type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    artificial_step_to_final_value = target_charge
                     target_charge = intermediate_target_charge
+
                 elif realized_charge_target + 1.5 >= target_charge and target_charge < max_target_charge:
                     # after the desired target ... do as if it was not really bump priority anymore
                     # and be after battery, lowest priority
@@ -2660,6 +2665,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     load=self,
                     load_param=self.car.name,
                     from_user=False,
+                    artificial_step_to_final_value=artificial_step_to_final_value,
                     initial_value=realized_charge_target,
                     target_value=target_charge,
                     power_steps=self._power_steps,

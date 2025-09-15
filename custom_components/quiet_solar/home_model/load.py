@@ -748,7 +748,7 @@ class AbstractLoad(AbstractDevice):
                 if self._last_completed_constraint.load_param is not None:
                     load_param = self._last_completed_constraint.load_param
                 new_val = ("COMPLETED:" +
-                           self._last_completed_constraint.name +
+                           self._last_completed_constraint.stable_name +
                            "-" +
                            load_param +
                            "-" +
@@ -760,7 +760,7 @@ class AbstractLoad(AbstractDevice):
             if current_constraint.load_param is not None:
                 load_param = current_constraint.load_param
             new_val = ("RUNNING:" +
-                       current_constraint.name +
+                       current_constraint.stable_name +
                        "-" +
                        load_param +
                        "-" +
