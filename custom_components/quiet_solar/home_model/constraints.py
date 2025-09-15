@@ -126,10 +126,7 @@ class LoadConstraint(object):
 
     @property
     def stable_name(self):
-        target_value = self.target_value
-        if self.artificial_step_to_final_value is not None:
-            target_value = self.artificial_step_to_final_value
-
+        target_value = self._get_target_value_for_readable()
         return f"Constraint for {self.load.name} ({self.load_param} {target_value}/{self.type})"
 
     def __eq__(self, other):
@@ -285,8 +282,15 @@ class LoadConstraint(object):
 
         return target
 
+    def _get_target_value_for_readable(self) -> int|float:
+        target_value = self.target_value
+        if self.artificial_step_to_final_value is not None:
+            target_value = self.artificial_step_to_final_value
+        return target_value
+
+
     def _get_readable_target_value_string(self) -> str:
-        target_string = f"{int(self.target_value)} Wh"
+        target_string = f"{int(self._get_target_value_for_readable())} Wh"
         if self.target_value >= 2000:
             target_string = f"{int(self.target_value / 1000)} kWh"
         return target_string
@@ -1313,7 +1317,7 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
         return data
 
     def _get_readable_target_value_string(self) -> str:
-        target_string = f"{int(round(self.target_value))} %"
+        target_string = f"{int(round(self._get_target_value_for_readable()))} %"
         return target_string
 
     def convert_target_value_to_energy(self, value: float) -> float:
@@ -1341,18 +1345,19 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def _get_readable_target_value_string(self) -> str:
-        minutes = int((self.target_value % 3600) / 60)
-        hours = int(self.target_value / 3600)
-        target_string = f"{int(self.target_value)}s"
-        if self.target_value >= 4 * 3600:
+        target_value = self._get_target_value_for_readable()
+        minutes = int((target_value % 3600) / 60)
+        hours = int(target_value / 3600)
+        target_string = f"{int(target_value)}s"
+        if target_value >= 4 * 3600:
             target_string = f"{hours}h"
-        elif self.target_value >= 3600:
+        elif target_value >= 3600:
             if minutes > 0:
                 target_string = f"{hours}h{minutes}mn"
             else:
                 target_string = f"{hours}h"
-        elif self.target_value >= 60:
-            target_string = f"{int(self.target_value / 60)}mn"
+        elif target_value >= 60:
+            target_string = f"{int(target_value / 60)}mn"
         return target_string
 
     def best_duration_extenstion_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
