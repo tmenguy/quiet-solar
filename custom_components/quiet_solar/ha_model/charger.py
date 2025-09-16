@@ -71,7 +71,7 @@ class QSOCPPv16v201ChargePointStatus(StrEnum):
 
     # v2.0.1
     ev_connected = "EVConnected"
-    idle = "Idle"
+    idle = "Idle" # seems like a synonym of Available
 
 
     """
