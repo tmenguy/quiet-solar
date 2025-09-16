@@ -356,12 +356,12 @@ class HADeviceMixin:
             return False
 
 
-    async def set_next_scheduled_event(self, start_time:datetime, end_time:datetime, description:str):
+    async def set_next_scheduled_event(self, time:datetime, start_time:datetime, end_time:datetime, description:str):
         if self.calendar is None:
             return
 
-        # first clean old ones if needed for teh next day .. but keep if it was already created
-        found = await self.clean_next_qs_scheduled_event(start_time, start_time_to_check=start_time, end_time_to_check=end_time)
+        # first clean old ones if needed for teh next day ... but keep if it was already created
+        found = await self.clean_next_qs_scheduled_event(time, start_time_to_check=start_time, end_time_to_check=end_time)
 
         if found:
             return

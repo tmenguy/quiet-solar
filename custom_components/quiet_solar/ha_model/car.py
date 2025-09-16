@@ -766,7 +766,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
         start_time = end_charge
         end_time = end_charge + timedelta(seconds=60*30)
-        await self.set_next_scheduled_event(start_time, end_time, f"Charge {self.name}")
+        time = datetime.now(pytz.UTC)
+        await self.set_next_scheduled_event(time, start_time, end_time, f"Charge {self.name}")
 
 
     async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None):
