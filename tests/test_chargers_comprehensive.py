@@ -11,7 +11,7 @@ from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.charger import (
-    QSChargerWallbox, 
+    QSChargerWallbox,
     QSChargerOCPP,
     QSChargerGroup,
     QSChargerStatus,
@@ -19,7 +19,7 @@ from custom_components.quiet_solar.ha_model.charger import (
     QSChargerStates,
     QSChargerGeneric,
     WallboxChargerStatus,
-    QSOCPPv16ChargePointStatus,
+    QSOCPPv16v201ChargePointStatus,
     STATE_CMD_RETRY_NUMBER
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
@@ -912,10 +912,10 @@ class TestChargerStates(unittest.TestCase):
     
     def test_ocpp_charge_point_status_enum(self):
         """Test QSOCPPv16ChargePointStatus enum values."""
-        self.assertEqual(QSOCPPv16ChargePointStatus.available, "Available")
-        self.assertEqual(QSOCPPv16ChargePointStatus.charging, "Charging")
-        self.assertEqual(QSOCPPv16ChargePointStatus.faulted, "Faulted")
-        self.assertEqual(QSOCPPv16ChargePointStatus.unavailable, "Unavailable")
+        self.assertEqual(QSOCPPv16v201ChargePointStatus.available, "Available")
+        self.assertEqual(QSOCPPv16v201ChargePointStatus.charging, "Charging")
+        self.assertEqual(QSOCPPv16v201ChargePointStatus.faulted, "Faulted")
+        self.assertEqual(QSOCPPv16v201ChargePointStatus.unavailable, "Unavailable")
 
 
 if __name__ == '__main__':

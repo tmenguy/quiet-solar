@@ -12,7 +12,7 @@ from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.charger import (
-    QSChargerWallbox, 
+    QSChargerWallbox,
     QSChargerOCPP,
     QSChargerGroup,
     QSChargerStatus,
@@ -20,7 +20,7 @@ from custom_components.quiet_solar.ha_model.charger import (
     QSChargerStates,
     QSChargerGeneric,
     WallboxChargerStatus,
-    QSOCPPv16ChargePointStatus
+    QSOCPPv16v201ChargePointStatus
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.home_model.commands import (

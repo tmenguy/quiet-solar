@@ -46,7 +46,7 @@ except:
         UNKNOWN = "Unknown"
 
 
-class QSOCPPv16ChargePointStatus(StrEnum):
+class QSOCPPv16v201ChargePointStatus(StrEnum):
     """
     Status reported in StatusNotification.req. A status can be reported for
     the Charge Point main controller (connectorId = 0) or for a specific
@@ -58,6 +58,7 @@ class QSOCPPv16ChargePointStatus(StrEnum):
     States considered Inoperative are: Unavailable, Faulted.
     """
 
+    # v1.6
     available = "Available"
     preparing = "Preparing"
     charging = "Charging"
@@ -67,6 +68,26 @@ class QSOCPPv16ChargePointStatus(StrEnum):
     reserved = "Reserved"
     unavailable = "Unavailable"
     faulted = "Faulted"
+
+    # v2.0.1
+    ev_connected = "EVConnected"
+    idle = "Idle"
+
+
+    """
+    Status reported in StatusNotification.req. A status can be reported for
+    the Charge Point main controller (connectorId = 0) or for a specific
+    connector. Status for the Charge Point main controller is a subset of the
+    enumeration Available, Unavailable or Faulted.
+
+    States considered Operative are Available, Preparing, Charging,
+    SuspendedEVSE, SuspendedEV, Finishing, Reserved.
+    States considered Inoperative are Unavailable, Faulted.
+    """
+
+    occupied = "Occupied"
+
+
 
 
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
@@ -3877,29 +3898,31 @@ class QSChargerOCPP(QSChargerGeneric):
 
     def get_car_charge_enabled_status_vals(self) -> list[str]:
         return [
-            QSOCPPv16ChargePointStatus.suspended_ev,
-            QSOCPPv16ChargePointStatus.charging,
-            QSOCPPv16ChargePointStatus.suspended_evse
+            QSOCPPv16v201ChargePointStatus.suspended_ev,
+            QSOCPPv16v201ChargePointStatus.charging,
+            QSOCPPv16v201ChargePointStatus.suspended_evse
         ]
 
     def get_car_plugged_in_status_vals(self) -> list[str]:
         return [
-            QSOCPPv16ChargePointStatus.preparing,
-            QSOCPPv16ChargePointStatus.charging,
-            QSOCPPv16ChargePointStatus.suspended_ev,
-            QSOCPPv16ChargePointStatus.suspended_evse,
-            QSOCPPv16ChargePointStatus.finishing
+            QSOCPPv16v201ChargePointStatus.preparing,
+            QSOCPPv16v201ChargePointStatus.charging,
+            QSOCPPv16v201ChargePointStatus.suspended_ev,
+            QSOCPPv16v201ChargePointStatus.suspended_evse,
+            QSOCPPv16v201ChargePointStatus.ev_connected,
+            QSOCPPv16v201ChargePointStatus.finishing,
+            QSOCPPv16v201ChargePointStatus.reserved
         ]
 
     def get_car_status_unknown_vals(self) -> list[str]:
-        return [QSOCPPv16ChargePointStatus.unavailable, QSOCPPv16ChargePointStatus.faulted]
+        return [QSOCPPv16v201ChargePointStatus.unavailable, QSOCPPv16v201ChargePointStatus.faulted]
 
     def get_car_stopped_asking_current_status_vals(self) -> list[str]:
-        return [QSOCPPv16ChargePointStatus.suspended_ev]
+        return [QSOCPPv16v201ChargePointStatus.suspended_ev]
 
 
     def get_car_status_rebooting_vals(self) -> list[str]:
-        return [QSOCPPv16ChargePointStatus.unavailable]
+        return [QSOCPPv16v201ChargePointStatus.unavailable]
 
 
 class QSChargerWallbox(QSChargerGeneric):
