@@ -315,7 +315,7 @@ class HADeviceMixin:
         return next_time
 
 
-    async def clean_next_qs_scheduled_event(self, time:datetime) -> bool:
+    async def clean_next_qs_scheduled_event(self, time:datetime, start_time_to_check:datetime|None = None, end_time_to_check:datetime|None = None,) -> bool:
 
         # by construction they can't be in the past, nor more than 24h in the future
         if self.calendar is None:
@@ -339,10 +339,17 @@ class HADeviceMixin:
                     # remove it
                     remove.append(e)
 
+            kept_one = False
             for e in remove:
+
+                if start_time_to_check is not None and end_time_to_check is not None and e.start == start_time_to_check and e.end == end_time_to_check:
+                    # do not remove it if it is the one we want to keep
+                    kept_one = True
+                    continue
+
                 await entity.async_delete_event(e.uid)
 
-            return True
+            return kept_one
 
         except Exception as err:
             _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=err)
@@ -353,38 +360,8 @@ class HADeviceMixin:
         if self.calendar is None:
             return
 
-        # check we don't have created it already
-        data = {ATTR_ENTITY_ID: self.calendar}
-        service = calendar.SERVICE_GET_EVENTS
-        data[calendar.EVENT_START_DATETIME] = start_time - timedelta(
-            seconds=10)  # -10s to get the "current one" will filter it below in the loop if needed
-        data[calendar.EVENT_END_DATETIME] = end_time + timedelta(seconds=10)
-        domain = calendar.DOMAIN
-
-        found = False
-        try:
-            resp = await self.hass.services.async_call(
-                domain, service, data, blocking=True, return_response=True
-            )
-            for cals in resp:
-                events = resp[cals].get("events", [])
-                for event in events:
-                    # events are sorted by time ... pick the first ok one
-                    st_time = datetime.fromisoformat(event["start"])
-                    st_time = st_time.astimezone(tz=pytz.UTC)
-
-                    nd_time = datetime.fromisoformat(event["end"])
-                    nd_time = nd_time.astimezone(tz=pytz.UTC)
-
-                    if start_time == st_time and end_time == nd_time:
-                        found = True
-                        break
-
-                    if st_time > end_time:
-                        break
-
-        except Exception as err:
-            _LOGGER.error(f"Error reading calendar in set_next_scheduled_event {self.calendar} {err}", exc_info=err)
+        # first clean old ones if needed for teh next day .. but keep if it was already created
+        found = await self.clean_next_qs_scheduled_event(start_time, start_time_to_check=start_time, end_time_to_check=end_time)
 
         if found:
             return
