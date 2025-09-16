@@ -89,14 +89,15 @@ class QsCarCard extends HTMLElement {
     const connected = (selCharger && selCharger.state !== 'unavailable');
     const charging = (Number(power) > 50);
     const carChargeTypeIcons = {
-      "Unknown": "mdi:help-circle-outline",
-      "Not Plugged": "mdi:power-plug-off",
-      "Not Charging": "mdi:battery-off",
-      "Target Met": "mdi:battery-high",
-      "As Fast As Possible": "mdi:rabbit",
-      "Scheduled": "mdi:clock-outline",
-      "Solar Priority": "mdi:solar-power",
-      "Solar": "mdi:white-balance-sunny",
+        "Unknown": "mdi:help-circle-outline",
+        "Not Plugged": "mdi:power-plug-off",
+        "Faulted": "mdi:emoticon-dead",
+        "Not Charging": "mdi:battery-off",
+        "Target Met": "mdi:battery-high",
+        "As Fast As Possible": "mdi:rabbit",
+        "Scheduled": "mdi:clock-outline",
+        "Solar Priority": "mdi:solar-power",
+        "Solar": "mdi:white-balance-sunny",
     };
     const iconForChargeType = (str) => carChargeTypeIcons[str];
     const chargeIcon = iconForChargeType(sChargeType?.state);
@@ -154,6 +155,9 @@ class QsCarCard extends HTMLElement {
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; }
       .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
+      .ring .pct.low { color: var(--error-color); }
+      .ring .pct.med { color: var(--warning-color, #FFC107); }
+      .ring .pct.high { color: var(--success-color, #2ecc71); }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
@@ -217,6 +221,7 @@ class QsCarCard extends HTMLElement {
       .disabled .progress > div { background: var(--divider-color); }
       .disabled #force, .disabled #schedule_inline { pointer-events: none; cursor: not-allowed; }
       .live { display:grid; gap:10px; }
+      .fault .card-title { color: var(--error-color); }
       .progress { height:10px; border-radius:999px; background: var(--divider-color); overflow:hidden; }
       .progress > div { height:100%; background: var(--accent-color); width:${soc}% }
       .menu { text-align:right; }
@@ -292,20 +297,23 @@ class QsCarCard extends HTMLElement {
     const gradGreenId = `gradG-${Math.floor(Math.random()*1e6)}`;
     const gradChargeId = `gradC-${Math.floor(Math.random()*1e6)}`;
     const gradDisabledId = `gradD-${Math.floor(Math.random()*1e6)}`;
+    const gradFaultId = `gradF-${Math.floor(Math.random()*1e6)}`;
     const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
+    const isFaulted = (sChargeType?.state || '').toLowerCase() === 'faulted';
     const chargerOptions = selCharger?.attributes?.options || [];
     const chargerState = (selCharger?.state || '').trim();
     const stateLc = chargerState.toLowerCase();
     const invalidStates = ['unavailable', 'unknown', 'none', 'not plugged', 'not_plugged', 'not connected', 'not_connected'];
     const shouldShowPlaceholder = isDisconnected || !chargerState || invalidStates.includes(stateLc) || !chargerOptions.includes(chargerState);
+    const socClass = soc < 30 ? 'low' : (soc < 75 ? 'med' : 'high');
     const chargerOptionsHtml = shouldShowPlaceholder
       ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
       : chargerOptions.map(o => `<option ${o===chargerState?'selected':''}>${o}</option>`).join('');
-    const activeGradId = isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId);
+    const activeGradId = isFaulted ? gradFaultId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId));
     const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
     this._root.innerHTML = `
-      <ha-card class="card ${isDisconnected ? 'disabled' : ''}">
+      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''}">
         <style>${css}</style>
         <div class="card-title">${title}</div>
         <div class="top"></div>
@@ -326,6 +334,10 @@ class QsCarCard extends HTMLElement {
                   <stop offset="0%" stop-color="#6b6b6b" stop-opacity="0.65"/>
                   <stop offset="100%" stop-color="#a0a0a0" stop-opacity="0.75"/>
                 </linearGradient>
+                <linearGradient id="${gradFaultId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#ff8a80"/>
+                  <stop offset="100%" stop-color="#ff1744"/>
+                </linearGradient>
                 <filter id="chargeGlow" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="2" result="blur" />
                   <feMerge>
@@ -334,12 +346,12 @@ class QsCarCard extends HTMLElement {
                   </feMerge>
                 </filter>
               </defs>
-              <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
+              <path d="${bgPath}" stroke="${isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)'}" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `
               <path id="charge_anim"
                     d="${socPath}"
-                    stroke="url(#${gradChargeId})"
+                    stroke="url(#${isFaulted ? gradFaultId : gradChargeId})"
                     stroke-width="16"
                     fill="none"
                     stroke-linecap="round"
@@ -353,7 +365,7 @@ class QsCarCard extends HTMLElement {
             </svg>
             <div class="center">
               <div class="stack">
-                <div class="pct" style="margin-bottom:4px;">${soc}%</div>
+                <div class="pct ${socClass}" style="margin-bottom:4px;">${soc}%</div>
                 <div class="mini-grid">
                   <div class="mini-title">${chargeIconLabel}</div>
                   <div class="mini-title">Target SOC</div>

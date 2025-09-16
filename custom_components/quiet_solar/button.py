@@ -97,7 +97,7 @@ def create_ha_button_for_QSCar(device: QSCar):
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_LOAD_CLEAN_AND_RESET,
         translation_key=BUTTON_LOAD_CLEAN_AND_RESET,
-        async_press=lambda x: x.device.clean_and_reset(),
+        async_press=lambda x: x.device.user_clean_and_reset(),
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
@@ -120,7 +120,7 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_LOAD_CLEAN_AND_RESET,
         translation_key=BUTTON_LOAD_CLEAN_AND_RESET,
-        async_press=lambda x: x.device.clean_and_reset(),
+        async_press=lambda x: x.device.user_clean_and_reset(),
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))

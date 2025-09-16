@@ -150,30 +150,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_charge_type(self) -> str:
         if self.charger is None:
             return CAR_CHARGE_TYPE_NOT_PLUGGED
-
-        # set time as now
-        time = datetime.now(pytz.UTC)
-
-        type = CAR_CHARGE_TYPE_NOT_CHARGING
-
-        constraints : list[LoadConstraint] = self.charger._constraints
-        for ct in constraints:
-            if ct.is_constraint_active_for_time_period(time):
-                if ct.as_fast_as_possible:
-                    type =CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
-                else:
-                    if ct.end_of_constraint < DATETIME_MAX_UTC:
-                        type = CAR_CHARGE_TYPE_SCHEDULE
-                    elif self.charger.compute_is_before_battery(ct, time):
-                        type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
-                    else:
-                        type = CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
-                break
-
-            elif ct.is_constraint_met(time=time):
-                type = CAR_CHARGE_TYPE_TARGET_MET
-
-        return type
+        else:
+            return self.charger.get_charge_type()
 
     def get_car_charge_time_readable_name(self):
 
@@ -990,7 +968,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if charger is not None:
                 await charger.set_user_selected_car_by_name(car_name=self.name)
 
-    async def clean_and_reset(self):
+    async def user_clean_and_reset(self):
+        await super().user_clean_and_reset()
         if self.charger is not None:
-            await self.charger.clean_and_reset()
-        self.reset()
+            await self.charger.user_clean_and_reset()
+        await self.clean_and_reset()
+

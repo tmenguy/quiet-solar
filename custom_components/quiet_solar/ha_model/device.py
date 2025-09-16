@@ -22,9 +22,21 @@ from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
 
+
+from datetime import datetime, timedelta
+from homeassistant.core import HomeAssistant
+from homeassistant.components.calendar.const import DATA_COMPONENT
+from homeassistant.components.calendar import CalendarEntity
+from homeassistant.components.calendar.const import CalendarEntityFeature
+
+
+
 UNAVAILABLE_STATE_VALUES = [STATE_UNKNOWN, STATE_UNAVAILABLE]
 
 _LOGGER = logging.getLogger(__name__)
+
+CALENDAR_MANAGED_STRING_ID = "[Quiet Solar]"
+CALENDAR_MANAGED_STRING = f"{CALENDAR_MANAGED_STRING_ID} Managed by Quiet Solar (do not edit)"
 
 
 def compute_energy_Wh_rieman_sum(
@@ -276,6 +288,10 @@ class HADeviceMixin:
         self._computed_dashboard_section = None
 
 
+    async def user_clean_and_reset(self):
+        time = datetime.now(tz=pytz.UTC)
+        await self.clean_next_qs_scheduled_event(time)
+
     def get_next_time_from_hours(self, local_hours:dt_time, time_utc_now:datetime | None = None, output_in_utc=True) -> datetime | None:
 
         if time_utc_now is None:
@@ -297,6 +313,41 @@ class HADeviceMixin:
             next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
         return next_time
+
+
+    async def clean_next_qs_scheduled_event(self, time:datetime) -> bool:
+
+        # by construction they can't be in the past, nor more than 24h in the future
+        if self.calendar is None:
+            return False
+
+        component = self.hass.data[DATA_COMPONENT]
+        entity = component.get_entity(self.calendar)
+
+        if not isinstance(entity, CalendarEntity):
+            return False
+
+        if not (entity.supported_features & CalendarEntityFeature.DELETE_EVENT):
+            return False
+
+        try:
+            events = await entity.async_get_events(self.hass, time - timedelta(seconds=10), time + timedelta(days=1, seconds=10))
+
+            remove = []
+            for e in events:
+                if CALENDAR_MANAGED_STRING_ID in e.description:
+                    # remove it
+                    remove.append(e)
+
+            for e in remove:
+                await entity.async_delete_event(e.uid)
+
+            return True
+
+        except Exception as err:
+            _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=err)
+            return False
+
 
     async def set_next_scheduled_event(self, start_time:datetime, end_time:datetime, description:str):
         if self.calendar is None:
@@ -343,6 +394,7 @@ class HADeviceMixin:
         data[calendar.EVENT_START_DATETIME] = start_time
         data[calendar.EVENT_END_DATETIME] = end_time
         data[calendar.EVENT_SUMMARY] = description
+        data[calendar.EVENT_DESCRIPTION] = CALENDAR_MANAGED_STRING
         domain = calendar.DOMAIN
 
         try:
@@ -723,7 +775,7 @@ class HADeviceMixin:
 
     def get_last_state_value_duration(self,
                                       entity_id: str,
-                                      states_vals: list[str],
+                                      states_vals: list[str]| set[str],
                                       num_seconds_before: float | None,
                                       time: datetime,
                                       invert_val_probe=False,

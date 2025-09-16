@@ -174,6 +174,10 @@ class AbstractDevice(object):
     def reset(self):
         self._local_reset()
 
+    async def clean_and_reset(self):
+        self.reset()
+
+
     @property
     def qs_enable_device(self) -> bool:
         return self._enabled
@@ -1101,8 +1105,8 @@ class AbstractLoad(AbstractDevice):
 
 
     async def clean_and_reset(self):
+        super().clean_and_reset()
         time = datetime.now(tz=pytz.UTC)
-        self.reset()
         _LOGGER.info(f"clean_and_reset: {self.name}")
         await self.launch_command(time=time, command=CMD_IDLE,
                                   ctxt=f"clean_and_reset: {self.name}")

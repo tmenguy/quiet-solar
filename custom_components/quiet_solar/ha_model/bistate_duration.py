@@ -43,6 +43,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.is_load_time_sensitive = True
 
+    async def user_clean_and_reset(self):
+        await super().user_clean_and_reset()
+        await self.clean_and_reset()
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:

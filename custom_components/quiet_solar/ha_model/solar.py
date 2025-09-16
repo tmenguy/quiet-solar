@@ -52,6 +52,10 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         if self.solar_forecast_provider_handler is not None:
             await self.solar_forecast_provider_handler.dump_for_debug(debug_path)
 
+    async def user_clean_and_reset(self):
+        await super().user_clean_and_reset()
+        await self.clean_and_reset()
+
 
 
 

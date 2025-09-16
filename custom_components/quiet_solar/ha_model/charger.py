@@ -100,7 +100,10 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
     FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
-    CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO
+    CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO, \
+    CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_FAULTED, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, \
+    CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
+    CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -1604,6 +1607,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._power_steps = []
 
+
+
+    async def user_clean_and_reset(self):
+        await super().user_clean_and_reset()
+        await self.clean_and_reset()
 
     @property
     def charger_group(self) -> QSChargerGroup:
@@ -3135,6 +3143,49 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def _is_state_set(self, time: datetime) -> bool:
         return self._expected_amperage.value is not None and self._expected_charge_state.value is not None and self._expected_num_active_phases.value is not None
 
+    def is_charger_faulted(self, time: datetime) -> bool:
+
+        contiguous_status = self.get_last_state_value_duration(self.charger_status_sensor_unfiltered,
+                                                               states_vals=self._unknown_state_vals,
+                                                               num_seconds_before=2*CHARGER_STATE_REFRESH_INTERVAL_S,
+                                                               time=time,
+                                                               count_only_duration=True)[0]
+        if contiguous_status is None:
+            return False
+
+        return contiguous_status > 0
+
+    def get_charge_type(self) -> str:
+
+        # set time as now
+        time = datetime.now(pytz.UTC)
+
+        if self.is_charger_faulted(time):
+            return CAR_CHARGE_TYPE_FAULTED
+
+        if self.car is None:
+            return CAR_CHARGE_TYPE_NOT_PLUGGED
+
+        type = CAR_CHARGE_TYPE_NOT_CHARGING
+
+        constraints: list[LoadConstraint] = self._constraints
+        for ct in constraints:
+            if ct.is_constraint_active_for_time_period(time):
+                if ct.as_fast_as_possible:
+                    type = CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
+                else:
+                    if ct.end_of_constraint < DATETIME_MAX_UTC:
+                        type = CAR_CHARGE_TYPE_SCHEDULE
+                    elif self.compute_is_before_battery(ct, time):
+                        type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
+                    else:
+                        type = CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
+                break
+
+            elif ct.is_constraint_met(time=time):
+                type = CAR_CHARGE_TYPE_TARGET_MET
+
+        return type
 
     async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> (bool | None, bool, datetime | None):
 
