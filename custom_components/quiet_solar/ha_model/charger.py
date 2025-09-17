@@ -3669,7 +3669,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.warning(f"low_level_set_charging_num_phases: num_phases {num_phases} Error {e}")
             return False
 
-    async def low_level_set_max_charging_current(self, current, time: datetime) -> bool:
+    async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
         try:
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
@@ -3680,7 +3680,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             domain = number.DOMAIN
 
             await self.hass.services.async_call(
-                domain, service, data, blocking=False
+                domain, service, data, blocking=blocking
             )
             done = True
         except Exception as e:
@@ -3866,19 +3866,20 @@ class QSChargerOCPP(QSChargerGeneric):
 
 
 
-    async def A_TRY_low_level_set_max_charging_current(self, current, time: datetime) -> bool:
+    async def A_TRY_low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
 
-        # check : https://github.com/lbbrhzn/ocpp/blob/main/docs/Charge_automation.md  seems to be tehright way
-        # but it seems that in fact the OCPP stuff is implemented like this already, seeing teh logs ...
+        # check : https://github.com/lbbrhzn/ocpp/blob/main/docs/Charge_automation.md  seems to be the right way
 
         if self.charger_ocpp_transaction_id is None:
             return await super().low_level_set_max_charging_current(current, time)
 
+
+        current_max = self.get_max_charging_amp_per_phase()
+
+        if current_max is None or current_max < current:
+            await super().low_level_set_max_charging_current(current, time, blocking=True)
+
         state = self.hass.states.get(self.charger_ocpp_transaction_id )
-
-
-
-
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
             _LOGGER.warning(f"low_level_set_max_charging_current: OCPP transaction ID not available or in unknown state")
@@ -3911,12 +3912,17 @@ class QSChargerOCPP(QSChargerGeneric):
             )
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_set_max_charging_current: Error {e}")
+            _LOGGER.warning(f"low_level_set_max_charging_current OCPP: Error {e}")
             done = False
+
+        if done is False:
+            # fallback to the number entity if any
+            done = await super().low_level_set_max_charging_current(current, time)
+
         return done
 
 
-    def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> (float, dict):
+    def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> tuple[float, dict]:
 
         val = amps * self.voltage
 
