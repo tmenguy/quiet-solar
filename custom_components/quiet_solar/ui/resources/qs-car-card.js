@@ -130,9 +130,9 @@ class QsCarCard extends HTMLElement {
     const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); }
-      .card-title { text-align:center; font-weight:800; font-size: 1.2rem; margin: 2px 0 8px; }
+      .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
-      .below { display:flex; align-items:center; justify-content:center; margin-top: 10px; width:300px; margin-left:auto; margin-right:auto; }
+      .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:300px; margin-left:auto; margin-right:auto; }
       .below .pill { width:100%; justify-content:center; }
       .below-line { width:300px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
@@ -149,15 +149,12 @@ class QsCarCard extends HTMLElement {
       .pill { position: relative; }
       .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; flex:1; width:auto; text-align:center; text-align-last:center; padding-left: 8px; }
 
-      .hero { margin-top: 14px; display:flex; align-items:center; justify-content:center; }
+      .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; }
       .hero .side { text-align:center; color: var(--secondary-text-color); font-weight:600; }
       .hero .side .value { display:block; font-size:1.2rem; color: var(--primary-text-color); }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; }
-      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
-      .ring .pct.low { color: var(--error-color); }
-      .ring .pct.med { color: var(--warning-color, #FFC107); }
-      .ring .pct.high { color: var(--success-color, #2ecc71); }
+      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; color: var(--text-primary-color, #fff); }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
@@ -305,7 +302,6 @@ class QsCarCard extends HTMLElement {
     const stateLc = chargerState.toLowerCase();
     const invalidStates = ['unavailable', 'unknown', 'none', 'not plugged', 'not_plugged', 'not connected', 'not_connected'];
     const shouldShowPlaceholder = isDisconnected || !chargerState || invalidStates.includes(stateLc) || !chargerOptions.includes(chargerState);
-    const socClass = soc < 30 ? 'low' : (soc < 75 ? 'med' : 'high');
     const chargerOptionsHtml = shouldShowPlaceholder
       ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
       : chargerOptions.map(o => `<option ${o===chargerState?'selected':''}>${o}</option>`).join('');
@@ -365,7 +361,7 @@ class QsCarCard extends HTMLElement {
             </svg>
             <div class="center">
               <div class="stack">
-                <div class="pct ${socClass}" style="margin-bottom:4px;">${soc}%</div>
+                <div class="pct" style="margin-bottom:4px;">${soc}%</div>
                 <div class="mini-grid">
                   <div class="mini-title">${chargeIconLabel}</div>
                   <div class="mini-title">Target SOC</div>
