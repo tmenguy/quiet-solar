@@ -154,7 +154,7 @@ class QsCarCard extends HTMLElement {
       .hero .side .value { display:block; font-size:1.2rem; color: var(--primary-text-color); }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; }
-      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; color: var(--text-primary-color, #fff); }
+      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
