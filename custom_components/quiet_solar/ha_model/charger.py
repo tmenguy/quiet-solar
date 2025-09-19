@@ -910,19 +910,44 @@ class QSChargerGroup(object):
             # battery_asked_charge > 0 : the battery needs to charge
             # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
-        initial_power_budget = full_available_home_power - diff_power_budget
-        if full_available_home_power != grid_available_home_power and battery_asked_charge > 0 and do_reset_allocation is False:
 
-            actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
-            has_one_before_battery = False
-            for cs in actionable_chargers:
-                if cs.is_before_battery:
-                    has_one_before_battery = True
+
+
+
+        # in case of "no reset" allocation, we will try to minimize the diffs
+        # this algorithm will only try to move "a bit" the chargers to reach the power budget
+        # if power_budget is negative : we need to go down and find the best charger to go down
+        # if power_budget is positive : we need to go up to consume extra solar and find the best charger to go up
+        # else:
+        # try to get as close as possible to the power budget, without going over it
+
+        initial_power_budget = full_available_home_power - diff_power_budget
+
+        # if all are after battery WE MUST respect battery asked charge
+        all_after = True
+        for charger_idx, cs in enumerate(actionable_chargers):
+            if battery_asked_charge > 0 and cs.is_before_battery is False:
+                # if we are AFTER battery : we shouldn't consume what the solver computed for the battery
+                initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+            else:
+                initial_power_budget = full_available_home_power - diff_power_budget
+                all_after = False
+                break
+
+        if all_after is False:
+            # check if in fact we need to consume more because the battery need extra discharging
+            for charger_idx, cs in enumerate(actionable_chargers):
+
+                if (battery_asked_charge < 0 and
+                        cs.is_before_battery and
+                        battery_can_discharge and
+                        cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
+                        cs.command.power_consign > 0
+                ):
+                    # case where solver asked to overconsume battery power
+                    initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                     break
 
-            if has_one_before_battery is False:
-                # we want to charge the battery at minimum with the battery_asked_charge or more
-                initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
 
         if do_reset_allocation:
             do_more_important_charger_first = True
@@ -935,13 +960,6 @@ class QSChargerGroup(object):
         # if decrease: remove charging from less important first (lower score)
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=do_more_important_charger_first)
 
-
-        # in case of "no reset" allocation, we will try to minimize the diffs
-        # this algorithm will only try to move "a bit" the chargers to reach the power budget
-        # if power_budget is negative : we need to go down and find the best charger to go down
-        # if power_budget is positive : we need to go up to consume extra solar and find the best charger to go up
-        # else:
-        # try to get as close as possible to the power budget, without going over it
 
         if do_reset_allocation:
             allow_state_changes = [True]
@@ -959,27 +977,33 @@ class QSChargerGroup(object):
         _LOGGER.info(
             f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget} battery_asked_charge {battery_asked_charge}, increase {initial_increase}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
 
+
         do_stop = False
         global_diff_power = 0
+        use_dynamic_per_cs_power_check = False
 
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
                 for charger_idx, cs in enumerate(actionable_chargers):
 
-                    if battery_asked_charge > 0 and cs.is_before_battery is False:
-                        # if we are AFTER battery : we shouldn't consume what the solver computed for teh battery
-                        power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                    else:
-                        if (battery_asked_charge < 0 and
-                                cs.is_before_battery and
-                                battery_can_discharge and
-                                cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
-                                cs.command.power_consign > 0
-                        ):
-                            # case where solver asked to overconsume battery power
+                    if use_dynamic_per_cs_power_check:
+                        # in fact this is probably a bad idea : teh battery consumption command is global, not per charger
+                        if battery_asked_charge > 0 and cs.is_before_battery is False:
+                            # if we are AFTER battery : we shouldn't consume what the solver computed for teh battery
                             power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                         else:
-                            power_budget = full_available_home_power - diff_power_budget
+                            if (battery_asked_charge < 0 and
+                                    cs.is_before_battery and
+                                    battery_can_discharge and
+                                    cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
+                                    cs.command.power_consign > 0
+                            ):
+                                # case where solver asked to overconsume battery power
+                                power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                            else:
+                                power_budget = full_available_home_power - diff_power_budget
+                    else:
+                        power_budget = initial_power_budget
 
                     if power_budget < 0:
                         increase = False
