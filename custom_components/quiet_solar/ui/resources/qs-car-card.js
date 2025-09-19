@@ -229,6 +229,7 @@ class QsCarCard extends HTMLElement {
       input[type="range"]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:20px; height:20px; border-radius:50%; background: var(--accent-color); box-shadow: 0 0 0 4px rgba(0,0,0,.15); cursor:pointer; }
 
       /* Themed confirm dialog */
+      #target_handle { touch-action: none; }
       .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; }
       .dialog { background: var(--card-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); border-radius: 16px; padding: 16px; width: min(92%, 360px); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
       .dialog h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight:800; text-align:left; }
@@ -499,8 +500,10 @@ class QsCarCard extends HTMLElement {
     };
 
     if (e.force_now) {
-      ids('force')?.addEventListener('click', async () => {
-        if (document.querySelector('.disabled')) return;
+      ids('force')?.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        if (this._root?.querySelector('.disabled')) return;
         showDialog({
           title: 'Force charge now',
           message: 'Start full-speed charge immediately?\nThis will use maximum available power.',
@@ -513,8 +516,10 @@ class QsCarCard extends HTMLElement {
     }
 
     if (e.schedule) {
-      ids('schedule_inline')?.addEventListener('click', async () => {
-        if (document.querySelector('.disabled')) return;
+      ids('schedule_inline')?.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        if (this._root?.querySelector('.disabled')) return;
         const limit = selLimit?.state || '';
         const time = tNext?.state || '';
         showDialog({
@@ -529,7 +534,9 @@ class QsCarCard extends HTMLElement {
     }
 
     if (e.reset) {
-      ids('reset')?.addEventListener('click', async () => {
+      ids('reset')?.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
         showDialog({
           title: 'Reset car state',
           message: 'This will reset internal state for this car and cannot be undone.\nProceed?',
@@ -571,6 +578,8 @@ class QsCarCard extends HTMLElement {
       const pt = svg.createSVGPoint();
       const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
       const onMove = (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
         const e2 = ev.touches ? ev.touches[0] : ev;
         pt.x = e2.clientX; pt.y = e2.clientY;
         const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
@@ -596,7 +605,8 @@ class QsCarCard extends HTMLElement {
         const tv = this._root.getElementById('target_value');
         if (tv) tv.textContent = pct + '%';
       };
-      const onUp = async () => {
+      const onUp = async (ev) => {
+        if (ev) { ev.stopPropagation(); ev.preventDefault(); }
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('touchmove', onMove);
         document.removeEventListener('mouseup', onUp);
@@ -614,17 +624,43 @@ class QsCarCard extends HTMLElement {
         this._targetDragPct = null;
         // allow re-rendering now
         this._isInteractingTarget = false;
+        handle.style.cursor = 'grab';
       };
       const onDown = (ev) => {
+        ev.stopPropagation();
         ev.preventDefault();
         this._isInteractingTarget = true;
         document.addEventListener('mousemove', onMove);
         document.addEventListener('touchmove', onMove, { passive: false });
         document.addEventListener('mouseup', onUp);
         document.addEventListener('touchend', onUp);
+        handle.style.cursor = 'grabbing';
       };
       handle.addEventListener('mousedown', onDown);
       handle.addEventListener('touchstart', onDown, { passive: false });
+
+      // Pointer Events for more reliable drag on modern browsers
+      if (window.PointerEvent) {
+        const onPointerMove = (ev) => onMove(ev);
+        const onPointerUp = async (ev) => {
+          try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
+          await onUp(ev);
+          handle.removeEventListener('pointermove', onPointerMove);
+          handle.removeEventListener('pointerup', onPointerUp);
+          handle.removeEventListener('pointercancel', onPointerUp);
+        };
+        const onPointerDown = (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          this._isInteractingTarget = true;
+          try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
+          handle.addEventListener('pointermove', onPointerMove);
+          handle.addEventListener('pointerup', onPointerUp);
+          handle.addEventListener('pointercancel', onPointerUp);
+          handle.style.cursor = 'grabbing';
+        };
+        handle.addEventListener('pointerdown', onPointerDown);
+      }
     }
   }
 }
