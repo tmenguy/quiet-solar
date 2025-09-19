@@ -3948,7 +3948,7 @@ class QSChargerOCPP(QSChargerGeneric):
         #     chargingProfileId: 1
         #     stackLevel: 0
         #     chargingProfileKind: Relative
-        #     chargingProfilePurpose: TxProfile
+        #     chargingProfilePurpose: TxProfile   => TxDefaultProfile could be used too
         #     chargingSchedule:
         #       chargingRateUnit: A
         #       chargingSchedulePeriod:
