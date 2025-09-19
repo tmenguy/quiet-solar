@@ -359,8 +359,8 @@
             "qs_car_charge_time": {
                 "name": "Charge ETA"
             },
-            "qs_car_charge_type_icon": {
-                "name": "Charge Type"
+            "qs_car_charge_type": {
+              "name": "Charge Type"
             },
             "qs_car_soc_percent": {
                 "name": "Current Charge"
