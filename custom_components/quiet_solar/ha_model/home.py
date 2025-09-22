@@ -267,7 +267,7 @@ class QSHome(QSDynamicGroup):
 
         return  await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(
                 time_now=time,
-                history_in_hours=24, futur_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
+                history_in_hours=24, future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
 
     async def compute_non_controlled_forecast(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
@@ -1240,7 +1240,7 @@ class QSSolarHistoryVals:
         return get_slots_from_time_serie(self._current_forecast, start_time, end_time)
 
 
-    async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, futur_needed_in_hours: int) -> list[tuple[datetime, float]]:
+    async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
 
         _LOGGER.debug("get_forecast_and_set_as_current called")
 
@@ -1250,11 +1250,32 @@ class QSSolarHistoryVals:
 
         time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
 
-        now_idx -= 1
+        if time_now_from_idx > time_now:
+            _LOGGER.warning(f"get_forecast_and_set_as_current: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
+
+        now_val, now_duration = self.get_current_non_stored_val_at_time(time_now)
+        # try to see if the current INTERVALS_MN, still not stored, can be used to improve the forecast
+        if now_duration is not None and now_duration > (INTERVALS_MN*60)//3:
+            # take it into account, enough data, even if unstored
+            pass
+        else:
+            now_val = None
+
+        end_idx = now_idx
+        if now_val is None:
+            end_idx -= 1 # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
+
         end_idx = self._sanitize_idx(now_idx)
         start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
 
         current_values, current_days = self._get_values(start_idx, end_idx)
+
+        if now_val is not None:
+            #override the last one with the current value
+            current_values = np.copy(current_values)
+            current_values[-1] = now_val
+            current_days = np.copy(current_days)
+            current_days[-1] = now_days
 
         if current_values is None or current_days is None:
             _LOGGER.debug("get_forecast_and_set_as_current no current_values !!!")
@@ -1278,10 +1299,6 @@ class QSSolarHistoryVals:
         scores = []
 
         for probe_days in best_past_probes_in_days:
-
-            if probe_days*24 < futur_needed_in_hours:
-                continue
-
 
             past_start_idx = self._sanitize_idx(start_idx - probe_days*NUM_INTERVALS_PER_DAY)
             past_end_idx = self._sanitize_idx(end_idx - probe_days*NUM_INTERVALS_PER_DAY)
@@ -1307,54 +1324,93 @@ class QSSolarHistoryVals:
             _LOGGER.debug("get_forecast_and_set_as_current no scores !!!")
             return []
 
-
         scores = sorted(scores, key=itemgetter(0))
+
+        forecast_values = None
+        past_days = None
+
+        num_intervals_to_get = (future_needed_in_hours+1)*NUM_INTERVAL_PER_HOUR # add one hour to cover the futur
+        num_intervals_pushed = 0
+
+        # add the best possible matches until we have enough future
 
         for score, probe_days in scores:
 
-            # now we have the best past, let's forecast the future
-            past_start_idx = self._sanitize_idx(now_idx - probe_days * NUM_INTERVALS_PER_DAY)
-            past_end_idx = self._sanitize_idx(past_start_idx + ((futur_needed_in_hours + 1) * NUM_INTERVAL_PER_HOUR)) # add one hour to cover the futur
+            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - probe_days * NUM_INTERVALS_PER_DAY)
+            new_to_get = min(((probe_days * 24)*NUM_INTERVAL_PER_HOUR) - num_intervals_pushed - 1, num_intervals_to_get)
+            past_end_idx = self._sanitize_idx(past_start_idx + new_to_get)
 
-            forecast_values, past_days = self._get_values(past_start_idx, past_end_idx)
-            past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
-            num_ok_vals = np.sum(past_ok_values)
+            c_forecast_values, c_past_days = self._get_values(past_start_idx, past_end_idx)
 
-            if num_ok_vals < 0.6*past_days.shape[0]:
+            c_past_ok_values = np.asarray(c_past_days != 0, dtype=np.int32)
+            num_ok_vals = np.sum(c_past_ok_values)
+
+            if num_ok_vals < 0.6 * c_past_days.shape[0]:
                 # bad forecast
-                _LOGGER.debug(f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
+                _LOGGER.debug(
+                    f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
+
+            # ok we will keep it
+            num_intervals_pushed += new_to_get
+            num_intervals_to_get -= new_to_get
+
+            # fill the forecast values
+            if forecast_values is None:
+                forecast_values = c_forecast_values
+                past_days = c_past_days
+            else:
+                forecast_values = np.concatenate((forecast_values, c_forecast_values))
+                past_days = np.concatenate((past_days, c_past_days))
+
+            if num_intervals_to_get <= 0:
+                # we are done
+                break
+
+
+        if forecast_values is not None and past_days is not None:
+
+            # the first forcast value represents now_idx, we will replace it with the current value if we have one, now_val
+            # by construction idx, so time_now_from_idx < time_now that has been asked
+            if now_val is not None:
+                forecast_values = np.copy(forecast_values)
+                forecast_values[0] = now_val
+                past_days = np.copy(past_days)
+                past_days[0] = now_days
+            else:
+                # we want to be sure the first one has a good value
+                if past_days[0] == 0:
+                    # ok le's find the last good value before, end_idx being
+                    prob_last_idx = self._sanitize_idx(now_idx - 1)
+
+                    # add back true value at begining if needed
+                    while True:
+                        if self.values[1][prob_last_idx] != 0:
+                            forecast_values = np.copy(forecast_values)
+                            forecast_values[0] = self.values[0][prob_last_idx]
+                            past_days = np.copy(past_days)
+                            past_days[0] = now_days
+                            break
+                        prob_last_idx -= 1
+                        prob_last_idx = self._sanitize_idx(prob_last_idx)
 
             forecast = []
 
-            prob_last_idx = end_idx
-
-            # add back true value at begining if needed
-            while True:
-                if self.values[1][prob_last_idx] != 0:
-                    time_first = self.get_utc_time_from_index(prob_last_idx, self.values[1][prob_last_idx])  + timedelta(minutes=INTERVALS_MN//2)
-                    if time_first < time_now_from_idx:
-                        forecast.insert(0, ( time_first , self.values[0][prob_last_idx]) )
-                    if time_first <= time_now:
-                        break
-
-                prob_last_idx -= 1
-                prob_last_idx = self._sanitize_idx(prob_last_idx)
-
-
-
             for i in range(past_days.shape[0]):
-                if past_ok_values[i] == 0:
+                if past_days[i] == 0:
                     continue
                 # adding INTERVALS_MN//2 has we have a mean on INTERVALS_MN
-                forecast.append((time_now_from_idx+timedelta(minutes=i*INTERVALS_MN + INTERVALS_MN//2), forecast_values[i]))
+                forecast_time = time_now_from_idx+timedelta(minutes=i*INTERVALS_MN + INTERVALS_MN//2)
+                if i == 0:
+                    forecast_time = max(time_now_from_idx, min(time_now - timedelta(seconds = 1), forecast_time))
+                forecast.append((forecast_time, forecast_values[i]))
 
             # complement with the future if there is not enough data at the end
-            if forecast[-1][0] < time_now + timedelta(hours=futur_needed_in_hours):
-                forecast.append((time_now + timedelta(hours=futur_needed_in_hours), forecast[-1][1]))
+            if forecast[-1][0] < time_now + timedelta(hours=future_needed_in_hours):
+                forecast.append((time_now + timedelta(hours=future_needed_in_hours), forecast[-1][1]))
 
             self._current_forecast = forecast
-            _LOGGER.debug(f"get_forecast_and_set_as_current A GOOD ONE STORED  {num_ok_vals} - {past_days.shape[0]}")
+            _LOGGER.debug(f"get_forecast_and_set_as_current A GOOD ONE STORED  {past_days.shape[0]}")
             return forecast
 
         _LOGGER.debug("get_forecast_and_set_as_current nothing works!")
@@ -1428,6 +1484,7 @@ class QSSolarHistoryVals:
             self.values[1][self._current_idx] = self._current_days
 
             if extend_but_not_cover_idx is not None:
+                # used to make the ring buffer contiguous
                 if extend_but_not_cover_idx <= self._current_idx:
                     # we have circled around the ring buffer
                     extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_IN_INTERVALS
@@ -1440,11 +1497,25 @@ class QSSolarHistoryVals:
             if do_save:
                 await self.save_values()
 
+    def get_current_non_stored_val_at_time(self, time: datetime) -> tuple[float | None, float | None]:
+
+        if self._current_idx is None or self._current_values is None or len(self._current_values) == 0:
+            return None, None
+
+        idx, days = self.get_index_from_time(time)
+
+        if idx == self._current_idx and days == self._current_days:
+            mean_v = get_average_sensor(self._current_values, last_timing=time)
+            duration_s = (time - self._current_values[0][0]).total_seconds()
+            return mean_v, duration_s
+
+        return None, None
+
 
 
     async def add_value(self, time: datetime, value: float, do_save: bool = False):
 
-        idx, days = self.get_index_from_time(time)
+        idx, days = self.get_index_from_time(time) # idx is % BUFFER_SIZE_IN_INTERVALS, begining of the interval minutes
 
         if self._current_idx is None:
             self._current_idx = idx

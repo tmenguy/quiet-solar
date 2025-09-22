@@ -122,7 +122,7 @@ class TestForecast(TestCase):
             conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
             await conso.init_forecasts(time)
 
-            conso_forecast = await conso.home_non_controlled_consumption.get_forecast_and_set_as_current(time_now=time, history_in_hours=24, futur_needed_in_hours=FLOATING_PERIOD_S//3600)
+            conso_forecast = await conso.home_non_controlled_consumption.get_forecast_and_set_as_current(time_now=time, history_in_hours=24, future_needed_in_hours=FLOATING_PERIOD_S // 3600)
 
             assert conso_forecast[-1][0] >= time + timedelta(seconds=FLOATING_PERIOD_S)
 
