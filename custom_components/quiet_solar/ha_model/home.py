@@ -26,11 +26,12 @@ from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
 
-from ..ha_model.device import HADeviceMixin, get_average_sensor, convert_power_to_w
+from ..ha_model.device import HADeviceMixin, convert_power_to_w
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
+from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
-    extract_name_and_index_from_dashboard_section_option
+    extract_name_and_index_from_dashboard_section_option, get_value_from_time_series
 from ..home_model.solver import PeriodSolver
 
 import numpy as np
@@ -76,29 +77,22 @@ class QSforecastValueSensor:
 
     def push_and_get(self, time: datetime) -> float | None:
         future_time = time + self._delta
-        # TODO better forecast : not good it takes what was before teh timing : should take around...
-        # the getter should work differenty probably on the slots or the closest time if found in the forecast
-        future_val = self._getter(future_time)
-        if future_val:
-            #sorted by nature
-            self._stored_values.append((future_val[0][0], future_val[0][1]))
+        future_time, future_val = self._getter(future_time)
+        if future_val is not None:
+            t,v, found, _ = get_value_from_time_series(self._stored_values, future_time)
+            if found is False:
+                self._stored_values.append((future_time, future_val))
 
         if not self._stored_values:
             return None
 
-        value = None
-        # find the last value before time
-        num_trash = 0
-        for t, v in self._stored_values:
-            if t <= time:
-                value = v
-                num_trash += 1
-            else:
-                break
 
-        if num_trash > 1:
-            self._stored_values = self._stored_values[num_trash - 1:]
+        # will give the best value for time
+        time_found_idx, value, found, idx = get_value_from_time_series(self._stored_values, time)
 
+        # the list is sorted ... remove all index before idx as we wil never ask again for a time before "time"
+        if value is not None and idx > 0 and idx < len(self._stored_values):
+            self._stored_values = self._stored_values[idx:]
 
         return value
 
@@ -181,11 +175,11 @@ class QSHome(QSDynamicGroup):
         self.home_solar_forecast_sensor_values = {}
 
         self.home_non_controlled_power_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
-            self.get_non_controlled_consumption_from_current_forecast,
+            self.get_non_controlled_consumption_from_current_forecast_getter,
             QSForecastHomeNonControlledSensors)
 
         self.home_solar_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
-            self.get_solar_from_current_forecast,
+            self.get_solar_from_current_forecast_getter,
             QSForecastSolarSensors)
 
         kwargs["home"] = self
@@ -259,11 +253,11 @@ class QSHome(QSDynamicGroup):
     def force_next_solve(self):
         self._last_solve_done = None
 
-    def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime) -> list[tuple[datetime | None, float | None]]:
+    def get_non_controlled_consumption_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
-                return self._consumption_forecast.home_non_controlled_consumption.get_from_current_forecast(start_time, end_time)
-        return []
+                return self._consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(start_time)
+        return (None, None)
 
     async def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
@@ -279,10 +273,14 @@ class QSHome(QSDynamicGroup):
 
         return unavoidable_consumption_forecast
 
+    def get_solar_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
+        if self._solar_plant:
+            return self._solar_plant.get_value_from_current_forecast(start_time)
+        return (None, None)
 
     def get_solar_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
         if self._solar_plant:
-                return self._solar_plant.get_forecast(start_time, end_time)
+            return self._solar_plant.get_forecast(start_time, end_time)
         return []
 
 
@@ -971,6 +969,7 @@ INTERVALS_MN = 60//NUM_INTERVAL_PER_HOUR # has to be a multiple of 60
 NUM_INTERVALS_PER_DAY = (24*NUM_INTERVAL_PER_HOUR)
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY
+
 class QSHomeConsumptionHistoryAndForecast:
 
     def __init__(self, home: QSHome | None, storage_path:str=None) -> None:
@@ -1238,8 +1237,11 @@ class QSSolarHistoryVals:
             return True
         return False
 
-    def get_from_current_forecast(self, start_time: datetime, end_time: datetime | None = None) -> list[tuple[datetime | None, str | float | None]]:
-        return get_slots_from_time_series(self._current_forecast, start_time, end_time)
+    def get_value_from_current_forecast(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+        res = get_value_from_time_series(self._current_forecast, time)
+        return res[0], res[1]
+
+
 
 
     async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
@@ -1263,11 +1265,25 @@ class QSSolarHistoryVals:
         else:
             now_val = None
 
+        prev_val = None
+
+        prev_val_idx = now_idx
+        tries = NUM_INTERVAL_PER_HOUR*2
+        while tries > 0:
+            prev_val_idx = self._sanitize_idx(prev_val_idx - 1)
+            if self.values[1][prev_val_idx] != 0:
+                prev_val = self.values[0][prev_val_idx]
+                break
+            tries -= 1
+
+        if prev_val is None:
+            prev_val = now_val
+
         end_idx = now_idx
         if now_val is None:
             end_idx -= 1 # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
+        end_idx = self._sanitize_idx(end_idx)
 
-        end_idx = self._sanitize_idx(now_idx)
         start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
 
         current_values, current_days = self._get_values(start_idx, end_idx)
@@ -1338,7 +1354,7 @@ class QSSolarHistoryVals:
 
         for score, probe_days in scores:
 
-            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - probe_days * NUM_INTERVALS_PER_DAY)
+            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - (probe_days * NUM_INTERVALS_PER_DAY))
             new_to_get = min(((probe_days * 24)*NUM_INTERVAL_PER_HOUR) - num_intervals_pushed - 1, num_intervals_to_get)
             past_end_idx = self._sanitize_idx(past_start_idx + new_to_get)
 
@@ -1372,7 +1388,7 @@ class QSSolarHistoryVals:
 
         if forecast_values is not None and past_days is not None:
 
-            # the first forcast value represents now_idx, we will replace it with the current value if we have one, now_val
+            # the first forecast value represents now_idx, we will replace it with the current value if we have one, now_val
             # by construction idx, so time_now_from_idx < time_now that has been asked
             if now_val is not None:
                 forecast_values = np.copy(forecast_values)
@@ -1382,29 +1398,30 @@ class QSSolarHistoryVals:
             else:
                 # we want to be sure the first one has a good value
                 if past_days[0] == 0:
-                    # ok le's find the last good value before, end_idx being
-                    prob_last_idx = self._sanitize_idx(now_idx - 1)
-
-                    # add back true value at begining if needed
-                    while True:
-                        if self.values[1][prob_last_idx] != 0:
-                            forecast_values = np.copy(forecast_values)
-                            forecast_values[0] = self.values[0][prob_last_idx]
-                            past_days = np.copy(past_days)
-                            past_days[0] = now_days
-                            break
-                        prob_last_idx -= 1
-                        prob_last_idx = self._sanitize_idx(prob_last_idx)
+                    # ok le's get the last good value before
+                    if prev_val is not None:
+                        forecast_values = np.copy(forecast_values)
+                        forecast_values[0] = prev_val
+                        past_days = np.copy(past_days)
+                        past_days[0] = now_days
+                    else:
+                        _LOGGER.error("get_forecast_and_set_as_current no prev_val !!!!")
+                        return []
 
             forecast = []
+
+            if time_now < time_now_from_idx + timedelta(minutes=INTERVALS_MN//2):
+                # we are before the middle of the current INTERVALS_MN, so we want to have a value before time_now
+                # and this value can be real
+                if prev_val is None:
+                    prev_val = forecast_values[0]
+                forecast.append((time_now_from_idx - timedelta(minutes=INTERVALS_MN - INTERVALS_MN//2), prev_val))
 
             for i in range(past_days.shape[0]):
                 if past_days[i] == 0:
                     continue
                 # adding INTERVALS_MN//2 has we have a mean on INTERVALS_MN
                 forecast_time = time_now_from_idx+timedelta(minutes=i*INTERVALS_MN + INTERVALS_MN//2)
-                if i == 0:
-                    forecast_time = max(time_now_from_idx, min(time_now - timedelta(seconds = 1), forecast_time))
                 forecast.append((forecast_time, forecast_values[i]))
 
             # complement with the future if there is not enough data at the end
@@ -1483,7 +1500,7 @@ class QSSolarHistoryVals:
 
             from_time = self.get_utc_time_from_index(self._current_idx, self._current_days)
 
-            nv = get_average_sensor(self._current_values, first_timing=from_time ,last_timing=up_to_time)
+            nv = get_average_time_series(self._current_values, first_timing=from_time ,last_timing=up_to_time)
             self.values[0][self._current_idx] = nv
             self.values[1][self._current_idx] = self._current_days
 
@@ -1509,7 +1526,7 @@ class QSSolarHistoryVals:
         idx, days = self.get_index_from_time(time)
 
         if idx == self._current_idx and days == self._current_days:
-            mean_v = get_average_sensor(self._current_values, last_timing=time)
+            mean_v = get_average_time_series(self._current_values, last_timing=time)
             duration_s = (time - self._current_values[0][0]).total_seconds()
             return mean_v, duration_s
 

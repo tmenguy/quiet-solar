@@ -7,6 +7,7 @@ import pytz
 
 from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
+from .home_utils import get_average_time_series
 from .load import AbstractLoad
 from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
     CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type, \
@@ -184,7 +185,7 @@ class PeriodSolver(object):
 
             #now compute the best power for the slots
             i_ua, ua_power = self._power_slot_from_forecast(self._ua_forecast, begin_slot, end_slot, i_ua)
-            i_pv, pv_power = self._power_slot_from_forecast(self._pv_forecast, begin_slot, end_slot, i_pv)
+            i_pv, pv_power = self._power_slot_from_forecast(self._pv_forecast, begin_slot, end_slot, i_pv, geometric_smoothing=True) #solar prediction can be smoothed a bit
 
             available_power[i] = ua_power - pv_power
 
@@ -192,7 +193,7 @@ class PeriodSolver(object):
 
 
 
-    def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end):
+    def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end, geometric_smoothing=False):
 
         if not forecast:
             return last_end, 0.0
@@ -203,31 +204,33 @@ class PeriodSolver(object):
                forecast[last_end + 1][0] <= end_slot):
             last_end += 1
         # get all the power data in the slot:
-        power = []
+        power_series = []
         if prev_end >= 0:
             if forecast[prev_end][0] == begin_slot:
-                power.append(forecast[prev_end][1])
+                power_series.append((begin_slot, forecast[prev_end][1]))
             elif forecast[prev_end][0] < begin_slot and prev_end < len(forecast) - 1:
                 adapted_power = forecast[prev_end][1]
-                adapted_power += ((forecast[prev_end + 1][1] - forecast[prev_end][1]) *
-                                  (begin_slot - forecast[prev_end][0]).total_seconds() /
-                                  (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds())
-                power.append(adapted_power)
+                if geometric_smoothing:
+                    adapted_power += ((forecast[prev_end + 1][1] - forecast[prev_end][1]) *
+                                      (begin_slot - forecast[prev_end][0]).total_seconds() /
+                                      (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds())
+                power_series.append((begin_slot, adapted_power))
         for j in range(prev_end + 1, last_end + 1):
-            power.append(forecast[j][1])
+            power_series.append((forecast[j][0], forecast[j][1]))
         # if i_ua is not the exact end, we need to adapt the power by computing an additional value
         # (else by construction if self._ua_forecast[i_ua][1] == end_slot it is inside already and in the power values)
         if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
             adapted_power = forecast[last_end][1]
-            adapted_power += ((forecast[last_end + 1][1] - forecast[last_end][1]) *
-                              (end_slot - forecast[last_end][0]).total_seconds() /
-                              (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds())
-            power.append(adapted_power)
+            if geometric_smoothing:
+                adapted_power += ((forecast[last_end + 1][1] - forecast[last_end][1]) *
+                                  (end_slot - forecast[last_end][0]).total_seconds() /
+                                  (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds())
+            power_series.append((end_slot, adapted_power))
 
-        if len(power) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
-            power.append(forecast[prev_end][1])
+        if len(power_series) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
+            power_series.append((forecast[prev_end][0], forecast[prev_end][1]))
 
-        return last_end, sum(power) / len(power)
+        return last_end, get_average_time_series(power_series, geometric_mean=geometric_smoothing)
 
 
 

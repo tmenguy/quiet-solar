@@ -13,7 +13,8 @@ from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S, \
     CONF_TYPE_NAME_QSSolar
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_series
+from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_series, \
+    get_value_from_time_series
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +48,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             return self.solar_forecast_provider_handler.get_forecast(start_time, end_time)
         return []
 
+    def get_value_from_current_forecast(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+        if self.solar_forecast_provider_handler is not None:
+            return self.solar_forecast_provider_handler.get_value_from_current_forecast(time)
+        return (None, None)
+
+
     async def dump_for_debug(self, debug_path: str) -> None:
 
         if self.solar_forecast_provider_handler is not None:
@@ -74,6 +81,10 @@ class QSSolarProvider:
 
     def get_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
         return get_slots_from_time_series(self.solar_forecast, start_time, end_time)
+
+    def get_value_from_current_forecast(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+        res = get_value_from_time_series(self.solar_forecast, time)
+        return res[0], res[1]
 
 
     def is_orchestrator(self, entity_id, orchestrator) -> bool:
@@ -104,10 +115,11 @@ class QSSolarProvider:
                 if len(self.solar_forecast) > 0:
 
                     # the value are "on" the timing, and we need more the value between the timing and the next one (slot)
-                    prev_value = self.solar_forecast[0][1]
-                    for i in range(1, len(self.solar_forecast)):
-                        self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + prev_value)/2.0)
-                        prev_value = self.solar_forecast[i][1]
+                    # .... we don't need it at all as all the time series after are exactly : value on timing
+                    # prev_value = self.solar_forecast[0][1]
+                    # for i in range(1, len(self.solar_forecast)):
+                    #     self.solar_forecast[i-1] = (self.solar_forecast[i-1][0], (self.solar_forecast[i][1] + prev_value)/2.0)
+                    #     prev_value = self.solar_forecast[i][1]
 
                     self._latest_update_time = time
             else:

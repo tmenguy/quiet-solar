@@ -4,7 +4,8 @@ from unittest import TestCase
 import pytz
 
 
-from custom_components.quiet_solar.ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin, get_median_sensor
+from custom_components.quiet_solar.home_model.home_utils import get_average_time_series
 from custom_components.quiet_solar.home_model.load import AbstractLoad, align_time_series_and_values
 
 
@@ -190,12 +191,13 @@ class TestDeviceUtils(TestCase):
             assert t1 == t2
             assert v1 == v2
 
-        a_no  = get_average_sensor(sum_no_invalid)
-        a_all = get_average_sensor(sum_all)
+        a_no  = get_average_time_series(sum_no_invalid)
+        a_all = get_average_time_series(sum_all)
         m_no = get_median_sensor(sum_no_invalid)
         m_all = get_median_sensor(sum_all)
 
         assert int(a_no) ==  3574 # before was ... but changed with time based calculus np.mean([v for _, v, _ in sum_no_invalid_res])
+        assert int(a_all) == 3473  # np.mean([v for _, v, _ in sum_all_res if v is not None])
+
         assert int(m_no) == 3440 # np.median([v for _, v, _ in sum_no_invalid_res])
-        assert int(a_all) == 3473 # np.mean([v for _, v, _ in sum_all_res if v is not None])
         assert int(m_all) == 2030 # np.median([v for _, v, _ in sum_all_res if v is not None])

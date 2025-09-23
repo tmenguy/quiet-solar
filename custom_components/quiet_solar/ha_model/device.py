@@ -18,6 +18,7 @@ from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BA
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
     FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, \
     CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin
+from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice
 
 import numpy as np
@@ -134,52 +135,6 @@ def get_average_power_energy_based(
         else:
             return 0.0
 
-    # do not change units
-    return val
-
-
-def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                       first_timing: datetime | None = None, last_timing: datetime | None = None):
-    if len(sensor_data) == 0:
-        return 0
-    elif len(sensor_data) == 1:
-        val = sensor_data[0][1]
-        if val is None:
-            val = 0.0
-    else:
-        sum_time = 0
-        sum_vals = 0
-        add_last = 0
-        if last_timing is not None:
-            add_last = 1
-        first_idx = 1
-        if first_timing is not None:
-            first_idx = 0
-        for i in range(first_idx, len(sensor_data) + add_last):
-            if i == 0:
-                value = sensor_data[0][1]
-            else:
-                value = sensor_data[i - 1][1]
-
-            if value is None:
-                continue
-            if i == len(sensor_data):
-                dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
-            elif i == 0:
-                dt = (sensor_data[i][0] - first_timing).total_seconds()
-            else:
-                dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
-
-            if dt == 0:
-                dt = 1
-
-            sum_time += dt
-            sum_vals += dt*float(value)
-
-        if sum_time > 0:
-            return sum_vals / sum_time
-        else:
-            return 0.0
     # do not change units
     return val
 
@@ -728,7 +683,7 @@ class HADeviceMixin:
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_average_sensor(entity_id_values, last_timing=time)
+        return get_average_time_series(entity_id_values, last_timing=time)
 
     def get_median_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
         return self.get_median_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)

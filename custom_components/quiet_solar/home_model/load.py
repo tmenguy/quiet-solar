@@ -1304,4 +1304,41 @@ def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datet
 
     return time_serie[start_idx:end_idx + 1]
 
+def get_value_from_time_series(time_series, time: datetime) -> tuple[datetime | None, str | float | None, bool, int]:
+
+    # find the closest time in the time serie
+    if time_series is None or len(time_series) == 0:
+        return (None, None, False, -1)
+
+    #small optim:
+    if time_series[-1][0] == time:
+        res = time_series[-1]
+        res_idx = len(time_series) - 1
+    elif time_series[0][0] == time:
+        res = time_series[0]
+        res_idx = 0
+    else:
+        idx = bisect_left(time_series, time, key=itemgetter(0))
+
+
+
+        if idx >= len(time_series):
+            res = time_series[-1]
+            res_idx = len(time_series) - 1
+        elif idx <= 0:
+            res = time_series[0]
+            res_idx = 0
+        elif time_series[idx][0] == time:
+            res = time_series[idx]
+            res_idx = idx
+        else:
+            if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
+                res = time_series[idx - 1]
+                res_idx = idx - 1
+            else:
+                res =  time_series[idx]
+                res_idx = idx
+
+    return res[0], res[1], res[0] == time, res_idx
+
 

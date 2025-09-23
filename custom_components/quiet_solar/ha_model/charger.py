@@ -107,11 +107,11 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
-from ..ha_model.device import HADeviceMixin, get_average_sensor, get_median_sensor
+from ..ha_model.device import HADeviceMixin, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
     CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN, copy_command_and_change_type
 from ..home_model.load import AbstractLoad
-from ..home_model.home_utils import is_amps_zero, are_amps_equal, add_amps, diff_amps
+from ..home_model.home_utils import is_amps_zero, are_amps_equal, add_amps, diff_amps, get_average_time_series
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -612,8 +612,8 @@ class QSChargerGroup(object):
                 grid_available_home_power = None
 
                 if grid_available_power:
-                    last_p_mean = get_average_sensor(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
-                    all_p_mean = get_average_sensor(grid_available_power, last_timing=time)
+                    last_p_mean = get_average_time_series(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
+                    all_p_mean = get_average_time_series(grid_available_power, last_timing=time)
                     last_p_median = get_median_sensor(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
                     all_p_median = get_median_sensor(grid_available_power, last_timing=time)
 
@@ -621,8 +621,8 @@ class QSChargerGroup(object):
 
                 if available_power:
 
-                    last_p_mean = get_average_sensor(available_power[-len(available_power) // 2:], last_timing=time)
-                    all_p_mean = get_average_sensor(available_power, last_timing=time)
+                    last_p_mean = get_average_time_series(available_power[-len(available_power) // 2:], last_timing=time)
+                    all_p_mean = get_average_time_series(available_power, last_timing=time)
                     last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
                     all_p_median = get_median_sensor(available_power, last_timing=time)
 
