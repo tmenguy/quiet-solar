@@ -17,7 +17,7 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 from .dynamic_group import QSDynamicGroup
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
-    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
+     FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
     CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
@@ -29,7 +29,7 @@ from ..ha_model.charger import QSChargerGeneric
 from ..ha_model.device import HADeviceMixin, get_average_sensor, convert_power_to_w
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_serie, \
+from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
     extract_name_and_index_from_dashboard_section_option
 from ..home_model.solver import PeriodSolver
 
@@ -76,6 +76,8 @@ class QSforecastValueSensor:
 
     def push_and_get(self, time: datetime) -> float | None:
         future_time = time + self._delta
+        # TODO better forecast : not good it takes what was before teh timing : should take around...
+        # the getter should work differenty probably on the slots or the closest time if found in the forecast
         future_val = self._getter(future_time)
         if future_val:
             #sorted by nature
@@ -257,7 +259,7 @@ class QSHome(QSDynamicGroup):
     def force_next_solve(self):
         self._last_solve_done = None
 
-    def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
+    def get_non_controlled_consumption_from_current_forecast(self, start_time:datetime) -> list[tuple[datetime | None, float | None]]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
                 return self._consumption_forecast.home_non_controlled_consumption.get_from_current_forecast(start_time, end_time)
@@ -1236,8 +1238,8 @@ class QSSolarHistoryVals:
             return True
         return False
 
-    def get_from_current_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
-        return get_slots_from_time_serie(self._current_forecast, start_time, end_time)
+    def get_from_current_forecast(self, start_time: datetime, end_time: datetime | None = None) -> list[tuple[datetime | None, str | float | None]]:
+        return get_slots_from_time_series(self._current_forecast, start_time, end_time)
 
 
     async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
@@ -1473,18 +1475,20 @@ class QSSolarHistoryVals:
                 return await self.hass.async_add_executor_job(
                     _load_values_from_file, self.file_path)
 
-    async def _store_current_vals(self, time: datetime | None = None, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
+    async def _store_current_vals(self, up_to_time: datetime | None = None, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
 
         if self._current_values:
             if self.values is None:
                 self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
-            nv = get_average_sensor(self._current_values, last_timing=time)
+            from_time = self.get_utc_time_from_index(self._current_idx, self._current_days)
+
+            nv = get_average_sensor(self._current_values, first_timing=from_time ,last_timing=up_to_time)
             self.values[0][self._current_idx] = nv
             self.values[1][self._current_idx] = self._current_days
 
             if extend_but_not_cover_idx is not None:
-                # used to make the ring buffer contiguous
+                # used to make the ring buffer contiguous, in case there was a hole
                 if extend_but_not_cover_idx <= self._current_idx:
                     # we have circled around the ring buffer
                     extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_IN_INTERVALS
@@ -1522,8 +1526,9 @@ class QSSolarHistoryVals:
             self._current_days = days
             self._current_values = []
 
-        if self._current_idx != idx:
-            await self._store_current_vals(time, do_save=do_save, extend_but_not_cover_idx=idx)
+        if self._current_idx != idx or self._current_days != days:
+            up_to_time = self.get_utc_time_from_index(idx, days)
+            await self._store_current_vals(up_to_time=up_to_time, do_save=do_save, extend_but_not_cover_idx=idx)
             self._current_idx = idx
             self._current_days = days
             self._current_values = [(time, value)]
@@ -1657,7 +1662,7 @@ class QSSolarHistoryVals:
                     pass
 
             if self._current_idx is not None and self._current_idx != now_idx:
-                await self._store_current_vals(time=None, do_save=False)
+                await self._store_current_vals(up_to_time=None, do_save=False)
 
             self._current_idx = None
 

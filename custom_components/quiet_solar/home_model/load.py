@@ -1275,13 +1275,13 @@ def align_time_series_and_values(
         return list(zip(t_only, new_v1)), list(zip(t_only, new_v2))
 
 
-def get_slots_from_time_serie(time_serie, start_time: datetime, end_time: datetime | None) -> list[
+def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datetime | None = None) -> list[
     tuple[datetime | None, str | float | None]]:
     if not time_serie:
         return []
 
     start_idx = bisect_left(time_serie, start_time, key=itemgetter(0))
-    # get one before
+    # get one before to have the timing just before
     if start_idx > 0:
         if time_serie[start_idx][0] != start_time:
             start_idx -= 1

@@ -13,7 +13,7 @@ from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S, \
     CONF_TYPE_NAME_QSSolar
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_serie
+from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_series
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class QSSolarProvider:
         self.solar_forecast : list[tuple[datetime | None, float | None]] = []
 
     def get_forecast(self, start_time: datetime, end_time: datetime | None) -> list[tuple[datetime | None, str | float | None]]:
-        return get_slots_from_time_serie(self.solar_forecast, start_time, end_time)
+        return get_slots_from_time_series(self.solar_forecast, start_time, end_time)
 
 
     def is_orchestrator(self, entity_id, orchestrator) -> bool:

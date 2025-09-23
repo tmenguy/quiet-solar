@@ -139,7 +139,7 @@ def get_average_power_energy_based(
 
 
 def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                       last_timing: datetime | None = None):
+                       first_timing: datetime | None = None, last_timing: datetime | None = None):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
@@ -152,12 +152,21 @@ def get_average_sensor(sensor_data: list[tuple[datetime | None, str | float | No
         add_last = 0
         if last_timing is not None:
             add_last = 1
-        for i in range(1, len(sensor_data) + add_last):
-            value = sensor_data[i - 1][1]
+        first_idx = 1
+        if first_timing is not None:
+            first_idx = 0
+        for i in range(first_idx, len(sensor_data) + add_last):
+            if i == 0:
+                value = sensor_data[0][1]
+            else:
+                value = sensor_data[i - 1][1]
+
             if value is None:
                 continue
             if i == len(sensor_data):
                 dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
+            elif i == 0:
+                dt = (sensor_data[i][0] - first_timing).total_seconds()
             else:
                 dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
 
@@ -719,7 +728,7 @@ class HADeviceMixin:
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_average_sensor(entity_id_values, time)
+        return get_average_sensor(entity_id_values, last_timing=time)
 
     def get_median_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
         return self.get_median_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)

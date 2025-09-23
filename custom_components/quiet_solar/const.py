@@ -179,6 +179,7 @@ SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
 
 QSForecastHomeNonControlledSensors = {
+    "qs_no_control_forecast_now": 0, #TODO better forecast
     "qs_no_control_forecast_15mn": 15*60,
     "qs_no_control_forecast_30mn": 30*60,
     "qs_no_control_forecast_1h": 60*60,
