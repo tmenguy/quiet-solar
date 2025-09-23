@@ -58,41 +58,47 @@ class QSforecastValueSensor:
     _stored_values: list[tuple[datetime, float]]
 
     @classmethod
-    def get_probers(cls, getter, names_and_duration):
+    def get_probers(cls, getter, getter_now, names_and_duration):
 
         probers = {}
 
         for name, duration_s in names_and_duration.items():
-            probers[name] = cls(name, duration_s, getter)
+            probers[name] = cls(name, duration_s, getter, getter_now)
 
         return probers
 
 
-    def __init__(self, name, duration_s, forecast_getter):
+    def __init__(self, name, duration_s, forecast_getter, current_getter=None):
         self._stored_values = []
         self._getter = forecast_getter
+        self._current_getter = current_getter
         self._delta = timedelta(seconds=duration_s)
         self.name = name
 
 
     def push_and_get(self, time: datetime) -> float | None:
-        future_time = time + self._delta
-        future_time, future_val = self._getter(future_time)
-        if future_val is not None:
-            t,v, found, _ = get_value_from_time_series(self._stored_values, future_time)
-            if found is False:
-                self._stored_values.append((future_time, future_val))
 
-        if not self._stored_values:
-            return None
+        if self._delta == timedelta(seconds=0) and self._current_getter is not None:
+            # get the current value
+            _, value = self._current_getter(time)
+        else:
 
+            future_time = time + self._delta
+            future_time, future_val = self._getter(future_time)
+            if future_val is not None:
+                t,v, found, _ = get_value_from_time_series(self._stored_values, future_time)
+                if found is False:
+                    self._stored_values.append((future_time, future_val))
 
-        # will give the best value for time
-        time_found_idx, value, found, idx = get_value_from_time_series(self._stored_values, time)
+            if not self._stored_values:
+                return None
 
-        # the list is sorted ... remove all index before idx as we wil never ask again for a time before "time"
-        if value is not None and idx > 0 and idx < len(self._stored_values):
-            self._stored_values = self._stored_values[idx:]
+            # will give the best value for time
+            time_found_idx, value, found, idx = get_value_from_time_series(self._stored_values, time)
+
+            # the list is sorted ... remove all index before idx as we wil never ask again for a time before "time"
+            if value is not None and idx > 0 and idx < len(self._stored_values):
+                self._stored_values = self._stored_values[idx:]
 
         return value
 
@@ -176,10 +182,12 @@ class QSHome(QSDynamicGroup):
 
         self.home_non_controlled_power_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
             self.get_non_controlled_consumption_from_current_forecast_getter,
+            self.get_non_controlled_consumption_best_stored_value_getter,
             QSForecastHomeNonControlledSensors)
 
         self.home_solar_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
             self.get_solar_from_current_forecast_getter,
+            None,
             QSForecastSolarSensors)
 
         kwargs["home"] = self
@@ -258,6 +266,13 @@ class QSHome(QSDynamicGroup):
             if self._consumption_forecast.home_non_controlled_consumption:
                 return self._consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(start_time)
         return (None, None)
+
+    def get_non_controlled_consumption_best_stored_value_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
+        if self._consumption_forecast:
+            if self._consumption_forecast.home_non_controlled_consumption:
+                return self._consumption_forecast.home_non_controlled_consumption.get_best_stored_value(start_time)
+        return (None, None)
+
 
     async def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
@@ -1531,6 +1546,33 @@ class QSSolarHistoryVals:
             return mean_v, duration_s
 
         return None, None
+
+    def get_best_stored_value(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+
+        val, _ = self.get_current_non_stored_val_at_time(time)
+        time_out = time
+
+        if val is None:
+            idx, days = self.get_index_from_time(time)
+            v = self.values[0][idx]
+            d = self.values[1][idx]
+            if d > 0 and d == days and v is not None:
+                val = v
+                time_out = self.get_utc_time_from_index(idx, days)
+            else:
+                idx = self._sanitize_idx(idx - 1)
+                v = self.values[0][idx]
+                d = self.values[1][idx]
+                if d > 0 and (d == days or d == days - 1) and v is not None:
+                    val = v
+                    time_out = self.get_utc_time_from_index(idx, days)
+
+        if val is None:
+            time_out = None
+
+        return time_out, val
+
+
 
 
 
