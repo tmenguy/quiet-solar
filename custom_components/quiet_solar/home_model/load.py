@@ -656,7 +656,7 @@ class AbstractLoad(AbstractDevice):
         self._last_pushed_end_constraint_from_agenda = None
 
 
-    def clean_constraints_for_load_param(self, time:datetime, load_param: str | None, do_full_reset=True):
+    def clean_constraints_for_load_param(self, time:datetime, load_param: str | None, for_full_reset=True):
         existing_constraints = []
         last_completed_constraint = None
         last_pushed_end_constraint_from_agenda = None
@@ -667,8 +667,9 @@ class AbstractLoad(AbstractDevice):
 
             if self._last_pushed_end_constraint_from_agenda.load_param == load_param:
                 # we have a last pushed end constraint that is still valid
-                _LOGGER.info(
-                    f"clean_constraints_for_load_param: Found a stored last pushed end constraint to be kept with {self._last_pushed_end_constraint_from_agenda.load_param}  {self._last_pushed_end_constraint_from_agenda.name}")
+                if for_full_reset:
+                    _LOGGER.info(
+                        f"clean_constraints_for_load_param: Found a stored last pushed end constraint to be kept with {self._last_pushed_end_constraint_from_agenda.load_param}  {self._last_pushed_end_constraint_from_agenda.name}")
                 last_pushed_end_constraint_from_agenda = self._last_pushed_end_constraint_from_agenda
             else:
                 found_one_bad = True
@@ -677,8 +678,9 @@ class AbstractLoad(AbstractDevice):
         if self._last_completed_constraint is not None:
             if self._last_completed_constraint.load_param == load_param:
                 # we have a last completed constraint that is still valid
-                _LOGGER.info(
-                    f"clean_constraints_for_load_param: Found a stored last completed constraint to be kept with {self._last_completed_constraint.load_param}  {self._last_completed_constraint.name}")
+                if for_full_reset:
+                    _LOGGER.info(
+                        f"clean_constraints_for_load_param: Found a stored last completed constraint to be kept with {self._last_completed_constraint.load_param}  {self._last_completed_constraint.name}")
                 last_completed_constraint = self._last_completed_constraint
             else:
                 found_one_bad = True
@@ -690,23 +692,26 @@ class AbstractLoad(AbstractDevice):
                 # this constraint is not compatible with the load_param we are looking for
                 found_one_bad = True
                 continue
-
-            _LOGGER.info(
-                f"clean_constraints_for_load_param: Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+            if for_full_reset:
+                _LOGGER.info(
+                    f"clean_constraints_for_load_param: Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
 
             existing_constraints.append(ct)
 
-        if found_one_bad is False and do_full_reset is False:
+        if found_one_bad is False and for_full_reset is False:
             # no need to reset, we have all the constraints we need
             _LOGGER.info(f"clean_constraints_for_load_param: No bad constraint found for {load_param}, no reset needed")
             return
 
-        if do_full_reset:
+        if for_full_reset:
             self.reset()
         else:
             self.reset_load_only()
 
-        self._last_completed_constraint = last_completed_constraint
+        # if not full reset : do not remember the last completed constraint .... (ex: a plugged car, when plugging in, forget any previously stored constraint)
+        if for_full_reset is False:
+            self._last_completed_constraint = last_completed_constraint
+
         self._last_pushed_end_constraint_from_agenda = last_pushed_end_constraint_from_agenda
         for ct in existing_constraints:
             if ct is not None:
