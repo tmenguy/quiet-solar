@@ -98,7 +98,7 @@ class QSforecastValueSensor:
 
             # the list is sorted ... remove all index before idx as we wil never ask again for a time before "time"
             if value is not None and idx > 0 and idx < len(self._stored_values):
-                self._stored_values = self._stored_values[idx:]
+                self._stored_values = self._stored_values[idx - 1:]
 
         return value
 
