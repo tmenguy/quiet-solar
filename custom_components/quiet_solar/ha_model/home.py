@@ -270,7 +270,7 @@ class QSHome(QSDynamicGroup):
     def get_non_controlled_consumption_best_stored_value_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
-                return self._consumption_forecast.home_non_controlled_consumption.get_best_stored_value(start_time)
+                return self._consumption_forecast.home_non_controlled_consumption.get_closest_stored_value(start_time)
         return (None, None)
 
 
@@ -1549,25 +1549,25 @@ class QSSolarHistoryVals:
 
         return None, None
 
-    def get_best_stored_value(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+    def get_closest_stored_value(self, time: datetime) -> tuple[datetime | None, str | float | None]:
 
-        val, _ = self.get_current_non_stored_val_at_time(time)
-        time_out = time
+        # val, _ = self.get_current_non_stored_val_at_time(time)
+        # time_out = time
 
-        if val is None:
-            idx, days = self.get_index_from_time(time)
-            v = self.values[0][idx]
-            d = self.values[1][idx]
-            if d > 0 and d == days and v is not None:
-                val = v
-                time_out = self.get_utc_time_from_index(idx, days)
-            else:
-                idx = self._sanitize_idx(idx - 1)
-                v = self.values[0][idx]
-                d = self.values[1][idx]
-                if d > 0 and (d == days or d == days - 1) and v is not None:
-                    val = v
-                    time_out = self.get_utc_time_from_index(idx, days)
+        val = None
+        time_out = None
+
+        idx, days = self.get_index_from_time(time)
+
+        if idx == self._current_idx and days == self._current_days:
+            # get the previous one
+            idx = self._sanitize_idx(idx - 1)
+
+        v = self.values[0][idx]
+        d = self.values[1][idx]
+        if d > 0 and (d == days or d == days - 1) and v is not None:
+            val = v
+            time_out = self.get_utc_time_from_index(idx, d)
 
         if val is None:
             time_out = None
