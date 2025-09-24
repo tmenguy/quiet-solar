@@ -3812,7 +3812,7 @@ class QSChargerOCPP(QSChargerGeneric):
             kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_charge_control")
 
             if self.use_ocpp_custom_charging_profile:
-                kwargs[CONF_CHARGER_CHARGING_CURRENT_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_current_offered")
+                kwargs[CONF_CHARGER_CHARGING_CURRENT_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_current_offered") # this one seems to be the true session current for charge, not measure
                 self.charger_ocpp_transaction_id = self._find_charger_entity_id(device, entries, "sensor.", "_transaction_id")
             else:
                 self.charger_ocpp_transaction_id = None
@@ -3821,6 +3821,12 @@ class QSChargerOCPP(QSChargerGeneric):
             # kwargs[CONF_CHARGER_REBOOT_BUTTON] = self._find_charger_entity_id(device, entries, "button.", "_reset")
 
             self.charger_ocpp_current_import = self._find_charger_entity_id(device, entries, "sensor.", "_current_import")
+            # measured current ... but well not super usefull as even if 0 charge in case of error ... there is still a value there ex for the twingo :
+            # it was below 7amp (the car minimum) at 6.67, even if we had 15 in _current_offered ... the car was not charging
+
+            # this one below is updated every 15mn and can give if some energy has really been in to the car
+            # TODO: use it to throw alterts in case it should charge ... and it is not!
+            self.charger_energy_active_import = self._find_charger_entity_id(device, entries, "sensor.", "_energy_active_import_register")
 
 
         super().__init__(**kwargs)
