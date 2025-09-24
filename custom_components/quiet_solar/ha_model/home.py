@@ -1354,10 +1354,12 @@ class QSSolarHistoryVals:
 
 
         if not scores:
-            _LOGGER.debug("get_forecast_and_set_as_current no scores !!!")
+            _LOGGER.info("get_forecast_and_set_as_current no scores !!!")
             return []
 
         scores = sorted(scores, key=itemgetter(0))
+
+        _LOGGER.info(f"get_forecast_and_set_as_current: best forecast from {scores[0][1]} days ({scores})")
 
         forecast_values = None
         past_days = None
