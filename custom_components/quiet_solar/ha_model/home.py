@@ -1364,19 +1364,19 @@ class QSSolarHistoryVals:
 
         best_r = -np.inf
         best_lag = 0
-        if Lmax != 0:
-            for lag in range(-Lmax, Lmax + 1):
-                if lag >= 0:
-                    a = zx[:n - lag]
-                    b = zy[lag:]
-                else:
-                    a = zx[-lag:]
-                    b = zy[:n + lag]
-                if len(a) < 2:  # too few points to compute correlation
-                    continue
-                r = np.corrcoef(a, b)[0, 1]  # Pearson on the overlap
-                if r > best_r:
-                    best_r, best_lag = r, lag
+
+        for lag in range(-Lmax, Lmax + 1):
+            if lag >= 0:
+                a = zx[:n - lag]
+                b = zy[lag:]
+            else:
+                a = zx[-lag:]
+                b = zy[:n + lag]
+            if len(a) < 2:  # too few points to compute correlation
+                continue
+            r = np.corrcoef(a, b)[0, 1]  # Pearson on the overlap
+            if r > best_r:
+                best_r, best_lag = r, lag
 
         best_r = float(best_r)
         S = (1 + best_r) / 2  # score [0,1]
@@ -1397,8 +1397,6 @@ class QSSolarHistoryVals:
         # scores_12 = self._get_possible_past_consumption_for_forecast(time_now, 12)
 
         scores_XX = self._get_possible_past_consumption_for_forecast(time_now, history_in_hours)
-
-        _LOGGER.info(f"get_forecast_and_set_as_current: best forecast from {scores_XX[0][1]} days ({scores_XX})")
 
         forecast_values = None
         past_days = None
