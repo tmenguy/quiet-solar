@@ -1257,42 +1257,11 @@ class QSSolarHistoryVals:
         return res[0], res[1]
 
 
-
-
-    async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
-
-        _LOGGER.debug("get_forecast_and_set_as_current called")
-
-        self._last_forecast_update_time = time_now
+    def _get_possible_past_consumption_for_forecast(self, time_now: datetime, history_in_hours: int):
 
         now_idx, now_days = self.get_index_from_time(time_now)
 
-        time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
-
-        if time_now_from_idx > time_now:
-            _LOGGER.warning(f"get_forecast_and_set_as_current: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
-
-        now_val, now_duration = self.get_current_non_stored_val_at_time(time_now)
-        # try to see if the current INTERVALS_MN, still not stored, can be used to improve the forecast
-        if now_duration is not None and now_duration > (INTERVALS_MN*60)//3:
-            # take it into account, enough data, even if unstored
-            pass
-        else:
-            now_val = None
-
-        prev_val = None
-
-        prev_val_idx = now_idx
-        tries = NUM_INTERVAL_PER_HOUR*2
-        while tries > 0:
-            prev_val_idx = self._sanitize_idx(prev_val_idx - 1)
-            if self.values[1][prev_val_idx] != 0:
-                prev_val = self.values[0][prev_val_idx]
-                break
-            tries -= 1
-
-        if prev_val is None:
-            prev_val = now_val
+        now_val = self._get_possible_now_val_for_forcast(time_now)
 
         end_idx = now_idx
         if now_val is None:
@@ -1311,7 +1280,7 @@ class QSSolarHistoryVals:
             current_days[-1] = now_days
 
         if current_values is None or current_days is None:
-            _LOGGER.debug("get_forecast_and_set_as_current no current_values !!!")
+            _LOGGER.debug("_get_possible_past_consumption_for_forecast no current_values !!!")
             return []
 
         current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
@@ -1333,6 +1302,10 @@ class QSSolarHistoryVals:
 
         for probe_days in best_past_probes_in_days:
 
+            if probe_days*24 < history_in_hours:
+                # not enough history for this probe
+                continue
+
             past_start_idx = self._sanitize_idx(start_idx - probe_days*NUM_INTERVALS_PER_DAY)
             past_end_idx = self._sanitize_idx(end_idx - probe_days*NUM_INTERVALS_PER_DAY)
 
@@ -1345,21 +1318,84 @@ class QSSolarHistoryVals:
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad history
                 _LOGGER.debug(
-                    f"get_forecast_and_set_as_current trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
+                    f"_get_possible_past_consumption_for_forecast trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
-            score = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)))/float(num_ok_vals)
+            score   = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)/float(num_ok_vals)))
+            c_vals = [current_values[i] for i in range(current_values.shape[0]) if check_vals[i]]
+            p_vals = [past_values[i]    for i in range(past_values.shape[0])    if check_vals[i]]
+            score_2 = self.xcorr_max_pearson(c_vals, p_vals, Lmax=4)[2]
+            score_3 = float(np.sum(np.abs(current_values - past_values)*check_vals))/float(num_ok_vals)
 
-            scores.append((score, probe_days))
+            scores.append((score, probe_days, score_2, score_3))
 
 
         if not scores:
-            _LOGGER.info("get_forecast_and_set_as_current no scores !!!")
+            _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) no scores !!!")
             return []
 
         scores = sorted(scores, key=itemgetter(0))
 
-        _LOGGER.info(f"get_forecast_and_set_as_current: best forecast from {scores[0][1]} days ({scores})")
+        _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}): best forecast from {scores[0][1]} days ({scores})")
+
+        return scores
+
+
+    def _get_possible_now_val_for_forcast(self, time_now: datetime):
+
+        now_val, now_duration = self.get_current_non_stored_val_at_time(time_now)
+        # try to see if the current INTERVALS_MN, still not stored, can be used to improve the forecast
+        if now_duration is not None and now_duration > (INTERVALS_MN*60)//2:
+            # take it into account, enough data, even if unstored
+            pass
+        else:
+            now_val = None
+
+        return now_val
+
+    def xcorr_max_pearson(self, x, y, Lmax):
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        n = len(x)
+        # z-score
+        zx = (x - x.mean()) / x.std(ddof=0)
+        zy = (y - y.mean()) / y.std(ddof=0)
+
+        best_r = -np.inf
+        best_lag = 0
+        for lag in range(-Lmax, Lmax + 1):
+            if lag >= 0:
+                a = zx[:n - lag]
+                b = zy[lag:]
+            else:
+                a = zx[-lag:]
+                b = zy[:n + lag]
+            if len(a) < 2:  # trop peu de points pour corréler
+                continue
+            r = np.corrcoef(a, b)[0, 1]  # Pearson sur la portion chevauchante
+            if r > best_r:
+                best_r, best_lag = r, lag
+
+        S = (1 + best_r) / 2  # score [0,1]
+        return best_r, best_lag, S
+
+    async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
+
+        _LOGGER.debug("get_forecast_and_set_as_current called")
+
+        self._last_forecast_update_time = time_now
+
+        # scores_48 = self._get_possible_past_consumption_for_forecast(time_now, 48)
+
+        # scores_36 = self._get_possible_past_consumption_for_forecast(time_now, 36)
+
+        # scores_06 = self._get_possible_past_consumption_for_forecast(time_now, 6)
+
+        # scores_12 = self._get_possible_past_consumption_for_forecast(time_now, 12)
+
+        scores_XX = self._get_possible_past_consumption_for_forecast(time_now, history_in_hours)
+
+        _LOGGER.info(f"get_forecast_and_set_as_current: best forecast from {scores_XX[0][1]} days ({scores_XX})")
 
         forecast_values = None
         past_days = None
@@ -1369,7 +1405,16 @@ class QSSolarHistoryVals:
 
         # add the best possible matches until we have enough future
 
-        for score, probe_days in scores:
+        now_idx, now_days = self.get_index_from_time(time_now)
+
+        time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
+
+        if time_now_from_idx > time_now:
+            _LOGGER.warning(f"_get_possible_past_consumption_for_forecast: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
+
+        for item_past in scores_XX:
+
+            probe_days = item_past[1]
 
             past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - (probe_days * NUM_INTERVALS_PER_DAY))
             new_to_get = min(((probe_days * 24)*NUM_INTERVAL_PER_HOUR) - num_intervals_pushed - 1, num_intervals_to_get)
@@ -1404,6 +1449,22 @@ class QSSolarHistoryVals:
 
 
         if forecast_values is not None and past_days is not None:
+
+            prev_val = None
+            now_val = self._get_possible_now_val_for_forcast(time_now)
+
+            prev_val_idx = now_idx
+            tries = NUM_INTERVAL_PER_HOUR * 2
+            while tries > 0:
+                prev_val_idx = self._sanitize_idx(prev_val_idx - 1)
+                if self.values[1][prev_val_idx] != 0:
+                    prev_val = self.values[0][prev_val_idx]
+                    break
+                tries -= 1
+
+            if prev_val is None:
+                prev_val = now_val
+
 
             # the first forecast value represents now_idx, we will replace it with the current value if we have one, now_val
             # by construction idx, so time_now_from_idx < time_now that has been asked
