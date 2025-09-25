@@ -1325,9 +1325,10 @@ class QSSolarHistoryVals:
             c_vals = [current_values[i] for i in range(current_values.shape[0]) if check_vals[i]]
             p_vals = [past_values[i]    for i in range(past_values.shape[0])    if check_vals[i]]
             score_2 = self.xcorr_max_pearson(c_vals, p_vals, Lmax=4)[2]
-            score_3 = float(np.sum(np.abs(current_values - past_values)*check_vals))/float(num_ok_vals)
+            score_3 = self.xcorr_max_pearson(c_vals, p_vals, Lmax=0)[2]
+            score_4 = float(np.sum(np.abs(current_values - past_values)*check_vals))/float(num_ok_vals)
 
-            scores.append((score, probe_days, score_2, score_3))
+            scores.append((score, probe_days, score_2, score_3, score_4))
 
 
         if not scores:
@@ -1363,19 +1364,21 @@ class QSSolarHistoryVals:
 
         best_r = -np.inf
         best_lag = 0
-        for lag in range(-Lmax, Lmax + 1):
-            if lag >= 0:
-                a = zx[:n - lag]
-                b = zy[lag:]
-            else:
-                a = zx[-lag:]
-                b = zy[:n + lag]
-            if len(a) < 2:  # trop peu de points pour corréler
-                continue
-            r = np.corrcoef(a, b)[0, 1]  # Pearson sur la portion chevauchante
-            if r > best_r:
-                best_r, best_lag = r, lag
+        if Lmax != 0:
+            for lag in range(-Lmax, Lmax + 1):
+                if lag >= 0:
+                    a = zx[:n - lag]
+                    b = zy[lag:]
+                else:
+                    a = zx[-lag:]
+                    b = zy[:n + lag]
+                if len(a) < 2:  # too few points to compute correlation
+                    continue
+                r = np.corrcoef(a, b)[0, 1]  # Pearson on the overlap
+                if r > best_r:
+                    best_r, best_lag = r, lag
 
+        best_r = float(best_r)
         S = (1 + best_r) / 2  # score [0,1]
         return best_r, best_lag, S
 
