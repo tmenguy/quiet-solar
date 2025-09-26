@@ -1304,6 +1304,8 @@ class QSSolarHistoryVals:
 
             if probe_days*24 < history_in_hours:
                 # not enough history for this probe
+                _LOGGER.debug(
+                    f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago for bad too small history")
                 continue
 
             past_start_idx = self._sanitize_idx(start_idx - probe_days*NUM_INTERVALS_PER_DAY)
@@ -1318,7 +1320,7 @@ class QSSolarHistoryVals:
             if num_ok_vals < 0.6*past_days.shape[0]:
                 # bad history
                 _LOGGER.debug(
-                    f"_get_possible_past_consumption_for_forecast trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
+                    f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
             score   = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)/float(num_ok_vals)))
@@ -1699,6 +1701,7 @@ class QSSolarHistoryVals:
         if self.values is not None:
 
             if self.values.shape[0] != 2 or self.values.shape[1] != BUFFER_SIZE_IN_INTERVALS:
+                _LOGGER.warning("Error loading forecast values for %s shape %s, resetting", self.entity_id, self.values.shape)
                 self.values = None
 
         if self.values is not None:
@@ -1781,7 +1784,7 @@ class QSSolarHistoryVals:
                         do_save = True
                 else:
                     # possibly a wrong state
-                    _LOGGER.info("Error loading lazy sate value for %s", self.entity_id)
+                    _LOGGER.warning("Error loading lazy safe value for %s", self.entity_id)
                     pass
 
             if self._current_idx is not None and self._current_idx != now_idx:
