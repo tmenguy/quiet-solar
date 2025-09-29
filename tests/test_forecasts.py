@@ -4,6 +4,19 @@ import pickle
 from datetime import datetime, timedelta
 from unittest import TestCase
 
+import logging, sys
+
+LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s:%(lineno)d - %(message)s"
+
+root = logging.getLogger()
+if not root.handlers:  # avoid duplicate handlers on re-run
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(handler)
+
+root.setLevel(logging.DEBUG)
+
+
 import pytz
 
 import numpy as np
@@ -12,9 +25,10 @@ from custom_components.quiet_solar.const import FLOATING_PERIOD_S, CONSTRAINT_TY
     CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
-    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-from custom_components.quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN, \
-    BUFFER_SIZE_DAYS, QSHome
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, DOMAIN, FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+from custom_components.quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast, BUFFER_SIZE_IN_INTERVALS, \
+    INTERVALS_MN, \
+    BUFFER_SIZE_DAYS, QSHome, QSSolarHistoryVals
 from custom_components.quiet_solar.ha_model.solar import QSSolarProvider, QSSolarProviderSolcastDebug
 from custom_components.quiet_solar.home_model.battery import Battery
 from custom_components.quiet_solar.home_model.commands import copy_command, CMD_AUTO_GREEN_ONLY, CMD_ON
@@ -22,6 +36,15 @@ from custom_components.quiet_solar.home_model.constraints import MultiStepsPower
     MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, TimeBasedSimplePowerLoadConstraint
 from custom_components.quiet_solar.home_model.load import TestLoad
 from custom_components.quiet_solar.home_model.solver import PeriodSolver
+
+
+root = logging.getLogger()
+if not root.handlers:  # avoid duplicate handlers on re-run
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(handler)
+
+root.setLevel(logging.DEBUG)
 
 def _util_constraint_save_dump(time, cs):
     dc_dump = cs.to_dict()
@@ -48,6 +71,21 @@ class TestForecast(TestCase):
         assert len(solar_provider.solar_forecast) >= 2
 
         assert   (solar_provider.solar_forecast[-1][0] - solar_provider.solar_forecast[0][0]).total_seconds() >= FLOATING_PERIOD_S
+
+
+
+    def test_optimize_forecasting(self):
+
+        test_folder = os.path.dirname(os.path.realpath(__file__))
+        conso_path = os.path.join(test_folder, "data", "29_09_2025_for_optim")
+
+        # nothing is here
+        conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
+        home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso)
+        home_non_controlled_consumption.values = home_non_controlled_consumption.read_value()
+        home_non_controlled_consumption.compute_prediction_score()
+
+
 
 
     def test_consumption_data_storage(self):
@@ -122,7 +160,7 @@ class TestForecast(TestCase):
             conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
             await conso.init_forecasts(time)
 
-            conso_forecast = await conso.home_non_controlled_consumption.get_forecast_and_set_as_current(time_now=time, history_in_hours=24, future_needed_in_hours=FLOATING_PERIOD_S // 3600)
+            conso_forecast = conso.home_non_controlled_consumption.compute_now_forecast(time_now=time, history_in_hours=24, future_needed_in_hours=FLOATING_PERIOD_S // 3600)
 
             assert conso_forecast[-1][0] >= time + timedelta(seconds=FLOATING_PERIOD_S)
 

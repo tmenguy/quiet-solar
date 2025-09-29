@@ -274,17 +274,22 @@ class QSHome(QSDynamicGroup):
         return (None, None)
 
 
-    async def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
+    def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
-        return  await self._consumption_forecast.home_non_controlled_consumption.get_forecast_and_set_as_current(
+        self._last_forecast_update_time = time
+        forecast = self._consumption_forecast.home_non_controlled_consumption.compute_now_forecast(
                 time_now=time,
                 history_in_hours=24, future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
+        if forecast:
+            self._current_forecast = forecast
+
+        return forecast
 
     async def compute_non_controlled_forecast(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
         unavoidable_consumption_forecast = []
         if await self._consumption_forecast.init_forecasts(time):
-            unavoidable_consumption_forecast = await self._compute_non_controlled_forecast_intl(time)
+            unavoidable_consumption_forecast = self._compute_non_controlled_forecast_intl(time)
 
         return unavoidable_consumption_forecast
 
@@ -810,7 +815,7 @@ class QSHome(QSDynamicGroup):
                                                                                      self.home_non_controlled_consumption,
                                                                                      do_save=True)
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
-                await self._compute_non_controlled_forecast_intl(time)
+                self._compute_non_controlled_forecast_intl(time)
 
 
 
@@ -1257,14 +1262,10 @@ class QSSolarHistoryVals:
         return res[0], res[1]
 
 
-    def _get_possible_past_consumption_for_forecast(self, time_now: datetime, history_in_hours: int):
-
-        now_idx, now_days = self.get_index_from_time(time_now)
-
-        now_val = self._get_possible_now_val_for_forcast(time_now)
+    def _get_possible_past_consumption_for_forecast(self, now_idx, now_days, history_in_hours: int, use_val_as_current:float = None):
 
         end_idx = now_idx
-        if now_val is None:
+        if use_val_as_current is None:
             end_idx -= 1 # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
         end_idx = self._sanitize_idx(end_idx)
 
@@ -1272,10 +1273,10 @@ class QSSolarHistoryVals:
 
         current_values, current_days = self._get_values(start_idx, end_idx)
 
-        if now_val is not None:
+        if use_val_as_current is not None:
             #override the last one with the current value
             current_values = np.copy(current_values)
-            current_values[-1] = now_val
+            current_values[-1] = use_val_as_current
             current_days = np.copy(current_days)
             current_days[-1] = now_days
 
@@ -1297,51 +1298,89 @@ class QSSolarHistoryVals:
             7*52,
             7*53,
         ]
+        # after a lot for trials with the compute_prediction_score : RMS is best .. and only 7 days is enough
+        best_past_probes_in_days = range(1, 7 + 1)
 
         scores = []
 
         for probe_days in best_past_probes_in_days:
 
-            if probe_days*24 < history_in_hours:
-                # not enough history for this probe
-                _LOGGER.debug(
-                    f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago for bad too small history")
-                continue
 
-            past_start_idx = self._sanitize_idx(start_idx - probe_days*NUM_INTERVALS_PER_DAY)
-            past_end_idx = self._sanitize_idx(end_idx - probe_days*NUM_INTERVALS_PER_DAY)
+            for i in range(-2, 3):
+                past_delta = probe_days * NUM_INTERVALS_PER_DAY + i
 
-            past_values, past_days = self._get_values(past_start_idx, past_end_idx)
-            past_ok_values = np.asarray(past_days!=0, dtype=np.int32)
+                if past_delta < history_in_hours*NUM_INTERVAL_PER_HOUR:
+                    # not enough history for this probe
+                    _LOGGER.debug(
+                        f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago + {i} for bad too small history")
+                    continue
 
-            check_vals = past_ok_values*current_ok_vales
-            num_ok_vals = np.sum(check_vals)
+                score = self._get_range_score(current_values, current_ok_vales, start_idx, past_delta=past_delta)
 
-            if num_ok_vals < 0.6*past_days.shape[0]:
-                # bad history
-                _LOGGER.debug(
-                    f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago for bad values {num_ok_vals} - {past_days.shape[0]}")
-                continue
-
-            score   = float(np.sqrt(np.sum(np.square(current_values - past_values)*check_vals)/float(num_ok_vals)))
-            c_vals = [current_values[i] for i in range(current_values.shape[0]) if check_vals[i]]
-            p_vals = [past_values[i]    for i in range(past_values.shape[0])    if check_vals[i]]
-            score_2 = self.xcorr_max_pearson(c_vals, p_vals, Lmax=4)[2]
-            score_3 = self.xcorr_max_pearson(c_vals, p_vals, Lmax=0)[2]
-            score_4 = float(np.sum(np.abs(current_values - past_values)*check_vals))/float(num_ok_vals)
-
-            scores.append((score, probe_days, score_2, score_3, score_4))
+                if score:
+                    scores.append(score)
 
 
         if not scores:
             _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) no scores !!!")
             return []
 
-        scores = sorted(scores, key=itemgetter(0))
+        scores = sorted(scores, key=itemgetter(1))
 
         _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}): best forecast from {scores[0][1]} days ({scores})")
 
         return scores
+
+    def _get_range_score(self, current_values, current_ok_vales, start_idx, past_delta, num_score=1):
+        past_start_idx = self._sanitize_idx(start_idx - past_delta)
+        past_start_idx = self._sanitize_idx(past_start_idx)
+        past_end_idx = self._sanitize_idx(past_start_idx + current_values.shape[0] - 1)
+
+        past_values, past_days = self._get_values(past_start_idx, past_end_idx)
+        past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
+
+        check_vals = past_ok_values * current_ok_vales
+        num_ok_vals = np.sum(check_vals)
+
+        if num_ok_vals < 0.6 * current_values.shape[0]:
+            # bad history
+            # _LOGGER.debug(
+            #    f"_get_range_score trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
+            return []
+
+        # compute various scores
+        res = [past_delta]
+
+        for score_idx in range(num_score):
+            if score_idx == 0:
+                # rmse
+                score = float(np.sqrt(np.sum(np.square(current_values - past_values) * check_vals) / float(num_ok_vals)))
+            elif score_idx == 1:
+                # mean ratio
+                score = float(np.abs(np.sum(past_values*check_vals)/np.sum(current_values*check_vals) - 1.0))*100.0
+            elif score_idx == 2:
+                # pearson correlation no lag
+                c_vals = [current_values[i] for i in range(current_values.shape[0]) if check_vals[i] > 0]
+                p_vals = [past_values[i] for i in range(past_values.shape[0]) if check_vals[i] > 0]
+
+                if len(c_vals) != num_ok_vals or len(p_vals) != num_ok_vals:
+                    _LOGGER.debug(f"_get_range_score trash a past match for bad values after check {len(c_vals)} - {num_ok_vals}")
+                    return []
+
+                # score = self.xcorr_max_pearson(c_vals, p_vals, Lmax=4)[2]
+                score = self.xcorr_max_pearson(c_vals, p_vals, Lmax=0)[2]
+            elif score_idx == 3:
+                # mean bias error
+                score = float(np.abs(np.sum((current_values - past_values) * check_vals))) / float(num_ok_vals)
+            elif score_idx == 4:
+                # mean abs error
+                score = float(np.sum(np.abs(current_values - past_values) * check_vals)) / float(num_ok_vals)
+            else:
+                score = 0.0
+
+            res.append(score)
+
+        return res
 
 
     def _get_possible_now_val_for_forcast(self, time_now: datetime):
@@ -1361,8 +1400,13 @@ class QSSolarHistoryVals:
         y = np.asarray(y, float)
         n = len(x)
         # z-score
-        zx = (x - x.mean()) / x.std(ddof=0)
-        zy = (y - y.mean()) / y.std(ddof=0)
+        sx = x.std(ddof=0)
+        sy = y.std(ddof=0)
+        if sx == 0 or sy == 0:
+            return -1, 0, 1
+            # no correlation, worst score
+        zx = (x - x.mean()) / sx
+        zy = (y - y.mean()) / sy
 
         best_r = -np.inf
         best_lag = 0
@@ -1376,51 +1420,31 @@ class QSSolarHistoryVals:
                 b = zy[:n + lag]
             if len(a) < 2:  # too few points to compute correlation
                 continue
+
             r = np.corrcoef(a, b)[0, 1]  # Pearson on the overlap
             if r > best_r:
                 best_r, best_lag = r, lag
 
         best_r = float(best_r)
-        S = (1 + best_r) / 2  # score [0,1]
+        S = 100.0*(1.0 - ((1 + best_r) / 2.0))  # score [0,100] : 0 is best, 1 is worst
         return best_r, best_lag, S
 
-    async def get_forecast_and_set_as_current(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
 
-        _LOGGER.debug("get_forecast_and_set_as_current called")
 
-        self._last_forecast_update_time = time_now
-
-        # scores_48 = self._get_possible_past_consumption_for_forecast(time_now, 48)
-
-        # scores_36 = self._get_possible_past_consumption_for_forecast(time_now, 36)
-
-        # scores_06 = self._get_possible_past_consumption_for_forecast(time_now, 6)
-
-        # scores_12 = self._get_possible_past_consumption_for_forecast(time_now, 12)
-
-        scores_XX = self._get_possible_past_consumption_for_forecast(time_now, history_in_hours)
+    def _get_predicted_data(self, future_needed_in_hours: int, now_idx, now_days, scores):
 
         forecast_values = None
         past_days = None
 
-        num_intervals_to_get = (future_needed_in_hours+1)*NUM_INTERVAL_PER_HOUR # add one hour to cover the futur
+        num_intervals_to_get = (future_needed_in_hours + 1) * NUM_INTERVAL_PER_HOUR  # add one hour to cover the futur
         num_intervals_pushed = 0
 
-        # add the best possible matches until we have enough future
+        for item_past in scores:
 
-        now_idx, now_days = self.get_index_from_time(time_now)
+            probe_num_intervals = item_past[0]
 
-        time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
-
-        if time_now_from_idx > time_now:
-            _LOGGER.warning(f"_get_possible_past_consumption_for_forecast: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
-
-        for item_past in scores_XX:
-
-            probe_days = item_past[1]
-
-            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - (probe_days * NUM_INTERVALS_PER_DAY))
-            new_to_get = min(((probe_days * 24)*NUM_INTERVAL_PER_HOUR) - num_intervals_pushed - 1, num_intervals_to_get)
+            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - probe_num_intervals)
+            new_to_get = min(probe_num_intervals - num_intervals_pushed - 1, num_intervals_to_get)
             past_end_idx = self._sanitize_idx(past_start_idx + new_to_get)
 
             c_forecast_values, c_past_days = self._get_values(past_start_idx, past_end_idx)
@@ -1431,7 +1455,7 @@ class QSSolarHistoryVals:
             if num_ok_vals < 0.6 * c_past_days.shape[0]:
                 # bad forecast
                 _LOGGER.debug(
-                    f"get_forecast_and_set_as_current trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
+                    f"_get_predicted_data: trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
                 continue
 
             # ok we will keep it
@@ -1450,11 +1474,160 @@ class QSSolarHistoryVals:
                 # we are done
                 break
 
+        return forecast_values, past_days
+
+    def compute_prediction_score(self, score_number = 1, num_exploration_days = 3):
+
+        #find the "biggest index" of the stored values
+        if self.values is None:
+            return
+
+        first_max_day = np.argmax(self.values[1]) # will give the first occurence of the max
+        now_idx = first_max_day
+        now_days = self.values[1][now_idx]
+        while now_days == self.values[1][self._sanitize_idx(now_idx + 1)]:
+            now_idx = self._sanitize_idx(now_idx + 1)
+
+        # ok we have the end of the stored values
+        forecast_window = 24*NUM_INTERVAL_PER_HOUR
+        past_check_window = 24*NUM_INTERVAL_PER_HOUR
+
+        all_res = []
+
+        num_exploration = num_exploration_days*NUM_INTERVALS_PER_DAY
+
+        all_res_numpy = np.zeros((num_exploration, score_number, 2*score_number + 1),
+                                 dtype=np.float64)  # +1 for the day offset
+
+
+        for dpast in range(num_exploration):
+
+            end_idx = self._sanitize_idx(now_idx - dpast)
+            start_idx = self._sanitize_idx(end_idx - forecast_window - 1)
+            current_values, current_days = self._get_values(start_idx, end_idx)
+            current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
+
+
+            check_end_idx = self._sanitize_idx(start_idx - 1)
+            check_start_idx = self._sanitize_idx(check_end_idx - past_check_window - 1)
+            check_current_values, check_current_days = self._get_values(check_start_idx, check_end_idx)
+            check_current_ok_vales = np.asarray(check_current_days != 0, dtype=np.int32)
+
+
+            scores = []
+            check_scores = []
+
+            best_past_probes_in_days = [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+            7 * 4,]
+            a = [
+                7 * 4,
+                7 * 8,
+                7 * 12,
+                7 * 51,
+                7 * 52,
+                7 * 53,
+            ]
+
+            best_past_probes_in_days = range(1, 7+1)
+
+
+            for past_days in best_past_probes_in_days:
+
+                for i in range(-2, 3):
+                    past_delta = past_days*NUM_INTERVALS_PER_DAY + i
+                    # score of the forecast prediction vs real values
+                    score = self._get_range_score(current_values, current_ok_vales, start_idx, past_delta=past_delta, num_score=score_number)
+
+                    # score of the "check" to get the forecast
+                    check_score = self._get_range_score(check_current_values, check_current_ok_vales, check_start_idx, past_delta=past_delta, num_score=score_number)
+
+                    if check_score and score:
+                        check_score.extend(score[1:])
+                        scores.append(score)
+                        check_scores.append(check_score)
+
+
+
+            # 1 is rms sum of abs diff
+            # 2 is sum_forecast/sum_real
+            # 3 is pearson
+            # 4 is mean diff
+            # 5 is sum of abs diff
+            probe_scores = []
+            for score_idx in range(score_number):
+                probe_scores.append(sorted(check_scores, key=itemgetter(score_idx+1)))
+
+            res = []
+            for score_idx in range(score_number):
+                probe = probe_scores[score_idx][0]
+                probe[0] = probe[0] / (24*NUM_INTERVAL_PER_HOUR)
+                res.append(probe)
+
+                all_res_numpy[dpast, score_idx, :] = probe
+
+            all_res.append(res)
+
+            algo_names = {5: " SumAbsDiff ", 1: " RMS        ", 3: " Pearson    ", 4: " MeanDiff   ", 2: " sumF/sumR  "}
+
+            res_table = np.zeros((score_number, 2*score_number+1), dtype=np.float64)
+            for probe_idx in range(score_number):
+                vals = all_res_numpy[:dpast + 1, probe_idx, 0]
+                res_table[probe_idx, 0] = np.mean(vals)
+                for res_idx in range(score_number):
+                    vals_forecast = all_res_numpy[:dpast+1, probe_idx, score_number + 1 + res_idx]
+                    res_table[probe_idx, res_idx+1] = np.mean(vals_forecast)
+                    vals_check = all_res_numpy[:dpast + 1, probe_idx, res_idx + 1]
+                    res_table[probe_idx, res_idx + 1 + score_number] = np.mean(vals_check)
+
+            # log the result table
+            _LOGGER.info(f"Prediction score table (mean over {dpast} explorations):")
+            _LOGGER.info("  predictor |                forecast result                    ")
+
+            columns_description = "            | days         |"
+            separator =           "------------|--------------|"
+            for probe_idx in range(1, score_number+1):
+                columns_description += f" {algo_names[probe_idx]} |"
+                separator += "--------------|"
+
+            _LOGGER.info(columns_description)
+            _LOGGER.info(separator)
+            for probe_idx in range(1, score_number+1):
+                line = f"{algo_names[probe_idx]}|"
+                line += f" {res_table[probe_idx-1, 0]:12.1f} |"
+                for res_idx in range(1, score_number+1):
+                    line += f"{res_table[probe_idx-1, res_idx]:6.1f}({res_table[probe_idx-1, res_idx+score_number]:6.1f})|"
+                _LOGGER.info(line)
+
+    def compute_now_forecast(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
+
+        _LOGGER.debug("compute_now_forecast called")
+
+        now_idx, now_days = self.get_index_from_time(time_now)
+
+        now_val = self._get_possible_now_val_for_forcast(time_now)
+
+        scores = self._get_possible_past_consumption_for_forecast(now_idx, now_days, history_in_hours, use_val_as_current=now_val)
+
+        forecast_values, past_days = self._get_predicted_data(future_needed_in_hours, now_idx, now_days, scores)
 
         if forecast_values is not None and past_days is not None:
 
+            forecast = []
+
+            # add the best possible matches until we have enough future
+            time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
+
+            if time_now_from_idx > time_now:
+                _LOGGER.warning(f"compute_now_forecast: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
+
             prev_val = None
-            now_val = self._get_possible_now_val_for_forcast(time_now)
 
             prev_val_idx = now_idx
             tries = NUM_INTERVAL_PER_HOUR * 2
@@ -1467,7 +1640,6 @@ class QSSolarHistoryVals:
 
             if prev_val is None:
                 prev_val = now_val
-
 
             # the first forecast value represents now_idx, we will replace it with the current value if we have one, now_val
             # by construction idx, so time_now_from_idx < time_now that has been asked
@@ -1486,10 +1658,8 @@ class QSSolarHistoryVals:
                         past_days = np.copy(past_days)
                         past_days[0] = now_days
                     else:
-                        _LOGGER.error("get_forecast_and_set_as_current no prev_val !!!!")
+                        _LOGGER.error("compute_now_forecast no prev_val !!!!")
                         return []
-
-            forecast = []
 
             if time_now < time_now_from_idx + timedelta(minutes=INTERVALS_MN//2):
                 # we are before the middle of the current INTERVALS_MN, so we want to have a value before time_now
@@ -1509,11 +1679,10 @@ class QSSolarHistoryVals:
             if forecast[-1][0] < time_now + timedelta(hours=future_needed_in_hours):
                 forecast.append((time_now + timedelta(hours=future_needed_in_hours), forecast[-1][1]))
 
-            self._current_forecast = forecast
-            _LOGGER.debug(f"get_forecast_and_set_as_current A GOOD ONE STORED  {past_days.shape[0]}")
+            _LOGGER.debug(f"compute_now_forecast A GOOD ONE  {past_days.shape[0]}")
             return forecast
 
-        _LOGGER.debug("get_forecast_and_set_as_current nothing works!")
+        _LOGGER.debug("compute_now_forecast nothing works!")
         return []
 
 
@@ -1555,7 +1724,17 @@ class QSSolarHistoryVals:
                 await self.hass.async_add_executor_job(
                     _save_values_to_file, file_path, self.values
                 )
-    async def read_values(self):
+
+    def read_value(self):
+
+        try:
+            ret = np.load(self.file_path)
+        except:
+            ret = None
+
+        return ret
+
+    async def read_values_async(self):
 
             def _load_values_from_file(path: str) -> Any | None:
                 """Read numpy."""
@@ -1572,6 +1751,7 @@ class QSSolarHistoryVals:
             else:
                 return await self.hass.async_add_executor_job(
                     _load_values_from_file, self.file_path)
+
 
     async def _store_current_vals(self, up_to_time: datetime | None = None, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
 
@@ -1676,7 +1856,6 @@ class QSSolarHistoryVals:
             return BEGINING_OF_TIME + timedelta(days=int(days-1)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
 
 
-
     async def init(self, time:datetime, for_reset:bool = False, reset_for_switch_device:AbstractLoad | None = None) -> tuple[datetime | None, datetime | None]:
 
         if self._init_done:
@@ -1693,7 +1872,7 @@ class QSSolarHistoryVals:
             self.values = None
         else:
             await aiofiles.os.makedirs(self.storage_path, exist_ok=True)
-            self.values = await self.read_values()
+            self.values = await self.read_values_async()
 
         last_bad_idx = None
         last_bad_days = None
