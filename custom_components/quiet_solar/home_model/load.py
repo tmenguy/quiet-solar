@@ -1319,9 +1319,7 @@ def get_value_from_time_series(time_series, time: datetime) -> tuple[datetime | 
         res_idx = 0
     else:
         idx = bisect_left(time_series, time, key=itemgetter(0))
-
-
-
+        
         if idx >= len(time_series):
             res = time_series[-1]
             res_idx = len(time_series) - 1
