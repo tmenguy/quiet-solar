@@ -276,12 +276,10 @@ class QSHome(QSDynamicGroup):
 
     def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
-        self._last_forecast_update_time = time
         forecast = self._consumption_forecast.home_non_controlled_consumption.compute_now_forecast(
                 time_now=time,
-                history_in_hours=24, future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1)
-        if forecast:
-            self._current_forecast = forecast
+                history_in_hours=24, future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1,
+                set_as_current=True)
 
         return forecast
 
@@ -1607,9 +1605,12 @@ class QSSolarHistoryVals:
                     line += f"{res_table[probe_idx-1, res_idx]:6.1f}({res_table[probe_idx-1, res_idx+score_number]:6.1f})|"
                 _LOGGER.info(line)
 
-    def compute_now_forecast(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int) -> list[tuple[datetime, float]]:
+    def compute_now_forecast(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int, set_as_current=False) -> list[tuple[datetime, float]]:
 
         _LOGGER.debug("compute_now_forecast called")
+
+        if set_as_current:
+            self._last_forecast_update_time = time_now
 
         now_idx, now_days = self.get_index_from_time(time_now)
 
@@ -1682,6 +1683,10 @@ class QSSolarHistoryVals:
                 forecast.append((time_now + timedelta(hours=future_needed_in_hours), forecast[-1][1]))
 
             _LOGGER.debug(f"compute_now_forecast A GOOD ONE  {past_days.shape[0]}")
+
+            if set_as_current:
+                self._current_forecast = forecast
+
             return forecast
 
         _LOGGER.debug("compute_now_forecast nothing works!")
@@ -1822,9 +1827,6 @@ class QSSolarHistoryVals:
             time_out = None
 
         return time_out, val
-
-
-
 
 
     async def add_value(self, time: datetime, value: float, do_save: bool = False):
