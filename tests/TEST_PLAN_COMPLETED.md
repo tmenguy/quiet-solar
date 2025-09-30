@@ -271,3 +271,4 @@ pytest tests/test_data_handler.py::test_async_add_entry_home_first -v
 
 ## Contact
 For questions or suggestions about the test suite, refer to the main project documentation or raise an issue.
+

@@ -134,7 +134,7 @@ class QSHome(QSDynamicGroup):
 
 
 
-        self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230.0)
+        self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
 
@@ -777,6 +777,10 @@ class QSHome(QSDynamicGroup):
             _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
             return
 
+        if await self._consumption_forecast.init_forecasts(time) is False:
+            _LOGGER.info("update_forecast_probers: _consumption_forecast not ready skipping")
+            return
+
         for name, prober in self.home_non_controlled_power_forecast_sensor_values_providers.items():
             self.home_non_controlled_power_forecast_sensor_values[name] = prober.push_and_get(time)
 
@@ -810,7 +814,7 @@ class QSHome(QSDynamicGroup):
 
 
         if await self._consumption_forecast.init_forecasts(time):
-            if self.home_non_controlled_consumption is not None:
+            if self._consumption_forecast.home_non_controlled_consumption is not None:
                 await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
                                                                                      self.home_non_controlled_consumption,
                                                                                      do_save=True)
@@ -1327,8 +1331,6 @@ class QSSolarHistoryVals:
 
         scores = sorted(scores, key=itemgetter(1))
 
-        _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}): best forecast from {scores[0][1]} days ({scores})")
-
         return scores
 
     def _get_range_score(self, current_values, current_ok_vales, start_idx, past_delta, num_score=1):
@@ -1795,6 +1797,9 @@ class QSSolarHistoryVals:
 
     def get_closest_stored_value(self, time: datetime) -> tuple[datetime | None, str | float | None]:
 
+        if self.values is None:
+            return None, None
+
         # val, _ = self.get_current_non_stored_val_at_time(time)
         # time_out = time
 
@@ -1925,6 +1930,7 @@ class QSSolarHistoryVals:
         # we will fill INTERVALS_IN_MN slots with the mean of the values in the state
         # the last remaining for the current one will be put as current value
         self._current_idx = None
+        self._current_days = None
         history_start = None
         history_end = None
 
@@ -1970,6 +1976,7 @@ class QSSolarHistoryVals:
                 await self._store_current_vals(up_to_time=None, do_save=False)
 
             self._current_idx = None
+            self._current_days = None
 
             if for_reset is False and do_save:
                 await self.save_values()
