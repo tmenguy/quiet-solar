@@ -704,9 +704,6 @@ class QSHome(QSDynamicGroup):
         except ValueError:
             _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices")
 
-
-
-
     def finished_setup(self, time: datetime) -> bool:
         """
         Check if the home setup is finished.
@@ -818,7 +815,6 @@ class QSHome(QSDynamicGroup):
                                                                                      do_save=True)
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
                 self._compute_non_controlled_forecast_intl(time)
-
 
 
     async def update_loads(self, time: datetime):
@@ -947,6 +943,12 @@ class QSHome(QSDynamicGroup):
 
             await load.do_probe_state_change(time)
 
+
+    async def force_update_all(self, time: datetime = None):
+        if time is None:
+            time = datetime.now(pytz.UTC)
+        await self.update_all_states(time)
+        await self.update_loads(time)
 
     async def reset_forecasts(self, time: datetime = None):
         if time is None:

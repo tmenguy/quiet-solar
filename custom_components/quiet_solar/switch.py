@@ -205,6 +205,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         self._attr_is_on = True
         self._set_availabiltiy()
         self.async_write_ha_state()
+        await self.device.home.force_update_all()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
 
@@ -213,6 +214,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         self._attr_is_on = False
         self._set_availabiltiy()
         self.async_write_ha_state()
+        await self.device.home.force_update_all()
 
 
 class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):

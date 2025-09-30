@@ -324,7 +324,7 @@ class HADeviceMixin:
         if self.calendar is None:
             return
 
-        # first clean old ones if needed for teh next day ... but keep if it was already created
+        # first clean old ones if needed for the next day ... but keep if it was already created
         found = await self.clean_next_qs_scheduled_event(time, start_time_to_check=start_time, end_time_to_check=end_time)
 
         if found:

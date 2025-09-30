@@ -191,6 +191,8 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         else:
             await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option)
 
+        await self.device.home.force_update_all()
+
     async def async_select_option(self, option: str | None) -> None:
         """Select an option."""
         self._attr_current_option = option

@@ -216,6 +216,7 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Process the button press."""
         await self.entity_description.async_press(self)
+        await self.device.home.force_update_all()
 
 
     @callback
