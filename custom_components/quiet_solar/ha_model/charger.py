@@ -1830,6 +1830,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if cs.command.is_like(CMD_ON):
             cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=native_power_steps[self.min_charge])
 
+        cs.bump_solar = self.qs_bump_solar_charge_priority
+        if cs.bump_solar:
+            if cs.command.is_like(CMD_AUTO_GREEN_CAP):
+                cs.command = copy_command_and_change_type(cs.command, CMD_AUTO_GREEN_ONLY.command)
+
 
         # if the car charge is in state "not charging" mark the real charge as 0
         if self._expected_charge_state.value is False:
@@ -1930,9 +1935,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # we are off and we can't change the state, so we can only stay off
                         possible_amps = [0]
 
-            if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]):
+            if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]) or self.current_command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]):
                 _LOGGER.info(
-                    f"get_stable_dynamic_charge_status: {self.name} CAP/GREEN_CONSIGN {cs.command} {possible_amps} (can_change_state: {can_change_state} current_state: {current_state})")
+                    f"get_stable_dynamic_charge_status: {self.name} CAP/GREEN_CONSIGN {cs.command} ({self.current_command}) {possible_amps} (can_change_state: {can_change_state} current_state: {current_state})")
 
 
         cs.possible_amps = possible_amps
@@ -1941,11 +1946,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         ct = self.get_current_active_constraint(time)
 
         cs.is_before_battery = self.compute_is_before_battery(ct, time)
-
-        cs.bump_solar = self.qs_bump_solar_charge_priority
-        if cs.bump_solar:
-            if cs.command.is_like(CMD_AUTO_GREEN_CAP):
-                cs.command = copy_command_and_change_type(cs.command, CMD_AUTO_GREEN_ONLY.command)
 
         score = self.get_normalized_score(ct, time)
 
