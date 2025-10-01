@@ -810,9 +810,8 @@ class QSHome(QSDynamicGroup):
 
         if await self._consumption_forecast.init_forecasts(time):
             if self._consumption_forecast.home_non_controlled_consumption is not None:
-                await self._consumption_forecast.home_non_controlled_consumption.add_value(time,
-                                                                                     self.home_non_controlled_consumption,
-                                                                                     do_save=True)
+                if self._consumption_forecast.home_non_controlled_consumption.add_value(time, self.home_non_controlled_consumption):
+                    await self._consumption_forecast.home_non_controlled_consumption.save_values()
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
                 self._compute_non_controlled_forecast_intl(time)
 
@@ -1854,18 +1853,30 @@ class QSSolarHistoryVals:
 
         return False
 
-    async def store_and_flush_current_vals(self, do_save: bool = False, extend_but_not_cover_idx=None) -> bool:
+    def get_current_interval_value(self) -> tuple[datetime | None, float | None]:
+
+        if self._current_values and self._current_idx is not None and self._current_days is not None:
+            from_time = self.get_utc_time_from_index(self._current_idx, self._current_days)
+            up_to_time = from_time + timedelta(minutes=INTERVALS_MN)
+
+            nv = get_average_time_series(self._current_values, first_timing=from_time, last_timing=up_to_time)
+
+            return from_time, nv
+
+        return None, None
+
+
+    def _cache_current_vals(self, extend_but_not_cover_idx=None) -> bool:
 
         done_something = False
-        if self._current_values and self._current_idx is not None and self._current_days is not None:
+        from_time, nv = self.get_current_interval_value()
+
+        if from_time is not None:
             done_something = True
             if self.values is None:
                 self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
-            from_time = self.get_utc_time_from_index(self._current_idx, self._current_days)
-            up_to_time = from_time + timedelta(minutes=INTERVALS_MN)
 
-            nv = get_average_time_series(self._current_values, first_timing=from_time ,last_timing=up_to_time)
             self.values[0][self._current_idx] = nv
             self.values[1][self._current_idx] = self._current_days
 
@@ -1875,13 +1886,18 @@ class QSSolarHistoryVals:
                     # we have circled around the ring buffer
                     extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_IN_INTERVALS
 
+                last_value = self._current_values[-1][1]
+
                 for delta in range(1, extend_but_not_cover_idx - self._current_idx):
                     new_idx, new_days = self.get_index_with_delta(self._current_idx, self._current_days, delta)
-                    self.values[0][new_idx] = self._current_values[-1][1]
+                    self.values[0][new_idx] = last_value
                     self.values[1][new_idx] = new_days
 
-            if do_save:
-                await self.save_values()
+        return done_something
+
+    def store_and_flush_current_vals(self, extend_but_not_cover_idx=None) -> bool:
+
+        done_something = self._cache_current_vals(extend_but_not_cover_idx=extend_but_not_cover_idx)
 
         self._current_values = []
         self._current_idx = None
@@ -1908,23 +1924,23 @@ class QSSolarHistoryVals:
         if self.values is None:
             return None, None
 
-        # val, _ = self.get_current_non_stored_val_at_time(time)
-        # time_out = time
-
         val = None
         time_out = None
 
         idx, days = self.get_index_from_time(time)
 
-        if idx == self._current_idx and days == self._current_days:
+        if self._current_idx is not None and _sanitize_idx(self._current_idx + 1) == idx:
+            time_out, val = self.get_current_interval_value()
+        elif idx == self._current_idx and days == self._current_days:
             # get the previous one
             idx = _sanitize_idx(idx - 1)
 
-        v = self.values[0][idx]
-        d = self.values[1][idx]
-        if d > 0 and (d == days or d == days - 1) and v is not None:
-            val = v
-            time_out = self.get_utc_time_from_index(idx, d)
+        if val is None:
+            v = self.values[0][idx]
+            d = self.values[1][idx]
+            if d > 0 and (d == days or d == days - 1) and v is not None:
+                val = v
+                time_out = self.get_utc_time_from_index(idx, d)
 
         if val is None:
             time_out = None
@@ -1932,7 +1948,9 @@ class QSSolarHistoryVals:
         return time_out, val
 
 
-    async def add_value(self, time: datetime, value: float, do_save: bool = False):
+    def add_value(self, time: datetime, value: float) -> bool:
+
+        something_done  = False
 
         idx, days = self.get_index_from_time(time) # idx is % BUFFER_SIZE_IN_INTERVALS, begining of the interval minutes
 
@@ -1942,12 +1960,14 @@ class QSSolarHistoryVals:
             self._current_values = []
 
         if self._current_idx != idx or self._current_days != days:
-            await self.store_and_flush_current_vals(do_save=do_save, extend_but_not_cover_idx=idx)
+            something_done = self._cache_current_vals(extend_but_not_cover_idx=idx)
             self._current_idx = idx
             self._current_days = days
             self._current_values = [(time, value)]
         else:
             self._current_values.append((time, value))
+
+        return something_done
 
 
     def get_index_from_time(self, time: datetime) -> tuple[int, int]:
@@ -2079,9 +2099,9 @@ class QSSolarHistoryVals:
                     value, _ = convert_power_to_w(value, state_attr)
 
                 if value is not None:
-                    await self.add_value(s.last_changed, value, do_save=False)
-                    # need to save if one value added, only do  it once at the end
-                    do_save = True
+                    if self.add_value(s.last_changed, value):
+                        # need to save if one value added, only do  it once at the end
+                        do_save = True
                 else:
 
                     if self.is_time_in_current_interval(s.last_changed):
@@ -2089,14 +2109,15 @@ class QSSolarHistoryVals:
                         pass
                     else:
                         #forget history before this bad value
-                        if await self.store_and_flush_current_vals(do_save=False):
+                        if self.store_and_flush_current_vals():
                             do_save = True
 
                     # possibly a wrong state
                     _LOGGER.warning("Error loading lazy safe value for %s", self.entity_id)
 
             if self._current_idx is not None and self._current_idx != now_idx:
-                await self.store_and_flush_current_vals(do_save=False)
+                if self.store_and_flush_current_vals():
+                    do_save = True
 
             self._current_idx = None
             self._current_days = None
