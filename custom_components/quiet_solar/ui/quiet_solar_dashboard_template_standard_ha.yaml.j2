@@ -285,6 +285,11 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_home_light_reset_history") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_reset_history") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}

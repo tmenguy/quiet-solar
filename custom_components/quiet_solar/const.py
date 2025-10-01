@@ -204,6 +204,7 @@ CONF_HOME_OFF_PEAK_PRICE = "home_off_peak_price"
 
 
 BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
+BUTTON_HOME_LIGHT_RESET_HISTORY = "qs_home_light_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 BUTTON_HOME_GENERATE_YAML_DASHBOARD = "qs_home_generate_yaml_dashboard"
 

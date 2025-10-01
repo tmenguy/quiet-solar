@@ -591,7 +591,10 @@
         "name": "Reset User Override"
       },
       "qs_home_reset_history": {
-        "name": "Reset Quiet Solar History"
+        "name": "Full Reset Quiet Solar History from DB"
+      },
+      "qs_home_light_reset_history": {
+        "name": "Light Reset Quiet Solar History"
       },
       "qs_home_serialize_for_debug": {
         "name": "Quiet Solar Dump for Debug"

@@ -956,6 +956,12 @@ class QSHome(QSDynamicGroup):
         if self._consumption_forecast:
             await self._consumption_forecast.reset_forecasts(time)
 
+    async def light_reset_forecasts(self, time: datetime = None):
+        if time is None:
+            time = datetime.now(pytz.UTC)
+        if self._consumption_forecast:
+            await self._consumption_forecast.reset_forecasts(time, light_reset=True)
+
 
     async def dump_for_debug(self):
         storage_path: str = join(self.hass.config.path(), DOMAIN, "debug")
@@ -993,6 +999,10 @@ INTERVALS_MN = 60//NUM_INTERVAL_PER_HOUR # has to be a multiple of 60
 NUM_INTERVALS_PER_DAY = (24*NUM_INTERVAL_PER_HOUR)
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY
+
+def _sanitize_idx(idx):
+    # it works for negative values too -2 * 10 => 8
+    return idx % BUFFER_SIZE_IN_INTERVALS
 
 class QSHomeConsumptionHistoryAndForecast:
 
@@ -1048,56 +1058,50 @@ class QSHomeConsumptionHistoryAndForecast:
 
         return not self._in_reset
 
-    async def reset_forecasts(self, time: datetime):
+    def _combine_stored_forecast_values(self, val1, val2, do_add = True) :
+
+        val1_ok_values = np.asarray(val1[1] != 0, dtype=np.int32)
+        val2_ok_values = np.asarray(val2[1] != 0, dtype=np.int32)
+
+        diff_day = val1[1] - val2[1]
+        val_common = np.asarray(diff_day == 0, dtype=np.int32)
+
+        check_vals = val1_ok_values * val2_ok_values * val_common
+
+        ret = np.zeros_like(val1)
+        if do_add:
+            ret[0] = (val1[0] + val2[0])*check_vals
+        else:
+            ret[0] = (val1[0] - val2[0])*check_vals
+
+        ret[1] = (val1[1])*check_vals # take days from val1 only, it will be only the common days anyway ...
+
+        return ret
+
+
+    async def reset_forecasts(self, time: datetime, light_reset=False):
 
         self._in_reset = True
 
-        self.home_non_controlled_consumption = None
-
-        # compute from history all the values that are not yet computed ... from "true HA" sensors, not QS computed ones
-
-        # start with home consumption
-
-        battery_charge = None
-
-        strt = BEGINING_OF_TIME
-        end = time + timedelta(days=1)
-
-        is_one_bad = False
-
-        battery_charge = None
-        if self.home._battery is not None:
-            if self.home._battery.charge_discharge_sensor:
-                battery_charge = QSSolarHistoryVals(entity_id=self.home._battery.charge_discharge_sensor, forecast=self)
-                s, e = await battery_charge.init(time, for_reset=True)
-                if s is None or e is None:
-                    is_one_bad = True
-                else:
-                    if s > strt:
-                        strt = s
-                    if e < end:
-                        end = e
+        if light_reset is False:
 
 
-        solar_production_minus_battery = None
-        _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
-        if is_one_bad is False:
-            if self.home._solar_plant is not None:
-                solar_production = None
-                if self.home._solar_plant.solar_inverter_active_power:
-                    # this one has the battery inside!
-                    solar_production_minus_battery =  QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_active_power, forecast=self)
-                    s, e = await solar_production_minus_battery.init(time, for_reset=True)
-                    if s is None or e is None:
-                        is_one_bad = True
-                    else:
-                        if s > strt:
-                            strt = s
-                        if e < end:
-                            end = e
-                elif self.home._solar_plant.solar_inverter_input_active_power:
-                    solar_production_minus_battery = QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_input_active_power, forecast=self)
-                    s, e = await solar_production_minus_battery.init(time, for_reset=True)
+            # compute from history all the values that are not yet computed ... from "true HA" sensors, not QS computed ones
+
+            # start with home consumption
+
+            battery_charge = None
+
+            strt = BEGINING_OF_TIME
+            end = time + timedelta(days=1)
+
+            is_one_bad = False
+
+            battery_charge = None
+            if self.home._battery is not None:
+                if self.home._battery.charge_discharge_sensor:
+                    battery_charge = QSSolarHistoryVals(entity_id=self.home._battery.charge_discharge_sensor, forecast=self)
+                    s, e = await battery_charge.init(time, for_reset=True)
                     if s is None or e is None:
                         is_one_bad = True
                     else:
@@ -1106,121 +1110,229 @@ class QSHomeConsumptionHistoryAndForecast:
                         if e < end:
                             end = e
 
-                    if is_one_bad is False and battery_charge is not None:
-                        solar_production_minus_battery.values[0] = solar_production_minus_battery.values[0] - battery_charge.values[0]
+            values_for_debug = {}
 
-        home_consumption = None
-        _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
-        if is_one_bad is False:
-            if self.home.grid_active_power_sensor:
-                home_consumption = QSSolarHistoryVals(entity_id=self.home.grid_active_power_sensor, forecast=self)
-                s, e = await home_consumption.init(time, for_reset=True)
-                if s is None or e is None:
-                    is_one_bad = True
-                else:
-                    if s > strt:
-                        strt = s
-                    if e < end:
-                        end = e
-                    if solar_production_minus_battery is None:
-                        if self.home.grid_active_power_sensor_inverted is False:
-                            home_consumption.values[0] = (-1)*home_consumption.values[0]
-                    else:
-                        if self.home.grid_active_power_sensor_inverted is False:
-                            home_consumption.values[0] = solar_production_minus_battery.values[0] - home_consumption.values[0]
+
+            solar_production_minus_battery = None
+            _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
+            if is_one_bad is False:
+                if self.home._solar_plant is not None:
+                    if self.home._solar_plant.solar_inverter_active_power:
+                        # this one has the battery inside!
+                        solar_production_minus_battery =  QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_active_power, forecast=self)
+                        s, e = await solar_production_minus_battery.init(time, for_reset=True)
+                        if s is None or e is None:
+                            is_one_bad = True
                         else:
-                            home_consumption.values[0] = solar_production_minus_battery.values[0] + home_consumption.values[0]
+                            if s > strt:
+                                strt = s
+                            if e < end:
+                                end = e
+                    elif self.home._solar_plant.solar_inverter_input_active_power:
+                        solar_production_minus_battery = QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_input_active_power, forecast=self)
+                        s, e = await solar_production_minus_battery.init(time, for_reset=True)
+                        if s is None or e is None:
+                            is_one_bad = True
+                        else:
+                            if s > strt:
+                                strt = s
+                            if e < end:
+                                end = e
 
-        _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")
-        if is_one_bad is False and home_consumption is not None:
+                        if is_one_bad is False and battery_charge is not None:
+                            solar_production_minus_battery.values = self._combine_stored_forecast_values(solar_production_minus_battery.values, battery_charge.values, do_add=False)
 
-            #ok we do have the computed home consumption ... now time for the controlled loads
+            values_for_debug["solar_minus_battery"] = np.copy(solar_production_minus_battery.values)
 
-            controlled_power_values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
-            added_controlled = False
-
-            bfs_queue = []
-            bfs_queue.extend(self.home._childrens)
-
-            while len(bfs_queue) > 0:
-                device = bfs_queue.pop(0)
-                ha_best_entity_id = None
-                if isinstance(device, QSDynamicGroup):
-                    if device.accurate_power_sensor is None:
-                        # use the children power consumption if there is no group good power sensor
-                        bfs_queue.extend(device._childrens)
-                        continue
-                    else:
-                        ha_best_entity_id = device.accurate_power_sensor
-                else:
-
-                    if not isinstance(device, AbstractLoad):
-                        continue
-                    if device.load_is_auto_to_be_boosted:
-                        continue
-
-                    if not isinstance(device, HADeviceMixin):
-                        continue
-
-                    ha_best_entity_id = device.get_best_power_HA_entity()
-
-                switch_device = None
-                if ha_best_entity_id is None:
-                    if isinstance(device, AbstractLoad) and device.switch_entity:
-                        ha_best_entity_id = device.switch_entity
-                        switch_device = device
-
-                if ha_best_entity_id is not None:
-                    load_sensor = QSSolarHistoryVals(entity_id=ha_best_entity_id, forecast=self)
-                    s, e = await load_sensor.init(time, for_reset=True, reset_for_switch_device=switch_device)
+            home_consumption = None
+            _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
+            if is_one_bad is False:
+                if self.home.grid_active_power_sensor:
+                    home_consumption = QSSolarHistoryVals(entity_id=self.home.grid_active_power_sensor, forecast=self)
+                    s, e = await home_consumption.init(time, for_reset=True)
                     if s is None or e is None:
                         is_one_bad = True
-                        break
                     else:
                         if s > strt:
                             strt = s
                         if e < end:
                             end = e
-                    controlled_power_values[0] += load_sensor.values[0]
-                    added_controlled = True
-                    _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {device.name} {ha_best_entity_id}")
+                        if solar_production_minus_battery is None:
+                            if self.home.grid_active_power_sensor_inverted is False:
+                                home_consumption.values[0] = (-1)*home_consumption.values[0]
+                            # else do nothing, it is already in the right format
+                        else:
+                            # if self.home.grid_active_power_sensor_inverted is False:
+                            #    home_consumption.values[0] = solar_production_minus_battery.values[0] - home_consumption.values[0]
+                            # else:
+                            #    home_consumption.values[0] = solar_production_minus_battery.values[0] + home_consumption.values[0]
+
+                            # when not inverted it means grid consumption is negative : when the house consume from teh grid is it negative : so we need to remove it from solar production
+                            # if "inverted, simply add it to solar production
+                            values_for_debug["grid"] = np.copy(home_consumption.values)
+                            home_consumption.values = self._combine_stored_forecast_values(solar_production_minus_battery.values, home_consumption.values, do_add=self.home.grid_active_power_sensor_inverted)
 
 
-            _LOGGER.info(f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}")
-            if is_one_bad is False and added_controlled:
-                home_consumption.values[0] = home_consumption.values[0] - controlled_power_values[0]
+            _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")
+            if is_one_bad is False and home_consumption is not None:
 
-        if is_one_bad is False and home_consumption is not None:
-            _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
-            # ok we do have now a pretty good idea of the non-controllable house consumption:
-            # let's first clean it with the proper start and end
-            strt_idx, strt_days = home_consumption.get_index_from_time(strt)
-            end_idx, end_days = home_consumption.get_index_from_time(end)
-            #rolling buffer cleaning
-            if strt_idx < end_idx:
-                if strt_idx > 0:
-                    home_consumption.values[0][0:strt_idx-1] = 0
-                    home_consumption.values[1][0:strt_idx-1] = 0
+                #ok we do have the computed home consumption ... now time for the controlled loads
 
-                home_consumption.values[0][end_idx:] = 0
-                home_consumption.values[1][end_idx:] = 0
-            elif strt_idx > end_idx:
-                home_consumption.values[0][end_idx+1:strt_idx] = 0
-                home_consumption.values[1][end_idx+1:strt_idx] = 0
-            else:
-                # equal
-                is_one_bad = True
+                controlled_power_values = None
+                added_controlled = False
 
-        _LOGGER.info(f"Resetting home consumption 8: is_one_bad {is_one_bad}")
-        if is_one_bad is False:
-            # now we do have something to save!
+                bfs_queue = []
+                bfs_queue.extend(self.home._childrens)
+
+                while len(bfs_queue) > 0:
+                    device = bfs_queue.pop(0)
+                    ha_best_entity_id = None
+                    if isinstance(device, QSDynamicGroup):
+                        if device.accurate_power_sensor is None:
+                            # use the children power consumption if there is no group good power sensor
+                            bfs_queue.extend(device._childrens)
+                            continue
+                        else:
+                            ha_best_entity_id = device.accurate_power_sensor
+                    else:
+
+                        if not isinstance(device, AbstractLoad):
+                            continue
+                        if device.load_is_auto_to_be_boosted:
+                            continue
+
+                        if not isinstance(device, HADeviceMixin):
+                            continue
+
+                        ha_best_entity_id = device.get_best_power_HA_entity()
+
+                    switch_device = None
+                    if ha_best_entity_id is None:
+                        if isinstance(device, AbstractLoad) and device.switch_entity:
+                            ha_best_entity_id = device.switch_entity
+                            switch_device = device
+
+                    if ha_best_entity_id is not None:
+                        load_sensor = QSSolarHistoryVals(entity_id=ha_best_entity_id, forecast=self)
+                        s, e = await load_sensor.init(time, for_reset=True, reset_for_switch_device=switch_device)
+                        if s is None or e is None:
+                            is_one_bad = True
+                            break
+                        else:
+                            if s > strt:
+                                strt = s
+                            if e < end:
+                                end = e
+
+                        values_for_debug[ha_best_entity_id] = np.copy(load_sensor.values)
+
+                        if controlled_power_values is None:
+                            controlled_power_values = load_sensor.values
+                        else:
+                            controlled_power_values = self._combine_stored_forecast_values(controlled_power_values,load_sensor.values, do_add=True)
+
+                        added_controlled = True
+                        _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {device.name} {ha_best_entity_id}")
+
+
+                _LOGGER.info(f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}")
+                if is_one_bad is False and added_controlled:
+                    values_for_debug["controlled_sum"] = np.copy(controlled_power_values)
+                    home_consumption.values = self._combine_stored_forecast_values(home_consumption.values, controlled_power_values, do_add=False)
+
+            if is_one_bad is False and home_consumption is not None:
+                _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
+                # ok we do have now a pretty good idea of the non-controllable house consumption:
+                # let's first clean it with the proper start and end
+                strt_idx, strt_days = home_consumption.get_index_from_time(strt)
+                end_idx, end_days = home_consumption.get_index_from_time(end)
+                #rolling buffer cleaning
+                if strt_idx == end_idx:
+                    # equal
+                    is_one_bad = True
+                else:
+                    found = False
+                    last_good_common = end_idx
+                    last_good_reset = end_idx
+                    delta = 0
+                    delta_reset = None
+                    for i in range(BUFFER_SIZE_IN_INTERVALS):
+                        last_good_common = _sanitize_idx(end_idx - i)
+                        if home_consumption.values[1][last_good_common] != 0 and delta_reset is None:
+                            last_good_reset = last_good_common
+                            delta_reset = i
+
+                        if home_consumption.values[1][last_good_common] != 0 and self.home_non_controlled_consumption.values[1][last_good_common] == home_consumption.values[1][last_good_common]:
+                            delta = i
+                            found = True
+                            break
+
+                    if delta_reset is not None:
+                        _LOGGER.info(f"Resetting home consumption 7: start {strt.astimezone()} end {end.astimezone()}")
+                        _LOGGER.info(f"Resetting home consumption 7: RESET: found last good idx {last_good_reset} ({delta_reset} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_reset, home_consumption.values[1][last_good_reset]).astimezone()} ")
+
+                        home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+                        await home_non_controlled_consumption.init(time, for_reset=True)
+
+                        for i in range(30*NUM_INTERVAL_PER_HOUR):
+
+                            idx = _sanitize_idx(last_good_reset - i)
+
+                            if home_consumption.values[1][idx] == 0:
+                                continue
+
+                            utc_time = home_consumption.get_utc_time_from_index(idx, home_consumption.values[1][idx])
+                            days = home_consumption.values[1][idx]
+                            # convert utc time to local time
+                            loc_time = utc_time.astimezone()
+                            val_reset = home_consumption.values[0][idx]
+                            val_real = home_non_controlled_consumption.values[0][idx]
+                            _LOGGER.info(f"Resetting home consumption 7: {loc_time} ({idx}/{days}): reset {val_reset} real {val_real}")
+                            debug_values = "Resetting home consumption 7:"
+                            for k, v in values_for_debug.items():
+                                debug_values += f" {k}={v[0][idx]} "
+                            _LOGGER.info(debug_values)
+
+                    if found is False:
+                        _LOGGER.warning(f"Resetting home consumption 7: ERROR NO GOOD STUFFS")
+                    else:
+                        _LOGGER.info(f"Resetting home consumption 7: start {strt.astimezone()} end {end.astimezone()}")
+
+                        _LOGGER.info(
+                            f"Resetting home consumption 7: COMMON: found last good idx {last_good_common} ({delta} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_common, home_consumption.values[1][last_good_common]).astimezone()} ")
+                        for i in range(17*NUM_INTERVAL_PER_HOUR):
+
+                            idx = _sanitize_idx(last_good_common - i)
+
+                            if home_consumption.values[1][idx] == 0 or self.home_non_controlled_consumption.values[1][idx] == 0 or self.home_non_controlled_consumption.values[1][idx] != home_consumption.values[1][idx]:
+                                continue
+
+                            utc_time = home_consumption.get_utc_time_from_index(idx, home_consumption.values[1][idx])
+                            # convert utc time to local time
+                            loc_time = utc_time.astimezone()
+                            val_reset = home_consumption.values[0][idx]
+                            val_real = self.home_non_controlled_consumption.values[0][idx] if self.home_non_controlled_consumption is not None else 0
+                            _LOGGER.info(f"Resetting home consumption 7: {loc_time} : reset/real {val_reset}/{val_real}")
+
+
+
+            _LOGGER.info(f"Resetting home consumption 8: is_one_bad {is_one_bad}")
+            if is_one_bad is False:
+                # now we do have something to save!
+                home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+                home_non_controlled_consumption.values = home_consumption.values
+                await home_non_controlled_consumption.save_values(for_reset=True)
+                _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
+                self.home_non_controlled_consumption = None
+
+            self._in_reset = False
+
+        else:
             home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
-            home_non_controlled_consumption.values = home_consumption.values
+            await home_non_controlled_consumption.init(time, for_reset=True)
             await home_non_controlled_consumption.save_values(for_reset=True)
-            _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
+            _LOGGER.info(f"Resetting home consumption LIGHT")
             self.home_non_controlled_consumption = None
-
-        self._in_reset = False
 
         await self.init_forecasts(time)
         return True
@@ -1271,9 +1383,9 @@ class QSSolarHistoryVals:
         end_idx = now_idx
         if use_val_as_current is None:
             end_idx -= 1 # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
-        end_idx = self._sanitize_idx(end_idx)
+        end_idx = _sanitize_idx(end_idx)
 
-        start_idx = self._sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
+        start_idx = _sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
 
         current_values, current_days = self._get_values(start_idx, end_idx)
 
@@ -1334,9 +1446,9 @@ class QSSolarHistoryVals:
         return scores
 
     def _get_range_score(self, current_values, current_ok_vales, start_idx, past_delta, num_score=1):
-        past_start_idx = self._sanitize_idx(start_idx - past_delta)
-        past_start_idx = self._sanitize_idx(past_start_idx)
-        past_end_idx = self._sanitize_idx(past_start_idx + current_values.shape[0] - 1)
+        past_start_idx = _sanitize_idx(start_idx - past_delta)
+        past_start_idx = _sanitize_idx(past_start_idx)
+        past_end_idx = _sanitize_idx(past_start_idx + current_values.shape[0] - 1)
 
         past_values, past_days = self._get_values(past_start_idx, past_end_idx)
         past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
@@ -1445,9 +1557,9 @@ class QSSolarHistoryVals:
 
             probe_num_intervals = item_past[0]
 
-            past_start_idx = self._sanitize_idx(now_idx + num_intervals_pushed - probe_num_intervals)
+            past_start_idx = _sanitize_idx(now_idx + num_intervals_pushed - probe_num_intervals)
             new_to_get = min(probe_num_intervals - num_intervals_pushed - 1, num_intervals_to_get)
-            past_end_idx = self._sanitize_idx(past_start_idx + new_to_get)
+            past_end_idx = _sanitize_idx(past_start_idx + new_to_get)
 
             c_forecast_values, c_past_days = self._get_values(past_start_idx, past_end_idx)
 
@@ -1487,8 +1599,8 @@ class QSSolarHistoryVals:
         first_max_day = np.argmax(self.values[1]) # will give the first occurence of the max
         now_idx = first_max_day
         now_days = self.values[1][now_idx]
-        while now_days == self.values[1][self._sanitize_idx(now_idx + 1)]:
-            now_idx = self._sanitize_idx(now_idx + 1)
+        while now_days == self.values[1][_sanitize_idx(now_idx + 1)]:
+            now_idx = _sanitize_idx(now_idx + 1)
 
         # ok we have the end of the stored values
         forecast_window = 24*NUM_INTERVAL_PER_HOUR
@@ -1504,14 +1616,14 @@ class QSSolarHistoryVals:
 
         for dpast in range(num_exploration):
 
-            end_idx = self._sanitize_idx(now_idx - dpast)
-            start_idx = self._sanitize_idx(end_idx - forecast_window - 1)
+            end_idx = _sanitize_idx(now_idx - dpast)
+            start_idx = _sanitize_idx(end_idx - forecast_window - 1)
             current_values, current_days = self._get_values(start_idx, end_idx)
             current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
 
 
-            check_end_idx = self._sanitize_idx(start_idx - 1)
-            check_start_idx = self._sanitize_idx(check_end_idx - past_check_window - 1)
+            check_end_idx = _sanitize_idx(start_idx - 1)
+            check_start_idx = _sanitize_idx(check_end_idx - past_check_window - 1)
             check_current_values, check_current_days = self._get_values(check_start_idx, check_end_idx)
             check_current_ok_vales = np.asarray(check_current_days != 0, dtype=np.int32)
 
@@ -1637,7 +1749,7 @@ class QSSolarHistoryVals:
             prev_val_idx = now_idx
             tries = NUM_INTERVAL_PER_HOUR * 2
             while tries > 0:
-                prev_val_idx = self._sanitize_idx(prev_val_idx - 1)
+                prev_val_idx = _sanitize_idx(prev_val_idx - 1)
                 if self.values[1][prev_val_idx] != 0:
                     prev_val = self.values[0][prev_val_idx]
                     break
@@ -1695,18 +1807,14 @@ class QSSolarHistoryVals:
         return []
 
 
-    def _sanitize_idx(self, idx):
-        # it works for negative values too -2 * 10 => 8
-        return idx % BUFFER_SIZE_IN_INTERVALS
-
 
     def _get_values(self, start_idx, end_idx):
         if self.values is None:
             _LOGGER.info(f"NO VALUES IN _get_values")
             return None, None
 
-        start_idx = self._sanitize_idx(start_idx)
-        end_idx = self._sanitize_idx(end_idx)
+        start_idx = _sanitize_idx(start_idx)
+        end_idx = _sanitize_idx(end_idx)
 
         if end_idx > start_idx:
             return self.values[0][start_idx:end_idx+1], self.values[1][start_idx:end_idx+1]
@@ -1761,32 +1869,48 @@ class QSSolarHistoryVals:
                 return await self.hass.async_add_executor_job(
                     _load_values_from_file, self.file_path)
 
+    def is_time_in_current_interval(self, time: datetime) -> bool:
 
-    async def _store_current_vals(self, up_to_time: datetime | None = None, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
+        if self._current_idx is None or self._current_days is None:
+            return False
 
-        if self._current_values:
+        idx, days = self.get_index_from_time(time)
+
+        if idx == self._current_idx and days == self._current_days:
+            return True
+
+        return False
+
+    async def store_and_flush_current_vals(self, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
+
+        if self._current_values and self._current_idx is not None and self._current_days is not None:
             if self.values is None:
                 self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
             from_time = self.get_utc_time_from_index(self._current_idx, self._current_days)
+            up_to_time = from_time + timedelta(minutes=INTERVALS_MN)
 
             nv = get_average_time_series(self._current_values, first_timing=from_time ,last_timing=up_to_time)
             self.values[0][self._current_idx] = nv
             self.values[1][self._current_idx] = self._current_days
 
-            if extend_but_not_cover_idx is not None:
+            if extend_but_not_cover_idx is not None and extend_but_not_cover_idx != _sanitize_idx(self._current_idx + 1):
                 # used to make the ring buffer contiguous, in case there was a hole
                 if extend_but_not_cover_idx <= self._current_idx:
                     # we have circled around the ring buffer
                     extend_but_not_cover_idx = extend_but_not_cover_idx + BUFFER_SIZE_IN_INTERVALS
 
-                for i in range(self._current_idx+1, extend_but_not_cover_idx):
-                    new_idx = self._sanitize_idx(i)
+                for delta in range(1, extend_but_not_cover_idx - self._current_idx):
+                    new_idx, new_days = self.get_index_with_delta(self._current_idx, self._current_days, delta)
                     self.values[0][new_idx] = nv
-                    self.values[1][new_idx] = self._current_days
+                    self.values[1][new_idx] = new_days
 
             if do_save:
                 await self.save_values()
+
+        self._current_values = []
+        self._current_idx = None
+        self._current_days = None
 
     def get_current_non_stored_val_at_time(self, time: datetime) -> tuple[float | None, float | None]:
 
@@ -1817,7 +1941,7 @@ class QSSolarHistoryVals:
 
         if idx == self._current_idx and days == self._current_days:
             # get the previous one
-            idx = self._sanitize_idx(idx - 1)
+            idx = _sanitize_idx(idx - 1)
 
         v = self.values[0][idx]
         d = self.values[1][idx]
@@ -1841,8 +1965,7 @@ class QSSolarHistoryVals:
             self._current_values = []
 
         if self._current_idx != idx or self._current_days != days:
-            up_to_time = self.get_utc_time_from_index(idx, days)
-            await self._store_current_vals(up_to_time=up_to_time, do_save=do_save, extend_but_not_cover_idx=idx)
+            await self.store_and_flush_current_vals(do_save=do_save, extend_but_not_cover_idx=idx)
             self._current_idx = idx
             self._current_days = days
             self._current_values = [(time, value)]
@@ -1850,10 +1973,16 @@ class QSSolarHistoryVals:
             self._current_values.append((time, value))
 
 
-    def get_index_from_time(self, time: datetime):
+    def get_index_from_time(self, time: datetime) -> tuple[int, int]:
         days = (time - BEGINING_OF_TIME).days
         idx = int((time-BEGINING_OF_TIME).total_seconds()//(60*INTERVALS_MN))%(BUFFER_SIZE_IN_INTERVALS)
         return idx, days
+
+    def get_index_with_delta(self, idx:int, days:int, delta_idx:int) -> tuple[int, int]:
+        init_time = self.get_utc_time_from_index(idx, days)
+        next_time = init_time + timedelta(minutes=delta_idx*INTERVALS_MN)
+        return  self.get_index_from_time(next_time)
+
 
     def get_utc_time_from_index(self, idx:int, days:int) -> datetime:
         days_index = int((days*24*60)//INTERVALS_MN)%(BUFFER_SIZE_IN_INTERVALS)
@@ -1941,6 +2070,8 @@ class QSSolarHistoryVals:
         if states:
 
             # in states we have "LazyState" objects ... with no attribute
+            # bewarei n homeassitant the states will "only change" meaning if ther eis no change, no measure, it is VERY important
+            # to factor that in teh add value below!
             real_state = self.hass.states.get(self.entity_id)
             if real_state is None:
                 state_attr = {}
@@ -1949,35 +2080,51 @@ class QSSolarHistoryVals:
 
             history_start = states[0].last_changed
             history_end = states[-1].last_changed
+
             for s in states:
-                if s is  None or s.state is  None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                if s is None:
                     continue
                 if s.last_changed < start_time:
                     continue
                 if s.last_changed > end_time:
                     continue
 
-                try:
-                    if reset_for_switch_device is None:
-                        value = float(s.state)
-                    else:
-                        value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
-                except:
-                    value = None
+                value = None
+                if s.state is  None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                    # we may forget what is between this "wrong measure' and the time before .. ti be seen if we don't use the last good value
+                    pass
+                else:
+                    try:
+                        if reset_for_switch_device is None:
+                            value = float(s.state)
+                        else:
+                            value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
+                    except:
+                        value = None
+                        # is it the same as a bad state above?
 
                 if value is not None:
-                    power_value, _ = convert_power_to_w(value, state_attr)
-                    if power_value is not None:
-                        await self.add_value(s.last_changed, power_value, do_save=False)
-                        # need to save if one value added, only do  it once at the end
-                        do_save = True
+                    value, _ = convert_power_to_w(value, state_attr)
+
+                if value is not None:
+                    await self.add_value(s.last_changed, value, do_save=False)
+                    # need to save if one value added, only do  it once at the end
+                    do_save = True
                 else:
+
+                    if self.is_time_in_current_interval(s.last_changed):
+                        #ok the current interval covers this, forget this bad value:
+                        pass
+                    else:
+                        #forget history before this bad value
+                        await self.store_and_flush_current_vals(do_save=False)
+                        do_save = True
+
                     # possibly a wrong state
                     _LOGGER.warning("Error loading lazy safe value for %s", self.entity_id)
-                    pass
 
             if self._current_idx is not None and self._current_idx != now_idx:
-                await self._store_current_vals(up_to_time=None, do_save=False)
+                await self.store_and_flush_current_vals(do_save=False)
 
             self._current_idx = None
             self._current_days = None
