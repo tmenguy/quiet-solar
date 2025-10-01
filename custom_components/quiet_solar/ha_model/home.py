@@ -1251,20 +1251,13 @@ class QSHomeConsumptionHistoryAndForecast:
                     # equal
                     is_one_bad = True
                 else:
-                    found = False
-                    last_good_common = end_idx
                     last_good_reset = end_idx
-                    delta = 0
                     delta_reset = None
                     for i in range(BUFFER_SIZE_IN_INTERVALS):
                         last_good_common = _sanitize_idx(end_idx - i)
                         if home_consumption.values[1][last_good_common] != 0 and delta_reset is None:
                             last_good_reset = last_good_common
                             delta_reset = i
-
-                        if home_consumption.values[1][last_good_common] != 0 and self.home_non_controlled_consumption.values[1][last_good_common] == home_consumption.values[1][last_good_common]:
-                            delta = i
-                            found = True
                             break
 
                     if delta_reset is not None:
@@ -1291,28 +1284,8 @@ class QSHomeConsumptionHistoryAndForecast:
                             debug_values = "Resetting home consumption 7:"
                             for k, v in values_for_debug.items():
                                 debug_values += f" {k}={v[0][idx]} "
-                            _LOGGER.info(debug_values)
+                            _LOGGER.debug(debug_values)
 
-                    if found is False:
-                        _LOGGER.warning(f"Resetting home consumption 7: ERROR NO GOOD STUFFS")
-                    else:
-                        _LOGGER.info(f"Resetting home consumption 7: start {strt.astimezone()} end {end.astimezone()}")
-
-                        _LOGGER.info(
-                            f"Resetting home consumption 7: COMMON: found last good idx {last_good_common} ({delta} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_common, home_consumption.values[1][last_good_common]).astimezone()} ")
-                        for i in range(17*NUM_INTERVAL_PER_HOUR):
-
-                            idx = _sanitize_idx(last_good_common - i)
-
-                            if home_consumption.values[1][idx] == 0 or self.home_non_controlled_consumption.values[1][idx] == 0 or self.home_non_controlled_consumption.values[1][idx] != home_consumption.values[1][idx]:
-                                continue
-
-                            utc_time = home_consumption.get_utc_time_from_index(idx, home_consumption.values[1][idx])
-                            # convert utc time to local time
-                            loc_time = utc_time.astimezone()
-                            val_reset = home_consumption.values[0][idx]
-                            val_real = self.home_non_controlled_consumption.values[0][idx] if self.home_non_controlled_consumption is not None else 0
-                            _LOGGER.info(f"Resetting home consumption 7: {loc_time} : reset/real {val_reset}/{val_real}")
 
 
 
@@ -1902,7 +1875,7 @@ class QSSolarHistoryVals:
 
                 for delta in range(1, extend_but_not_cover_idx - self._current_idx):
                     new_idx, new_days = self.get_index_with_delta(self._current_idx, self._current_days, delta)
-                    self.values[0][new_idx] = nv
+                    self.values[0][new_idx] = self._current_values[-1][1]
                     self.values[1][new_idx] = new_days
 
             if do_save:
