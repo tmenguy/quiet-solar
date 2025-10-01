@@ -284,11 +284,14 @@
             "qs_home_generate_yaml_dashboard": {
                 "name": "Re-Generate YAML Dashboard"
             },
+            "qs_home_light_reset_history": {
+              "name": "Light Reset Quiet Solar History"
+            },
             "qs_home_reset_history": {
               "name": "Full Reset Quiet Solar History from DB"
             },
-            "qs_home_light_reset_history": {
-              "name": "Light Reset Quiet Solar History"
+            "qs_home_serialize_for_debug": {
+                "name": "Quiet Solar Dump for Debug"
             },
             "qs_load_clean_and_reset": {
                 "name": "BEWARE: Force Reset"
