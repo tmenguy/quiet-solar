@@ -1854,9 +1854,11 @@ class QSSolarHistoryVals:
 
         return False
 
-    async def store_and_flush_current_vals(self, do_save: bool = False, extend_but_not_cover_idx=None) -> None:
+    async def store_and_flush_current_vals(self, do_save: bool = False, extend_but_not_cover_idx=None) -> bool:
 
+        done_something = False
         if self._current_values and self._current_idx is not None and self._current_days is not None:
+            done_something = True
             if self.values is None:
                 self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
@@ -1884,6 +1886,8 @@ class QSSolarHistoryVals:
         self._current_values = []
         self._current_idx = None
         self._current_days = None
+
+        return done_something
 
     def get_current_non_stored_val_at_time(self, time: datetime) -> tuple[float | None, float | None]:
 
@@ -1978,6 +1982,7 @@ class QSSolarHistoryVals:
             return None, None
 
         now_idx, now_days = self.get_index_from_time(time)
+        time_now_idx = self.get_utc_time_from_index(now_idx, now_days)
 
         if for_reset:
             self.values = None
@@ -1986,7 +1991,7 @@ class QSSolarHistoryVals:
             self.values = await self.read_values_async()
 
         last_bad_idx = None
-        last_bad_days = None
+        num_slots_before_now_idx = 0
         do_save = False
         if self.values is not None:
 
@@ -1997,11 +2002,6 @@ class QSSolarHistoryVals:
         if self.values is not None:
 
             last_bad_idx = now_idx
-            last_bad_days = now_days
-            # find a value before that may be good and filled already
-            # if self.values[1][last_good_idx] is 0 : not filled
-            # self.values[1][last_good_idx] is more than BUFFER_SIZE_DAYS difference ...a year: not valid
-            num_slots_before_now_idx = 0
 
             while True:
 
@@ -2011,7 +2011,6 @@ class QSSolarHistoryVals:
 
                 if self.values[1][try_prev_idx] == 0 or now_days - self.values[1][try_prev_idx] >= BUFFER_SIZE_DAYS:
                     last_bad_idx = try_prev_idx
-                    last_bad_days = self.values[1][try_prev_idx]
                     num_slots_before_now_idx += 1
                 else:
                     break
@@ -2026,7 +2025,7 @@ class QSSolarHistoryVals:
 
         end_time = time
         if last_bad_idx is not None:
-            start_time = self.get_utc_time_from_index(last_bad_idx, last_bad_days)
+            start_time = time_now_idx - timedelta(minutes=(num_slots_before_now_idx)*INTERVALS_MN)
         else:
             start_time = time - timedelta(days=BUFFER_SIZE_DAYS-1)
 
@@ -2090,8 +2089,8 @@ class QSSolarHistoryVals:
                         pass
                     else:
                         #forget history before this bad value
-                        await self.store_and_flush_current_vals(do_save=False)
-                        do_save = True
+                        if await self.store_and_flush_current_vals(do_save=False):
+                            do_save = True
 
                     # possibly a wrong state
                     _LOGGER.warning("Error loading lazy safe value for %s", self.entity_id)
