@@ -42,7 +42,7 @@ def load_energy_csv(csv_path: str) -> EnergySeries:
             "battery_in": None,
             "battery_out": None,
             "solar_production": None,
-        }  # type: Dict[str, np.ndarray]
+        }  # type: Dict[str, np.ndarray|None]
 
         for row in reader:
             if not row or len(row) < 3:
