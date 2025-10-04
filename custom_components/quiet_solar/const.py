@@ -80,6 +80,8 @@ CONF_GRID_POWER_SENSOR_INVERTED = "grid_active_power_sensor_inverted"
 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR = "inverter_active_power_sensor"
 CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR = "inverter_input_power_sensor"
 CONF_SOLAR_FORECAST_PROVIDER = "solar_forecast_provider"
+CONF_SOLAR_MAX_OUTPUT_POWER_VALUE = "solar_max_output_power_value"
+CONF_SOLAR_MAX_PHASE_AMPS = "solar_max_phase_amps"
 
 CONF_BATTERY_CHARGE_DISCHARGE_SENSOR = "battery_charge_discharge_sensor"
 CONF_BATTERY_CHARGE_PERCENT_SENSOR = "battery_charge_percent_sensor"
@@ -221,7 +223,7 @@ BUTTON_LOAD_RESET_OVERRIDE_STATE = "qs_load_reset_override_state"
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 SWITCH_ENABLE_DEVICE = "qs_enable_device"
 SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
-
+SWITCH_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"

@@ -67,9 +67,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         return self._dyn_group_max_phase_current
 
-
-
-    def is_delta_current_acceptable(self, delta_amps: list[float|int], new_amps_consumption: list[float|int] | None, time:datetime) -> tuple[bool, list[float|int]]:
+    def is_delta_current_acceptable(self, delta_amps: list[float|int], time:datetime, new_amps_consumption: list[float|int] | None = None) -> tuple[bool, list[float|int]]:
 
         if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
             _LOGGER.info(
@@ -173,7 +171,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     # the idea is that if we have a 3p home we allocate as if phases were balanced for loads that are not 3p
     def prepare_slots_for_amps_budget(self, time: datetime, num_slots: int,
-                                      from_father_budget: list[float | int] | None = None) -> list[float | int]:
+                                      from_father_budget: list[float | int] | None = None):
 
         init_from_father_budget = from_father_budget
         if from_father_budget is None:

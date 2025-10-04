@@ -108,7 +108,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -126,7 +126,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -145,7 +145,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?  (1, 2 or 3)",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -258,7 +258,12 @@
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
                     "name": "Name",
-                    "solar_forecast_provider": "Preferred solar forecast provider"
+                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase group)",
+                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase group)",
+                    "solar_forecast_provider": "Preferred solar forecast provider",
+                    "solar_max_output_power_value": "Solar inverter max output power (W)",
+                    "solar_max_phase_amps": "Solar inverter max output current per phase (A)"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
                 "title": "Edit your solar panel plant"
@@ -285,10 +290,10 @@
                 "name": "Re-Generate YAML Dashboard"
             },
             "qs_home_light_reset_history": {
-              "name": "Light Reset Quiet Solar History"
+                "name": "Light Reset Quiet Solar History"
             },
             "qs_home_reset_history": {
-              "name": "Full Reset Quiet Solar History from DB"
+                "name": "Full Reset Quiet Solar History from DB"
             },
             "qs_home_serialize_for_debug": {
                 "name": "Quiet Solar Dump for Debug"
@@ -334,6 +339,7 @@
                 "state": {
                     "home_mode_charger_only": "EV Charger only",
                     "home_mode_off": "Nothing runs",
+                    "home_mode_off_grid": "Off-grid mode",
                     "home_mode_on": "Full Quiet Solar",
                     "home_mode_reset_sensors": "WARN: reset sensors from HA history",
                     "home_mode_sensors_only": "Only run sensors"
@@ -363,7 +369,7 @@
                 "name": "Charge ETA"
             },
             "qs_car_charge_type": {
-              "name": "Charge Type"
+                "name": "Charge Type"
             },
             "qs_car_soc_percent": {
                 "name": "Current Charge"
@@ -528,7 +534,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -546,7 +552,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -565,7 +571,7 @@
                     "default_car_charge": "generic car default charge target in %",
                     "device_efficiency": "generic car charging power efficiency in %",
                     "device_is_3p": "Is the charger 3 phases?",
-                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase?",
+                    "device_mono_phase": "if mono phase or phase switch enabled, what is the main charging phase? (1, 2 or 3)",
                     "dynamic_group_name": "Add charger to a load group to limit the amps",
                     "name": "Name"
                 },
@@ -677,7 +683,12 @@
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
                     "name": "Name",
-                    "solar_forecast_provider": "Preferred solar forecast provider"
+                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase group)",
+                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase group)",
+                    "solar_forecast_provider": "Preferred solar forecast provider",
+                    "solar_max_output_power_value": "Solar inverter max output power (W)",
+                    "solar_max_phase_amps": "Solar inverter max output current per phase (A)"
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
                 "title": "Edit your solar panel plant"

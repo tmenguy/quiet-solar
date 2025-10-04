@@ -15,7 +15,7 @@ from custom_components.quiet_solar.switch import (
     create_ha_switch_for_AbstractLoad,
     QSSwitchEntity,
     QSSwitchEntityChargerOrCar,
-    async_setup_entry,
+    async_setup_entry, QSSwitchEntityDescription,
 )
 from custom_components.quiet_solar.const import DOMAIN, SWITCH_ENABLE_DEVICE
 from tests.conftest import create_mock_device
@@ -73,11 +73,12 @@ async def test_qs_switch_entity_turn_on():
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
     mock_device.test_switch = False
-    mock_description = MagicMock()
-    mock_description.key = "test_switch"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.set_val = None
+
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
     
     switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
     switch.async_write_ha_state = MagicMock()
@@ -96,11 +97,13 @@ async def test_qs_switch_entity_turn_off():
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
     mock_device.test_switch = True
-    mock_description = MagicMock()
-    mock_description.key = "test_switch"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.set_val = None
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+
     
     switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
     switch.async_write_ha_state = MagicMock()

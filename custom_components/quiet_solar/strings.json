@@ -85,7 +85,12 @@
           "name": "Name",
           "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
           "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
-          "solar_forecast_provider": "Preferred solar forecast provider"
+          "solar_forecast_provider": "Preferred solar forecast provider",
+          "solar_max_output_power_value": "Solar inverter max output power (W)",
+          "solar_max_phase_amps": "Solar inverter max output current per phase (A)",
+          "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+          "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase group)",
+          "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase group)"
         }
       },
       "charger": {
@@ -351,7 +356,12 @@
           "name": "[%key:component::quiet_solar::config::step::solar::data::name%]",
           "inverter_active_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor%]",
           "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]",
-          "solar_forecast_provider": "[%key:component::quiet_solar::config::step::solar::data::solar_forecast_provider%]"
+          "solar_forecast_provider": "[%key:component::quiet_solar::config::step::solar::data::solar_forecast_provider%]",
+          "solar_max_output_power_value": "[%key:component::quiet_solar::config::step::solar::data::solar_max_output_power_value%]",
+          "solar_max_phase_amps": "[%key:component::quiet_solar::config::step::solar::data::solar_max_phase_amps%]",
+          "phase_1_amps_sensor": "[%key:component::quiet_solar::config::step::solar::data::phase_1_amps_sensor%]",
+          "phase_2_amps_sensor": "[%key:component::quiet_solar::config::step::solar::data::phase_2_amps_sensor%]",
+          "phase_3_amps_sensor": "[%key:component::quiet_solar::config::step::solar::data::phase_3_amps_sensor%]"
         }
       },
       "charger_generic": {
@@ -665,6 +675,7 @@
           "home_mode_off": "Nothing runs",
           "home_mode_sensors_only": "Only run sensors",
           "home_mode_charger_only": "EV Charger only",
+          "home_mode_off_grid": "Off-grid mode",
           "home_mode_on": "Full Quiet Solar",
           "home_mode_reset_sensors": "WARN: reset sensors from HA history"
         }

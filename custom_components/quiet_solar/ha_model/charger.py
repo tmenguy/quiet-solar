@@ -1701,7 +1701,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.is_charge_enabled(time=time):
             current_amp = self.get_charging_current()
-            if current_amp is not None and current_amp >= self.min_charge and current_amp <= self.max_charge:
+            if current_amp is not None:
                 if self.current_3p:
                     return [current_amp, current_amp, current_amp]
                 else:
@@ -2496,7 +2496,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.is_charger_unavailable(time) is False:
             if self.probe_for_possible_needed_reboot(time):
-                # we need to launch a rebbot
+                # we need to launch a reboot
                 await self.reboot(time)
                 return False
 
@@ -2514,7 +2514,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # by construction if we are here : not car could have been attached to the charger
                 # get best car would use the car coming from the boot data
                 pass
-
 
             # after a time th eboot time data is deprecated : kill it
             if (time - self._boot_time).total_seconds() < CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
@@ -2582,7 +2581,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         f"check_load_activity_and_constraints: plugged car {self.car.name} ins as fast as possible and has a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
                     car_initial_percent = max(0, target_charge - 5)
 
-
                 force_constraint = MultiStepsPowerLoadConstraintChargePercent(
                     total_capacity_wh=self.car.car_battery_capacity,
                     type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -2595,6 +2593,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     power_steps=self._power_steps,
                     support_auto=True,
                 )
+
                 if self.push_live_constraint(time, force_constraint):
                     _LOGGER.info(
                         f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_SOC()} pushed forces constraint {force_constraint.name}")
@@ -2668,9 +2667,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     )
 
                     if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
-                        do_force_solve = True
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                        do_force_solve = True
 
                     realized_charge_target = target_charge
 
@@ -2679,8 +2678,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if realized_charge_target is None:
                     realized_charge_target = car_initial_percent
 
+                if self.is_off_grid():
+                    default_type_for_low_battery = CONSTRAINT_TYPE_FILLER_AUTO
+                else:
+                    default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+
+
                 if self.qs_bump_solar_charge_priority:
                     type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                     intermediate_target_charge = 0
                 else:
                     type = CONSTRAINT_TYPE_FILLER
@@ -2698,7 +2704,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if realized_charge_target + 1.5 < intermediate_target_charge and intermediate_target_charge > 0:
                     # priority before we reach the minimum of the battery for this car
-                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                    type = default_type_for_low_battery
                     artificial_step_to_final_value = target_charge
                     target_charge = intermediate_target_charge
 
@@ -2708,25 +2714,28 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     type = CONSTRAINT_TYPE_FILLER_AUTO
                     target_charge = max_target_charge
 
-                car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
-                    total_capacity_wh=self.car.car_battery_capacity,
-                    type=type,
-                    time=time,
-                    load=self,
-                    load_param=self.car.name,
-                    from_user=False,
-                    artificial_step_to_final_value=artificial_step_to_final_value,
-                    initial_value=realized_charge_target,
-                    target_value=target_charge,
-                    power_steps=self._power_steps,
-                    support_auto=True
-                )
+                    if self.is_off_grid():
+                        type = None
 
-                if self.push_live_constraint(time, car_charge_best_effort):
-                    do_force_solve = True
-                    _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} default charge: {self.car.car_default_charge}% pushed filler constraint {car_charge_best_effort.name}")
+                if type is not None:
+                    car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
+                        total_capacity_wh=self.car.car_battery_capacity,
+                        type=type,
+                        time=time,
+                        load=self,
+                        load_param=self.car.name,
+                        from_user=False,
+                        artificial_step_to_final_value=artificial_step_to_final_value,
+                        initial_value=realized_charge_target,
+                        target_value=target_charge,
+                        power_steps=self._power_steps,
+                        support_auto=True
+                    )
 
+                    if self.push_live_constraint(time, car_charge_best_effort):
+                        _LOGGER.info(
+                            f"check_load_activity_and_constraints: plugged car {self.car.name} default charge: {self.car.car_default_charge}% pushed filler constraint {car_charge_best_effort.name}")
+                        do_force_solve = True
 
         return do_force_solve
 
@@ -2750,10 +2759,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def max_charge(self):
+
         if self.car:
-            return int(min(self.charger_max_charge, self.car.car_charger_max_charge))
+            static_max = int(min(self.charger_max_charge, self.car.car_charger_max_charge))
         else:
-            return self.charger_max_charge
+            static_max = self.charger_max_charge
+
+        max_phase_home = int(self.home.get_home_max_phase_amp())
+
+        res = min(static_max, max_phase_home)
+        if res <= self.min_charge + 1:
+            res = min(static_max, self.min_charge + 1)
+
+        return res
+
 
     def get_platforms(self):
         parent = super().get_platforms()
@@ -3429,7 +3448,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return (result, do_continue_constraint)
 
-    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int) -> (bool, int|float):
+    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int) -> tuple[bool, int|float]:
 
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
@@ -3470,7 +3489,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         handled = False
         if self.is_car_stopped_asking_current(time):
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} stopped asking current ... do nothing")
-
             handled = True
         elif command is None or command.is_off_or_idle():
             handled = True
@@ -3479,7 +3497,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             handled = False
 
         if self.is_in_state_reset():
-            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name}in state reset at the end .. force an idle like state")
+            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} in state reset at the end .. force an idle like state")
             handled = True
 
         if probe_only is False and handled is True:

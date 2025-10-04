@@ -15,7 +15,7 @@ from custom_components.quiet_solar.button import (
     create_ha_button_for_AbstractLoad,
     QSButtonEntity,
     async_setup_entry,
-    async_unload_entry,
+    async_unload_entry, QSButtonEntityDescription,
 )
 from custom_components.quiet_solar.const import DOMAIN
 from tests.conftest import create_mock_device
@@ -31,7 +31,7 @@ def test_create_ha_button_for_home():
     
     entities = create_ha_button_for_QSHome(mock_home)
     
-    assert len(entities) == 3  # Reset history, serialize debug, generate yaml
+    assert len(entities) == 4  # Reset history, serialize debug, generate yaml
     assert all(isinstance(e, QSButtonEntity) for e in entities)
 
 
@@ -127,19 +127,19 @@ async def test_qs_button_entity_press():
     """Test button press calls async_press function."""
     mock_handler = MagicMock()
     mock_handler.hass = MagicMock()
+    mock_handler.force_update_all = AsyncMock()
     mock_device = create_mock_device("test")
     
     press_called = False
     async def mock_press(entity):
         nonlocal press_called
         press_called = True
-    
-    mock_description = MagicMock()
-    mock_description.key = "test_button"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.is_available = None
-    mock_description.async_press = mock_press
+
+    mock_description = QSButtonEntityDescription(
+        key="test_button",
+        translation_key="test",
+        async_press=mock_press
+    )
     
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
     

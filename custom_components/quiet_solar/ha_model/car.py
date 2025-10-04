@@ -192,6 +192,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.charger = None
         self.do_force_next_charge = False
         self.user_attached_charger_name = None
+        self._qs_bump_solar_priority = False
 
 
     def attach_charger(self, charger):

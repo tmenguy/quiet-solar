@@ -109,7 +109,7 @@ class TestForecast(TestCase):
             conso.home_non_controlled_consumption._current_idx = None
             for num_minutes in range((BUFFER_SIZE_IN_INTERVALS + 1000)*INTERVALS_MN):
                 t = time + timedelta(minutes=num_minutes)
-                await conso.home_non_controlled_consumption.add_value(t, 1000, False)
+                conso.home_non_controlled_consumption.add_value(t, 1000)
 
             mi = np.min(conso.home_non_controlled_consumption.values[0])
             assert mi == 1000.0

@@ -326,6 +326,7 @@ def create_mock_device(device_type: str, name: str = "Mock Device", **kwargs):
     device.device_id = f"mock_{device_type}_{name}"
     device.qs_enable_device = kwargs.get("qs_enable_device", True)
     device.get_platforms = MagicMock(return_value=[Platform.SENSOR, Platform.SWITCH])
+    device.home = kwargs.get("home", None)
     
     for key, value in kwargs.items():
         setattr(device, key, value)

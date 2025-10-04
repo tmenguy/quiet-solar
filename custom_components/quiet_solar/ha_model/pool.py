@@ -4,7 +4,7 @@ import pytz
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
-    CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool
+    CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.on_off_duration import QSOnOffDuration
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
 
@@ -78,8 +78,8 @@ class QSPool(QSOnOffDuration):
 
                 # schedule the load to be launched
                 type = CONSTRAINT_TYPE_MANDATORY_END_TIME
-                if self.qs_best_effort_green_only is True:
-                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN # will be before battery filling
+                if self.is_best_effort_only_load():
+                    type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,

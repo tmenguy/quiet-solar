@@ -113,6 +113,7 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Change the value."""
+        _LOGGER.info(f"QSBaseNumber:async_set_native_value: {value} {self.entity_description.key} on {self.device.name}")
         self._attr_native_value = value
         try:
             setattr(self.device, self.entity_description.key, value)

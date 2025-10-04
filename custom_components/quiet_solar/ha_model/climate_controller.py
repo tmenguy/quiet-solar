@@ -5,13 +5,12 @@ from typing import Any
 from homeassistant.components import climate
 from homeassistant.components.climate import HVACMode
 
-from .bistate_duration import QSBiStateDuration, bistate_modes
+from .bistate_duration import QSBiStateDuration
 from ..const import SENSOR_CONSTRAINT_SENSOR_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF, \
     CONF_CLIMATE, CONF_TYPE_NAME_QSClimateDuration
 
 from ..home_model.commands import LoadCommand, CMD_ON
-from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE, \
-    ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID
 
 
 from homeassistant.helpers import entity_registry as er

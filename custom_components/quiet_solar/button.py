@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Coroutine, Any
@@ -16,6 +17,7 @@ from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
 from .home_model.load import AbstractDevice, AbstractLoad
 
+_LOGGER = logging.getLogger(__name__)
 
 def create_ha_button_for_QSHome(device: QSHome):
     entities = []
@@ -223,8 +225,10 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Process the button press."""
+        _LOGGER.info(f"QSButtonEntity:async_press : {self.entity_description.key} on {self.device.name}")
         await self.entity_description.async_press(self)
-        await self.device.home.force_update_all()
+        if self.device.home:
+            await self.device.home.force_update_all()
 
 
     @callback

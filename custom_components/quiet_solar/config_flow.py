@@ -50,6 +50,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, SOLCAST_SOLAR_DOMAIN, \
     OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_CALENDAR, \
+    CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, CONF_SOLAR_MAX_PHASE_AMPS, \
     CONF_DEFAULT_CAR_CHARGE, CONF_HOME_START_OFF_PEAK_RANGE_1, CONF_HOME_END_OFF_PEAK_RANGE_1, \
     CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, \
     CONF_LOAD_IS_BOOST_ONLY, CONF_CAR_IS_INVITED, POOL_TEMP_STEPS, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, \
@@ -657,11 +658,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         TYPE = QSSolar.conf_type_name
         if user_input is not None:
-            #do sotme stuff to update
+            #do some stuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE)
+        sc_dict = self.get_common_schema(type=TYPE, add_amps_sensors=True)
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
@@ -694,6 +695,29 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
                     )
                 )})
+
+        # Additional solar plant parameters
+        sc_dict.update({
+            vol.Optional(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
+                         description={"suggested_value": self.config_entry.data.get(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, 0)}):
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement=UnitOfPower.WATT,
+                    )
+                ),
+            vol.Optional(CONF_SOLAR_MAX_PHASE_AMPS,
+                         description={"suggested_value": self.config_entry.data.get(CONF_SOLAR_MAX_PHASE_AMPS, 0)}):
+                selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+                    )
+                ),
+        })
 
         schema = vol.Schema(sc_dict)
 

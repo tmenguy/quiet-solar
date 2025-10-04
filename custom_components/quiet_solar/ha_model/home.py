@@ -29,7 +29,7 @@ from ..ha_model.charger import QSChargerGeneric
 from ..ha_model.device import HADeviceMixin, convert_power_to_w
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.home_utils import get_average_time_series
+from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
     extract_name_and_index_from_dashboard_section_option, get_value_from_time_series
 from ..home_model.solver import PeriodSolver
@@ -51,7 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MAX_SENSOR_HISTORY_S = 60*60*24*7
 
-POWER_ALIGNEMENT_TOLERANCE_S = 120
+POWER_ALIGNMENT_TOLERANCE_S = 120
 
 class QSforecastValueSensor:
 
@@ -132,6 +132,8 @@ class QSHome(QSDynamicGroup):
         self.grid_active_power_sensor: str | None = None
         self.grid_active_power_sensor_inverted: bool = False
 
+        self.qs_home_is_off_grid = False
+
 
 
         self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
@@ -199,6 +201,7 @@ class QSHome(QSDynamicGroup):
 
         self.home_non_controlled_consumption = None
         self.home_consumption = None
+        self.solar_production = 0
         self.home_available_power = None
         self.grid_consumption_power = None
         self.home_mode = None
@@ -232,11 +235,82 @@ class QSHome(QSDynamicGroup):
         self._init_completed = False
 
 
+    async def async_set_off_grid_mode(self, off_grid:bool):
+
+        do_reset = self.qs_home_is_off_grid != off_grid
+
+        self.qs_home_is_off_grid = off_grid
+
+        if do_reset:
+            # reset all loads
+            for load in self._all_loads:
+                if load.qs_enable_device is False:
+                    continue
+                load.reset()
+
+            # force solve
+            self.force_next_solve()
+
+            # force an update of all load will recompute what should be computed, like new constraints, etc
+            await self.force_update_all()
+
+    def is_off_grid(self) -> bool:
+        return self.qs_home_is_off_grid
+
     @property
     def voltage(self) -> float:
         """Return the voltage of the home."""
         return self._voltage
 
+
+    def get_home_max_phase_amp(self) -> float:
+
+        static_amp = self.dyn_group_max_phase_current_conf
+        if not self.is_off_grid():
+            return static_amp
+
+        # ok we are in off grid mode, we need to limit the current to the max phase current of the home
+        available_production_w = self.solar_production
+        if self._battery is not None and self._battery.battery_can_discharge():
+            available_production_w += self._battery.get_max_discharging_power()  # self._battery.max_discharge_number
+
+        if self._solar_plant and self._solar_plant.solar_max_output_power_value:
+            available_production_w = min(available_production_w, self._solar_plant.solar_max_output_power_value)
+
+        if self.physical_3p:
+            available_production_amp = (available_production_w / 3.0) / (self.voltage)
+        else:
+            available_production_amp = available_production_w / (self.voltage)
+
+        available_production_amp = min(self.dyn_group_max_phase_current_conf, available_production_amp)
+
+        if self._solar_plant and self._solar_plant.solar_max_phase_amps:
+            available_production_amp = min(available_production_amp, self._solar_plant.solar_max_phase_amps)
+
+        return min(static_amp, available_production_amp)
+
+
+    @property
+    def dyn_group_max_phase_current(self) -> list[float|int]:
+
+        static_amps = super().dyn_group_max_phase_current
+
+        if not self.is_off_grid():
+            return static_amps
+
+        available_production_amp = self.get_home_max_phase_amp()
+
+        if self.physical_3p:
+            self._dyn_group_max_phase_current = [available_production_amp, available_production_amp, available_production_amp]
+        else:
+            self._dyn_group_max_phase_current = [0, 0, 0]
+            self._dyn_group_max_phase_current[self.mono_phase_index] = available_production_amp
+
+        _LOGGER.info(f"dyn_group_max_phase_current: Home in off grid mode, setting max phase current to {available_production_amp}A instead of {self.dyn_group_max_phase_current_conf}A")
+
+        self._dyn_group_max_phase_current = min_amps(self._dyn_group_max_phase_current, static_amps)
+
+        return self._dyn_group_max_phase_current
 
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 
@@ -368,9 +442,10 @@ class QSHome(QSDynamicGroup):
         return max(price_start, price_end)
 
 
-
-
     def get_tariffs(self, start_time:datetime, end_time:datetime) -> list[tuple[datetime, float]] | float:
+
+        if self.is_off_grid():
+            return 0.0
 
         if self.price_off_peak == 0:
             return self.price_peak
@@ -465,22 +540,31 @@ class QSHome(QSDynamicGroup):
 
         battery_charge = None
         if self._battery is not None:
-            battery_charge = self._battery.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+            battery_charge = self._battery.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
+        self.solar_production = 0
         if self._solar_plant is not None:
             solar_production = None
             if self._solar_plant.solar_inverter_active_power:
                 # this one has the battery inside!
-                solar_production_minus_battery = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+                solar_production_minus_battery = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
             if solar_production_minus_battery is None and self._solar_plant.solar_inverter_input_active_power:
-                solar_production = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+                solar_production = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
             if solar_production_minus_battery is None:
                 if solar_production is not None and battery_charge is not None:
                     solar_production_minus_battery = solar_production - battery_charge
                 elif solar_production is not None:
                     solar_production_minus_battery = solar_production
+
+            if solar_production is not None:
+                self.solar_production = solar_production
+            elif solar_production_minus_battery is not None:
+                if battery_charge is not None:
+                    self.solar_production = solar_production_minus_battery + battery_charge
+                else:
+                    self.solar_production = solar_production_minus_battery
 
         elif battery_charge is not None:
             solar_production_minus_battery = 0 - battery_charge
@@ -490,7 +574,7 @@ class QSHome(QSDynamicGroup):
             solar_production_minus_battery = 0
 
         # get grid consumption
-        grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time)
+        grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
         if grid_consumption is None:
             self.home_non_controlled_consumption = None
@@ -503,7 +587,7 @@ class QSHome(QSDynamicGroup):
             else:
                 home_consumption = 0 - grid_consumption
 
-            controlled_consumption = self.get_device_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNEMENT_TOLERANCE_S, time=time, ignore_auto_load=True)
+            controlled_consumption = self.get_device_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True)
 
             val = home_consumption - controlled_consumption
 
@@ -538,28 +622,39 @@ class QSHome(QSDynamicGroup):
         return self.get_state_history_data(self.grid_consumption_power_sensor, duration_before_s, time)
 
     def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
-        # first check if we do have an amp sensor for the phases
-        multiplier = 1
-        if self.grid_active_power_sensor_inverted is False:
-            # if not inverted it should be -1 as consumption are reversed
-            multiplier = -1
 
-        pM = None
-        is_3p = False
-        if isinstance(self, AbstractDevice):
-            is_3p = self.current_3p
+        home_amps = [0, 0, 0]
+
+        if not self.is_off_grid():
+            # first check if we do have an amp sensor for the phases
+            multiplier = 1
+            if self.grid_active_power_sensor_inverted is False:
+                # if not inverted it should be -1 as consumption are reversed
+                multiplier = -1
+
+            pM = None
+            is_3p = False
+            if isinstance(self, AbstractDevice):
+                is_3p = self.current_3p
+
+            if self.grid_active_power_sensor is not None:
+                # this one has been inverted at the moment it was attached to prob
+                # so just multiply it by -1
+                p = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=tolerance_seconds, time=time)
+                if p is not None:
+                    p = -1.0*p
+                    if p > 0 and isinstance(self, AbstractDevice):
+                        pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
+
+            home_amps = self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
 
 
-        if self.grid_active_power_sensor is not None:
-            # this one has been inverted at the moment it was attached to prob
-            # so just multiply it by -1
-            p = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=tolerance_seconds, time=time)
-            if p is not None:
-                p = -1.0*p
-                if p > 0 and isinstance(self, AbstractDevice):
-                    pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
+        if self._solar_plant:
+            solar_amps = self._solar_plant.get_device_amps_consumption(tolerance_seconds, time)
+            if solar_amps is not None and home_amps is not None:
+                home_amps = add_amps(home_amps, solar_amps)
 
-        return self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
+        return home_amps
 
     def battery_can_discharge(self):
 
@@ -828,7 +923,6 @@ class QSHome(QSDynamicGroup):
             _LOGGER.info("update_loads: Home not finished setup, skipping")
             return
 
-
         try:
             await self.update_loads_constraints(time)
         except Exception as err:
@@ -925,14 +1019,35 @@ class QSHome(QSDynamicGroup):
                 # only launch one at a time for a given load
                 break
 
+        # we should order commands by load that have key constraints ... and the launch command should forbid as a last ressort
+        # any command that would go above amps budget (especially true in case of off grid mode)
+
+        delta_amps = [0, 0, 0]
+
         for load, commands in self._commands:
 
+            prev_cmd = load.current_command
+            if prev_cmd is None:
+                prev_cmd = CMD_IDLE
+
             while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+
                 cmd_time, command = commands.pop(0)
-                # _LOGGER.info(f"---> Set load command {load.name} {command}")
-                await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
-                # only launch one at a time for a given load
-                break
+
+                new_amps = load.get_phase_amps_from_power_for_budgeting(command.power_consign)
+                current_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
+                delta_load_amps = diff_amps(new_amps, current_amps)
+
+                if command.power_consign == 0 or load.father_device.is_delta_current_acceptable(delta_amps=add_amps(delta_amps, delta_load_amps), time=time):
+                    # _LOGGER.info(f"---> Set load command {load.name} {command}")
+                    await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
+                    # only launch one at a time for a given load
+                    delta_amps = add_amps(delta_amps, delta_load_amps)
+                    break
+                else:
+                    _LOGGER.warning(f"update_loads: ---> FORBID Set load command {load.name} {command} delta_amps {delta_amps} delta_load_amps {delta_load_amps}")
+
+                prev_cmd = command
 
         for load in all_loads:
             if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
@@ -1197,6 +1312,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
                         if not isinstance(device, AbstractLoad):
                             continue
+
                         if device.load_is_auto_to_be_boosted:
                             continue
 

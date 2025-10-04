@@ -1030,7 +1030,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if self._internal_start_of_constraint != DATETIME_MIN_UTC:
                 first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
 
-            if has_a_proper_end_time and self.load.is_time_sensitive():
+            # no need to reduce in case of OFF GRID Mode
+            if has_a_proper_end_time and self.load.is_time_sensitive() and not self.load.is_off_grid():
                 # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
                 # a 6 hours windows, of course if the constraint is timed we get bigger
 
@@ -1222,8 +1223,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             for fill_power_idx in range(len(power_sorted_cmds)):
                                 if (nrj_to_be_added + nrj_to_replace) <= price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
                                     break
-                            # boost a bit to speed up a bit the filling
-                            fill_power_idx = min(fill_power_idx + 1, len(power_sorted_cmds) - 1)
+
+                            # boost a bit to speed up a bit the filling, only if not off grid mode
+                            if not self.load.is_off_grid():
+                                fill_power_idx = min(fill_power_idx + 1, len(power_sorted_cmds) - 1)
                         else:
                             fill_power_idx = 0
 

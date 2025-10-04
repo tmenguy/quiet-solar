@@ -112,6 +112,11 @@ class AbstractDevice(object):
 
         self._computed_dashboard_section = None
 
+    def is_off_grid(self) -> bool:
+        if self.home:
+            return self.home.qs_home_is_off_grid
+        return False
+
     @property
     def dashboard_section(self) -> str | None:
         if self._computed_dashboard_section is None and self.home is not None and self.home.dashboard_sections is not None and len(self.home.dashboard_sections) > 0:
@@ -503,10 +508,13 @@ class AbstractLoad(AbstractDevice):
 
     def is_time_sensitive(self):
 
-        if self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only:
+        if self.is_best_effort_only_load():
             return False
 
         return self.is_load_time_sensitive
+
+    def is_best_effort_only_load(self):
+        return self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only
 
     def get_for_solver_constraints(self, start_time:datetime, end_time:datetime) -> list[Any]:
         if self.qs_enable_device is False:

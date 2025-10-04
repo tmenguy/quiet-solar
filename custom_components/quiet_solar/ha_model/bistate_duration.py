@@ -6,7 +6,7 @@ from datetime import time as dt_time
 
 import pytz
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
@@ -42,6 +42,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.bistate_entity = self.switch_entity
 
         self.is_load_time_sensitive = True
+
+    def is_best_effort_only_load(self) -> bool:
+        if super().is_best_effort_only_load():
+            return True
+        if self.is_off_grid():
+            return True
+        return False
 
     async def user_clean_and_reset(self):
         await super().user_clean_and_reset()
@@ -246,7 +253,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             if do_add_constraint:
 
                 type = CONSTRAINT_TYPE_MANDATORY_END_TIME
-                if has_user_forced_constraint is False and (self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only is True):
+                if has_user_forced_constraint is False and self.is_best_effort_only_load():
                     type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
