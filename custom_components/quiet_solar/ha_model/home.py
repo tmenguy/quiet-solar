@@ -491,7 +491,7 @@ class QSHome(QSDynamicGroup):
             parent = set()
         else:
             parent = set(parent)
-        parent.update([ Platform.SENSOR, Platform.SELECT, Platform.BUTTON ])
+        parent.update([ Platform.SENSOR, Platform.SELECT, Platform.BUTTON, Platform.SWITCH ])
         return list(parent)
 
     def get_car_by_name(self, name: str) -> QSCar | None:

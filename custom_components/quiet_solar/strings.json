@@ -634,6 +634,9 @@
       },
       "qs_pool_force_winter_mode": {
         "name": "Force Winter Mode"
+      },
+      "qs_home_is_off_grid": {
+        "name": "Set Off-Grid"
       }
     },
     "select": {

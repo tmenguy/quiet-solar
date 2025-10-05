@@ -45,7 +45,7 @@ def create_ha_switch_for_QSHome(device: QSHome):
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_HOME_IS_OFF_GRID,
         translation_key=SWITCH_HOME_IS_OFF_GRID,
-        async_switch=lambda s, val: s.device.async_set_off_grid_mode(val)
+        async_switch=lambda s, val: s.async_set_off_grid_mode(val)
     )
 
     entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
