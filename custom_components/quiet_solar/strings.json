@@ -67,6 +67,7 @@
         "data": {
           "name": "Name",
           "battery_capacity": "Capacity (Wh)",
+          "battery_is_dc_coupled" : "Is the battery DC coupled with an hybrid solar inverter?",
           "battery_charge_percent_sensor": "Charge percentage (%)",
           "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
           "battery_max_discharge_power_value": "Maximum discharge power (W)",
@@ -338,6 +339,7 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::battery::data::name%]",
           "battery_capacity": "[%key:component::quiet_solar::config::step::battery::data::battery_capacity%]",
+          "battery_is_dc_coupled" : "[%key:component::quiet_solar::config::step::battery::data::battery_is_dc_coupled%]",
           "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
           "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]",
           "battery_max_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_value%]",

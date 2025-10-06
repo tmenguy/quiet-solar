@@ -93,6 +93,7 @@ CONF_BATTERY_MAX_CHARGE_POWER_VALUE = "battery_max_charge_power_value"
 CONF_BATTERY_MAX_CHARGE_POWER_NUMBER = "battery_max_charge_power_number"
 CONF_BATTERY_MIN_CHARGE_PERCENT = "battery_min_charge_percent_value"
 CONF_BATTERY_MAX_CHARGE_PERCENT = "battery_max_charge_percent_value"
+CONF_BATTERY_IS_DC_COUPLED = "battery_is_dc_coupled"
 
 CONF_CLIMATE = "climate"
 CONF_CLIMATE_HVAC_MODE_ON = "climate_hvac_on"
@@ -253,3 +254,6 @@ CAR_CHARGE_TYPE_SCHEDULE = "Scheduled"
 CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY = "Solar Priority"
 CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY = "Solar"
 CAR_CHARGE_TYPE_UNKNOWN = "Unknown"
+
+MAX_POWER_INFINITE = 1e12
+MAX_AMP_INFINITE = 1e12

@@ -17,11 +17,12 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 from .dynamic_group import QSDynamicGroup
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
-     FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
+    FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
     CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
-    CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome
+    CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
+    MAX_POWER_INFINITE
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -201,7 +202,6 @@ class QSHome(QSDynamicGroup):
 
         self.home_non_controlled_consumption = None
         self.home_consumption = None
-        self.solar_production = 0
         self.home_available_power = None
         self.grid_consumption_power = None
         self.home_mode = None
@@ -270,7 +270,10 @@ class QSHome(QSDynamicGroup):
             return static_amp
 
         # ok we are in off grid mode, we need to limit the current to the max phase current of the home
-        available_production_w = self.solar_production
+        available_production_w = 0
+        if self._solar_plant is not None:
+            available_production_w = self._solar_plant.solar_production
+
         if self._battery is not None and self._battery.battery_can_discharge():
             available_production_w += self._battery.get_max_discharging_power()  # self._battery.max_discharge_number
 
@@ -284,7 +287,7 @@ class QSHome(QSDynamicGroup):
 
         available_production_amp = min(self.dyn_group_max_phase_current_conf, available_production_amp)
 
-        if self._solar_plant and self._solar_plant.solar_max_phase_amps:
+        if self._solar_plant:
             available_production_amp = min(available_production_amp, self._solar_plant.solar_max_phase_amps)
 
         return min(static_amp, available_production_amp)
@@ -542,8 +545,9 @@ class QSHome(QSDynamicGroup):
         if self._battery is not None:
             battery_charge = self._battery.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
-        self.solar_production = 0
+
         if self._solar_plant is not None:
+            self._solar_plant.solar_production = 0.0
             solar_production = None
             if self._solar_plant.solar_inverter_active_power:
                 # this one has the battery inside!
@@ -559,12 +563,12 @@ class QSHome(QSDynamicGroup):
                     solar_production_minus_battery = solar_production
 
             if solar_production is not None:
-                self.solar_production = solar_production
+                self._solar_plant.solar_production = solar_production
             elif solar_production_minus_battery is not None:
                 if battery_charge is not None:
-                    self.solar_production = solar_production_minus_battery + battery_charge
+                    self._solar_plant.solar_production = solar_production_minus_battery + battery_charge
                 else:
-                    self.solar_production = solar_production_minus_battery
+                    self._solar_plant.solar_production = solar_production_minus_battery
 
         elif battery_charge is not None:
             solar_production_minus_battery = 0 - battery_charge
@@ -572,6 +576,9 @@ class QSHome(QSDynamicGroup):
 
         if solar_production_minus_battery is None:
             solar_production_minus_battery = 0
+
+        if self._solar_plant is not None:
+            self._solar_plant.solar_production_minus_battery = solar_production_minus_battery
 
         # get grid consumption
         grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
@@ -598,6 +605,16 @@ class QSHome(QSDynamicGroup):
             else:
                 self.home_available_power = grid_consumption
 
+            # clamp the available power to what could be really available
+            if self.home_available_power > 0:
+                # we need to check if what is available will "really" be available to consume by any dynamic load ...
+                maximum_production_output = self.get_current_maximum_production_output_power()
+
+                if solar_production_minus_battery + self.home_available_power >= maximum_production_output:
+                    _LOGGER.info("Home available_power CLAMPED: from %.2f to  %.2f", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery))
+                    self.home_available_power = max(0.0, maximum_production_output - solar_production_minus_battery)
+
+
             self.grid_consumption_power = grid_consumption
 
         val = self.home_non_controlled_consumption
@@ -610,6 +627,36 @@ class QSHome(QSDynamicGroup):
             return None
 
         return (time, val, {})
+
+    def get_current_over_clamp_production_power(self) -> float:
+
+        if self._solar_plant is None:
+            return 0.0
+
+        if self._solar_plant.solar_production > self._solar_plant.solar_max_output_power_value:
+            return self._solar_plant.solar_production - self._solar_plant.solar_max_output_power_value
+
+        return 0.0
+
+    def get_current_maximum_production_output_power(self) -> float:
+
+        maximum_production_output = MAX_POWER_INFINITE
+
+        if self._solar_plant is not None and self._solar_plant.solar_max_output_power_value:
+            # we need to check if what is available will "really" be available to consume by any dynamic load ...
+            maximum_production_output = self._solar_plant.solar_max_output_power_value
+
+        if self._battery is not None:
+            max_battery_discharge = self._battery.battery_get_current_possible_max_discharge_power()
+        else:
+            max_battery_discharge = 0
+
+        # check wht could really be the max production output...because we could not reach the max inverter output
+        # with the current production of the solar plant + battery discharge
+        if self._solar_plant.solar_production + max_battery_discharge < maximum_production_output:
+            maximum_production_output = self._solar_plant.solar_production + max_battery_discharge
+
+        return maximum_production_output
 
     def get_grid_active_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.grid_active_power_sensor, duration_before_s, time)

@@ -61,7 +61,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
     CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
-    DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
+    DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -697,27 +697,36 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )})
 
         # Additional solar plant parameters
-        sc_dict.update({
-            vol.Optional(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
-                         description={"suggested_value": self.config_entry.data.get(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, 0)}):
-                selector.NumberSelector(
+        default = self.config_entry.data.get(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE)
+        if default:
+            sc_key = vol.Optional(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
+                         description={"suggested_value": default})
+        else:
+            sc_key = vol.Optional(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE)
+
+        sc_dict[sc_key] = selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
                         mode=selector.NumberSelectorMode.BOX,
                         unit_of_measurement=UnitOfPower.WATT,
                     )
-                ),
-            vol.Optional(CONF_SOLAR_MAX_PHASE_AMPS,
-                         description={"suggested_value": self.config_entry.data.get(CONF_SOLAR_MAX_PHASE_AMPS, 0)}):
-                selector.NumberSelector(
+                )
+
+        default = self.config_entry.data.get(CONF_SOLAR_MAX_PHASE_AMPS)
+        if default:
+            sc_key = vol.Optional(CONF_SOLAR_MAX_PHASE_AMPS,
+                         description={"suggested_value": default})
+        else:
+            sc_key = vol.Optional(CONF_SOLAR_MAX_PHASE_AMPS)
+
+        sc_dict[sc_key] = selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
                         step=1,
                         mode=selector.NumberSelectorMode.BOX,
                         unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                     )
-                ),
-        })
+                )
 
         schema = vol.Schema(sc_dict)
 
@@ -806,11 +815,17 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         TYPE = QSBattery.conf_type_name
 
         if user_input is not None:
-            #do sotme stuff to update
+            #do some stuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
         sc_dict = self.get_common_schema(type=TYPE)
+
+        sc_dict.update({
+            vol.Optional(CONF_BATTERY_IS_DC_COUPLED,
+                         default=self.config_entry.data.get(CONF_BATTERY_IS_DC_COUPLED, False)):
+                cv.boolean,
+        })
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
@@ -819,8 +834,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         number_entites = selectable_power_entities(self.hass, domains=[NUMBER_DOMAIN])
         if len(number_entites) > 0:
             self.add_entity_selector(sc_dict, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, False, entity_list=number_entites)
-            self.add_entity_selector(sc_dict, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, False,
-                                     entity_list=number_entites)
+            self.add_entity_selector(sc_dict, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, False, entity_list=number_entites)
 
         percent_entities = selectable_percent_sensor_entities(self.hass)
         if len(percent_entities) > 0 :
@@ -831,7 +845,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         sc_dict.update(
             {
 
-                vol.Optional(CONF_BATTERY_CAPACITY, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_CAPACITY, 0)}):
+                vol.Required(CONF_BATTERY_CAPACITY, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_CAPACITY, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,
@@ -839,7 +853,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfEnergy.WATT_HOUR,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MIN_CHARGE_PERCENT, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MIN_CHARGE_PERCENT, 0)}):
+                vol.Required(CONF_BATTERY_MIN_CHARGE_PERCENT, description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MIN_CHARGE_PERCENT, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -849,7 +863,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=PERCENTAGE,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MAX_CHARGE_PERCENT,
+                vol.Required(CONF_BATTERY_MAX_CHARGE_PERCENT,
                              description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_PERCENT, 100)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
@@ -860,7 +874,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=PERCENTAGE,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+                vol.Required(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
                              description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
@@ -869,7 +883,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             unit_of_measurement=UnitOfPower.WATT,
                         )
                     ),
-                vol.Optional(CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
+                vol.Required(CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
                              description={"suggested_value":self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(

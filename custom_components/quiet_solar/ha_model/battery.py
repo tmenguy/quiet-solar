@@ -7,10 +7,10 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR
     SERVICE_TURN_OFF
 from homeassistant.components import number
 
-
+from .solar import QSSolar
 from ..const import CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, \
     CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, CONF_BATTERY_CHARGE_PERCENT_SENSOR, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
-    CONF_TYPE_NAME_QSBattery
+    CONF_TYPE_NAME_QSBattery, MAX_POWER_INFINITE, CONF_BATTERY_IS_DC_COUPLED
 from ..ha_model.device import HADeviceMixin, convert_power_to_w
 from ..home_model.battery import Battery
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_IDLE, CMD_AUTO_GREEN_ONLY, CMD_GREEN_CHARGE_AND_DISCHARGE, \
@@ -28,8 +28,14 @@ class QSBattery(HADeviceMixin, Battery):
         self.max_charge_number = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, None)
         self.charge_percent_sensor = kwargs.pop(CONF_BATTERY_CHARGE_PERCENT_SENSOR, None)
         self.charge_from_grid_switch = kwargs.pop(CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, None)
+        self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
 
         super().__init__(**kwargs)
+
+        # attach a solar plant if it is an hybrid battery
+        self._solar_plant : QSSolar | None = None
+        if self.is_dc_coupled:
+            self._solar_plant = self.home._solar_plant
 
         self.attach_power_to_probe(self.charge_discharge_sensor)
 
@@ -43,6 +49,12 @@ class QSBattery(HADeviceMixin, Battery):
         await super().user_clean_and_reset()
         await self.clean_and_reset()
 
+
+    @property
+    def max_inverter_dc_to_ac_power(self) -> float:
+        if self._solar_plant:
+            return self._solar_plant.solar_max_output_power_value
+        return MAX_POWER_INFINITE
 
     @property
     def current_charge(self) -> float | None:
@@ -238,21 +250,41 @@ class QSBattery(HADeviceMixin, Battery):
             domain, service, data, blocking=blocking
         )
 
+    def get_current_battery_asked_change_for_outside_production_system(self) -> float:
+
+        if self.current_command is None:
+            return 0.0
+
+        if self.current_command.power_consign == 0.0:
+            return 0.0
+
+        if self.home._solar_plant is None:
+            return self.current_command.power_consign
+
+        if self.current_command.power_consign > 0:
+            return max(0, self.current_command.power_consign - self.home._solar_plant.get_current_over_clamp_production_power())
+
+        return self.current_command.power_consign
+
+
     def battery_can_discharge(self):
+        return self.battery_get_current_possible_max_discharge_power() > 0.0
+
+    def battery_get_current_possible_max_discharge_power(self) -> float:
 
         current_charge = self.current_charge
 
         if current_charge is None:
-            return False
+            return 0.0
 
-        if self.get_max_discharging_power() == 0:
-            return False
+        max_discharge = self.get_max_discharging_power()
+        if max_discharge == 0.0:
+            return 0.0
 
         if self.is_value_empty(current_charge):
-            return False
+            return 0.0
 
-        return True
-
+        return max_discharge
 
     def get_platforms(self):
         parent = super().get_platforms()

@@ -17,6 +17,7 @@
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
                     "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
+                    "battery_is_dc_coupled": "Is the battery DC coupled with an hybrid solar inverter?",
                     "battery_max_charge_percent_value": "Maximum charge percentage (%)",
                     "battery_max_charge_power_number": "Maximum charge power (W, kW) Number entity",
                     "battery_max_charge_power_value": "Maximum charge power (W)",
@@ -418,14 +419,14 @@
             "qs_enable_device": {
                 "name": "Enabled for quiet solar"
             },
+            "qs_home_is_off_grid": {
+                "name": "Set Off-Grid"
+            },
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
             },
             "qs_pool_force_winter_mode": {
                 "name": "Force Winter Mode"
-            },
-            "qs_home_is_off_grid": {
-              "name": "Set Off-Grid"
             }
         },
         "time": {
@@ -455,6 +456,7 @@
                     "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
                     "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid",
                     "battery_charge_percent_sensor": "Charge percentage (%)",
+                    "battery_is_dc_coupled": "Is the battery DC coupled with an hybrid solar inverter?",
                     "battery_max_charge_percent_value": "Maximum charge percentage (%)",
                     "battery_max_charge_power_number": "Maximum charge power (W, kW) Number entity",
                     "battery_max_charge_power_value": "Maximum charge power (W)",

@@ -11,7 +11,8 @@ import pytz
 
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S, \
-    CONF_TYPE_NAME_QSSolar, CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, CONF_SOLAR_MAX_PHASE_AMPS, CONF_ACCURATE_POWER_SENSOR
+    CONF_TYPE_NAME_QSSolar, CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, CONF_SOLAR_MAX_PHASE_AMPS, CONF_ACCURATE_POWER_SENSOR, \
+    MAX_POWER_INFINITE, MAX_AMP_INFINITE
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_series, \
     get_value_from_time_series
@@ -26,8 +27,8 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self.solar_inverter_active_power = kwargs.pop(CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, None)
         self.solar_inverter_input_active_power = kwargs.pop(CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, None)
         self.solar_forecast_provider = kwargs.pop(CONF_SOLAR_FORECAST_PROVIDER, None)
-        self.solar_max_output_power_value = kwargs.pop(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, None)
-        self.solar_max_phase_amps = kwargs.pop(CONF_SOLAR_MAX_PHASE_AMPS, None)
+        self.solar_max_output_power_value = kwargs.pop(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, MAX_POWER_INFINITE)
+        self.solar_max_phase_amps = kwargs.pop(CONF_SOLAR_MAX_PHASE_AMPS, MAX_AMP_INFINITE)
         self.solar_forecast_provider_handler: QSSolarProvider | None = None
         kwargs[CONF_ACCURATE_POWER_SENSOR] = self.solar_inverter_active_power # to allow proper measurement
         super().__init__(**kwargs)
@@ -41,6 +42,16 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 self.solar_forecast_provider_handler = QSSolarProviderSolcast(self)
             elif self.solar_forecast_provider == OPEN_METEO_SOLAR_DOMAIN:
                 self.solar_forecast_provider_handler = QSSolarProviderOpenWeather(self)
+
+        self.solar_production = 0
+        self.solar_production_minus_battery = 0
+
+    def get_current_over_clamp_production_power(self) -> float:
+
+        if self.solar_production > self.solar_max_output_power_value:
+            return self.solar_production - self.solar_max_output_power_value
+
+        return 0.0
 
     async def update_forecast(self, time: datetime) -> None:
         if self.solar_forecast_provider_handler is not None:

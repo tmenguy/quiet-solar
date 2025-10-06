@@ -6,7 +6,7 @@ from datetime import datetime
 
 from typing import Any
 
-from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_TYPE_NAME_QSDynamicGroup
+from ..const import CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_TYPE_NAME_QSDynamicGroup, MAX_POWER_INFINITE, MAX_AMP_INFINITE
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice
 from ..home_model.home_utils import is_amps_zero, are_amps_equal, is_amps_greater, add_amps, diff_amps, min_amps, \
@@ -159,7 +159,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if len(self._childrens) == 0:
             return super().get_min_max_power()
 
-        min_p = 1e12
+        min_p = MAX_POWER_INFINITE
         max_p = 0
         for device in self._childrens:
             min_p_d, max_p_d = device.get_min_max_power()
@@ -180,7 +180,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             from_father_budget = min_amps(from_father_budget, self.dyn_group_max_phase_current)
 
         if from_father_budget is None:
-            from_father_budget = [1e8, 1e8, 1e8] # a lot of amps :)
+            from_father_budget = [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE] # a lot of amps :)
 
         self.available_amps_for_group = [copy.copy(from_father_budget) for _ in range(num_slots)]
 

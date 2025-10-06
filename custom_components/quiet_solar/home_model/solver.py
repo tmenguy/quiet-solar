@@ -57,6 +57,7 @@ class PeriodSolver(object):
         self._pv_forecast: list[datetime, float] | None = pv_forecast
         self._ua_forecast: list[datetime, float] | None = unavoidable_consumption_forecast
         self._battery = battery
+        self._battery_charge_power_by_inverter_AC_clamping = None
 
         if not tariffs:
             self._tariffs = [(start_time, 0.2/1000.0)]
@@ -72,6 +73,13 @@ class PeriodSolver(object):
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
         self._time_slots, self._active_constraints = self.create_time_slots(self._start_time, self._end_time)
         self._prices, self._durations_s, self._available_power = self.create_power_slots(self._time_slots)
+        self._solar_production = -self._available_power.copy()
+        self._battery_charge_power_by_inverter_AC_clamping = None
+
+        # fill the battery if we do have some production clamping at inverter level
+        if self._battery is not None:
+            self._battery_charge_power_by_inverter_AC_clamping = self._battery_get_charging_power(for_production_clamping=True)[0]
+            self._available_power = self._available_power + self._battery_charge_power_by_inverter_AC_clamping
 
 
         if pv_forecast is None:
@@ -168,7 +176,6 @@ class PeriodSolver(object):
         i_ua = -1 #the latest entry used in the previous slot
         i_pv = -1
 
-
         for i in range(len(anchors)-1):
             begin_slot = anchors[i]
             end_slot = anchors[i+1]
@@ -190,8 +197,6 @@ class PeriodSolver(object):
             available_power[i] = ua_power - pv_power
 
         return prices, durations_s, available_power
-
-
 
     def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end, geometric_smoothing=False):
 
@@ -284,10 +289,10 @@ class PeriodSolver(object):
         loads[load] = existing_cmds
 
 
-    def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None):
+    def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None, for_production_clamping=False):
 
         available_power_list = self._available_power
-        battery_charge_power = np.zeros(len(available_power_list), dtype=np.float64)
+        battery_ext_consumption_power = np.zeros(len(available_power_list), dtype=np.float64)
         battery_charge = np.zeros(len(available_power_list), dtype=np.float64)
         if existing_battery_commands is None:
             battery_commands = [None] * len(available_power_list)
@@ -295,7 +300,6 @@ class PeriodSolver(object):
             battery_commands = existing_battery_commands
         prices_discharged_energy_buckets = {}
         prices_remaining_grid_energy_buckets = {}
-        remaining_grid_price = 0
         remaining_grid_energy = 0
         excess_solar_energy = 0
 
@@ -310,47 +314,74 @@ class PeriodSolver(object):
             for i in range(len(available_power_list)):
 
                 charging_power = 0.0
-                available_power = available_power_list[i]
+                consumption_power = 0.0
+
+                if for_production_clamping:
+                    # if available power negative : we do have some production/solar available power
+                    if 0.0-available_power_list[i] > self._battery.max_inverter_dc_to_ac_power:
+                        available_power = available_power_list[i] + self._battery.max_inverter_dc_to_ac_power
+                    else:
+                        available_power = 0.0
+                else:
+                    available_power = available_power_list[i]
 
                 if battery_commands[i] is None:
                     battery_commands[i] = copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE)
 
+                # as the clamping happened no matter what
+                clamped_charge_power = 0.0
+                if self._battery_charge_power_by_inverter_AC_clamping is not None:
+                    clamped_charge_power = self._battery_charge_power_by_inverter_AC_clamping[i]
+
 
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
-
+                    # clamped_charge_power was part already of the force charge computation
                     charging_power = self._battery.get_best_charge_power(battery_commands[i].power_consign,
+                                                                         float(self._solar_production[i]),
                                                                          float(self._durations_s[i]),
                                                                          current_charge=prev_battery_charge)
-                    if charging_power < 0.0:
+                    if charging_power <= 0.0:
                         charging_power = 0.0
+                        consumption_power = 0.0
+                    else:
+                        consumption_power = charging_power - clamped_charge_power
                 else:
-
-                    if available_power < 0.0:
+                    battery_available_power = float(available_power) - float(clamped_charge_power)
+                    if battery_available_power < 0.0:
 
                         # charge
-                        charging_power = self._battery.get_best_charge_power(0.0 - available_power,
+                        charging_power = self._battery.get_best_charge_power(0.0 - float(battery_available_power),
+                                                                             float(self._solar_production[i]),
                                                                              float(self._durations_s[i]),
                                                                              current_charge=prev_battery_charge)
-                        if charging_power < 0.0:
+                        if charging_power <= 0.0:
                             charging_power = 0.0
+                            consumption_power = 0.0
+                        else:
+                            consumption_power = charging_power - clamped_charge_power
 
-                    elif available_power > 0.0:
+                    elif battery_available_power > 0.0:
 
                         if battery_commands[i].is_like(CMD_GREEN_CHARGE_ONLY):
-                            charging_power = 0.0
+                            # in this one discharge is forbidden
+                            charging_power = clamped_charge_power
+                            consumption_power = 0.0
                         else:
                             # discharge....
-                            charging_power = self._battery.get_best_discharge_power(float(available_power),
+                            charging_power = self._battery.get_best_discharge_power(float(battery_available_power),
+                                                                                    float(self._solar_production[i]),
                                                                                     float(self._durations_s[i]),
                                                                                     current_charge=float(prev_battery_charge))
                             if charging_power > 0:
                                 charging_power = 0.0 - charging_power
+                                consumption_power = charging_power
                             else:
                                 charging_power = 0.0
+                                consumption_power = 0.0
 
-                battery_charge_power[i] = charging_power
-
+                battery_ext_consumption_power[i] = consumption_power
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
+
 
                 if limited_discharge_per_price is not None:
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
@@ -372,7 +403,7 @@ class PeriodSolver(object):
                     prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(
                         self._prices[i], 0.0) - charged_energy
 
-                grid_nrj = (((available_power + charging_power) * float(self._durations_s[i])) / 3600.0)
+                grid_nrj = (((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0)
                 if grid_nrj > 0:
                     # we will ask it from the grid:
                     remaining_grid_energy += grid_nrj
@@ -386,7 +417,7 @@ class PeriodSolver(object):
                 prev_battery_charge = battery_charge[i]
 
 
-        return battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy
+        return battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy
 
 
     def _prepare_battery_segmentation(self, over_budget=0.2):
@@ -396,7 +427,7 @@ class PeriodSolver(object):
 
         num_slots = len(self._available_power)
         # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
-        battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+        battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
 
         empty_segments = [[None, num_slots - 1]]
         for i in range(num_slots):
@@ -427,7 +458,7 @@ class PeriodSolver(object):
                 # compute what is consumed from the grid in those empty segments ... to try to get it back by consuming less before
                 # the empty segments
                 for i in range(s[0], s[1] + 1):
-                    energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_charge_power[i]) * self._durations_s[i] / 3600.0
+                    energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_ext_consumption_power[i]) * self._durations_s[i] / 3600.0
 
                 if s_idx == 0:
                     if s[0] > 0:
@@ -440,7 +471,7 @@ class PeriodSolver(object):
                 # only take what is still asked from the grid, not what is charged in the battery
                 if segments_to_shave[s_idx] is not None:
                     for i in range(segments_to_shave[s_idx][0], segments_to_shave[s_idx][1] + 1):
-                        energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_charge_power[i]) * self._durations_s[i] / 3600.0
+                        energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_ext_consumption_power[i]) * self._durations_s[i] / 3600.0
 
             for s_idx in range(len(segments_to_shave)):
                 s = segments_to_shave[s_idx]
@@ -683,7 +714,7 @@ class PeriodSolver(object):
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
         battery_commands = None
         battery_charge = None
-        battery_charge_power = None
+        battery_ext_consumption_power = None
 
         if self._battery is not None:
 
@@ -699,7 +730,7 @@ class PeriodSolver(object):
             # if not enough remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
             # if the battery "not used energy" from this pass is
 
-            battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+            battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
 
             #the goal is to lower as much as possible the remaining_grid_energy ... by, if possible, discharging more in the "high" prices and less in the low prices
             if remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1: # 100Wh hum or use a bit of a buffer here for uncertainty?
@@ -732,7 +763,6 @@ class PeriodSolver(object):
                                     energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                     energy_to_cover = 0
 
-
                                 else:
                                     _LOGGER.info(f"solve: Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
                                     energy_can_still_be_discharged = 0
@@ -748,10 +778,10 @@ class PeriodSolver(object):
                                 break
 
                 if have_an_optim is True:
-                    battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
+                    battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
 
             # now we have the best battery commands for the period
-            self._available_power = self._available_power + battery_charge_power
+            self._available_power = self._available_power + battery_ext_consumption_power
 
         # for the slots where we still have some surplus production even after battery charge: it means the battery was at full capacity ... we can do now other non mandatory stuffs
         # like surplus to the car or other non mandatory constraints, non mandatory constraint are only consuming free electricity ... if anything is left :)
@@ -885,9 +915,9 @@ class PeriodSolver(object):
         # final battery
         if battery_commands is not None:
             # recompute all battery charge and so on after all the adaptation, so remove any discharge that could have been added
-            self._available_power = self._available_power - battery_charge_power
-            battery_charge_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(existing_battery_commands=battery_commands)
-            self._available_power = self._available_power + battery_charge_power
+            self._available_power = self._available_power - battery_ext_consumption_power
+            battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(existing_battery_commands=battery_commands)
+            self._available_power = self._available_power + battery_ext_consumption_power
 
         # we have now all the constraints solved, and the battery commands computed
         # now will be time to layout the commands for the constraints and their respective loads
