@@ -114,7 +114,7 @@ class AbstractDevice(object):
 
     def is_off_grid(self) -> bool:
         if self.home:
-            return self.home.qs_home_is_off_grid
+            return self.home.is_off_grid()
         return False
 
     @property

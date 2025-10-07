@@ -861,20 +861,20 @@ class QSHome(QSDynamicGroup):
         if self._init_completed:
             return True
 
-        # check if we have all devices
+        # check if we have some devices
         if not self._all_devices:
             return False
 
         # check if we have a battery
-        if self._battery is None:
-            return False
+        # if self._battery is None:
+        #    return False
 
         # check if we have a solar plant
-        if self._solar_plant is None:
-            return False
+        # if self._solar_plant is None:
+        #    return False
 
-        # check if we have at least one load
-        if not self._all_loads:
+        # check if we have at least one load ... we may have zero if they are all disabled in fact!
+        if not self._all_loads and not self._disabled_devices:
             return False
 
 
