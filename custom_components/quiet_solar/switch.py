@@ -276,10 +276,11 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
         else:
             self._attr_is_on = last_sensor_state.native_is_on
 
-        if self._attr_is_on is None and hasattr(self.device, self.entity_description.key):
-            self._attr_is_on = getattr(self.device, self.entity_description.key, False)
-        else:
-            self._attr_is_on = False
+        if self._attr_is_on is None:
+            if hasattr(self.device, self.entity_description.key):
+                self._attr_is_on = getattr(self.device, self.entity_description.key, False)
+            else:
+                self._attr_is_on = False
 
 
         if self._attr_is_on:
