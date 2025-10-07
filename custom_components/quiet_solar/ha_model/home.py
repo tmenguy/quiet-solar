@@ -237,11 +237,16 @@ class QSHome(QSDynamicGroup):
 
     async def async_set_off_grid_mode(self, off_grid:bool):
 
+
+
         do_reset = self.qs_home_is_off_grid != off_grid
 
         self.qs_home_is_off_grid = off_grid
 
         if do_reset:
+
+            _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
+
             # reset all loads
             for load in self._all_loads:
                 if load.qs_enable_device is False:
@@ -611,7 +616,7 @@ class QSHome(QSDynamicGroup):
                 maximum_production_output = self.get_current_maximum_production_output_power()
 
                 if solar_production_minus_battery + self.home_available_power >= maximum_production_output:
-                    _LOGGER.info("Home available_power CLAMPED: from %.2f to  %.2f", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery))
+                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery))
                     self.home_available_power = max(0.0, maximum_production_output - solar_production_minus_battery)
 
 
@@ -651,9 +656,10 @@ class QSHome(QSDynamicGroup):
         else:
             max_battery_discharge = 0
 
-        # check wht could really be the max production output...because we could not reach the max inverter output
+        # check what could really be the max production output...because we could not reach the max inverter output
         # with the current production of the solar plant + battery discharge
         if self._solar_plant.solar_production + max_battery_discharge < maximum_production_output:
+            _LOGGER.warning(f"get_current_maximum_production_output_power: clamped to {(self._solar_plant.solar_production + max_battery_discharge):.2f}W because solar production {self._solar_plant.solar_production:.2f}W + max battery discharge {max_battery_discharge:.2f}W is lower than solar max output power {maximum_production_output:.2f}W")
             maximum_production_output = self._solar_plant.solar_production + max_battery_discharge
 
         return maximum_production_output

@@ -262,7 +262,10 @@ class QSBattery(HADeviceMixin, Battery):
             return self.current_command.power_consign
 
         if self.current_command.power_consign > 0:
-            return max(0, self.current_command.power_consign - self.home._solar_plant.get_current_over_clamp_production_power())
+            inverter_clamp =  self.home._solar_plant.get_current_over_clamp_production_power()
+            if inverter_clamp > 0:
+                _LOGGER.warning(f"get_current_battery_asked_change_for_outside_production_system: reduce power command {self.current_command.power_consign:.2f} by {inverter_clamp:.2f} to self.current_command.power_consign - inverter_clamp")
+            return max(0, self.current_command.power_consign - inverter_clamp)
 
         return self.current_command.power_consign
 

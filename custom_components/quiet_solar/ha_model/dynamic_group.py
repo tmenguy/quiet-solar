@@ -67,6 +67,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         return self._dyn_group_max_phase_current
 
+
+
     def is_delta_current_acceptable(self, delta_amps: list[float|int], time:datetime, new_amps_consumption: list[float|int] | None = None) -> tuple[bool, list[float|int]]:
 
         if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):

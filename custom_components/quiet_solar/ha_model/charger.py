@@ -2764,13 +2764,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     @property
     def max_charge(self):
-
         if self.car:
             static_max = int(min(self.charger_max_charge, self.car.car_charger_max_charge))
         else:
             static_max = self.charger_max_charge
 
         max_phase_home = int(self.home.get_home_max_phase_amp())
+
+        if max_phase_home < static_max:
+            _LOGGER.warning(f"max_charge: limiting max charge current to {max_phase_home}A because of home max phase current limit of {max_phase_home}")
 
         res = min(static_max, max_phase_home)
         if res <= self.min_charge + 1:
@@ -3494,6 +3496,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         handled = False
         if self.is_car_stopped_asking_current(time):
             _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} car {self.car.name} stopped asking current ... do nothing")
+
             handled = True
         elif command is None or command.is_off_or_idle():
             handled = True

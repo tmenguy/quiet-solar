@@ -1,7 +1,10 @@
+import logging
+
 from ..home_model.load import AbstractDevice
 from ..const import CONF_BATTERY_CAPACITY, CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, CONF_BATTERY_MAX_CHARGE_POWER_VALUE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, MAX_POWER_INFINITE, CONF_BATTERY_IS_DC_COUPLED
 
+_LOGGER = logging.getLogger(__name__)
 
 class Battery(AbstractDevice):
 
@@ -49,6 +52,10 @@ class Battery(AbstractDevice):
         charging_power = min(power_in, self.max_charging_power)
 
         if self.charge_from_grid is False:
+            if solar_production < charging_power:
+                _LOGGER.warning(
+                    f"get_best_charge_power: clamping charging_power:{charging_power} > solar_production:{solar_production}")
+
             charging_power = min(solar_production, charging_power)
 
         available_power = max(0.0, ((self.get_value_full()) - current_charge) * 3600 / duration_s)
@@ -91,6 +98,8 @@ class Battery(AbstractDevice):
         if solar_production > 0.0:
             if power_out + solar_production > self.max_inverter_dc_to_ac_power:
                 discharging_power = max(0.0, self.max_inverter_dc_to_ac_power - solar_production)
+                _LOGGER.warning(f"get_best_discharge_power: clamping power_out:{power_out} + solar_production:{solar_production} to max_inverter_dc_to_ac_power:{self.max_inverter_dc_to_ac_power}, so discharging_power={discharging_power}")
+
 
         discharging_power = min(discharging_power, self.max_discharging_power)
 
