@@ -658,7 +658,7 @@ class QSHome(QSDynamicGroup):
 
         # check what could really be the max production output...because we could not reach the max inverter output
         # with the current production of the solar plant + battery discharge
-        if self._solar_plant.solar_production + max_battery_discharge < maximum_production_output:
+        if self._solar_plant is not None and self._solar_plant.solar_production + max_battery_discharge < maximum_production_output:
             _LOGGER.warning(f"get_current_maximum_production_output_power: clamped to {(self._solar_plant.solar_production + max_battery_discharge):.2f}W because solar production {self._solar_plant.solar_production:.2f}W + max battery discharge {max_battery_discharge:.2f}W is lower than solar max output power {maximum_production_output:.2f}W")
             maximum_production_output = self._solar_plant.solar_production + max_battery_discharge
 
