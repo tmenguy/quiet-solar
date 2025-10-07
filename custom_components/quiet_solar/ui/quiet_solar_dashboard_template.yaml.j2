@@ -116,6 +116,16 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("car_charge_type") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("car_charge_time") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_clean_and_reset") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
@@ -311,6 +321,11 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_serialize_for_debug") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_home_is_off_grid") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
