@@ -545,6 +545,7 @@ class QSHome(QSDynamicGroup):
 
         # get solar production
         solar_production_minus_battery = None
+        solar_production = None
 
         battery_charge = None
         if self._battery is not None:
@@ -616,7 +617,12 @@ class QSHome(QSDynamicGroup):
                 maximum_production_output = self.get_current_maximum_production_output_power()
 
                 if solar_production_minus_battery + self.home_available_power >= maximum_production_output:
-                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery))
+                    if self._battery is not None:
+                        max_battery_discharge = self._battery.battery_get_current_possible_max_discharge_power()
+                    else:
+                        max_battery_discharge = 0
+
+                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
                     self.home_available_power = max(0.0, maximum_production_output - solar_production_minus_battery)
 
 

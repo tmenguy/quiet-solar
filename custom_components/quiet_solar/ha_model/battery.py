@@ -277,8 +277,9 @@ class QSBattery(HADeviceMixin, Battery):
 
         current_charge = self.current_charge
 
+        # unknown ... return max discharge by default
         if current_charge is None:
-            return 0.0
+            return self.max_discharging_power
 
         if self.is_value_empty(current_charge):
             return 0.0

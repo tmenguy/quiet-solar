@@ -864,9 +864,8 @@ class QSChargerGroup(object):
                     if cs_to_stop_can_now is None and cs_to_stop_by_forcing_it is not None:
 
                         min_s = min(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
-                        max_s = max(TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S)
 
-                        time_to_check = int(max(min_s, (max_s + min_s) // 2))
+                        time_to_check = min_s
 
                         can_change_state = cs_to_stop_by_forcing_it.charger._expected_charge_state.is_ok_to_set(time, time_to_check)
 
@@ -884,17 +883,19 @@ class QSChargerGroup(object):
                             f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
                         do_reset_allocation = True
 
-        current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers, do_reset_allocation)
+        current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
+                                                                                 do_reset_allocation, time)
 
-        # first bad case of amps overly booked by the solver for example...
-        new_mandatory_amps = await self._shave_mandatory_budgets(actionable_chargers, current_amps, mandatory_amps, time)
+        if current_ok is False and do_reset_allocation is False:
+            # we will try to do a reset allocation to see if it can solve the problem
+            _LOGGER.info(
+                f"budgeting_algorithm_minimize_diffs: CAN'T SHAVE CURRENT BUDGETS, TRYING A RESET ALLOCATION !!!!")
 
-        # ok in case of change redo the budgets allocations
-        if are_amps_equal(new_mandatory_amps, mandatory_amps) is False:
-            current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers, do_reset_allocation)
+            do_reset_allocation = True
+            should_do_reset_allocation = True
 
-        current_ok = await self._shave_current_budgets(actionable_chargers, time)
-
+            current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
+                                                                                     do_reset_allocation, time)
         if current_ok is False:
             _LOGGER.error(
                 f"budgeting_algorithm_minimize_diffs: CAN'T SHAVE BUDGETS !!!!")
@@ -1198,6 +1199,23 @@ class QSChargerGroup(object):
                             cs_to_update.budgeted_num_phases = next_num_phases_budget
 
         return True, should_do_reset_allocation, do_reset_allocation
+
+    async def _do_prepare_and_shave_budgets(self, actionable_chargers: list[Any], do_reset_allocation: bool,
+                                            time: datetime) -> tuple[tuple[list[Any] | Any, bool], bool]:
+        current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers,
+                                                                                                  do_reset_allocation)
+
+        # first bad case of amps overly booked by the solver for example...
+        new_mandatory_amps = await self._shave_mandatory_budgets(actionable_chargers, current_amps, mandatory_amps,
+                                                                 time)
+
+        # ok in case of change redo the budgets allocations
+        if are_amps_equal(new_mandatory_amps, mandatory_amps) is False:
+            current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(
+                actionable_chargers, do_reset_allocation)
+
+        current_ok = await self._shave_current_budgets(actionable_chargers, time)
+        return current_ok, has_phase_changes
 
     async def _do_prepare_budgets_for_algo(self, actionable_chargers, do_reset_allocation):
         current_amps = [0.0, 0.0, 0.0]
@@ -1927,7 +1945,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         do_add_0 = True
                         if cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and cs.command.power_consign > 0:
                             if self.home._battery is not None:
-                                battery_asked_charge = self.home._battery.get_current_battery_asked_change_for_outside_production_system()
+                                battery_asked_charge = self.home._battery.get_current_battery_asked_change_for_outside_production_system() # it is really adapting what was computed to get in the battery vs the situation now
                                 battery_can_discharge = self.home.battery_can_discharge()
                                 if battery_can_discharge and battery_asked_charge < 0:
                                     do_add_0 = False
