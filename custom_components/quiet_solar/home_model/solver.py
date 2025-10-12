@@ -79,6 +79,7 @@ class PeriodSolver(object):
         # fill the battery if we do have some production clamping at inverter level
         if self._battery is not None:
             self._battery_charge_power_by_inverter_AC_clamping = self._battery_get_charging_power(for_production_clamping=True)[0]
+            # reduce the avalable power to what is really available for the hone: it is clamped by the maximum capacity of the inverter
             self._available_power = self._available_power + self._battery_charge_power_by_inverter_AC_clamping
 
 
@@ -319,6 +320,7 @@ class PeriodSolver(object):
                 if for_production_clamping:
                     # if available power negative : we do have some production/solar available power
                     if 0.0-available_power_list[i] > self._battery.max_inverter_dc_to_ac_power:
+                        # what is above the inverter limit will be overcharged in the battery if it is an hybrid + battery setup
                         available_power = available_power_list[i] + self._battery.max_inverter_dc_to_ac_power
                     else:
                         available_power = 0.0
@@ -330,7 +332,7 @@ class PeriodSolver(object):
 
                 # as the clamping happened no matter what
                 clamped_charge_power = 0.0
-                if self._battery_charge_power_by_inverter_AC_clamping is not None:
+                if for_production_clamping is False and self._battery_charge_power_by_inverter_AC_clamping is not None:
                     clamped_charge_power = self._battery_charge_power_by_inverter_AC_clamping[i]
 
 
