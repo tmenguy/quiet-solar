@@ -2,6 +2,8 @@
 
 import unittest
 from datetime import datetime, timedelta
+
+import pytest
 import pytz
 
 from custom_components.quiet_solar.ha_model.car import QSCar, CAR_MAX_EFFICIENCY_HISTORY_S
@@ -445,6 +447,7 @@ class TestCarRangeEstimation(unittest.TestCase):
         # The second segment has 50% SOC for 120km, so 50% should give exactly 120km
         self.assertAlmostEqual(estimated_range, 120.0, places=1)
 
+    @pytest.mark.skip(reason="delat graphs no more used")
     def test_efficiency_deltas_graph_creation(self):
         """Test that efficiency deltas and graph structures are created."""
         time = datetime.now(pytz.UTC)
