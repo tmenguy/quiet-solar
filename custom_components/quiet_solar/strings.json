@@ -175,6 +175,8 @@
           "car_charge_percent_sensor": "% charge of the battery",
           "car_charge_percent_max_number": "% set car charge limit entity",
           "car_charge_percent_max_number_steps": "Optional: for the entity above which % values are allowed, comma separated",
+          "car_odometer_sensor": "Odometer sensor (km or miles)",
+          "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
           "car_battery_capacity": "Battery capacity (Wh)",
           "car_charger_min_charge": "Per phase min charge in (A)",
           "car_charger_max_charge": "Per phase max charge in (A)",
@@ -438,6 +440,8 @@
           "car_charge_percent_sensor": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_sensor%]",
           "car_charge_percent_max_number": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_max_number%]",
           "car_charge_percent_max_number_steps": "[%key:component::quiet_solar::config::step::car::data::car_charge_percent_max_number_steps%]",
+          "car_odometer_sensor": "[%key:component::quiet_solar::config::step::car::data::car_odometer_sensor%]",
+          "car_estimated_range_sensor": "[%key:component::quiet_solar::config::step::car::data::car_estimated_range_sensor%]",
           "car_battery_capacity": "[%key:component::quiet_solar::config::step::car::data::car_battery_capacity%]",
           "car_charger_min_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_min_charge%]",
           "car_charger_max_charge": "[%key:component::quiet_solar::config::step::car::data::car_charger_max_charge%]",
@@ -567,6 +571,13 @@
       "qs_car_charge_time": {
         "name": "Charge ETA"
       },
+      "qs_car_estimated_range_km": {
+        "name": "Estimated Range (km)"
+      },
+      "qs_car_autonomy_to_target_soc_km": {
+        "name": "Autonomy to Target SOC (km)"
+      },
+      
       "qs_constraint_sensor": {
         "name": "Next"
       },

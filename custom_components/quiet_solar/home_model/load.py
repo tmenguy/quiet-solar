@@ -117,6 +117,11 @@ class AbstractDevice(object):
             return self.home.is_off_grid()
         return False
 
+    def device_post_home_init(self, time:datetime):
+        """This method is called after the constraints have been loaded from storage.
+        It can be overridden by subclasses to perform additional initialization."""
+        pass
+
     @property
     def dashboard_section(self) -> str | None:
         if self._computed_dashboard_section is None and self.home is not None and self.home.dashboard_sections is not None and len(self.home.dashboard_sections) > 0:
@@ -620,10 +625,7 @@ class AbstractLoad(AbstractDevice):
 
         self.externally_initialized_constraints = True
 
-    def load_post_home_init(self, time:datetime):
-        """This method is called after the constraints have been loaded from storage.
-        It can be overridden by subclasses to perform additional initialization."""
-        pass
+
 
 
 

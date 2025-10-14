@@ -48,12 +48,17 @@ def test_create_ha_sensor_for_car():
     mock_car.get_car_charge_type = MagicMock(return_value="Solar")
     mock_car.get_car_charge_time_readable_name = MagicMock(return_value="2 hours")
     
+    mock_car.get_estimated_range_km = MagicMock(return_value=260)
+    mock_car.get_autonomy_to_target_soc_km = MagicMock(return_value=50)
+
     entities = create_ha_sensor_for_QSCar(mock_car)
     
     assert len(entities) > 0
-    # Should create SOC, charge type, and charge time sensors
+    # Should create SOC, charge type, charge time, and range sensors
     assert any("car_soc_percentage" in e.entity_description.key for e in entities)
     assert any("car_charge_type" in e.entity_description.key for e in entities)
+    assert any("car_estimated_range_km" in e.entity_description.key for e in entities)
+    assert any("car_autonomy_to_target_soc_km" in e.entity_description.key for e in entities)
 
 
 def test_create_ha_sensor_for_load():

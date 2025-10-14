@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 import pytz
@@ -332,3 +332,237 @@ def create_mock_device(device_type: str, name: str = "Mock Device", **kwargs):
         setattr(device, key, value)
     
     return device
+
+
+# ============================================================================
+# Real Home Assistant Fixtures (for integration tests)
+# ============================================================================
+# These fixtures are for integration tests that use a real Home Assistant
+# instance. They are separate from the unit test fixtures above.
+
+
+@pytest.fixture(autouse=True)
+def auto_enable_custom_integrations(enable_custom_integrations):
+    """Enable loading custom integrations in all tests using real HA.
+    
+    This fixture is from pytest-homeassistant-custom-component and allows
+    the test to discover and load integrations from the custom_components directory.
+    """
+    yield
+
+
+@pytest.fixture
+def real_home_config_entry(hass):
+    """Create and register real mock config entry for home device."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Home",
+            "device_type": "home",
+            CONF_HOME_VOLTAGE: 230,
+            CONF_IS_3P: True,
+        },
+        entry_id=f"test_home_real_{uuid.uuid4().hex[:8]}",
+        title="home: Test Home",
+        unique_id=f"home_test_home_real_{uuid.uuid4().hex[:8]}"
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def real_charger_config_entry(hass):
+    """Create and register real mock config entry for charger device."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Charger",
+            "device_type": "charger_generic",  # Use the actual conf_type_name
+            CONF_CHARGER_MIN_CHARGE: 6,
+            CONF_CHARGER_MAX_CHARGE: 16,
+            CONF_IS_3P: False,
+        },
+        entry_id=f"test_charger_real_{uuid.uuid4().hex[:8]}",
+        title="charger: Test Charger",
+        unique_id=f"charger_test_charger_real_{uuid.uuid4().hex[:8]}"
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def real_car_config_entry(hass):
+    """Create and register real mock config entry for car device."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Car",
+            "device_type": "car",
+            CONF_CAR_BATTERY_CAPACITY: 50000,
+        },
+        entry_id=f"test_car_real_{uuid.uuid4().hex[:8]}",
+        title="car: Test Car",
+        unique_id=f"car_test_car_real_{uuid.uuid4().hex[:8]}"
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def mock_solcast_data():
+    """Mock Solcast solar forecast data."""
+    return {
+        "forecasts": [
+            {"period_end": "2024-06-15T13:00:00Z", "pv_estimate": 2.5},
+            {"period_end": "2024-06-15T14:00:00Z", "pv_estimate": 3.0},
+            {"period_end": "2024-06-15T15:00:00Z", "pv_estimate": 3.5},
+        ]
+    }
+
+
+@pytest.fixture
+def mock_external_apis():
+    """Mock all external API calls for integration tests."""
+    with patch("custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers", new_callable=AsyncMock) as mock_forecast:
+        yield {
+            "forecast": mock_forecast,
+        }
+
+
+@pytest.fixture
+async def setup_home_first(hass, real_home_config_entry):
+    """Setup home device first and wait for it to complete.
+    
+    This fixture ensures home is fully initialized before other devices can be added.
+    """
+    with patch("custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers", new_callable=AsyncMock):
+        result = await hass.config_entries.async_setup(real_home_config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert result is True
+    return real_home_config_entry
+
+
+@pytest.fixture
+async def home_and_charger(hass, setup_home_first):
+    """Setup home and charger together in correct order.
+    
+    Home is set up first via setup_home_first fixture, then charger is added.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    # Home is already set up from setup_home_first
+    home_entry = setup_home_first
+    
+    # Create charger entry with unique ID (using generic charger type)
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Charger",
+            "device_type": "charger_generic",  # Use the actual conf_type_name
+            CONF_CHARGER_MIN_CHARGE: 6,
+            CONF_CHARGER_MAX_CHARGE: 16,
+            CONF_IS_3P: False,
+        },
+        entry_id=f"test_charger_composite_{uuid.uuid4().hex[:8]}",
+        title="charger: Test Charger",
+        unique_id=f"charger_test_composite_{uuid.uuid4().hex[:8]}"
+    )
+    charger_entry.add_to_hass(hass)
+    
+    # Now setup charger (home is already initialized)
+    result = await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+    
+    return home_entry, charger_entry
+
+
+@pytest.fixture
+async def home_and_car(hass, setup_home_first):
+    """Setup home and car together in correct order.
+    
+    Home is set up first via setup_home_first fixture, then car is added.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    # Home is already set up from setup_home_first
+    home_entry = setup_home_first
+    
+    # Create car entry with unique ID
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Car",
+            "device_type": "car",
+            CONF_CAR_BATTERY_CAPACITY: 50000,
+        },
+        entry_id=f"test_car_composite_{uuid.uuid4().hex[:8]}",
+        title="car: Test Car",
+        unique_id=f"car_test_composite_{uuid.uuid4().hex[:8]}"
+    )
+    car_entry.add_to_hass(hass)
+    
+    # Now setup car (home is already initialized)
+    result = await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+    
+    return home_entry, car_entry
+
+
+@pytest.fixture
+async def home_charger_and_car(hass, setup_home_first):
+    """Setup home, charger, and car together in correct order.
+    
+    Home is set up first, then charger, then car.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    # Home is already set up
+    home_entry = setup_home_first
+    
+    # Create charger entry (using generic charger type)
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Charger",
+            "device_type": "charger_generic",  # Use the actual conf_type_name
+            CONF_CHARGER_MIN_CHARGE: 6,
+            CONF_CHARGER_MAX_CHARGE: 16,
+            CONF_IS_3P: False,
+        },
+        entry_id=f"test_charger_all_{uuid.uuid4().hex[:8]}",
+        title="charger: Test Charger",
+        unique_id=f"charger_test_all_{uuid.uuid4().hex[:8]}"
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+    
+    # Create car entry
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Test Car",
+            "device_type": "car",
+            CONF_CAR_BATTERY_CAPACITY: 50000,
+        },
+        entry_id=f"test_car_all_{uuid.uuid4().hex[:8]}",
+        title="car: Test Car",
+        unique_id=f"car_test_all_{uuid.uuid4().hex[:8]}"
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+    
+    return home_entry, charger_entry, car_entry

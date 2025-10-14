@@ -17,9 +17,9 @@ from awesomeversion import AwesomeVersion
 from homeassistant.const import __version__ as HAVERSION, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, \
-    UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime
+    UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime, UnitOfLength
 
-from homeassistant.helpers import config_validation as cv, selector
+from homeassistant.helpers import config_validation as cv, selector, entity_registry as er
 from typing import TYPE_CHECKING
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
@@ -61,7 +61,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
     CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
-    DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED
+    DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED, CONF_CAR_ODOMETER_SENSOR, \
+    CONF_CAR_ESTIMATED_RANGE_SENSOR
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -89,6 +90,18 @@ LOAD_TYPES_MENU = {
 }
 
 
+def _filter_quiet_solar_entities(hass: HomeAssistant, entity_ids: list[str]) -> list[str]:
+    """Filter out entities from the quiet_solar integration."""
+    entity_reg = er.async_get(hass)
+    filtered_entities = []
+    
+    for entity_id in entity_ids:
+        entity_entry = entity_reg.async_get(entity_id)
+        # If entity is not in registry or platform is not quiet_solar, include it
+        if entity_entry is None or entity_entry.platform != DOMAIN:
+            filtered_entities.append(entity_id)
+    
+    return filtered_entities
 
 
 def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
@@ -105,8 +118,7 @@ def selectable_power_entities(hass: HomeAssistant, domains=None) -> list:
         and ent.domain in ALLOWED_DOMAINS
     ]
 
-
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
 
 
 def selectable_amps_entities(hass: HomeAssistant, domains=None) -> list:
@@ -122,7 +134,7 @@ def selectable_amps_entities(hass: HomeAssistant, domains=None) -> list:
         if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) in UnitOfElectricCurrent
         and ent.domain in ALLOWED_DOMAINS
     ]
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
 
 def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
     """Return an entity selector which compatible entities."""
@@ -137,7 +149,7 @@ def selectable_calendar_entities(hass: HomeAssistant, domains=None) -> list:
         if ent.domain in ALLOWED_DOMAINS
     ]
 
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
 
 
 def selectable_temperature_entities(
@@ -152,7 +164,7 @@ def selectable_temperature_entities(
         if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) in UnitOfTemperature
         and ent.domain in ALLOWED_DOMAINS
     ]
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
 
 def selectable_percent_sensor_entities(
     hass: HomeAssistant,
@@ -166,7 +178,21 @@ def selectable_percent_sensor_entities(
         if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) == PERCENTAGE
         and ent.domain in ALLOWED_DOMAINS
     ]
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
+
+def selectable_length_sensor_entities(
+    hass: HomeAssistant,
+) -> list:
+    """Return sensor entities with unit of length."""
+
+    ALLOWED_DOMAINS = [SENSOR_DOMAIN]
+    entities = [
+        ent.entity_id
+        for ent in hass.states.async_all(ALLOWED_DOMAINS)
+        if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) in UnitOfLength
+        and ent.domain in ALLOWED_DOMAINS
+    ]
+    return _filter_quiet_solar_entities(hass, entities)
 
 def selectable_percent_number_entities(
     hass: HomeAssistant,
@@ -180,7 +206,7 @@ def selectable_percent_number_entities(
         if ent.attributes.get(ATTR_UNIT_OF_MEASUREMENT) == PERCENTAGE
         and ent.domain in ALLOWED_DOMAINS
     ]
-    return entities
+    return _filter_quiet_solar_entities(hass, entities)
 
 def _get_reset_selector_entity_name(key:str):
     return f"{key}_qs_reset_selector"
@@ -982,6 +1008,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
 
 
+
+        # Odometer sensor: only length units
+        length_entities = selectable_length_sensor_entities(self.hass)
+        if len(length_entities) > 0:
+            self.add_entity_selector(sc_dict, CONF_CAR_ODOMETER_SENSOR, False, entity_list=length_entities)
+
+        # Estimated range sensor: only length units
+        if len(length_entities) > 0:
+            self.add_entity_selector(sc_dict, CONF_CAR_ESTIMATED_RANGE_SENSOR, False, entity_list=length_entities)
 
         sc_dict.update(
             {

@@ -887,8 +887,10 @@ class QSHome(QSDynamicGroup):
             if load.externally_initialized_constraints is False:
                 return False
 
-        for load in self._all_loads:
-            load.load_post_home_init(time)
+        for device in self._all_devices:
+            if isinstance(device, AbstractDevice):
+                if device.qs_enable_device:
+                    device.device_post_home_init(time)
 
         self._init_completed = True
         return True
@@ -1051,6 +1053,10 @@ class QSHome(QSDynamicGroup):
             unavoidable_consumption_forecast = await self.compute_non_controlled_forecast(time)
             pv_forecast = self.get_solar_from_current_forecast(time, time + self._period)
 
+            max_inverter_dc_to_ac_power = None
+            if self._solar_plant is not None and self._solar_plant.solar_max_output_power_value is not None:
+                max_inverter_dc_to_ac_power = self._solar_plant.solar_max_output_power_value
+
             end_time = time + self._period
             solver = PeriodSolver(
                 start_time = time,
@@ -1060,7 +1066,8 @@ class QSHome(QSDynamicGroup):
                 battery = self._battery,
                 pv_forecast  = pv_forecast,
                 unavoidable_consumption_forecast = unavoidable_consumption_forecast,
-                step_s = self._solver_step_s
+                step_s = self._solver_step_s,
+                max_inverter_dc_to_ac_power=max_inverter_dc_to_ac_power
             )
 
             # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.

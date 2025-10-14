@@ -96,6 +96,16 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("car_estimated_range_km") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("car_autonomy_to_target_soc_km") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_clean_and_reset") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}

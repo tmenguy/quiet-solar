@@ -40,6 +40,8 @@
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_is_invited": "Is this car a placeholder one for a guest?",
+                    "car_odometer_sensor": "Odometer sensor (km or miles)",
+                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",
@@ -365,11 +367,17 @@
             }
         },
         "sensor": {
+            "qs_car_autonomy_to_target_soc_km": {
+                "name": "Autonomy to Target SOC (km)"
+            },
             "qs_car_charge_time": {
                 "name": "Charge ETA"
             },
             "qs_car_charge_type": {
                 "name": "Charge Type"
+            },
+            "qs_car_estimated_range_km": {
+                "name": "Estimated Range (km)"
             },
             "qs_car_soc_percent": {
                 "name": "Current Charge"
@@ -478,6 +486,8 @@
                     "car_charger_min_charge": "Per phase min charge in (A)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_is_invited": "Is this car a placeholder one for a guest?",
+                    "car_odometer_sensor": "Odometer sensor (km or miles)",
+                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",

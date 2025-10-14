@@ -80,6 +80,8 @@ class QsCarCard extends HTMLElement {
     const tNext = this._entity(e.next_time);
     const sChargeType = this._entity(e.charge_type);
     const sChargeTime = this._entity(e.charge_time);
+    const sRangeNow = this._entity(e.range_now);
+    const sRangeTarget = this._entity(e.range_target);
 
     const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
     const soc = this._percent(sSoc?.state);
@@ -104,6 +106,12 @@ class QsCarCard extends HTMLElement {
     const chargeTime = sChargeTime?.state || '';
     const chargeIconLabel = 'Mode';
     const chargeTimeLabel = 'Finish';
+
+    const isNumberLike = (v) => v != null && v !== '' && !Number.isNaN(Number(v));
+    const normState = (s) => String(s || '').toLowerCase();
+    const validState = (s) => s != null && !['unavailable','unknown','none'].includes(normState(s));
+    const rangeNowStr = (sRangeNow && validState(sRangeNow.state) && isNumberLike(sRangeNow.state)) ? `${Math.round(Number(sRangeNow.state))} km` : '';
+    const rangeTargetStr = (sRangeTarget && validState(sRangeTarget.state) && isNumberLike(sRangeTarget.state)) ? `${Math.round(Number(sRangeTarget.state))} km` : '';
 
     const parseTargetPercent = (txt) => {
       if (!txt) return undefined;
@@ -153,17 +161,25 @@ class QsCarCard extends HTMLElement {
       .hero .side { text-align:center; color: var(--secondary-text-color); font-weight:600; }
       .hero .side .value { display:block; font-size:1.2rem; color: var(--primary-text-color); }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
-      .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; }
+      .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(16px); }
       .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; text-align:center; width: 180px; margin: 0 auto; }
+      .ring .soc-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .stack > * { text-align:center; }
       .ring .mini-grid { display:grid; grid-template-columns: repeat(3, 60px); grid-auto-rows: auto; width:180px; margin: 0 auto; justify-items:center; align-items:center; row-gap:4px; column-gap:0; }
+      .ring .mini-grid.extra { row-gap:0; margin-top:2px; margin-bottom:6px; }
+      .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:0; }
       .ring .mini-title { color: var(--secondary-text-color); font-weight:700; font-size: .7rem; letter-spacing:.2px; white-space: nowrap; }
       .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height:1.1; white-space: pre-line; }
       .ring .mini-icon { --mdc-icon-size: 18px; color: var(--primary-text-color); }
+      .ring .mini-range { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
+      .ring .mini-range-now { color: var(--primary-text-color); font-weight:700; font-size: .95rem; line-height:1; margin-top:0; transform: translateY(-8px); }
+      .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height:1; margin-top:0; margin-bottom:0; transform: translateY(-8px); }
+      .disabled .ring .mini-range-target { color: var(--secondary-text-color); }
+      .ring .mini-range:empty, .ring .mini-range-now:empty, .ring .mini-range-target:empty { display:none; }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
       .ring .sun-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; }
       .ring .sun-btn ha-icon { --mdc-icon-size: 22px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
@@ -362,7 +378,11 @@ class QsCarCard extends HTMLElement {
             </svg>
             <div class="center">
               <div class="stack">
-                <div class="pct" style="margin-bottom:4px;">${soc}%</div>
+                <div class="soc-block">
+                  <div class="pct" style="margin-bottom:0;">${soc}%</div>
+                  <div class="mini-range-now" aria-label="current range">${rangeNowStr}</div>
+                </div>
+                <div class="target-block">
                 <div class="mini-grid">
                   <div class="mini-title">${chargeIconLabel}</div>
                   <div class="mini-title">Target SOC</div>
@@ -371,6 +391,12 @@ class QsCarCard extends HTMLElement {
                   <ha-icon class="mini-icon" icon="${chargeIcon}"></ha-icon>
                   <div id="target_value" class="target-value">${Math.round(handlePct)}%</div>
                   <div class="mini-value">${chargeTime}</div>
+                </div>
+                <div class="mini-grid extra">
+                  <div></div>
+                  <div><div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div></div>
+                  <div></div>
+                </div>
                 </div>
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div class="mini-title">Solar priority</div>

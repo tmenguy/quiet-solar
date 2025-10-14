@@ -7,11 +7,11 @@ from typing import Mapping, Any, Callable
 
 import pytz
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform, \
-    ATTR_ENTITY_ID, UnitOfElectricCurrent
+    ATTR_ENTITY_ID, UnitOfElectricCurrent, UnitOfLength
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util.unit_conversion import PowerConverter
+from homeassistant.util.unit_conversion import PowerConverter, DistanceConverter
 from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
@@ -111,6 +111,25 @@ def convert_current_to_amps(value: float, attributes: dict | None = None) -> (fl
 
     if sensor_unit in UnitOfElectricCurrent and sensor_unit != default_unit:
         value = PowerConverter.convert(value=value, from_unit=sensor_unit, to_unit=default_unit)
+        new_attr = {}
+        if attributes is not None:
+            new_attr = dict(attributes)
+
+        new_attr[ATTR_UNIT_OF_MEASUREMENT] = default_unit
+
+    return value, new_attr
+
+
+def convert_distance_to_km(value: float, attributes: dict | None = None) -> (float, dict):
+    default_unit: str = UnitOfLength.KILOMETERS
+    new_attr = attributes
+    if attributes is None:
+        sensor_unit = default_unit
+    else:
+        sensor_unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, default_unit)
+
+    if sensor_unit in UnitOfLength and sensor_unit != default_unit:
+        value = DistanceConverter.convert(value=value, from_unit=sensor_unit, to_unit=default_unit)
         new_attr = {}
         if attributes is not None:
             new_attr = dict(attributes)

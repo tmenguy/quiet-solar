@@ -51,12 +51,6 @@ class QSBattery(HADeviceMixin, Battery):
 
 
     @property
-    def max_inverter_dc_to_ac_power(self) -> float:
-        if self._solar_plant:
-            return self._solar_plant.solar_max_output_power_value
-        return MAX_POWER_INFINITE
-
-    @property
     def current_charge(self) -> float | None:
         percent = self.get_sensor_latest_possible_valid_value(entity_id=self.charge_percent_sensor)
         if percent is None:

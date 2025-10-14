@@ -137,6 +137,8 @@ CONF_CAR_CHARGER_MIN_CHARGE = "car_charger_min_charge"
 CONF_CAR_CHARGER_MAX_CHARGE = "car_charger_max_charge"
 CONF_CAR_CUSTOM_POWER_CHARGE_VALUES = "car_use_custom_power_charge_values"
 CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P = "car_is_custom_power_charge_values_3p"
+CONF_CAR_ODOMETER_SENSOR = "car_odometer_sensor"
+CONF_CAR_ESTIMATED_RANGE_SENSOR = "car_estimated_range_sensor"
 CONF_MOBILE_APP = "mobile_app"
 CONF_MOBILE_APP_URL = "mobile_app_url"
 CONF_MOBILE_APP_NOTHING = "No Notifications"
@@ -180,6 +182,10 @@ SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
+
+# EV autonomy/efficiency sensors
+SENSOR_CAR_ESTIMATED_RANGE_KM = "qs_car_estimated_range_km"
+SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
@@ -254,6 +260,7 @@ CAR_CHARGE_TYPE_SCHEDULE = "Scheduled"
 CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY = "Solar Priority"
 CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY = "Solar"
 CAR_CHARGE_TYPE_UNKNOWN = "Unknown"
+CAR_EFFICIENCY_KM_PER_KWH = "car_efficiency_km_per_kwh"
 
 MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12

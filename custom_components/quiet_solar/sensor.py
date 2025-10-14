@@ -6,7 +6,7 @@ from typing import Any, Callable
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE, UnitOfLength
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -23,7 +23,8 @@ from .const import (
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT, HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT,
-    SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME
+    SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
+    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -74,6 +75,30 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         key="car_charge_time",
         translation_key=SENSOR_CAR_CHARGE_TIME,
         value_fn=lambda device, key: device.get_car_charge_time_readable_name(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    # Estimated remaining range now
+    load_current_command = QSSensorEntityDescription(
+        key="car_estimated_range_km",
+        translation_key=SENSOR_CAR_ESTIMATED_RANGE_KM,
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda device, key: device.get_estimated_range_km(),
+        qs_is_none_unavailable=True,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    # Autonomy to selected target SOC
+    load_current_command = QSSensorEntityDescription(
+        key="car_autonomy_to_target_soc_km",
+        translation_key=SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda device, key: device.get_autonomy_to_target_soc_km(),
+        qs_is_none_unavailable=True,
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 

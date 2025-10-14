@@ -1,12 +1,16 @@
 import bisect
 import logging
+from operator import itemgetter
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytz
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
+from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.components import number
 
+from .device import convert_distance_to_km
 from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
@@ -15,7 +19,8 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, \
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, \
-    CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
+    CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
+    CAR_EFFICIENCY_KM_PER_KWH
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
@@ -25,6 +30,8 @@ from datetime import time as dt_time
 _LOGGER = logging.getLogger(__name__)
 
 MIN_CHARGE_POWER_W = 70
+
+CAR_MAX_EFFICIENCY_HISTORY_S = 3600*24*31
 
 
 class QSCar(HADeviceMixin, AbstractDevice):
@@ -36,6 +43,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
         self.car_charge_percent_max_number = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, None)
+        self.car_odometer_sensor = kwargs.pop(CONF_CAR_ODOMETER_SENSOR, None)
+        self.car_estimated_range_sensor = kwargs.pop(CONF_CAR_ESTIMATED_RANGE_SENSOR, None)
         self._conf_car_charge_percent_max_number_steps = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, None)
         if self._conf_car_charge_percent_max_number_steps == "":
             self._conf_car_charge_percent_max_number_steps = None
@@ -43,6 +52,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
         self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 50.0)
 
+        self.car_efficiency_km_per_kwh_sensor : str = CAR_EFFICIENCY_KM_PER_KWH
 
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
@@ -120,14 +130,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                             self.conf_customized_amp_to_power_3p[a//3] = self.customized_amp_to_power_3p[a//3] = self.amp_to_power_3p[a//3] = val
 
 
-        self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
-                                      is_numerical=True)
-
-        self.attach_ha_state_to_probe(self.car_plugged,
-                                      is_numerical=False)
-
-        self.attach_ha_state_to_probe(self.car_tracker,
-                                      is_numerical=False)
 
         self._salvable_dampening = {}
 
@@ -144,7 +146,88 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._qs_bump_solar_priority = False
 
+        # Efficiency learning state
+        self._km_per_kwh: float | None = None
+        self._efficiency_segments: list[tuple[float, float, float, float, datetime]] = []  # delta_km, delta_soc, soc_from, soc_to, time of finishing
+
+        # self._efficiency_deltas = {}
+        # self._efficiency_deltas_graph = {}
+
+        self._decreasing_segments: list[list[tuple[float, float]|None|int]] = []
+        self._dec_seg_count = 0
+
         self.reset()
+
+
+
+        self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
+                                      is_numerical=True)
+
+        self.attach_ha_state_to_probe(self.car_plugged,
+                                      is_numerical=False)
+
+        self.attach_ha_state_to_probe(self.car_tracker,
+                                      is_numerical=False)
+
+        self.attach_ha_state_to_probe(self.car_odometer_sensor,
+                                      conversion_fn=convert_distance_to_km,
+                                      is_numerical=True)
+
+        self.attach_ha_state_to_probe(self.car_estimated_range_sensor,
+                                      conversion_fn=convert_distance_to_km,
+                                      is_numerical=True)
+
+        self.attach_ha_state_to_probe(self.car_efficiency_km_per_kwh_sensor,
+                                      is_numerical=True,
+                                      non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter)
+
+
+
+
+
+    def car_efficiency_km_per_kwh_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
+            tuple[datetime | None, float | str | None, dict | None] | None):
+
+        # Learn efficiency only when car is unplugged and we have both sensors
+        if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
+            return None
+
+        soc = self.get_car_charge_percent(time)
+        odo = self.get_car_odometer_km(time)
+        if soc is None or odo is None:
+            return None
+
+        # check what was before this sample
+        prev_sample = None
+        prev_seg_idx = None
+
+        if len(self._decreasing_segments) > 0:
+            prev_sample = self._decreasing_segments[-1][1]
+            if prev_sample is None:
+                prev_sample = self._decreasing_segments[-1][0]
+            prev_seg_idx = self._decreasing_segments[-1][2]
+
+        self._add_soc_odo_value_to_segments(soc, odo, time)
+
+        if prev_sample is not None and self._decreasing_segments[-1][2] == prev_seg_idx and prev_sample[0] > soc:
+            # we have added the new point to the last segment
+            prev_soc, prev_odo, prev_time = prev_sample
+            if soc < prev_soc and odo > prev_odo:
+                # progressive EMA from segment start to current
+                if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
+                    seg_soc0, seg_odo0, seg_t0 = self._decreasing_segments[-1][0]
+                    distance_km = float(odo - seg_odo0)
+                    delta_soc = float(seg_soc0 - soc)
+                    energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
+                    if energy_kwh > 0.0 and distance_km > 0.0:
+                        sample_eff = distance_km / energy_kwh
+                        if self._km_per_kwh is None:
+                            self._km_per_kwh = sample_eff
+                        else:
+                            alpha = 0.2
+                            self._km_per_kwh = alpha * sample_eff + (1.0 - alpha) * self._km_per_kwh
+
+        return (time, self._km_per_kwh, {})
 
 
     def get_car_charge_type(self) -> str:
@@ -182,6 +265,188 @@ class QSCar(HADeviceMixin, AbstractDevice):
             parent = set(parent)
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
         return list(parent)
+
+    def device_post_home_init(self, time: datetime):
+        # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
+        try:
+            # Asynchronously try to compute an initial km/kWh from HA history
+            if self.hass is not None:
+                self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
+        except Exception:
+            pass
+
+
+    def _add_soc_odo_value_to_segments(self, soc:float, odo:float, time:datetime):
+
+        current_vals = (soc, odo, time)
+
+        if len(self._decreasing_segments) > 0:
+            current_segment = self._decreasing_segments[-1]
+        else:
+            current_segment = [current_vals, None, self._dec_seg_count]
+            self._decreasing_segments.append(current_segment)
+            self._dec_seg_count += 1
+            return
+
+        if current_segment[1] is None:
+            if soc < current_segment[0][0]:
+                # decreasing open really the segment
+                current_segment[1] = current_vals
+            elif soc == current_segment[0][0]:
+                # do nothing keep the segment open
+                pass
+            else:
+                # upper than segment start ... segment no closed, start a new one
+                current_segment = [current_vals, None, self._dec_seg_count]
+                self._decreasing_segments[-1] = current_segment
+                self._dec_seg_count += 1
+        else:
+            if soc <= current_segment[1][0]:
+                # continue decreasing segment
+                current_segment[1] = current_vals
+            else:
+                # close the current segment:
+                new_segment = [current_vals, None, self._dec_seg_count]
+                self._dec_seg_count += 1
+                if current_segment[1][0] < current_segment[0][0] and current_segment[1][1] > current_segment[0][1]:
+                    # good soc and odo values, keep it, add the new one
+                    self._decreasing_segments.append(new_segment)
+
+                    from_soc = current_segment[0][0]
+                    to_soc = current_segment[1][0]
+
+                    # first segment, just add it
+                    delta_soc = float(from_soc - to_soc)
+                    delta_km = float(current_segment[1][1] - current_segment[0][1])
+
+                    to_be_stored_efficiency_segment = (delta_km, delta_soc, from_soc, to_soc, time)
+
+                    if len(self._efficiency_segments) == 0 or time > self._efficiency_segments[-1][4]:
+                        self._efficiency_segments.append(to_be_stored_efficiency_segment)
+                    else:
+                        # insert it in the time ordered list
+                        idx = bisect.bisect_left(self._efficiency_segments, to_be_stored_efficiency_segment, key=itemgetter(4))
+                        # always insert
+                        self._efficiency_segments.insert(idx, to_be_stored_efficiency_segment)
+
+                    if (time - self._efficiency_segments[0][4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
+                        self._efficiency_segments.pop(0)
+
+
+                    # to play a bit with graphs with known soc deltas ... not sure it is really useful
+                    # self._efficiency_deltas[(from_soc, to_soc)] = delta_km
+                    # self._efficiency_deltas[(to_soc, from_soc)] = -delta_km
+                    #
+                    # fs = self._efficiency_deltas_graph.setdefault(from_soc, set())
+                    # fs.add(to_soc)
+                    # ts = self._efficiency_deltas_graph.setdefault(to_soc, set())
+                    # ts.add(from_soc)
+
+
+                else:
+                    # bad segment, replace it with the new one
+                    self._decreasing_segments[-1] = new_segment
+
+
+    async def _async_bootstrap_efficiency_from_history(self, time: datetime):
+        # pull last 14 days; compute efficiency only from segments where SOC decreases
+        if self.hass is None:
+            return
+        if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
+            return
+        if self.car_battery_capacity is None or self.car_battery_capacity <= 0:
+            return
+
+        start_time = time - timedelta(days=31)
+        end_time = time
+
+        def _load_hist(entity_id: str):
+            return state_changes_during_period(
+                self.hass, start_time, end_time, entity_id, include_start_time_state=True, no_attributes=True
+            ).get(entity_id, [])
+
+        try:
+            odos = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_odometer_sensor)
+            socs = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_charge_percent_sensor)
+        except Exception:
+            return
+
+        if not odos or not socs:
+            return
+
+        # Build time series (time, value) with floats, ordered
+        def _series(lst):
+            res = []
+            for s in lst:
+                if s is None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE, None, "None", "unknown", "unavailable"]:
+                    continue
+                try:
+                    v = float(s.state)
+                except (TypeError, ValueError):
+                    continue
+                res.append((s.last_changed, v))
+            res.sort(key=lambda x: x[0])
+            return res
+
+        odo_series = _series(odos)
+        soc_series = _series(socs)
+        if len(odo_series) < 2 or len(soc_series) < 2:
+            return
+
+        # Helper to get odometer value at or before time (using bisect with key)
+        def _odo_at(ts):
+            idx = bisect.bisect_right(odo_series, ts, key=itemgetter(0)) - 1
+            if idx < 0:
+                return odo_series[0][1]
+            if idx >= len(odo_series):
+                return odo_series[-1][1]
+            return odo_series[idx][1]
+
+        total_energy_kwh = 0.0
+        total_distance_km = 0.0
+        cap_kwh = float(self.car_battery_capacity) / 1000.0
+
+        self._decreasing_segments = []
+        self._efficiency_segments = []
+
+        # Iterate SOC segments; only count when SOC decreases
+
+        for t, soc in soc_series:
+            odo = _odo_at(t)
+            self._add_soc_odo_value_to_segments(soc, odo, t)
+
+        for d_seg in self._decreasing_segments:
+
+            if d_seg[1] is None:
+                continue
+
+            soc0, odo0, _ = d_seg[0]
+            soc1, odo1, _ = d_seg[1]
+
+            delta_soc = float(soc0 - soc1)
+
+            if delta_soc <= 0.0:
+                continue
+
+            if odo0 is None or odo1 is None:
+                continue
+
+            delta_km = float(odo1 - odo0)
+
+            if delta_km <= 0.0:
+                continue
+
+            energy_kwh = (delta_soc / 100.0) * cap_kwh
+            total_energy_kwh += energy_kwh
+            total_distance_km += delta_km
+
+
+        if total_energy_kwh <= 0.0 or total_distance_km <= 1.0:
+            return
+
+        eff = total_distance_km / total_energy_kwh
+        # no clamping per user request
+        self._km_per_kwh = eff
 
     def reset(self):
         super().reset()
@@ -291,6 +556,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float=4*3600 ) -> float | None:
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
+    def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds)
+
+    def get_car_estimated_range_km_from_sensor(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
+
     def is_car_charge_growing(self,
                               num_seconds: float,
                               time: datetime) -> bool | None:
@@ -298,6 +569,109 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor,
                                num_seconds=num_seconds,
                               time=time)
+
+
+    def _get_delta_from_graph(self, deltas, deltas_graph, from_v, to_v):
+
+        delta = None
+
+        if len(deltas) > 0:
+
+            delta = deltas.get((from_v, to_v))
+
+            if delta is None and len(deltas) > 2:
+                # not direct try a path:
+                path = self.find_path(deltas_graph, from_v, to_v)
+
+                if path and len(path) > 1 and path[0] == from_v and path[-1] == to_v:
+                    delta = 0
+                    for i in range(1, len(path)):
+                        d = deltas.get((path[i-1], path[i]))
+                        if d is None:
+                            _LOGGER.error(f"_get_delta_from_graph path in error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v} path[i-1] {path[i-1]} path[i] {path[i]}")
+                            delta = None
+                            break
+
+                        delta += d
+                elif path:
+                    _LOGGER.error(
+                        f"_get_delta_from_graph path error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v}")
+
+        return delta
+
+    def get_car_estimated_range_km(self, from_soc=100.0, to_soc=0.0, time: datetime | None = None) -> float | None:
+
+        # not really useful no?
+        # graph_distance = self._get_delta_from_graph(self._efficiency_deltas, self._efficiency_deltas_graph, from_soc, to_soc)
+
+        if time is None:
+            time = datetime.now(pytz.UTC)
+
+        delta_soc = abs(from_soc - to_soc)
+
+
+        current_soc = self.get_car_charge_percent(time)
+        car_estimate = self.get_car_estimated_range_km_from_sensor(time)
+
+        car_estimated_distance = None
+        if current_soc is not None and car_estimate is not None:
+            car_estimated_distance = (delta_soc*car_estimate)/float(current_soc)
+
+
+
+        best_segment = None
+        # from the more recent to the older
+        for i in range(len(self._efficiency_segments)-1, -1, -1):
+            seg = self._efficiency_segments[i]
+            if (time - seg[4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
+                break
+
+            if seg[0] == 0 or seg[1] == 0:
+                continue
+
+            if best_segment is None or (abs(seg[1] - delta_soc) < abs(best_segment[1] - delta_soc)):
+                best_segment = seg
+
+        soc_distance = None
+        if best_segment is not None:
+            soc_distance = delta_soc*(best_segment[0] / best_segment[1])
+
+        efficiency_distance = None
+        eff = self._km_per_kwh
+        if eff is not None:
+            if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
+                energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
+                efficiency_distance = energy_kwh * eff
+
+
+        result = car_estimated_distance
+        if result is None:
+            result = soc_distance
+        if result is None:
+            result = efficiency_distance
+
+        _LOGGER.info(
+            f"get_car_estimated_range_km : Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} best_segment {best_segment} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
+
+        return result
+
+
+    def get_estimated_range_km(self, time: datetime | None = None) -> float | None:
+
+        soc = self.get_car_charge_percent(time)
+        if soc is None:
+            return None
+        return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
+
+
+    def get_autonomy_to_target_soc_km(self, time: datetime | None = None) -> float | None:
+
+        soc = self.get_car_target_SOC()
+        if soc is None:
+            return None
+        return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
+
+
 
     def get_car_current_capacity(self, time: datetime) -> float | None:
         res = self.get_car_charge_percent(time)
@@ -406,37 +780,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if from_amp*from_num_phase == to_amp*to_num_phase:
             return 0.0
 
-        power = None
-
-        from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
-        to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
-
-        if len(self._dampening_deltas) > 0:
-
-            from_amp = from_amp*from_num_phase
-            to_amp = to_amp*to_num_phase
-
-            power = self._dampening_deltas.get((from_amp, to_amp))
-
-            if power is None and len(self._dampening_deltas) > 2:
-                # not direct try a path:
-                path = self.find_path(self._dampening_deltas_graph, from_amp, to_amp)
-
-                if path and len(path) > 1 and path[0] == from_amp and path[-1] == to_amp:
-                    power = 0
-                    for i in range(1, len(path)):
-                        p = self._dampening_deltas.get((path[i-1], path[i]))
-                        if p is None:
-                            _LOGGER.error(f"get_delta_dampened_power path in error: Car {self.name} deltas {self._dampening_deltas} graph {self._dampening_deltas_graph} from_amp {from_amp} to_amp {to_amp} path[i-1] {path[i-1]} path[i] {path[i]}")
-                            power = None
-                            break
-
-                        power += p
-                elif path:
-                    _LOGGER.error(
-                        f"get_delta_dampened_power path error: Car {self.name} deltas {self._dampening_deltas} graph {self._dampening_deltas_graph} from_amp {from_amp} to_amp {to_amp}")
+        power = self._get_delta_from_graph(deltas=self._dampening_deltas, deltas_graph=self._dampening_deltas_graph, from_v=from_amp*from_num_phase, to_v=to_amp*to_num_phase)
 
         if power is None:
+            from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
+            to_power = self._get_power_from_stored_amps(to_amp, to_num_phase)
+
             if from_power is not None and to_power is not None:
                 power = to_power - from_power
 

@@ -134,6 +134,9 @@ CAR_CHARGER_LONG_RELATIONSHIP_S = 60 * 60
 STATE_CMD_RETRY_NUMBER = 3
 STATE_CMD_TIME_BETWEEN_RETRY_S = CHARGER_STATE_REFRESH_INTERVAL_S * 3
 
+CHARGER_TIME_BETWEEN_DATA_REQUEST_S = CHARGER_STATE_REFRESH_INTERVAL_S + CHARGER_STATE_REFRESH_INTERVAL_S//2
+
+
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 20
@@ -1634,6 +1637,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self.initial_num_in_out_immediate = 1
         self.charge_start_stop_retry_s = CHARGER_START_STOP_RETRY_S
+        self._last_requested_update_time = None
 
 
         self._unknown_state_vals = set()
@@ -2456,7 +2460,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             await self.car.force_charge_now()
 
 
-    def load_post_home_init(self, time:datetime):
+    def device_post_home_init(self, time:datetime):
         """This method is called after the constraints have been loaded from storage."""
         # if there was an active constraint, we are here just after a reboot
         self.reset_boot_data()
@@ -2475,23 +2479,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     continue
                 if self._boot_car is None:
                     old_connected_car_name = None
-                    _LOGGER.warning(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name} but the car is not available, so we will not use it")
+                    _LOGGER.warning(f"device_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name} but the car is not available, so we will not use it")
                     continue
-                _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+                _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
                 break
         if old_connected_car_name is None and self._last_completed_constraint is not None:
             old_connected_car_name = self._last_completed_constraint.load_param
-            _LOGGER.info(f"load_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
+            _LOGGER.info(f"device_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
 
         if old_connected_car_name is None and self._last_pushed_end_constraint_from_agenda is not None:
             old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
-            _LOGGER.info(f"load_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
+            _LOGGER.info(f"device_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
 
         self._boot_car = None
         if old_connected_car_name is not None:
             self._boot_car = self.home.get_car_by_name(old_connected_car_name)
             if self._boot_car is not None and self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
-                _LOGGER.info(f"load_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
+                _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
                 self._boot_car = None
 
         # clean a bit the non user constraints we only need to keep those ones, as the other ones will be recomputed
@@ -3289,6 +3293,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if one_bad is False:
             current_active_phases = self.current_num_phases
             if current_active_phases != self._expected_num_active_phases.value:
+
+                await self.update_data_request(time=time)
+
                 one_bad = True
                 # check first if amperage setting is ok
                 if probe_only is False:
@@ -3320,10 +3327,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             charging_current_amp = self.get_charging_current()
             if charging_current_amp == self._expected_amperage.value:
                 await self._expected_amperage.success(time=time)
+
+                duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S * 2
+                if self._expected_amperage.last_ping_time_success == self._expected_amperage.first_time_success:
+                    duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S
+
+                if (time - self._expected_amperage.last_ping_time_success).total_seconds() > (duration_check_s - 3.0):
+                    await self.update_data_request(time=time)
+
                 if probe_only is False:
-                    duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S*2
-                    if self._expected_amperage.last_ping_time_success == self._expected_amperage.first_time_success:
-                        duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S
                     if (time - self._expected_amperage.last_ping_time_success).total_seconds() > duration_check_s:
                         if is_charge_disabled is False or is_charge_enabled:
                             _LOGGER.debug(f"Ensure State:{self.name} set amperage already set to {charging_current_amp}A ... but reset it")
@@ -3331,6 +3343,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         self._expected_amperage.last_ping_time_success = time
             else:
                 one_bad = amps_bad_set
+
                 _LOGGER.info(
                     f"Ensure State:{self.name} current {charging_current_amp}A expected {self._expected_amperage.value}A")
                 if probe_only is False:
@@ -3340,6 +3353,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             await self.set_charging_current(current=self._expected_amperage.value, time=time)
                     else:
                         _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {charging_current_amp}A expected {self._expected_amperage.value}A")
+
+                await self.update_data_request(time=time)
 
             if not ((self._expected_charge_state.value is True and is_charge_enabled) or (
                 self._expected_charge_state.value is False and is_charge_disabled)):
@@ -3357,6 +3372,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             await self.stop_charge(time=time)
                     else:
                         _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
+
+                await self.update_data_request(time=time)
+
             else:
                 await self._expected_charge_state.success(time=time)
 
@@ -3656,6 +3674,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return found
 
+    async def update_data_request(self, time) -> bool:
+        res = False
+        if self._last_requested_update_time is None or (time - self._last_requested_update_time).total_seconds() > CHARGER_TIME_BETWEEN_DATA_REQUEST_S:
+            self._last_requested_update_time = time
+            res = await self.low_level_update_data_request(time)
+
+        return res
+
+
+
 
     # ============================ INTERFACE TO BE OVERCHARGED ===================================== #
 
@@ -3736,6 +3764,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return res_plugged, state_time
 
+    async def low_level_update_data_request(self, time) -> bool:
+        return True
+
     async def low_level_reboot(self, time):
         if self.can_reboot() and self.charger_reboot_button is not None:
             try:
@@ -3770,6 +3801,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
         try:
+            _LOGGER.warning(f"low_level_set_max_charging_current: {current}A")
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
             service = number.SERVICE_SET_VALUE
@@ -3984,10 +4016,61 @@ class QSChargerOCPP(QSChargerGeneric):
             entities.append(self.charger_ocpp_transaction_id)
         return entities
 
+    async def low_level_update_data_request(self, time) -> bool:
+
+        if self.use_ocpp_custom_charging_profile is False:
+            return True
+
+        try:
+            data: dict[str, Any] = {"devid": self.devid}
+            service = "trigger_custom_message"
+            data["requested_message"] = "MeterValues"
+            domain = "ocpp"
+            await self.hass.services.async_call(
+                domain, service, data, blocking=False
+            )
+            done = True
+        except Exception as e:
+            _LOGGER.warning(f"low_level_update_data OCPP: Error {e}")
+            done = False
+
+        return done
+
+    async def _ocpp_reset_charging_profiles(self):
+
+        if self.use_ocpp_custom_charging_profile is False:
+            return True
+
+        try:
+            data: dict[str, Any] = {"devid": self.devid}
+            service = "clear_profile"
+            domain = "ocpp"
+            await self.hass.services.async_call(
+                domain, service, data, blocking=False
+            )
+            done = True
+        except Exception as e:
+            _LOGGER.warning(f"_occp_reset_charging_profiles OCPP: Error {e}")
+            done = False
+
+        return done
+
+
+    async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
+
+        if self.use_ocpp_custom_charging_profile is False:
+            return await super().low_level_set_max_charging_current(current, time)
+
+        return await self.low_level_set_charging_current(current, time, blocking)
+
+
     async def low_level_set_charging_current(self, current, time: datetime, blocking=False) -> bool:
 
         # check : https://github.com/lbbrhzn/ocpp/blob/main/docs/Charge_automation.md  seems to be the right way
         # ex: use this during a charge (the transactionId as to be from sensor.charger_b_transaction_id
+        #
+        # really look at the ocpp code ocppv16.py set_charge_rate ... probably we may prefer use code directly than services
+        #
         # it seems it got rejected on Wallbox
         # action: ocpp.set_charge_rate
         # data:
@@ -3995,24 +4078,33 @@ class QSChargerOCPP(QSChargerGeneric):
         #   conn_id: 1
         #   custom_profile:
         #     transactionId: 0
-        #     chargingProfileId: 1
-        #     stackLevel: 0
+        #     chargingProfileId: 1 => in fact by default 1000 is used here for max profile (see set_charge_rate)
+        #     stackLevel: 0 => the priority of the profile
         #     chargingProfileKind: Relative
-        #     chargingProfilePurpose: TxProfile   => TxDefaultProfile could be used too
+        #     chargingProfilePurpose: TxProfile   => TxDefaultProfile could be used too, use ChargePointMaxProfile to set the max
         #     chargingSchedule:
         #       chargingRateUnit: A
         #       chargingSchedulePeriod:
         #         - startPeriod: 0
         #           limit: 16
 
+        # to update the current Offered immediately ... simply do:
+        # action: ocpp.trigger_custom_message
+        # data:
+        #   devid: charger_A
+        #   requested_message: "MeterValues"
+        #
+        #
+        # to reset the charging profile:
+        # action: ocpp.clear_profile
+        # data:
+        #   devid: charger_A
+        #
+
         if self.use_ocpp_custom_charging_profile is False:
             return await super().low_level_set_charging_current(current, time)
 
-
-        current_max = self.get_max_charging_amp_per_phase()
-
-        if current_max is None or current_max < current:
-            await self.low_level_set_max_charging_current(current, time, blocking=True)
+        _LOGGER.warning(f"low_level_set_charging_current OCPP: {current}A")
 
         state = self.hass.states.get(self.charger_ocpp_transaction_id )
 
@@ -4026,9 +4118,9 @@ class QSChargerOCPP(QSChargerGeneric):
             data["devid"] = self.devid
             data["custom_profile"] = {
                 "transactionId": int(state.state),
-                "chargingProfileId": 1,
+                "chargingProfileId": 1000,
                 "stackLevel": 0,
-                "chargingProfilePurpose": "TxProfile",
+                "chargingProfilePurpose": "TxDefaultProfile",
                 "chargingProfileKind": "Relative",
                 "chargingSchedule": {
                     "chargingRateUnit": "A",
@@ -4059,6 +4151,12 @@ class QSChargerOCPP(QSChargerGeneric):
 
         return done
 
+    def get_max_charging_amp_per_phase(self):
+
+        if self.use_ocpp_custom_charging_profile is False or self.charger_charging_current_sensor is None:
+            return super().get_max_charging_amp_per_phase()
+
+        return self.get_charging_current()
 
     def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> tuple[float, dict]:
 

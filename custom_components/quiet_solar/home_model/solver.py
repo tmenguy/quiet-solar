@@ -26,6 +26,7 @@ class PeriodSolver(object):
                  pv_forecast: list[tuple[datetime, float]] = None,
                  unavoidable_consumption_forecast: list[tuple[datetime, float]] = None,
                  step_s: timedelta = timedelta(seconds=900),
+                 max_inverter_dc_to_ac_power = None,
                  ) -> None:
 
         """
@@ -58,6 +59,7 @@ class PeriodSolver(object):
         self._ua_forecast: list[datetime, float] | None = unavoidable_consumption_forecast
         self._battery = battery
         self._battery_charge_power_by_inverter_AC_clamping = None
+        self._max_inverter_dc_to_ac_power = max_inverter_dc_to_ac_power
 
         if not tariffs:
             self._tariffs = [(start_time, 0.2/1000.0)]
@@ -79,9 +81,12 @@ class PeriodSolver(object):
         # fill the battery if we do have some production clamping at inverter level
         if self._battery is not None:
             self._battery_charge_power_by_inverter_AC_clamping = self._battery_get_charging_power(for_production_clamping=True)[0]
-            # reduce the avalable power to what is really available for the hone: it is clamped by the maximum capacity of the inverter
+            # reduce the available power to what is really available for the home: it is clamped by the maximum capacity of the inverter
             self._available_power = self._available_power + self._battery_charge_power_by_inverter_AC_clamping
 
+        if max_inverter_dc_to_ac_power is not None:
+            # Clamp so values are >= -max_inverter_dc_to_ac_power (limit excess production magnitude)
+            self._available_power = np.maximum(self._available_power, -float(max_inverter_dc_to_ac_power))
 
         if pv_forecast is None:
             _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
@@ -293,6 +298,7 @@ class PeriodSolver(object):
     def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None, for_production_clamping=False):
 
         available_power_list = self._available_power
+        max_inverter_dc_to_ac_power = self._max_inverter_dc_to_ac_power
         battery_ext_consumption_power = np.zeros(len(available_power_list), dtype=np.float64)
         battery_charge = np.zeros(len(available_power_list), dtype=np.float64)
         if existing_battery_commands is None:
@@ -319,9 +325,9 @@ class PeriodSolver(object):
 
                 if for_production_clamping:
                     # if available power negative : we do have some production/solar available power
-                    if 0.0-available_power_list[i] > self._battery.max_inverter_dc_to_ac_power:
+                    if max_inverter_dc_to_ac_power is not None and  0.0-available_power_list[i] > max_inverter_dc_to_ac_power:
                         # what is above the inverter limit will be overcharged in the battery if it is an hybrid + battery setup
-                        available_power = available_power_list[i] + self._battery.max_inverter_dc_to_ac_power
+                        available_power = available_power_list[i] + max_inverter_dc_to_ac_power
                     else:
                         available_power = 0.0
                 else:
@@ -340,6 +346,7 @@ class PeriodSolver(object):
                     # clamped_charge_power was part already of the force charge computation
                     charging_power = self._battery.get_best_charge_power(battery_commands[i].power_consign,
                                                                          float(self._solar_production[i]),
+                                                                         max_inverter_dc_to_ac_power,
                                                                          float(self._durations_s[i]),
                                                                          current_charge=prev_battery_charge)
                     if charging_power <= 0.0:
@@ -354,6 +361,7 @@ class PeriodSolver(object):
                         # charge
                         charging_power = self._battery.get_best_charge_power(0.0 - float(battery_available_power),
                                                                              float(self._solar_production[i]),
+                                                                             max_inverter_dc_to_ac_power,
                                                                              float(self._durations_s[i]),
                                                                              current_charge=prev_battery_charge)
                         if charging_power <= 0.0:
@@ -372,6 +380,7 @@ class PeriodSolver(object):
                             # discharge....
                             charging_power = self._battery.get_best_discharge_power(float(battery_available_power),
                                                                                     float(self._solar_production[i]),
+                                                                                    max_inverter_dc_to_ac_power,
                                                                                     float(self._durations_s[i]),
                                                                                     current_charge=float(prev_battery_charge))
                             if charging_power > 0:

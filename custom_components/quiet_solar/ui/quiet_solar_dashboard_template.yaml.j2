@@ -52,6 +52,8 @@ views:
               {% if ha.get("qs_load_clean_and_reset") %}reset: {{ ha.get("qs_load_clean_and_reset").entity_id }}{% endif %}
               {% if ha.get("car_charge_type") %}charge_type: {{ ha.get("car_charge_type").entity_id }}{% endif %}
               {% if ha.get("car_charge_time") %}charge_time: {{ ha.get("car_charge_time").entity_id }}{% endif %}
+              {% if ha.get("car_estimated_range_km") %}range_now: {{ ha.get("car_estimated_range_km").entity_id }}{% endif %}
+              {% if ha.get("car_autonomy_to_target_soc_km") %}range_target: {{ ha.get("car_autonomy_to_target_soc_km").entity_id }}{% endif %}
             {%- else %}
             {%- if  device.device_type == "car" %}
               {%- set car_tracker = device.car_tracker %}
