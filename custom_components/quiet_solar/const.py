@@ -229,7 +229,6 @@ BUTTON_LOAD_RESET_OVERRIDE_STATE = "qs_load_reset_override_state"
 
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 SWITCH_ENABLE_DEVICE = "qs_enable_device"
-SWITCH_POOL_FORCE_WINTER_MODE = "qs_pool_force_winter_mode"
 SWITCH_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"

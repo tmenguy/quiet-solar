@@ -42,16 +42,6 @@ def test_create_ha_switch_for_car():
     assert len(entities) == 1  # Solar priority switch
 
 
-def test_create_ha_switch_for_pool():
-    """Test creating switches for pool."""
-    mock_pool = create_mock_device("pool")
-    mock_pool.data_handler = MagicMock()
-    
-    entities = create_ha_switch_for_QSPool(mock_pool)
-    
-    assert len(entities) == 1  # Winter mode switch
-
-
 def test_create_ha_switch_for_load():
     """Test creating switches for load - uses real class for isinstance check."""
     # Skip this test - it requires real device class instantiation

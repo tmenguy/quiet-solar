@@ -11,7 +11,7 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
 from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
-    SWITCH_POOL_FORCE_WINTER_MODE, SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY, SWITCH_HOME_IS_OFF_GRID
+    SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY, SWITCH_HOME_IS_OFF_GRID
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
@@ -71,16 +71,6 @@ def create_ha_switch_for_QSCar(device: QSCar):
 
 def create_ha_switch_for_QSPool(device: QSPool):
     entities = []
-
-
-    qs_force_winter = QSSwitchEntityDescription(
-        key=SWITCH_POOL_FORCE_WINTER_MODE,
-        translation_key=SWITCH_POOL_FORCE_WINTER_MODE,
-    )
-
-    entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_force_winter))
-
-
     return entities
 
 

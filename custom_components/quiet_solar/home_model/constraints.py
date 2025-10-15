@@ -1347,6 +1347,45 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
 
 class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
+
+    def __init__(self, **kwargs):
+
+        end_ct = kwargs.get("end_of_constraint")
+        if end_ct is None:
+            end_ct = DATETIME_MAX_UTC
+
+        if end_ct < DATETIME_MAX_UTC:
+
+            time = kwargs.get("time")
+            if time is None:
+                time = datetime.now(pytz.UTC)
+
+            start_time = kwargs.get("start_of_constraint")
+            if start_time is None:
+                start_time = time
+
+            start_value = kwargs.get("current_value")
+            if start_value is None:
+                start_value = kwargs.get("initial_value", 0.0)
+
+            end_value = kwargs.get("target_value")
+
+            if end_value is not None:
+                load = kwargs.get("load")
+                if load is not None:
+                    efficiency_factor = load.efficiency_factor
+                else:
+                    efficiency_factor = 1.0
+
+                duration_s = efficiency_factor * (end_value - start_value)
+
+                # check if we need to clamp the target value to what is possible
+                if duration_s > 0 and duration_s > (end_ct - start_time).total_seconds():
+                    # we cannot fill that much in the time available, so clamp it, minimum is 1s here...
+                    kwargs["target_value"] = start_value + max(1.0, ((end_ct - start_time).total_seconds())/efficiency_factor)
+
+        super().__init__(**kwargs)
+
     def _get_readable_target_value_string(self) -> str:
         target_value = self._get_target_value_for_readable()
         minutes = int((target_value % 3600) / 60)

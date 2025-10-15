@@ -207,7 +207,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self.external_user_initiated_state = state.state
                         self.external_user_initiated_state_time = time
 
-                        # remove all constraints if any, will be added again below
+                        # remove all constraints if any, will be added again below ... hum by doing that we forget how much was teh constraint
+                        # remaining ... we have to keep probably the current active constraint if any and keep it "frozen"
                         self.reset()
                         do_force_next_solve = True
 

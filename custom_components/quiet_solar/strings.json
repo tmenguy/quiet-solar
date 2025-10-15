@@ -645,9 +645,6 @@
       "qs_enable_device": {
         "name": "Enabled for quiet solar"
       },
-      "qs_pool_force_winter_mode": {
-        "name": "Force Winter Mode"
-      },
       "qs_home_is_off_grid": {
         "name": "Set Off-Grid"
       }
@@ -666,15 +663,25 @@
         "name": "ON/OFF Load Mode",
         "state": {
           "on_off_mode_off": "Force OFF",
-          "bistate_mode_auto": "Auto",
+          "bistate_mode_auto": "Use Calendar",
           "bistate_mode_default": "Use Default",
           "on_off_mode_on": "Force ON"
+        }
+      },
+      "pool_mode": {
+        "name": "Pool Mode",
+        "state": {
+          "on_off_mode_off": "Force OFF",
+          "bistate_mode_auto": "Auto from T°",
+          "bistate_mode_default": "Use Default",
+          "on_off_mode_on": "Force ON",
+          "pool_winter_mode": "Winter Mode"
         }
       },
       "climate_mode": {
         "name": "Climate Mode",
         "state": {
-          "bistate_mode_auto": "Auto",
+          "bistate_mode_auto": "Use Calendar",
           "bistate_mode_default": "Use Default",
           "off": "Force HVAC Mode OFF",
           "heat": "Force HVAC Mode HEAT",

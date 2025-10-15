@@ -38,10 +38,10 @@
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
+                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_is_invited": "Is this car a placeholder one for a guest?",
                     "car_odometer_sensor": "Odometer sensor (km or miles)",
-                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",
@@ -327,7 +327,7 @@
                 "name": "Climate Mode",
                 "state": {
                     "auto": "Force HVAC Mode AUTO",
-                    "bistate_mode_auto": "Auto",
+                    "bistate_mode_auto": "Use Calendar",
                     "bistate_mode_default": "Use Default",
                     "cool": "Force HVAC Mode COOL",
                     "dry": "Force HVAC Mode DRY",
@@ -350,10 +350,20 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "bistate_mode_auto": "Auto",
+                    "bistate_mode_auto": "Use Calendar",
                     "bistate_mode_default": "Use Default",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
+                }
+            },
+            "pool_mode": {
+                "name": "Pool Mode",
+                "state": {
+                    "bistate_mode_auto": "Auto from T\u00b0",
+                    "bistate_mode_default": "Use Default",
+                    "on_off_mode_off": "Force OFF",
+                    "on_off_mode_on": "Force ON",
+                    "pool_winter_mode": "Winter Mode"
                 }
             },
             "selected_car_for_charger": {
@@ -431,9 +441,6 @@
             },
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
-            },
-            "qs_pool_force_winter_mode": {
-                "name": "Force Winter Mode"
             }
         },
         "time": {
@@ -484,10 +491,10 @@
                     "car_charge_percent_sensor": "% charge of the battery",
                     "car_charger_max_charge": "Per phase max charge in (A)",
                     "car_charger_min_charge": "Per phase min charge in (A)",
+                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_is_custom_power_charge_values_3p": "Are those power values for 3 phases?",
                     "car_is_invited": "Is this car a placeholder one for a guest?",
                     "car_odometer_sensor": "Odometer sensor (km or miles)",
-                    "car_estimated_range_sensor": "Estimated range sensor from car (km or miles)",
                     "car_plugged": "Binary sensor to detect if the car is plugged or not",
                     "car_tracker": "car device tracker to know if the car is at home or not",
                     "car_use_custom_power_charge_values": "Use custom power charge values?",

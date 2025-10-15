@@ -416,7 +416,7 @@ class AbstractDevice(object):
 
     def is_load_command_set(self, time:datetime):
         if self.qs_enable_device is False:
-            return True
+            return False
 
         return self.running_command is None and self.current_command is not None
 

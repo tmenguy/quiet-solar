@@ -190,11 +190,6 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {{ "  icon: mdi:solar-power" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_pool_force_winter_mode") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("default_on_finish_time") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
