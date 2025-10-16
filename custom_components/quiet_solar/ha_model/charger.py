@@ -1586,8 +1586,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def __init__(self, **kwargs):
         self.charger_plugged = kwargs.pop(CONF_CHARGER_PLUGGED, None)
+
         self.charger_max_charging_current_number = kwargs.pop(CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, None)
         self.charger_charging_current_sensor = kwargs.pop(CONF_CHARGER_CHARGING_CURRENT_SENSOR, None)
+
+        if self.charger_max_charging_current_number is None and self.charger_charging_current_sensor is None:
+            _LOGGER.error(f"Charger {self.name} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
+            raise ValueError(f"Charger {self.name} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
+
+
         self.charger_pause_resume_switch = kwargs.pop(CONF_CHARGER_PAUSE_RESUME_SWITCH, None)
         self.charger_three_to_one_phase_switch = kwargs.pop(CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, None)
         self.charger_max_charge = kwargs.pop(CONF_CHARGER_MAX_CHARGE, 32)
@@ -3702,6 +3709,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_max_charging_amp_per_phase(self):
 
+        if self.charger_max_charging_current_number is None:
+            return self.get_charging_current()
+
         state = self.hass.states.get(self.charger_max_charging_current_number)
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
@@ -3800,6 +3810,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return False
 
     async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
+
+        if self.charger_max_charging_current_number is None:
+            return await self.low_level_set_charging_current(current, time, blocking)
+
         try:
             _LOGGER.warning(f"low_level_set_max_charging_current: {current}A")
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
@@ -3820,7 +3834,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return done
 
     async def low_level_set_charging_current(self, current, time: datetime, blocking=False) -> bool:
-        return await self.low_level_set_max_charging_current(current=current, time=time, blocking=blocking)
+        if self.charger_max_charging_current_number is not None:
+            return await self.low_level_set_max_charging_current(current=current, time=time, blocking=blocking)
+
+        _LOGGER.error(f"low_level_set_charging_current: No way to set current {current}A")
+        raise NotImplementedError("No way to set charging current")
 
     async def low_level_stop_charge(self, time: datetime):
 
@@ -3884,7 +3902,7 @@ class QSChargerOCPP(QSChargerGeneric):
             self.devid = device.name_by_user or device.name
 
 
-            kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(device, entries, "number.", "_maximum_current")
+
             kwargs[CONF_CHARGER_PAUSE_RESUME_SWITCH] = self._find_charger_entity_id(device, entries, "switch.", "_charge_control")
 
             if self.use_ocpp_custom_charging_profile:
@@ -3892,6 +3910,9 @@ class QSChargerOCPP(QSChargerGeneric):
                 self.charger_ocpp_transaction_id = self._find_charger_entity_id(device, entries, "sensor.", "_transaction_id")
             else:
                 self.charger_ocpp_transaction_id = None
+                kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(device, entries,
+                                                                                                "number.",
+                                                                                                "_maximum_current")
 
             kwargs[CONF_CHARGER_STATUS_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_status_connector")
             # kwargs[CONF_CHARGER_REBOOT_BUTTON] = self._find_charger_entity_id(device, entries, "button.", "_reset")
@@ -4130,11 +4151,7 @@ class QSChargerOCPP(QSChargerGeneric):
                 }
             }
 
-
-
-            # data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             service = "set_charge_rate"
-            # data[number.ATTR_VALUE] = int(min(max_value, max(min_value, range_value)))
             domain = "ocpp"
 
             await self.hass.services.async_call(
@@ -4150,13 +4167,6 @@ class QSChargerOCPP(QSChargerGeneric):
         #    done = await super().low_level_set_max_charging_current(current, time)
 
         return done
-
-    def get_max_charging_amp_per_phase(self):
-
-        if self.use_ocpp_custom_charging_profile is False or self.charger_charging_current_sensor is None:
-            return super().get_max_charging_amp_per_phase()
-
-        return self.get_charging_current()
 
     def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> tuple[float, dict]:
 
