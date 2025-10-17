@@ -2268,6 +2268,7 @@ class QSSolarHistoryVals:
                             value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
                     except:
                         value = None
+                        _LOGGER.warning("Error loading lazy safe value for %s state %s", self.entity_id, s.state)
                         # is it the same as a bad state above?
 
                 if value is not None:

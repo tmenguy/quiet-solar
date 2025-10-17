@@ -1591,8 +1591,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.charger_charging_current_sensor = kwargs.pop(CONF_CHARGER_CHARGING_CURRENT_SENSOR, None)
 
         if self.charger_max_charging_current_number is None and self.charger_charging_current_sensor is None:
-            _LOGGER.error(f"Charger {self.name} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
-            raise ValueError(f"Charger {self.name} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
+            _LOGGER.error(f"Charger {kwargs.get("name")} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
+            # raise ValueError(f"Charger {kwargs.get("name")} must have either {CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER} or {CONF_CHARGER_CHARGING_CURRENT_SENSOR} defined")
 
 
         self.charger_pause_resume_switch = kwargs.pop(CONF_CHARGER_PAUSE_RESUME_SWITCH, None)

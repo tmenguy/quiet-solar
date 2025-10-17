@@ -209,23 +209,33 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._add_soc_odo_value_to_segments(soc, odo, time)
 
-        if prev_sample is not None and self._decreasing_segments[-1][2] == prev_seg_idx and prev_sample[0] > soc:
-            # we have added the new point to the last segment
-            prev_soc, prev_odo, prev_time = prev_sample
-            if soc < prev_soc and odo > prev_odo:
-                # progressive EMA from segment start to current
-                if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
-                    seg_soc0, seg_odo0, seg_t0 = self._decreasing_segments[-1][0]
-                    distance_km = float(odo - seg_odo0)
-                    delta_soc = float(seg_soc0 - soc)
-                    energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
-                    if energy_kwh > 0.0 and distance_km > 0.0:
-                        sample_eff = distance_km / energy_kwh
-                        if self._km_per_kwh is None:
-                            self._km_per_kwh = sample_eff
-                        else:
-                            alpha = 0.2
-                            self._km_per_kwh = alpha * sample_eff + (1.0 - alpha) * self._km_per_kwh
+        sample_eff = None
+        if self.car_estimated_range_sensor is not None:
+            current_soc = self.get_car_charge_percent(time)
+            car_estimate = self.get_car_estimated_range_km_from_sensor(time)
+            if current_soc is not None and car_estimate is not None and current_soc > 0.0:
+                sample_eff = float(car_estimate) / ((float(current_soc) / 100.0) * (float(self.car_battery_capacity) / 1000.0))
+
+        if sample_eff is None:
+            if prev_sample is not None and self._decreasing_segments[-1][2] == prev_seg_idx and prev_sample[0] > soc:
+                # we have added the new point to the last segment
+                prev_soc, prev_odo, prev_time = prev_sample
+                if soc < prev_soc and odo > prev_odo:
+                    # progressive EMA from segment start to current
+                    if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
+                        seg_soc0, seg_odo0, seg_t0 = self._decreasing_segments[-1][0]
+                        distance_km = float(odo - seg_odo0)
+                        delta_soc = float(seg_soc0 - soc)
+                        energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
+                        if energy_kwh > 0.0 and distance_km > 0.0:
+                            sample_eff = distance_km / energy_kwh
+
+        if sample_eff is not None:
+            if self._km_per_kwh is None:
+                self._km_per_kwh = sample_eff
+            else:
+                alpha = 0.2
+                self._km_per_kwh = alpha * sample_eff + (1.0 - alpha) * self._km_per_kwh
 
         return (time, self._km_per_kwh, {})
 
@@ -614,34 +624,38 @@ class QSCar(HADeviceMixin, AbstractDevice):
         car_estimate = self.get_car_estimated_range_km_from_sensor(time)
 
         car_estimated_distance = None
+        soc_distance = None
+        efficiency_distance = None
+
+
         if current_soc is not None and car_estimate is not None:
             car_estimated_distance = (delta_soc*car_estimate)/float(current_soc)
 
+        if car_estimated_distance is None:
 
+            best_segment = None
+            # from the more recent to the older
+            for i in range(len(self._efficiency_segments)-1, -1, -1):
+                seg = self._efficiency_segments[i]
+                if (time - seg[4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
+                    break
 
-        best_segment = None
-        # from the more recent to the older
-        for i in range(len(self._efficiency_segments)-1, -1, -1):
-            seg = self._efficiency_segments[i]
-            if (time - seg[4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
-                break
+                if seg[0] == 0 or seg[1] == 0:
+                    continue
 
-            if seg[0] == 0 or seg[1] == 0:
-                continue
+                if best_segment is None or (abs(seg[1] - delta_soc) < abs(best_segment[1] - delta_soc)):
+                    best_segment = seg
 
-            if best_segment is None or (abs(seg[1] - delta_soc) < abs(best_segment[1] - delta_soc)):
-                best_segment = seg
+            soc_distance = None
+            if best_segment is not None:
+                soc_distance = delta_soc*(best_segment[0] / best_segment[1])
 
-        soc_distance = None
-        if best_segment is not None:
-            soc_distance = delta_soc*(best_segment[0] / best_segment[1])
-
-        efficiency_distance = None
-        eff = self._km_per_kwh
-        if eff is not None:
-            if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
-                energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
-                efficiency_distance = energy_kwh * eff
+            if soc_distance is None:
+                eff = self._km_per_kwh
+                if eff is not None:
+                    if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
+                        energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
+                        efficiency_distance = energy_kwh * eff
 
 
         result = car_estimated_distance
@@ -650,8 +664,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if result is None:
             result = efficiency_distance
 
-        _LOGGER.info(
-            f"get_car_estimated_range_km : Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} best_segment {best_segment} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
+        _LOGGER.debug(
+            f"get_car_estimated_range_km : Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
 
         return result
 
