@@ -3815,7 +3815,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return await self.low_level_set_charging_current(current, time, blocking)
 
         try:
-            _LOGGER.warning(f"low_level_set_max_charging_current: {current}A")
+            _LOGGER.info(f"low_level_set_max_charging_current: {current}A")
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
             service = number.SERVICE_SET_VALUE
