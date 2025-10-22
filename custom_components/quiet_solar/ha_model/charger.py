@@ -2374,8 +2374,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # and detach if it was used elsewhere, will be re-attached by the other charger directly
         best_car = assigned_chargers.get(self)
 
-        best_car = None
-
         if best_car is None:
 
             if self._boot_car is not None and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
