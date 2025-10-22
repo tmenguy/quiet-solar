@@ -182,7 +182,7 @@ class QsCarCard extends HTMLElement {
       .below .pill { width:100%; justify-content:center; }
       .below-line { width:300px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
-      .below-line.full > button { width: 100%; justify-content: center, position: relative; }
+      .below-line.full > button { width: 100%; justify-content: center; position: relative; }
       .below-line.full > button.align-left { justify-content: flex-start; }
       .below-line.full > button .btn-center { position: absolute; left: 50%; transform: translateX(-50%); }
       .below-line .time-row { justify-self: end; margin-top: 0; }
