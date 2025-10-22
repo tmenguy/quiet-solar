@@ -73,7 +73,6 @@ class QsCarCard extends HTMLElement {
 
     const sSoc = this._entity(e.soc);
     const sPower = this._entity(e.power);
-    const sSummary = this._entity(e.next_summary);
     const selCharger = this._entity(e.charger_select);
     const selLimit = this._entity(e.next_limit);
     const swPriority = this._entity(e.bump_priority);
@@ -86,9 +85,7 @@ class QsCarCard extends HTMLElement {
     const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
     const soc = this._percent(sSoc?.state);
     const power = sPower?.state || "0";
-    const summary = sSummary?.state || "";
     const target = selLimit?.state || "";
-    const connected = (selCharger && selCharger.state !== 'unavailable');
     const charging = (Number(power) > 50);
     const carChargeTypeIcons = {
         "Unknown": "mdi:help-circle-outline",
