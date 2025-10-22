@@ -577,7 +577,6 @@
       "qs_car_autonomy_to_target_soc_km": {
         "name": "Autonomy to Target SOC (km)"
       },
-      
       "qs_constraint_sensor": {
         "name": "Next"
       },

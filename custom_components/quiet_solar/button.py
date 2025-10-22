@@ -174,6 +174,8 @@ async def async_setup_entry(
     if device:
 
         entities = create_ha_button(device)
+        for attached_device in device.get_attached_virtual_devices():
+            entities.extend(create_ha_button(attached_device))
 
         if entities:
             async_add_entities(entities)

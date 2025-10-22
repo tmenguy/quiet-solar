@@ -97,13 +97,14 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
-    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, \
+    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED,\
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
     FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
     CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO, \
     CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_FAULTED, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, \
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
-    CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR
+    CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
+    CONF_TYPE_NAME_QSCar, DEVICE_TYPE, CAR_HARD_WIRED_CHARGER
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
@@ -1628,10 +1629,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         data = {
             CONF_CAR_CHARGER_MIN_CHARGE: self.charger_min_charge,
             CONF_CAR_CHARGER_MAX_CHARGE: self.charger_max_charge,
-            CONF_CAR_BATTERY_CAPACITY: 100000,
             CONF_CALENDAR: self.calendar,
             CONF_DEVICE_EFFICIENCY: self.efficiency,
-            CONF_DEFAULT_CAR_CHARGE: 80.0
+            CONF_CAR_IS_INVITED: True,
+            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
+            CAR_HARD_WIRED_CHARGER: self
         }
 
         self._default_generic_car = QSCar(hass=self.hass, home=self.home, config_entry=None,
@@ -1782,6 +1784,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if class_name == MultiStepsPowerLoadConstraintChargePercent.__name__:
             return  self.constraint_update_value_callback_percent_soc
+
+        if class_name == MultiStepsPowerLoadConstraint.__name__:
+            return  self.constraint_update_value_callback_energy_soc
 
         return None
 
@@ -2369,25 +2374,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # and detach if it was used elsewhere, will be re-attached by the other charger directly
         best_car = assigned_chargers.get(self)
 
+        best_car = None
+
         if best_car is None:
 
             if self._boot_car is not None and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
                 best_car = self._boot_car
                 _LOGGER.info(f"get_best_car: Best Car from boot data: {best_car.name} for charger {self.name}")
             else:
-                # there is no good car for this charger: get an invited car that is not already assigned to another charger
-                if self.car is not None and self.car.car_is_invited:
-                    best_car = self.car
-                    _LOGGER.info(f"get_best_car: Best invited car used: {best_car.name} for charger {self.name}")
-                else:
-                    for car in self.home._cars:
-                        if car.car_is_invited and car.charger is None:
-                            best_car = car
-                            _LOGGER.info(f"get_best_car: first time best invited car used: {best_car.name} for charger {self.name}")
-                            break
-                if best_car is None:
-                    best_car = self._default_generic_car
-                    _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
+                # there is no good car for this charger: get teh charger invited one
+                best_car = self._default_generic_car
+                _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
         else:
             if self._boot_car is not None and self._boot_car.name != best_car.name and self._boot_car.user_attached_charger_name != FORCE_CAR_NO_CHARGER_CONNECTED:
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
@@ -2594,12 +2591,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.clean_constraints_for_load_param(time, load_param=best_car.name, for_full_reset=True)
                 self.attach_car(best_car, time)
 
-            target_charge = await self.car.setup_car_charge_target_if_needed()
 
-            car_current_charge_percent = car_initial_percent = self.car.get_car_charge_percent(time)
-            if car_initial_percent is None: # for possible percent issue
-                car_initial_percent = 0.0
-                _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} has a None car_initial_percent... force init at 0")
+
+            # we have to check if teh car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
+            ConstraintClass = None
+            is_target_percent = True
+            if self.car.can_use_charge_percent_constraints():
+                ConstraintClass = MultiStepsPowerLoadConstraintChargePercent
+                target_charge = await self.car.setup_car_charge_target_if_needed()
+
+                car_current_charge_value = car_initial_value = self.car.get_car_charge_percent(time)
+                if car_initial_value is None:  # for possible percent issue
+                    car_initial_value = 0.0
+                    _LOGGER.info(
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} has a None car_initial_value... force init at 0")
+
+            else:
+                ConstraintClass = MultiStepsPowerLoadConstraint
+                is_target_percent = False
+                target_charge = self.car.get_car_target_charge_energy()
+                # no need as to compute as the push constraint will respect the previous value of the constraint
+                car_current_charge_value = 0
+                car_initial_value = 0
+
 
             realized_charge_target = None
             # add a constraint ... for now just fill the car as much as possible
@@ -2610,19 +2624,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 do_force_solve = True
                 self.reset_load_only() # cleanup any previous constraints to force this one!
 
-                if car_initial_percent >= target_charge:
+                if car_initial_value >= target_charge:
                     _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} ins as fast as possible and has a car_initial_percent {car_initial_percent} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
-                    car_initial_percent = max(0, target_charge - 5)
+                        f"check_load_activity_and_constraints: plugged car {self.car.name} ins as fast as possible and has a car_initial_value {car_initial_value} >= target_charge {target_charge}... force init at {max(0, target_charge - 5)}")
+                    car_initial_value = max(0, target_charge - 5)
 
-                force_constraint = MultiStepsPowerLoadConstraintChargePercent(
-                    total_capacity_wh=self.car.car_battery_capacity,
+                force_constraint = ConstraintClass(
+                    total_capacity_wh=self.car.car_battery_capacity, # ok to leave it for MultiStepsPowerLoadConstraint, will be an unused kwargs
                     type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
                     time=time,
                     load=self,
                     load_param=self.car.name,
                     from_user=True,
-                    initial_value=car_initial_percent,
+                    initial_value=car_initial_value,
                     target_value=target_charge,
                     power_steps=self._power_steps,
                     support_auto=True,
@@ -2663,7 +2677,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if self._last_completed_constraint is not None:
 
                     do_check_timed_constraint = False
-                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_percent, target_charge=target_charge)
+                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value, target_charge=target_charge,is_target_percent=is_target_percent)
 
                     if is_car_charged is False:
                         do_check_timed_constraint = True
@@ -2686,7 +2700,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # only add it if it is "after" the end of the forced constraint
                 if start_time is not None:
 
-                    car_charge_mandatory = MultiStepsPowerLoadConstraintChargePercent(
+                    car_charge_mandatory = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                         time=time,
@@ -2694,7 +2708,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         load_param=self.car.name,
                         from_user=False,
                         end_of_constraint=start_time,
-                        initial_value=car_initial_percent,
+                        initial_value=car_initial_value,
                         target_value=target_charge,
                         power_steps=self._power_steps,
                         support_auto=True
@@ -2707,52 +2721,57 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     realized_charge_target = target_charge
 
-            if realized_charge_target is None or realized_charge_target < self.car.car_default_charge:
+            if realized_charge_target is None or (is_target_percent and realized_charge_target < self.car.car_default_charge):
 
                 if realized_charge_target is None:
-                    realized_charge_target = car_initial_percent
-
-                if self.is_off_grid():
-                    default_type_for_low_battery = CONSTRAINT_TYPE_FILLER_AUTO
-                else:
-                    default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-
-
-                if self.qs_bump_solar_charge_priority:
-                    type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                    default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-                    intermediate_target_charge = 0
-                else:
-                    type = CONSTRAINT_TYPE_FILLER
-                    intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
-
-                if intermediate_target_charge <= 5:
-                    intermediate_target_charge = 0.0
-
-                if intermediate_target_charge > target_charge:
-                    intermediate_target_charge = 0.0
-
-                max_target_charge = max(intermediate_target_charge, max(max(target_charge, realized_charge_target), self.car.car_default_charge))
+                    realized_charge_target = car_initial_value
 
                 artificial_step_to_final_value = None
 
-                if realized_charge_target + 1.5 < intermediate_target_charge and intermediate_target_charge > 0:
-                    # priority before we reach the minimum of the battery for this car
-                    type = default_type_for_low_battery
-                    artificial_step_to_final_value = target_charge
-                    target_charge = intermediate_target_charge
-
-                elif realized_charge_target + 1.5 >= target_charge and target_charge < max_target_charge:
-                    # after the desired target ... do as if it was not really bump priority anymore
-                    # and be after battery, lowest priority
+                if is_target_percent is False:
                     type = CONSTRAINT_TYPE_FILLER_AUTO
-                    target_charge = max_target_charge
-
+                    if self.qs_bump_solar_charge_priority:
+                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                else:
                     if self.is_off_grid():
-                        type = None
+                        default_type_for_low_battery = CONSTRAINT_TYPE_FILLER_AUTO
+                    else:
+                        default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+
+
+                    if self.qs_bump_solar_charge_priority:
+                        type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                        default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+                        intermediate_target_charge = 0
+                    else:
+                        type = CONSTRAINT_TYPE_FILLER
+                        intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
+
+                    if intermediate_target_charge <= 5:
+                        intermediate_target_charge = 0.0
+
+                    if intermediate_target_charge > target_charge:
+                        intermediate_target_charge = 0.0
+
+                    max_target_charge = max(intermediate_target_charge, max(max(target_charge, realized_charge_target), self.car.car_default_charge))
+
+                    if realized_charge_target + 1.5 < intermediate_target_charge and intermediate_target_charge > 0:
+                        # priority before we reach the minimum of the battery for this car
+                        type = default_type_for_low_battery
+                        artificial_step_to_final_value = target_charge
+                        target_charge = intermediate_target_charge
+
+                    elif realized_charge_target + 1.5 >= target_charge and target_charge < max_target_charge:
+                        # after the desired target ... do as if it was not really bump priority anymore
+                        # and be after battery, lowest priority
+                        type = CONSTRAINT_TYPE_FILLER_AUTO
+                        target_charge = max_target_charge
+
+                        if self.is_off_grid():
+                            type = None
 
                 if type is not None:
-                    car_charge_best_effort = MultiStepsPowerLoadConstraintChargePercent(
+                    car_charge_best_effort = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=type,
                         time=time,
@@ -2816,8 +2835,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             parent = set()
         else:
             parent = set(parent)
+
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON, Platform.TIME])
         return list(parent)
+
+    def get_attached_virtual_devices(self) -> list[HADeviceMixin]:
+        attached = list(super().get_attached_virtual_devices())
+        if self._default_generic_car is not None:
+            attached.append(self._default_generic_car)
+        return attached
+
 
     def attach_car(self, car, time: datetime):
 
@@ -3398,25 +3425,36 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return False
 
 
-    def _compute_added_percent_charge_update(self, start_time: datetime, end_time: datetime) -> float | None:
+    def _compute_added_charge_update(self, start_time: datetime, end_time: datetime, is_target_percent=True) -> float | None:
         """ compute the percent charge update for a given time period
         """
-        if self.car is None or self.car.car_battery_capacity is None:
+        if self.car is None:
             return None
-
-        added_percent = None
 
         added_nrj = self.get_device_real_energy(start_time=start_time,
                                                 end_time=end_time,
                                                 clip_to_zero_under_power=self.charger_consumption_W)
+        added_percent = None
 
-        if added_nrj is not None and self.car.car_battery_capacity > 0:
-            added_nrj = added_nrj/self.efficiency_factor
+        added_nrj = added_nrj / self.efficiency_factor
+
+        if self.car.car_battery_capacity is not None and added_nrj is not None and self.car.car_battery_capacity > 0:
             added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
 
-        return added_percent
+        if is_target_percent:
+            return added_percent
+        else:
+            return added_nrj
 
-    async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> tuple[float | None, bool]:
+    async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> tuple[
+        float | None, bool]:
+        return await self.constraint_update_value_callback_soc(ct, time, is_target_percent=True)
+
+    async def constraint_update_value_callback_energy_soc(self, ct: LoadConstraint, time: datetime) -> tuple[
+        float | None, bool]:
+        return await self.constraint_update_value_callback_soc(ct, time, is_target_percent=False)
+
+    async def constraint_update_value_callback_soc(self, ct: LoadConstraint, time: datetime, is_target_percent=True) -> tuple[float | None, bool]:
         """ Example of a value compute callback for a load constraint. like get a sensor state, compute energy available for a car from battery charge etc
         it could also update the current command of the load if needed
         """
@@ -3424,81 +3462,95 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             # if we reset here it will remove the current constraint list from the load!!!!
-            _LOGGER.info(f"update_value_callback: {self.name} reset because no car or not plugged")
+            _LOGGER.info(f"update_value_callback (is %:{is_target_percent}): {self.name} reset because no car or not plugged")
             return (None, False)
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
-            _LOGGER.info(f"update_value_callback: {self.name} short unplug")
+            _LOGGER.info(f"update_value_callback (is %:{is_target_percent}): {self.name} short unplug")
             return (None, True)
 
         result_calculus = None
         sensor_result = None
 
         if self.current_command is None or self.current_command.is_off_or_idle():
-            _LOGGER.info(f"update_value_callback: {self.name} no command or idle/off")
+            _LOGGER.info(f"update_value_callback (is %:{is_target_percent}): {self.name} no command or idle/off")
             result = None
         else:
 
             probe_charge_window = 30*60
-            sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+            if is_target_percent:
+                sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+            else:
+                sensor_result = self.car.get_car_charge_energy(time, tolerance_seconds=probe_charge_window)
 
             total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
 
-            computed_percent_added_last = self._compute_added_percent_charge_update(start_time=ct.last_value_change_update, end_time=time)
-            if computed_percent_added_last is not None:
-                result_calculus = ct.current_value + int(computed_percent_added_last) # round it to int ... so stay the same for small updates
+            delta_added = self._compute_added_charge_update(start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent)
+
+            if delta_added is not None:
+                if is_target_percent:
+                    result_calculus = ct.current_value + int(delta_added) # round it to int ... so stay the same for small updates
+                else:
+                    result_calculus = ct.current_value + delta_added
 
             result = sensor_result
 
             if sensor_result is None:
-                if self.car.car_charge_percent_sensor:
+                if self.car.car_charge_percent_sensor and is_target_percent:
                     _LOGGER.info(
-                        f"update_value_callback:{self.name} {self.car.name} use calculus because sensor None {result_calculus}")
+                        f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} use calculus because sensor None {result_calculus}")
                 result = result_calculus
             else:
-                if sensor_result > 99:
-                    if computed_percent_added_last is not None:
-                        result = min(sensor_result, ct.current_value + computed_percent_added_last)
+                if is_target_percent and sensor_result > 99:
+                    if delta_added is not None:
+                        result = min(sensor_result, ct.current_value + delta_added)
                 elif total_charge_duration >= probe_charge_window:
                     # keep the sensor result we are at the begining
-                    computed_percent_added_begin = self._compute_added_percent_charge_update(
-                        start_time=ct.first_value_update, end_time=time)
+                    delta_begin = self._compute_added_charge_update(
+                        start_time=ct.first_value_update, end_time=time, is_target_percent=is_target_percent)
 
-                    if computed_percent_added_begin is None or computed_percent_added_begin >= 1:
+                    if is_target_percent:
+                        smallest_increment = 1 # 1%
+                    else:
+                        smallest_increment = 1000  # 1000 Wh
+
+                    if delta_begin is None or delta_begin >= smallest_increment:
                         # we should have a growing one probe the last probe_window
-                        computed_percent_probe_window = self._compute_added_percent_charge_update(start_time=time - timedelta(seconds=probe_charge_window), end_time=time)
+                        computed_change_probe_window = self._compute_added_charge_update(start_time=time - timedelta(seconds=probe_charge_window), end_time=time, is_target_percent=is_target_percent)
 
-                        if computed_percent_probe_window is not None and computed_percent_probe_window >= 1:
+                        if computed_change_probe_window is not None and computed_change_probe_window >= smallest_increment:
                             # we are growing in the last probe window
-                            is_growing = self.car.is_car_charge_growing(num_seconds=computed_percent_probe_window, time=time)
+                            is_growing = self.car.is_car_charge_growing(num_seconds=probe_charge_window, time=time)
                             if is_growing is None:
                                 _LOGGER.info(
-                                    f"update_value_callback:{self.name} {self.car.name} use sensor because sensor growing unknown (expected growth:{computed_percent_probe_window}%)  calculus:{result_calculus} sensor:{sensor_result}")
+                                    f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} use sensor because sensor growing unknown (expected growth:{computed_change_probe_window}%)  calculus:{result_calculus} sensor:{sensor_result}")
                                 result = sensor_result
                             elif is_growing is False:
                                 # we are not growing and we should ...
-                                if computed_percent_probe_window > 5:
-                                    _LOGGER.info(f"update_value_callback:{self.name} {self.car.name} use calculus because sensor not growing (expected growth:{computed_percent_probe_window}%)  {result_calculus}")
+                                if computed_change_probe_window > 5*smallest_increment:
+                                    _LOGGER.info(f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} use calculus because sensor not growing (expected growth:{computed_change_probe_window}%)  {result_calculus}")
                                     result = result_calculus
                             # else : the sensor is growing ... keep it
 
 
-        is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value)
+        is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value, is_target_percent=is_target_percent)
 
         if result is not None and ct.is_constraint_met(time=time, current_value=result):
             do_continue_constraint = False
         else:
             do_continue_constraint = True
-            await self.car.setup_car_charge_target_if_needed(ct.target_value)
+            if is_target_percent:
+                await self.car.setup_car_charge_target_if_needed(ct.target_value)
+
             # await self._dynamic_compute_and_launch_new_charge_state(time)
             await self.charger_group.dyn_handle(time)
 
-        _LOGGER.info(f"update_value_callback:{self.name} {self.car.name}  {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
+        _LOGGER.info(f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name}  {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}")
 
         return (result, do_continue_constraint)
 
-    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int) -> tuple[bool, int|float]:
+    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int, is_target_percent: bool) -> tuple[bool, int|float]:
 
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
@@ -3507,7 +3559,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # force met constraint: car is charged in all cases
             result = target_charge
         elif current_charge is not None:
-            if target_charge >= 100:
+            if is_target_percent and target_charge >= 100:
                 # for a car to be fully charged it has to have a stopped asking charge at minimum
                 result = min(current_charge, 99)
             else:

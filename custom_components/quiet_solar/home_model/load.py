@@ -552,7 +552,7 @@ class AbstractLoad(AbstractDevice):
 
         new_end_time = new_ct.end_of_constraint
 
-        if new_end_time is None or new_end_time == DATETIME_MAX_UTC or new_end_time == DATETIME_MIN_UTC:
+        if new_end_time == DATETIME_MAX_UTC or new_end_time == DATETIME_MIN_UTC:
             return False
 
         if self._last_pushed_end_constraint_from_agenda is None:
@@ -561,9 +561,9 @@ class AbstractLoad(AbstractDevice):
             # if the agenda has changed ... we should remove an existing uneeded constraint
             if self._last_pushed_end_constraint_from_agenda.end_of_constraint != new_end_time:
                 for i, ct in enumerate(self._constraints):
-                    if (isinstance(ct, new_ct.__class__)
-                            and ct.type == new_ct.type
-                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda.end_of_constraint):
+                    if type(ct) == type(new_ct) \
+                            and ct.type == new_ct.type \
+                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda.end_of_constraint:
                         self._constraints[i] = None
                         break
 
@@ -939,7 +939,7 @@ class AbstractLoad(AbstractDevice):
             for i, c in enumerate(self._constraints):
                 if c == constraint:
                     return False
-                if  c.end_of_constraint == constraint.end_of_constraint:
+                if  c.end_of_constraint == constraint.end_of_constraint or (c.as_fast_as_possible and constraint.as_fast_as_possible):
                     if c.score(time) == constraint.score(time):
                         _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
                         return False
@@ -947,7 +947,7 @@ class AbstractLoad(AbstractDevice):
                         self._constraints[i] = None
                         _LOGGER.info(f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one)")
                         # the problem here is that we can loose .... the current value
-                        if c.current_value > constraint.current_value:
+                        if type(c) == type(constraint) and c.current_value > constraint.current_value :
                             constraint.current_value = min(c.current_value, constraint.target_value)
 
             self._constraints.append(constraint)

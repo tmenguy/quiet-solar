@@ -330,7 +330,21 @@ class QSHome(QSDynamicGroup):
                     if d.dashboard_section == section_name:
                         found.add(d)
 
+        for list in [self._all_devices]:
+            for d in list:
+                virtual_devices = d.get_attached_virtual_devices()
+                for vd in virtual_devices:
+                    # attach the virtual device if the main device is in the section
+                    if d in found:
+                        found.add(vd)
+                    # attach the same type of virtual device is there is one in the section
+                    for f in found:
+                        if vd.device_type == f.device_type or type(vd) == type(f):
+                            found.add(vd)
+                            break
+
         found = sorted(found, key=lambda device: device.dashboard_sort_string)
+
         return found
 
 
@@ -799,6 +813,10 @@ class QSHome(QSDynamicGroup):
                 device.register_all_on_change_states()
                 self._all_devices.append(device)
 
+            for attached_device in device.get_attached_virtual_devices():
+                if isinstance(attached_device, AbstractDevice):
+                    self.add_device(attached_device)
+
         #will redo the whole topology each time
         self._set_topology()
 
@@ -843,6 +861,10 @@ class QSHome(QSDynamicGroup):
                 self._all_devices.remove(device)
             except ValueError:
                 _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
+
+        if isinstance(device, HADeviceMixin):
+            for attached_device in device.get_attached_virtual_devices():
+                self.remove_device(attached_device)
 
         #will redo the whole topology each time
         self._set_topology()

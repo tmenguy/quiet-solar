@@ -17,10 +17,10 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
-    CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, \
+    CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, DEVICE_TYPE, \
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, \
     CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH
+    CAR_EFFICIENCY_KM_PER_KWH, CONF_CALENDAR, CONF_DEVICE_EFFICIENCY, CAR_HARD_WIRED_CHARGER
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
@@ -33,12 +33,17 @@ MIN_CHARGE_POWER_W = 70
 
 CAR_MAX_EFFICIENCY_HISTORY_S = 3600*24*31
 
+CAR_DEFAULT_CAPACITY = 100000 # 100 kWh
+
 
 class QSCar(HADeviceMixin, AbstractDevice):
 
     conf_type_name = CONF_TYPE_NAME_QSCar
 
     def __init__(self, **kwargs):
+
+        self.car_hard_wired_charger = kwargs.pop(CAR_HARD_WIRED_CHARGER, None)
+
         self.car_plugged = kwargs.pop(CONF_CAR_PLUGGED, None)
         self.car_tracker = kwargs.pop(CONF_CAR_TRACKER, None)
         self.car_charge_percent_sensor = kwargs.pop(CONF_CAR_CHARGE_PERCENT_SENSOR, None)
@@ -140,6 +145,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.do_force_next_charge = False
 
         self._next_charge_target = None
+        self._next_charge_target_energy = None
         self.user_attached_charger_name : str | None = None
 
         self.default_charge_time: dt_time | None = None
@@ -185,8 +191,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
 
-    def car_efficiency_km_per_kwh_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+    def car_efficiency_km_per_kwh_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
         # Learn efficiency only when car is unplugged and we have both sensors
         if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
@@ -566,6 +571,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float=4*3600 ) -> float | None:
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
+    def get_car_charge_energy(self, time: datetime, tolerance_seconds: float=4*3600) -> float | None:
+        res = self.get_car_charge_percent(time, tolerance_seconds)
+        if res is None:
+            return None
+
+        if self.car_battery_capacity is None or self.car_battery_capacity == 0:
+            return None
+
+        try:
+            return float(res) * self.car_battery_capacity / 100.0
+        except TypeError:
+            return None
+
     def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
@@ -665,7 +683,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             result = efficiency_distance
 
         _LOGGER.debug(
-            f"get_car_estimated_range_km : Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
+            f"get_car_estimated_range_km: Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
 
         return result
 
@@ -685,20 +703,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return None
         return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
 
-
-
-    def get_car_current_capacity(self, time: datetime) -> float | None:
-        res = self.get_car_charge_percent(time)
-        if res is None:
-            return None
-
-        if self.car_battery_capacity is None or self.car_battery_capacity == 0:
-            return None
-
-        try:
-            return float(res) * self.car_battery_capacity / 100.0
-        except TypeError:
-            return None
 
     async def adapt_max_charge_limit(self, asked_percent):
 
@@ -1088,9 +1092,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return min_charge
 
-
-
-
     def interpolate_power_steps(self, do_recompute_min_charge=False, use_conf_values=False):
 
         if use_conf_values:
@@ -1166,6 +1167,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.can_force_a_charge_now():
             self.do_force_next_charge = True
 
+    def can_use_charge_percent_constraints(self):
+
+        if self.car_battery_capacity is None:
+            return False
+        if self.car_charge_percent_sensor is None:
+            return False
+
+        return True
+
+
     async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
 
         target_charge = asked_target_charge
@@ -1178,13 +1189,27 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return target_charge
 
-
-
-
     def get_car_next_charge_values_options(self):
-        time = datetime.now(pytz.UTC)
-        #current_soc = self.get_car_charge_percent(time)
-        #if current_soc is None:
+
+        if self.can_use_charge_percent_constraints():
+            return self.get_car_next_charge_values_options_percent()
+        else:
+            return self.get_car_next_charge_values_options_energy()
+
+    async def set_next_charge_target(self, value:int|float|str):
+
+        if self.can_use_charge_percent_constraints():
+            await self.set_next_charge_target_percent(value)
+        else:
+            await self.set_next_charge_target_energy(value)
+
+    def get_car_target_charge_option(self):
+        if self.can_use_charge_percent_constraints():
+            return self.get_car_target_charge_option_percent()
+        else:
+            return self.get_car_target_charge_option_energy()
+
+    def get_car_next_charge_values_options_percent(self):
         current_soc = 0
 
         options = set()
@@ -1217,11 +1242,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         options.sort()
 
         for i in range(len(options)):
-            options[i] = self.get_car_option_charge_from_value(options[i])
+            options[i] = self.get_car_option_charge_from_value_percent(options[i])
 
         return options
 
-    def get_car_option_charge_from_value(self, value:int|float):
+    def get_car_option_charge_from_value_percent(self, value:int|float):
         value = int(float(value))
         if value > 100:
             value = 100
@@ -1233,8 +1258,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return f"{value}%"
 
-
-    async def set_next_charge_target(self, value:int|float|str):
+    async def set_next_charge_target_percent(self, value:int|float|str):
 
         if isinstance(value, str):
             if "default" in value:
@@ -1260,8 +1284,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if await self.charger.do_run_check_load_activity_and_constraints(time):
                 self.home.force_next_solve()
 
-    def get_car_target_charge_option(self):
-        return self.get_car_option_charge_from_value(self.get_car_target_SOC())
+    def get_car_target_charge_option_percent(self):
+        return self.get_car_option_charge_from_value_percent(self.get_car_target_SOC())
 
     def get_car_target_SOC(self) -> int | float:
         if self._next_charge_target is None:
@@ -1271,6 +1295,60 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_minimum_ok_SOC(self) -> int | float:
         return self.car_minimum_ok_charge
 
+
+    def get_car_next_charge_values_options_energy(self):
+
+        max_battery_energy = self.car_battery_capacity
+        if max_battery_energy is None or max_battery_energy <= 0:
+            max_battery_energy = CAR_DEFAULT_CAPACITY
+
+        options = set()
+        options.add(max_battery_energy)
+
+        for v in range(0, max_battery_energy, 5000):
+            options.add(v)
+
+        options = list(options)
+        options.sort()
+
+        for i in range(len(options)):
+            options[i] = self.get_car_option_charge_from_value_energy(options[i])
+
+        return options
+
+    def get_car_option_charge_from_value_energy(self, value:int|float):
+        value = int(float(value))//1000 # kwh
+        return f"{value}kWh"
+
+    async def set_next_charge_target_energy(self, value:int|float|str):
+
+        if isinstance(value, str):
+            try:
+                value = value.strip("kWh")
+                value = float(value)*1000.0
+            except ValueError:
+                _LOGGER.error(f"Car {self.name} set_next_charge_target_energy: invalid value {value}")
+                return
+        else:
+            value = float(value) * 1000.0
+
+        self._next_charge_target_energy = value
+
+        if self.charger:
+            time = datetime.now(pytz.UTC)
+            if await self.charger.do_run_check_load_activity_and_constraints(time):
+                self.home.force_next_solve()
+
+    def get_car_target_charge_energy(self) -> int | float:
+        if self._next_charge_target_energy is None:
+            if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
+                self._next_charge_target_energy = self.car_battery_capacity
+            else:
+                self._next_charge_target_energy = CAR_DEFAULT_CAPACITY
+        return self._next_charge_target_energy
+
+    def get_car_target_charge_option_energy(self):
+        return self.get_car_option_charge_from_value_energy(self.get_car_target_charge_energy())
 
 
     @property
@@ -1293,6 +1371,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         options = []
         for charger in self.home._chargers:
+            if self.car_hard_wired_charger:
+                if charger is not self.car_hard_wired_charger:
+                    continue
             if charger.is_optimistic_plugged(time):
                 options.append(charger.name)
             else:
@@ -1339,3 +1420,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             await self.charger.user_clean_and_reset()
         await self.clean_and_reset()
 
+
+    @property
+    def current_constraint_current_energy(self):
+        if self.charger is None:
+            return None
+        return self.charger.current_constraint_current_energy

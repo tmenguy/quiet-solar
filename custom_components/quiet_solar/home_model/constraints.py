@@ -254,7 +254,7 @@ class LoadConstraint(object):
             return 100.0 * (self.current_value - init_val) / (target_val - init_val)
 
     def get_readable_next_target_date_string(self, for_small_standalone:bool=False) -> str:
-        if self.end_of_constraint == DATETIME_MAX_UTC or self.end_of_constraint is None:
+        if self.end_of_constraint == DATETIME_MAX_UTC:
             if for_small_standalone:
                 return "--:--"
             else:
@@ -949,7 +949,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             do_use_available_power_only = True
 
         has_a_proper_end_time = False
-        if self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC:
+        if self.end_of_constraint != DATETIME_MAX_UTC:
             if self.end_of_constraint <= time_slots[-1]:
                 has_a_proper_end_time = True
             else:
@@ -1417,7 +1417,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         if current_value >= (0.995*self.target_value): #0.5% tolerance
             return True
 
-        if self.end_of_constraint is not None and self.end_of_constraint <= time and current_value >= (0.9*self.target_value): # 10% tolerance if close to end
+        if self.end_of_constraint <= time and current_value >= (0.9*self.target_value): # 10% tolerance if close to end
             return True
 
         return False

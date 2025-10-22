@@ -86,6 +86,8 @@ async def async_setup_entry(
     if device:
 
         entities = create_ha_time(device)
+        for attached_device in device.get_attached_virtual_devices():
+            entities.extend(create_ha_time(attached_device))
 
         if entities:
             async_add_entities(entities)

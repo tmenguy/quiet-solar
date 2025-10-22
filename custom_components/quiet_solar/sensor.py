@@ -52,15 +52,49 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-    load_current_command = QSSensorEntityDescription(
-        key="car_soc_percentage",
-        translation_key=SENSOR_CAR_SOC_PERCENT,
-        native_unit_of_measurement=PERCENTAGE,
-        device_class=SensorDeviceClass.BATTERY,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda device, key: device.get_car_charge_percent(),
+    constraints_sensor = QSSensorEntityDescription(
+        key="current_constraint_current_energy",
+        translation_key=SENSOR_CONSTRAINT_SENSOR_ENERGY,
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        qs_is_none_unavailable=True
     )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
+    if device.can_use_charge_percent_constraints():
+        load_current_command = QSSensorEntityDescription(
+            key="car_soc_percentage",
+            translation_key=SENSOR_CAR_SOC_PERCENT,
+            native_unit_of_measurement=PERCENTAGE,
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            value_fn=lambda device, key: device.get_car_charge_percent(),
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+        # Estimated remaining range now
+        load_current_command = QSSensorEntityDescription(
+            key="car_estimated_range_km",
+            translation_key=SENSOR_CAR_ESTIMATED_RANGE_KM,
+            device_class=SensorDeviceClass.DISTANCE,
+            native_unit_of_measurement=UnitOfLength.KILOMETERS,
+            state_class=SensorStateClass.MEASUREMENT,
+            value_fn=lambda device, key: device.get_estimated_range_km(),
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+        # Autonomy to selected target SOC
+        load_current_command = QSSensorEntityDescription(
+            key="car_autonomy_to_target_soc_km",
+            translation_key=SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
+            device_class=SensorDeviceClass.DISTANCE,
+            native_unit_of_measurement=UnitOfLength.KILOMETERS,
+            state_class=SensorStateClass.MEASUREMENT,
+            value_fn=lambda device, key: device.get_autonomy_to_target_soc_km(),
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
 
     load_current_command = QSSensorEntityDescription(
@@ -78,29 +112,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-    # Estimated remaining range now
-    load_current_command = QSSensorEntityDescription(
-        key="car_estimated_range_km",
-        translation_key=SENSOR_CAR_ESTIMATED_RANGE_KM,
-        device_class=SensorDeviceClass.DISTANCE,
-        native_unit_of_measurement=UnitOfLength.KILOMETERS,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda device, key: device.get_estimated_range_km(),
-        qs_is_none_unavailable=True,
-    )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-    # Autonomy to selected target SOC
-    load_current_command = QSSensorEntityDescription(
-        key="car_autonomy_to_target_soc_km",
-        translation_key=SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
-        device_class=SensorDeviceClass.DISTANCE,
-        native_unit_of_measurement=UnitOfLength.KILOMETERS,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda device, key: device.get_autonomy_to_target_soc_km(),
-        qs_is_none_unavailable=True,
-    )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
     return entities
 
@@ -166,7 +178,6 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
             translation_key=SENSOR_CONSTRAINT_SENSOR_ENERGY,
             device_class=SensorDeviceClass.ENERGY,
             native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
-            entity_category=EntityCategory.DIAGNOSTIC,
             qs_is_none_unavailable=True
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
@@ -272,6 +283,8 @@ async def async_setup_entry(
     if device:
 
         entities = create_ha_sensor(device)
+        for attached_device in device.get_attached_virtual_devices():
+            entities.extend(create_ha_sensor(attached_device))
 
         if entities:
             async_add_entities(entities)

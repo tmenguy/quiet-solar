@@ -61,7 +61,7 @@ def create_ha_select_for_QSCar(device: QSCar):
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
 
 
-
+    # the selector will automatically be in kwh or % depending on teh car capabilities
     selected_car_description = QSSelectEntityDescription(
         key="selected_next_charge_limit_for_car",
         translation_key="selected_next_charge_limit_for_car",
@@ -129,6 +129,8 @@ async def async_setup_entry(
     if device:
 
         entities = create_ha_select(device)
+        for attached_device in device.get_attached_virtual_devices():
+            entities.extend(create_ha_select(attached_device))
 
         if entities:
             async_add_entities(entities)

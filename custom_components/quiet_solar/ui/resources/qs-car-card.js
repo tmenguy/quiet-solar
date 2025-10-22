@@ -83,7 +83,7 @@ class QsCarCard extends HTMLElement {
     const sRangeTarget = this._entity(e.range_target);
 
     const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
-    const soc = this._percent(sSoc?.state);
+    let soc = this._percent(sSoc?.state);
     const power = sPower?.state || "0";
     const target = selLimit?.state || "";
     const charging = (Number(power) > 50);
@@ -115,7 +115,48 @@ class QsCarCard extends HTMLElement {
       const m = String(txt).match(/(\d+)\s*%?/);
       return m ? Number(m[1]) : undefined;
     };
-    const targetPct = parseTargetPercent(target);
+
+    const parseTargetEnergy = (txt) => {
+      if (!txt) return undefined;
+      const m = String(txt).match(/([\d.]+)\s*kWh/i);
+      return m ? Number(m[1]) : undefined;
+    };
+
+    // Check if we're in energy mode
+    const useEnergyMode = e.use_energy_mode === "on";
+
+    // Font size for energy unit (kWh) relative to the number
+    const energyUnitFontSize = 0.4; // 40% of the number size
+
+    // Get target value based on mode
+    let targetPct, displayTargetValue, maxCircleValue, displaySocValue;
+    if (useEnergyMode) {
+      const targetEnergy = parseTargetEnergy(target);
+      // Get max energy from last option
+      const limitOptions = selLimit?.attributes?.options || [];
+      const lastOption = limitOptions.length > 0 ? limitOptions[limitOptions.length - 1] : "100kWh";
+      maxCircleValue = parseTargetEnergy(lastOption) || 100;
+
+      // Convert SOC from Wh to kWh and round
+      const socKwh = Math.round(Number(sSoc?.state || 0) / 1000);
+
+      // Calculate percentage for circle (0 to maxCircleValue)
+      const socPct = maxCircleValue > 0 ? (socKwh / maxCircleValue) * 100 : 0;
+      targetPct = targetEnergy != null && maxCircleValue > 0 ? (targetEnergy / maxCircleValue) * 100 : socPct;
+
+      displaySocValue = `${socKwh}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>`;
+
+      let toBeDisplayedvalue = Math.round(targetEnergy || socKwh)
+      displayTargetValue = `${toBeDisplayedvalue}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>`;
+
+      // Override soc for display
+      soc = Math.max(0, Math.min(100, socPct));
+    } else {
+      targetPct = parseTargetPercent(target);
+      maxCircleValue = 100;
+      displayTargetValue = `${Math.round(targetPct ?? soc)}%`;
+      displaySocValue = `${soc}%`;
+    }
 
     const formatHm = (mins) => {
       if (mins == null) return '';
@@ -141,7 +182,7 @@ class QsCarCard extends HTMLElement {
       .below .pill { width:100%; justify-content:center; }
       .below-line { width:300px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
-      .below-line.full > button { width: 100%; justify-content: center; position: relative; }
+      .below-line.full > button { width: 100%; justify-content: center, position: relative; }
       .below-line.full > button.align-left { justify-content: flex-start; }
       .below-line.full > button .btn-center { position: absolute; left: 50%; transform: translateX(-50%); }
       .below-line .time-row { justify-self: end; margin-top: 0; }
@@ -170,7 +211,7 @@ class QsCarCard extends HTMLElement {
       .ring .mini-grid.extra { row-gap:0; margin-top:2px; margin-bottom:6px; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:0; }
       .ring .mini-title { color: var(--secondary-text-color); font-weight:700; font-size: .7rem; letter-spacing:.2px; white-space: nowrap; }
-      .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height:1.1; white-space: pre-line; }
+      .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height: 1.1; white-space: pre-line; }
       .ring .mini-icon { --mdc-icon-size: 18px; color: var(--primary-text-color); }
       .ring .mini-range { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .mini-range-now { color: var(--primary-text-color); font-weight:700; font-size: .95rem; line-height:1; margin-top:0; transform: translateY(-8px); }
@@ -376,24 +417,26 @@ class QsCarCard extends HTMLElement {
             <div class="center">
               <div class="stack">
                 <div class="soc-block">
-                  <div class="pct" style="margin-bottom:0;">${soc}%</div>
-                  <div class="mini-range-now" aria-label="current range">${rangeNowStr}</div>
+                  <div class="pct" style="margin-bottom:0;">${displaySocValue}</div>
+                  ${useEnergyMode ? '' : `<div class="mini-range-now" aria-label="current range">${rangeNowStr}</div>`}
                 </div>
                 <div class="target-block">
                 <div class="mini-grid">
                   <div class="mini-title">${chargeIconLabel}</div>
-                  <div class="mini-title">Target SOC</div>
+                  <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
                   <ha-icon class="mini-icon" icon="${chargeIcon}"></ha-icon>
-                  <div id="target_value" class="target-value">${Math.round(handlePct)}%</div>
+                  <div id="target_value" class="target-value">${displayTargetValue}</div>
                   <div class="mini-value">${chargeTime}</div>
                 </div>
+                ${useEnergyMode ? '' : `
                 <div class="mini-grid extra">
                   <div></div>
                   <div><div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div></div>
                   <div></div>
                 </div>
+                `}
                 </div>
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div class="mini-title">Solar priority</div>
@@ -577,15 +620,37 @@ class QsCarCard extends HTMLElement {
       const p = String(percent);
       return options.find(o => o.startsWith(p) || o.startsWith(p+"%") || o.includes(`${p}%`));
     };
+
+    const findOptionByEnergy = (energy) => {
+      const options = selLimit?.attributes?.options || [];
+      const e = String(Math.round(energy));
+      return options.find(o => o.startsWith(e) || o.includes(`${e}kWh`) || o.includes(`${e} kWh`));
+    };
+
+    const parseEnergyFromOption = (opt) => {
+      const m = String(opt).match(/([\d.]+)\s*kWh/i);
+      return m ? Number(m[1]) : undefined;
+    };
+
     const parsePctFromOption = (opt) => {
       const m = String(opt).match(/(\d+)\s*%/);
       return m ? Number(m[1]) : undefined;
     };
+
     const allowedPercents = (selLimit?.attributes?.options || [])
       .map(parsePctFromOption)
       .filter(v => v != null && !Number.isNaN(v))
       .sort((a,b)=>a-b);
-    const allowedOrDefault = allowedPercents.length ? allowedPercents : [50,60,70,80,90,100];
+
+    const allowedEnergies = (selLimit?.attributes?.options || [])
+      .map(parseEnergyFromOption)
+      .filter(v => v != null && !Number.isNaN(v))
+      .sort((a,b)=>a-b);
+
+    const allowedOrDefault = useEnergyMode
+      ? (allowedEnergies.length ? allowedEnergies : [10,20,30,40,50,60,70,80,90,100])
+      : (allowedPercents.length ? allowedPercents : [50,60,70,80,90,100]);
+
     root.querySelectorAll('.chip[data-pct]')?.forEach(el => {
       el.addEventListener('click', () => {
         const pct = Number(el.getAttribute('data-pct'));
@@ -617,16 +682,21 @@ class QsCarCard extends HTMLElement {
         // Snap to available select options
         const rawPct = ((a - startDeg) / rangeDeg) * 100;
         const list = allowedOrDefault;
-        const pct = list.reduce((best, v) => Math.abs(v - rawPct) < Math.abs(best - rawPct) ? v : best, list[0]);
-        this._targetDragPct = pct;
+        const snapValue = list.reduce((best, v) => Math.abs(v - (useEnergyMode ? (rawPct / 100 * maxCircleValue) : rawPct)) < Math.abs(best - (useEnergyMode ? (rawPct / 100 * maxCircleValue) : rawPct)) ? v : best, list[0]);
+
+        // Store the percentage for the circle (0-100)
+        const displayPct = useEnergyMode ? (snapValue / maxCircleValue * 100) : snapValue;
+        this._targetDragPct = displayPct;
+        this._targetDragValue = snapValue; // Store actual value (percent or kWh)
         this._isInteractingTarget = true;
+
         // Update handle and target label without full render to keep it smooth
-        const angSnap = startDeg + (pct/100)*rangeDeg;
+        const angSnap = startDeg + (displayPct/100)*rangeDeg;
         const pos = polar(center.cx , center.cy, ringCirc, angSnap);
         handle.setAttribute('cx', pos.x.toFixed(2));
         handle.setAttribute('cy', pos.y.toFixed(2));
         const tv = this._root.getElementById('target_value');
-        if (tv) tv.textContent = pct + '%';
+        if (tv) tv.innerHTML = useEnergyMode ? `${Math.round(snapValue)}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>` : `${snapValue}%`;
       };
       const onUp = async (ev) => {
         if (ev) { ev.stopPropagation(); ev.preventDefault(); }
@@ -634,8 +704,8 @@ class QsCarCard extends HTMLElement {
         document.removeEventListener('touchmove', onMove);
         document.removeEventListener('mouseup', onUp);
         document.removeEventListener('touchend', onUp);
-        if (this._targetDragPct != null) {
-          const opt = findOptionByPercent(this._targetDragPct);
+        if (this._targetDragValue != null) {
+          const opt = useEnergyMode ? findOptionByEnergy(this._targetDragValue) : findOptionByPercent(this._targetDragValue);
           if (opt) await this._select(e.next_limit, opt);
           // optimistic: keep local until HA pushes the new state
           this._localTargetPct = this._targetDragPct;
@@ -645,6 +715,7 @@ class QsCarCard extends HTMLElement {
           }, 2000);
         }
         this._targetDragPct = null;
+        this._targetDragValue = null;
         // allow re-rendering now
         this._isInteractingTarget = false;
         handle.style.cursor = 'grab';
@@ -700,5 +771,3 @@ if (!window.customCards.find((c) => c.type === 'qs-car-card')) {
     description: 'Quiet Solar car control card',
   });
 }
-
-
