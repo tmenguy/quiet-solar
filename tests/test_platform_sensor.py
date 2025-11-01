@@ -104,11 +104,14 @@ def test_qs_base_sensor_init():
     """Test QSBaseSensor initialization."""
     mock_handler = MagicMock()
     mock_device = create_mock_device("test")
-    mock_description = MagicMock()
-    mock_description.key = "test_sensor"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.qs_is_none_unavailable = False
+
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_description = QSSensorEntityDescription(
+        key="test_sensor",
+        translation_key="test",
+        qs_is_none_unavailable=False,
+    )
     
     sensor = QSBaseSensor(mock_handler, mock_device, mock_description)
     
@@ -122,12 +125,17 @@ def test_qs_base_sensor_update_with_value():
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
     mock_device.test_value = 42.5
-    mock_description = MagicMock()
-    mock_description.key = "test_value"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.qs_is_none_unavailable = False
-    mock_description.value_fn = None
+
+
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_description = QSSensorEntityDescription(
+        key="test_value",
+        translation_key="test",
+        qs_is_none_unavailable=False,
+        value_fn=None
+    )
+
     
     sensor = QSBaseSensor(mock_handler, mock_device, mock_description)
     sensor.async_write_ha_state = MagicMock()
@@ -145,12 +153,15 @@ def test_qs_base_sensor_update_with_none_not_unavailable():
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
     mock_device.test_value = None
-    mock_description = MagicMock()
-    mock_description.key = "test_value"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.qs_is_none_unavailable = False
-    mock_description.value_fn = None
+
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_description = QSSensorEntityDescription(
+        key="test_value",
+        translation_key="test",
+        qs_is_none_unavailable=False,
+        value_fn=None
+    )
     
     sensor = QSBaseSensor(mock_handler, mock_device, mock_description)
     sensor.async_write_ha_state = MagicMock()
@@ -167,12 +178,16 @@ def test_qs_base_sensor_update_with_none_unavailable():
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
     mock_device.test_value = None
-    mock_description = MagicMock()
-    mock_description.key = "test_value"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.qs_is_none_unavailable = True
-    mock_description.value_fn = None
+
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_description = QSSensorEntityDescription(
+        key="test_value",
+        translation_key="test",
+        qs_is_none_unavailable=True,
+        value_fn=None
+    )
+
     
     sensor = QSBaseSensor(mock_handler, mock_device, mock_description)
     sensor.async_write_ha_state = MagicMock()
@@ -186,17 +201,21 @@ def test_qs_base_sensor_update_with_none_unavailable():
 
 def test_qs_base_sensor_update_with_value_fn():
     """Test sensor update using value function."""
+
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
     mock_handler = MagicMock()
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
-    mock_description = MagicMock()
-    mock_description.key = "computed_value"
-    mock_description.name = None
-    mock_description.translation_key = "test"
-    mock_description.qs_is_none_unavailable = False
-    mock_description.value_fn = lambda device, key: device.name.upper()
+
+    description = QSSensorEntityDescription(
+        key="computed_value",
+        translation_key="test",
+        qs_is_none_unavailable=False,
+        value_fn=lambda device, key: device.name.upper()
+    )
     
-    sensor = QSBaseSensor(mock_handler, mock_device, mock_description)
+    sensor = QSBaseSensor(mock_handler, mock_device, description)
     sensor.async_write_ha_state = MagicMock()
     
     test_time = datetime.now(pytz.UTC)

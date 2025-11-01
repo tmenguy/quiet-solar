@@ -75,7 +75,7 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
     qs_add_default_next_charge = QSButtonEntityDescription(
         key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
-        async_press=lambda x: x.device.add_default_charge(),
+        async_press=lambda x: x.device.user_add_default_charge(),
         is_available=lambda x: x.device.can_add_default_charge()
     )
 
@@ -98,7 +98,7 @@ def create_ha_button_for_QSCar(device: QSCar):
     qs_add_default_next_charge = QSButtonEntityDescription(
         key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
-        async_press=lambda x: x.device.add_default_charge(),
+        async_press=lambda x: x.device.user_add_default_charge(),
         is_available=lambda x: x.device.can_add_default_charge()
     )
 

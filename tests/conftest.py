@@ -104,7 +104,7 @@ class FakeBus:
     def __init__(self) -> None:
         self.listeners: Dict[str, List[Callable]] = {}
 
-    def async_listen(self, event_type: str, callback: Callable) -> Callable[[], None]:
+    def async_listen(self, event_type: str, callback: Callable, event_filter: Callable | None = None) -> Callable[[], None]:
         """Listen to events."""
         if event_type not in self.listeners:
             self.listeners[event_type] = []

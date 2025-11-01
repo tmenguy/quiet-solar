@@ -81,6 +81,7 @@ class QsCarCard extends HTMLElement {
     const sChargeTime = this._entity(e.charge_time);
     const sRangeNow = this._entity(e.range_now);
     const sRangeTarget = this._entity(e.range_target);
+    const sForecastedPerson = this._entity(e.forecasted_person);
 
     const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
     let soc = this._percent(sSoc?.state);
@@ -97,6 +98,7 @@ class QsCarCard extends HTMLElement {
         "Scheduled": "mdi:clock-outline",
         "Solar Priority": "mdi:solar-power",
         "Solar": "mdi:white-balance-sunny",
+        "Person Automated": "mdi:auto-fix",
     };
     const iconForChargeType = (str) => carChargeTypeIcons[str];
     const chargeIcon = iconForChargeType(sChargeType?.state);
@@ -176,6 +178,8 @@ class QsCarCard extends HTMLElement {
     const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); }
+      .forecasted-person { position: absolute; top: var(--pad); left: var(--pad); font-size: 0.9rem; font-weight: 600; color: var(--secondary-text-color); display: flex; align-items: center; gap: 6px; }
+      .forecasted-person ha-icon { --mdc-icon-size: 18px; }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:300px; margin-left:auto; margin-right:auto; }
@@ -363,9 +367,13 @@ class QsCarCard extends HTMLElement {
     const activeGradId = isFaulted ? gradFaultId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId));
     const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
+    const forecastedPersonStr = sForecastedPerson?.state;
+    const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
+
     this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''}">
         <style>${css}</style>
+        ${showForecastedPerson ? `<div class="forecasted-person"><ha-icon icon="mdi:account"></ha-icon><span>${forecastedPersonStr}</span></div>` : ''}
         <div class="card-title">${title}</div>
         <div class="top"></div>
 

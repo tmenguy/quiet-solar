@@ -3,7 +3,8 @@
     "abort": {
       "already_configured": "Entry already configured",
       "no_devices_found": "No devices found on the network",
-      "single_instance_allowed": "Already configured. Only a single configuration possible."
+      "single_instance_allowed": "Already configured. Only a single configuration possible.",
+      "no_person_entities": "No person entities found in Home Assistant. Please create a person first."
     },
     "error": {
       "already_configured_device": "Device is already configured",
@@ -19,6 +20,7 @@
           "solar": "Add a Solar Panel Plant",
           "charger": "Add an electrical vehicle charger",
           "car": "Add an electrical vehicle",
+          "person": "Add a Person",
           "pool": "Add a pool",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
@@ -218,6 +220,18 @@
           "charge_30": "Charge Power in W for a 30A charge (per phase), clear for default",
           "charge_31": "Charge Power in W for a 31A charge (per phase), clear for default",
           "charge_32": "Charge Power in W for a 32A charge (per phase), clear for default"
+        }
+      },
+      "person": {
+        "title": "Add a Person",
+        "description": "Track a person's location and driving patterns to predict EV charging needs",
+        "data": {
+          "name": "Name",
+          "person_person_entity": "Person entity to track",
+          "person_authorized_cars": "Authorized cars this person can drive",
+          "person_preferred_car": "Preferred car for this person",
+          "person_notification_time": "Time of day to send daily notification about car readiness",
+          "device_dashboard_section": "Dashboard section"
         }
       },
       "pool": {
@@ -485,6 +499,18 @@
           "charge_32": "[%key:component::quiet_solar::config::step::car::data::charge_32%]"
         }
       },
+      "person": {
+        "title": "[%key:component::quiet_solar::config::step::person::title%]",
+        "description": "[%key:component::quiet_solar::config::step::person::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::person::data::name%]",
+          "person_person_entity": "[%key:component::quiet_solar::config::step::person::data::person_person_entity%]",
+          "person_authorized_cars": "[%key:component::quiet_solar::config::step::person::data::person_authorized_cars%]",
+          "person_preferred_car": "[%key:component::quiet_solar::config::step::person::data::person_preferred_car%]",
+          "person_notification_time": "[%key:component::quiet_solar::config::step::person::data::person_notification_time%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]"
+        }
+      },
       "pool": {
         "title": "[%key:component::quiet_solar::config::step::pool::title%]",
         "description": "[%key:component::quiet_solar::config::step::pool::description%]",
@@ -570,6 +596,12 @@
       },
       "qs_car_charge_time": {
         "name": "Charge ETA"
+      },
+      "qs_car_forecast_person_name": {
+        "name": "Forecasted Person"
+      },
+      "qs_car_forecast_person_full": {
+        "name": "Forecast for Person"
       },
       "qs_car_estimated_range_km": {
         "name": "Estimated Range (km)"

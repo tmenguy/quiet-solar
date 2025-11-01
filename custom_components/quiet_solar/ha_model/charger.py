@@ -97,16 +97,16 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
-    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED,\
+    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, \
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
     FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
     CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO, \
     CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_FAULTED, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, \
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
     CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
-    CONF_TYPE_NAME_QSCar, DEVICE_TYPE, CAR_HARD_WIRED_CHARGER
+    CONF_TYPE_NAME_QSCar, DEVICE_TYPE, CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
-    MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
+    MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
@@ -125,7 +125,7 @@ CHARGER_MIN_REBOOT_DURATION_S = 120
 CHARGER_STATE_REFRESH_INTERVAL_S = 14
 CHARGER_ADAPTATION_WINDOW_S = 45
 CHARGER_CHECK_STATE_WINDOW_S = 15
-CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 60
+CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 120
 
 CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S = 5 * 60 # to be sure the car is not asking for current anymore
 CHARGER_LONG_CONNECTION_S = 60 * 10
@@ -1632,7 +1632,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             CONF_CALENDAR: self.calendar,
             CONF_DEVICE_EFFICIENCY: self.efficiency,
             CONF_CAR_IS_INVITED: True,
-            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
             CAR_HARD_WIRED_CHARGER: self
         }
 
@@ -1668,11 +1667,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._power_steps = []
 
+        self._auto_constraints_cleand_at_user_reset : list[LoadConstraint] = []
+
 
 
     async def user_clean_and_reset(self):
+
+        # find any automated constraint
+        time = datetime.now(pytz.UTC)
+
+        auto_constraints = []
+        for ct in self._constraints:
+            if ct.is_constraint_active_for_time_period(time):
+                if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param and ct.load_info is not None and "person" in ct.load_info and ct.from_user is False:
+                    auto_constraints.append(ct)
+
         await super().user_clean_and_reset()
         await self.clean_and_reset()
+
+        self._auto_constraints_cleand_at_user_reset = auto_constraints
 
     @property
     def charger_group(self) -> QSChargerGroup:
@@ -2104,6 +2117,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def reset_boot_data(self):
         self._boot_time = None
         self._boot_car = None
+        self._boot_time_adjusted = None
 
     def reset(self):
         _LOGGER.info(f"Charger reset {self.name}")
@@ -2112,6 +2126,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._reset_state_machine()
         self._asked_for_reboot_at_time = None
         self.qs_bump_solar_priority = False
+        self._auto_constraints_cleand_at_user_reset = []
         self.reset_boot_data()
 
     def _reset_state_machine(self):
@@ -2443,9 +2458,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self.car.default_charge_time = value
 
 
-    async def add_default_charge(self):
+    async def user_add_default_charge(self):
         if self.can_add_default_charge():
-            await self.car.add_default_charge()
+            await self.car.user_add_default_charge()
 
     def can_add_default_charge(self) -> bool:
         if self.car is not None and self.car.can_add_default_charge():
@@ -2469,6 +2484,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._boot_time = time
         self._boot_car = None
+        self._boot_time_adjusted = None
 
         old_connected_car_name = None
         if self._constraints is not None and len(self._constraints) > 0:
@@ -2511,6 +2527,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         for ct in to_be_kept:
             self.push_live_constraint(time, ct)
 
+        if len(to_be_kept) > 0 and self._boot_car:
+            # force the car!
+            self._boot_car.user_attached_charger_name = self.name
+            self.user_attached_car_name = self._boot_car.name
+
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
@@ -2536,16 +2557,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if (time - self._boot_time).total_seconds() < 2*CHARGER_CHECK_STATE_WINDOW_S:
                 # do nothing until we do have a proper window of time to check the charger state
                 return False
-            else:
-                # we can check the states on the charger and cars ... but prepare a bit for the constraints that should be kept
-                # to know on which car we should be for example
 
-                # by construction if we are here : not car could have been attached to the charger
-                # get best car would use the car coming from the boot data
-                pass
+            # we can check the states on the charger and cars ... but prepare a bit for the constraints that should be kept
+            # to know on which car we should be for example
+
+            # by construction if we are here : not car could have been attached to the charger
+            # get best car would use the car coming from the boot data
+            if self._boot_time_adjusted is None:
+                self._boot_time_adjusted = time
 
             # after a time th eboot time data is deprecated : kill it
-            if (time - self._boot_time).total_seconds() < CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
+            if (time - self._boot_time_adjusted).total_seconds() > CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
                 self.reset_boot_data()
 
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
@@ -2580,19 +2602,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.detach_car() # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
-                    self.clean_constraints_for_load_param(time, load_param=self.car.name, for_full_reset=False)
+                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name, for_full_reset=False)
 
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
                 _LOGGER.info(f"check_load_activity_and_constraints: plugging car {best_car.name} not connected: reset and attach car")
-                self.clean_constraints_for_load_param(time, load_param=best_car.name, for_full_reset=True)
+                self.clean_constraints_for_load_param_and_info(time, load_param=best_car.name, for_full_reset=True)
                 self.attach_car(best_car, time)
 
+            is_person_covered, next_usage_time, person_min_target_charge, person = await self.car.get_best_person_next_need(time)
+
+            if person is not None:
+                _LOGGER.warning(f"==> TODO REMOVE RESET plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
+                person = None
+                is_person_covered = None
 
 
-            # we have to check if teh car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
-            ConstraintClass = None
+            # we have to check if the car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
             is_target_percent = True
             if self.car.can_use_charge_percent_constraints():
                 ConstraintClass = MultiStepsPowerLoadConstraintChargePercent
@@ -2612,13 +2639,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 car_current_charge_value = 0
                 car_initial_value = 0
 
-
             realized_charge_target = None
             # add a constraint ... for now just fill the car as much as possible
             force_constraint = None
+            user_timed_constraint = None
+            car_charge_mandatory = None
+            car_charge_person = None
 
             # in case a user pressed the button ....clean everything and force the charge
             if self.car.do_force_next_charge is True:
+
                 do_force_solve = True
                 self.reset_load_only() # cleanup any previous constraints to force this one!
 
@@ -2661,63 +2691,190 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if force_constraint is not None:
                 # reset the next charge force state
                 self.car.do_force_next_charge = False
+                self.car.do_next_charge_time = None
                 realized_charge_target = target_charge
             else:
-                # if we do have a last completed one it means there was no plug / un plug or reset in between
-                # in case of a car schedule we take the start of the event as the target
-                start_time, end_time = await self.car.get_next_scheduled_event(time, after_end_time=True)
-                if start_time is not None and time > start_time:
-                    # not need at all to push any time constraint ... we passed it
-                    _LOGGER.info(
-                        f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time} end:{end_time} time:{time}")
-                    start_time = None
 
-                if self._last_completed_constraint is not None:
+                user_timed_constraint = None
+                # check for a possible user timed constraint
+                if self.car.do_next_charge_time is not None:
 
-                    do_check_timed_constraint = False
-                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value, target_charge=target_charge,is_target_percent=is_target_percent)
+                    # the constraint will be launched and the start time was the one pushed here : reset it
+                    do_force_solve = True
+                    self.reset_load_only() # cleanup any previous constraints to force this one!
 
-                    if is_car_charged is False:
-                        do_check_timed_constraint = True
-                    elif start_time is not None:
-                        if time - self._last_completed_constraint.end_of_constraint > timedelta(hours=12) or start_time - time < timedelta(hours=8):
-                            # we may want to try to push a time based constraint that may happen sooner just in case ...
-                            do_check_timed_constraint = True
-
-                    if do_check_timed_constraint is False:
-                        if start_time is not None:
-                            _LOGGER.info(
-                                f"check_load_activity_and_constraints: plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
-                        start_time = None
-                    else:
-                        # we will check for a time constraint here if there is one (ie start_time is not None)
-                        # a time constraint will be created, else we will create a filler one at the end
-                        # in the "if realized_charge_target is None" pass below
-                        pass
-
-                # only add it if it is "after" the end of the forced constraint
-                if start_time is not None:
-
-                    car_charge_mandatory = ConstraintClass(
+                    user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                         time=time,
                         load=self,
                         load_param=self.car.name,
-                        from_user=False,
-                        end_of_constraint=start_time,
+                        from_user=True,
+                        end_of_constraint=self.car.do_next_charge_time,
                         initial_value=car_initial_value,
                         target_value=target_charge,
                         power_steps=self._power_steps,
                         support_auto=True
                     )
 
-                    if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
+                    if self.push_live_constraint(time, user_timed_constraint):
                         _LOGGER.info(
-                            f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                            f"check_load_activity_and_constraints: plugged car {self.car.name} pushed user mandatory constraint {user_timed_constraint.name}")
                         do_force_solve = True
 
+                else:
+                    for ct in self._constraints:
+                        if ct.is_constraint_active_for_time_period(time):
+                            if ct.from_user:
+                                user_timed_constraint = ct
+                                ct.reset_load_param(self.car.name)
+                                if user_timed_constraint.target_value != target_charge:
+                                    user_timed_constraint.target_value = target_charge
+                                    do_force_solve = True
+                                    # update the constraints to follow the new target
+                                    self.set_live_constraints(time, self._constraints)
+                                break
+
+                if user_timed_constraint:
+                    self.car.do_next_charge_time = None
                     realized_charge_target = target_charge
+                else:
+                    # now see if we can have a schedule constraint from the agenda, not overridden by the time based user one above
+                    # in case of a car schedule we take the start of the event as the target
+                    start_time, _ = await self.car.get_next_scheduled_event(time, after_end_time=True)
+
+                    if start_time is not None and time > start_time:
+                        # not need at all to push any time constraint ... we passed it
+                        _LOGGER.info(
+                            f"check_load_activity_and_constraints: plugged car {self.car.name} NOT pushing time mandatory constraint: {start_time}  time:{time}")
+                        start_time = None
+
+                    # if we do have a last completed one it means there was no plug / un plug or reset in between
+                    if self._last_completed_constraint is not None:
+
+                        do_kill_possible_time_constraint = True
+                        is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value, target_charge=target_charge, is_target_percent=is_target_percent)
+
+                        if is_car_charged is False:
+                            do_kill_possible_time_constraint = False
+                        elif start_time is not None:
+                            # the car seems to have been charged, but long ago enough or the next start time is close
+                            if time - self._last_completed_constraint.end_of_constraint > timedelta(hours=12) or start_time - time < timedelta(hours=8):
+                                # we may want to try to push a time based constraint that may happen sooner just in case ...
+                                do_kill_possible_time_constraint = False
+
+                        if do_kill_possible_time_constraint:
+                            if start_time is not None:
+                                _LOGGER.info(
+                                    f"check_load_activity_and_constraints: plugged car {self.car.name} removed a time constraint: {start_time} completed ct end: {self._last_completed_constraint.end_of_constraint} time:{time} is_car_charged:{is_car_charged}")
+                            start_time = None
+
+                    if start_time is not None:
+
+                        car_charge_mandatory = ConstraintClass(
+                            total_capacity_wh=self.car.car_battery_capacity,
+                            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                            time=time,
+                            load=self,
+                            load_param=self.car.name,
+                            from_user=False,
+                            end_of_constraint=start_time,
+                            initial_value=car_initial_value,
+                            target_value=target_charge,
+                            power_steps=self._power_steps,
+                            support_auto=True
+                        )
+
+                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
+                            _LOGGER.info(
+                                f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                            do_force_solve = True
+
+                        realized_charge_target = target_charge
+
+            # now there is a nice intermediate one : check if we can add an automatic constraint based on a person usage
+            # for the car to have some minimum charge when needed
+            # first check it is possible to add it ... and if it was not added  then removed before because of and end user reset
+            if is_target_percent and user_timed_constraint is None and force_constraint is None:
+
+                # first check (and remove) any previous person based constraint ... if different from the current one
+                # we found and removed a previous person based constraint, or anything not as it should be there
+                if person is not None and is_person_covered is not None and is_person_covered is False:
+
+                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                   load_info={"person": person.name},
+                                                                   for_full_reset=False)
+
+                    for old_ct in self._auto_constraints_cleand_at_user_reset:
+                        if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
+                            if abs(old_ct.end_of_constraint - next_usage_time) < timedelta(minutes=15) and abs(old_ct.target_value - person_min_target_charge) < 3.0:
+                                # ok found one ... that was reset by the user ... we should not add it back
+                                is_person_covered = True
+                                break
+
+
+                do_remove_all_person_constraints = True
+
+                if person is not None and is_person_covered is not None and is_person_covered is False and next_usage_time is not None and person_min_target_charge and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
+
+                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value,
+                                                            target_charge=person_min_target_charge,
+                                                            is_target_percent=is_target_percent)
+
+                    if is_car_charged is False:
+                        do_remove_all_person_constraints = False
+
+                        # we should check if there is not an existing person constraint and replace it by this one?
+                        target_charge = person_min_target_charge
+
+
+                        for ct in self._constraints:
+                            if ct.is_constraint_active_for_time_period(time):
+                                if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param == self.car.name and ct.load_info is not None and ct.load_info.get("person") == person.name:
+                                    # ok found one ... check if it is ok
+                                    if ct.target_value != target_charge or ct.end_of_constraint != next_usage_time:
+                                        # we now remove it and re-add it below
+                                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                                       load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                                                                                       for_full_reset=False)
+                                    else:
+                                        car_charge_person = ct
+                                    break
+
+
+
+                        if car_charge_person is None:
+                            # ok we do know we want to add a constraint to have at least this charge at this time
+                            await self.car.set_next_charge_target_percent(target_charge, do_update_charger=False)
+
+                            car_charge_person = ConstraintClass(
+                                total_capacity_wh=self.car.car_battery_capacity,
+                                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                time=time,
+                                load=self,
+                                load_param=self.car.name,
+                                load_info={"person": person.name},
+                                from_user=False,
+                                initial_value=car_initial_value,
+                                target_value=target_charge,
+                                power_steps=self._power_steps,
+                                support_auto=True
+                            )
+
+                            if self.push_live_constraint(time, car_charge_person):
+                                _LOGGER.info(
+                                    f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}")
+                                do_force_solve = True
+
+                        realized_charge_target = target_charge
+
+                if do_remove_all_person_constraints:
+                    # we should remove ALL previous person based constraints from this car
+                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                   load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                                                                   for_full_reset=False)
+
+
 
             if realized_charge_target is None or (is_target_percent and realized_charge_target < self.car.car_default_charge):
 
@@ -3267,6 +3424,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     if ct.end_of_constraint < DATETIME_MAX_UTC:
                         type = CAR_CHARGE_TYPE_SCHEDULE
+                        if ct.load_info and "person" in ct.load_info:
+                            type = CAR_CHARGE_TYPE_PERSON_AUTOMATED
                     elif self.compute_is_before_battery(ct, time):
                         type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
                     else:
@@ -3278,7 +3437,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return type
 
-    async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> (bool | None, bool, datetime | None):
+    async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> tuple[bool | None, bool, datetime | None]:
 
         await self._do_update_charger_state(time)
 

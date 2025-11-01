@@ -72,6 +72,9 @@ def map_section_selected_name_in_section_list(section_stored_name: str, section_
 
 
 class AbstractDevice(object):
+
+    conf_type_name = "unknown"
+
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
         self._enabled = True
@@ -87,6 +90,11 @@ class AbstractDevice(object):
 
         self._conf_dashboard_section_option = kwargs.pop(CONF_DEVICE_DASHBOARD_SECTION, None)
 
+        self._device_type = device_type
+
+        # device_type is a clever property ... giving back a proper type
+        device_type = self.device_type
+
         if self._conf_dashboard_section_option is None and device_type is not None:
             self._conf_dashboard_section_option = LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.get(type)
 
@@ -94,7 +102,7 @@ class AbstractDevice(object):
             self._conf_dashboard_section_option = DASHBOARD_NO_SECTION
 
         self.name = name
-        self._device_type = device_type
+
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
@@ -116,11 +124,6 @@ class AbstractDevice(object):
         if self.home:
             return self.home.is_off_grid()
         return False
-
-    def device_post_home_init(self, time:datetime):
-        """This method is called after the constraints have been loaded from storage.
-        It can be overridden by subclasses to perform additional initialization."""
-        pass
 
     @property
     def dashboard_section(self) -> str | None:
@@ -217,9 +220,14 @@ class AbstractDevice(object):
 
     @property
     def device_type(self):
-        if self._device_type is None:
-            return self.__class__.__name__
-        return self._device_type
+
+        if self._device_type is not None:
+            return self._device_type
+
+        if hasattr(self.__class__, "conf_type_name"):
+            return self.__class__.conf_type_name
+
+        return self.__class__.__name__
 
 
 
@@ -269,6 +277,7 @@ class AbstractDevice(object):
         return self.device_id
 
     #it is a property as it has to be overchargeable (ex: charger for its car)
+    # has to be > 1.0
     @property
     def efficiency_factor(self):
         return 100.0 / self.efficiency
@@ -665,8 +674,22 @@ class AbstractLoad(AbstractDevice):
         self._last_completed_constraint = None
         self._last_pushed_end_constraint_from_agenda = None
 
+    def _match_ct(self, ct:LoadConstraint, load_param:str|None, load_info:dict | None = None) -> bool:
+        if ct.load_param != load_param:
+            return False
+        if not load_info:
+            return True
+        if not ct.load_info:
+            return True
+        for k, v in load_info.items():
+            if k in ct.load_info and ct.load_info[k] != v:
+                return False
+        return True
 
-    def clean_constraints_for_load_param(self, time:datetime, load_param: str | None, for_full_reset=True):
+    def clean_constraints_for_load_param_and_info(self, time:datetime, load_param: str | None, load_info:dict | None = None, for_full_reset=True) -> bool:
+
+        """ Clean constraints that do not match the load_param and load_info the load info matching is loose : ie : it is only NOT matching if their is a common key with a different value """
+
         existing_constraints = []
         last_completed_constraint = None
         last_pushed_end_constraint_from_agenda = None
@@ -675,7 +698,7 @@ class AbstractLoad(AbstractDevice):
 
         if self._last_pushed_end_constraint_from_agenda is not None:
 
-            if self._last_pushed_end_constraint_from_agenda.load_param == load_param:
+            if self._match_ct(self._last_pushed_end_constraint_from_agenda, load_param, load_info):
                 # we have a last pushed end constraint that is still valid
                 if for_full_reset:
                     _LOGGER.info(
@@ -686,7 +709,7 @@ class AbstractLoad(AbstractDevice):
 
 
         if self._last_completed_constraint is not None:
-            if self._last_completed_constraint.load_param == load_param:
+            if self._match_ct(self._last_completed_constraint, load_param, load_info):
                 # we have a last completed constraint that is still valid
                 if for_full_reset:
                     _LOGGER.info(
@@ -698,7 +721,7 @@ class AbstractLoad(AbstractDevice):
 
         for ct in self._constraints:
 
-            if ct.load_param != load_param:
+            if self._match_ct(ct, load_param, load_info) is False:
                 # this constraint is not compatible with the load_param we are looking for
                 found_one_bad = True
                 continue
@@ -711,7 +734,7 @@ class AbstractLoad(AbstractDevice):
         if found_one_bad is False and for_full_reset is False:
             # no need to reset, we have all the constraints we need
             _LOGGER.info(f"clean_constraints_for_load_param: No bad constraint found for {load_param}, no reset needed")
-            return
+            return False
 
         if for_full_reset:
             self.reset()
@@ -723,9 +746,12 @@ class AbstractLoad(AbstractDevice):
             self._last_completed_constraint = last_completed_constraint
 
         self._last_pushed_end_constraint_from_agenda = last_pushed_end_constraint_from_agenda
+
         for ct in existing_constraints:
             if ct is not None:
                 self.push_live_constraint(time, ct)
+
+        return True
 
 
     def reset(self):
@@ -928,9 +954,11 @@ class AbstractLoad(AbstractDevice):
 
         if constraint is not None:
 
+            # use the requested_target_value instead of teh real target_value, as it could have been updated
+            # (by a TimeConstraint for example) and making this test erroneous
             if (self._last_completed_constraint is not None and
                 self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
-                self._last_completed_constraint.target_value == constraint.target_value):
+                self._last_completed_constraint.requested_target_value == constraint.requested_target_value):
                 _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date and same target value as last completed one")
                 return False
 
@@ -1145,7 +1173,7 @@ class TestLoad(AbstractLoad):
         self.min_p = min_p
         self.max_p = max_p
 
-    def get_min_max_power(self) -> (float, float):
+    def get_min_max_power(self) -> tuple[float, float]:
         return self.min_p, self.max_p
 
 def align_time_series_and_values(
@@ -1313,7 +1341,7 @@ def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datet
 
     return time_serie[start_idx:end_idx + 1]
 
-def get_value_from_time_series(time_series, time: datetime) -> tuple[datetime | None, str | float | None, bool, int]:
+def get_value_from_time_series(time_series, time: datetime, interpolation_operation : Callable[[Any, Any, datetime], Any]| None = None) -> tuple[datetime | None, str | float | None, bool, int]:
 
     # find the closest time in the time serie
     if time_series is None or len(time_series) == 0:
@@ -1339,12 +1367,31 @@ def get_value_from_time_series(time_series, time: datetime) -> tuple[datetime | 
             res = time_series[idx]
             res_idx = idx
         else:
-            if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
-                res = time_series[idx - 1]
-                res_idx = idx - 1
+            # we have multiple scenarios here : we can take the closest one or compute an interpolated value
+            if interpolation_operation is None:
+                if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
+                    res = time_series[idx - 1]
+                    res_idx = idx - 1
+                else:
+                    res =  time_series[idx]
+                    res_idx = idx
             else:
-                res =  time_series[idx]
-                res_idx = idx
+                v1 = time_series[idx - 1]
+                v2 = time_series[idx]
+
+                if v1[1] is None and v2[1] is None:
+                    res = (None, None)
+                    res_idx = -1
+                elif v1[1] is None:
+                    res = v2
+                    res_idx = idx
+                elif v2[1] is None:
+                    res = v1
+                    res_idx = idx - 1
+                else:
+                    res = interpolation_operation(v1, v2, time)
+                    res_idx = idx - 1
+
 
     return res[0], res[1], res[0] == time, res_idx
 

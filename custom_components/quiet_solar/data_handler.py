@@ -40,9 +40,11 @@ class QSDataHandler:
     def _add_device(self, config_entry: ConfigEntry ):
         type = config_entry.data.get(DEVICE_TYPE)
         d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
+        if d is None:
+            _LOGGER.error("Could not create device: %s", config_entry.entry_id)
+            return None
         self.hass.data[DOMAIN][config_entry.entry_id] = d
-        if d.qs_enable_device or type == QSHome.conf_type_name:
-            self.home.add_device(d)
+        self.home.add_device(d)
 
         return d
 
@@ -60,7 +62,8 @@ class QSDataHandler:
                 config_entry_to_forward = [self.home]
                 for c_c_entry in self._cached_config_entries:
                     c_d = self._add_device(c_c_entry)
-                    config_entry_to_forward.append(c_d)
+                    if c_d is not None:
+                        config_entry_to_forward.append(c_d)
                 self._cached_config_entries = []
             else:
                 self._cached_config_entries.append(config_entry)
@@ -76,6 +79,8 @@ class QSDataHandler:
                 await self.hass.config_entries.async_forward_entry_setups(
                     d.config_entry, platforms
                 )
+
+            d.config_entry_initialized = True
 
             # config_entry.async_on_unload(d.config_entry.add_update_listener(entry_update_listener))
 

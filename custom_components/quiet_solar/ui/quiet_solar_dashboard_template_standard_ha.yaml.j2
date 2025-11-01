@@ -20,6 +20,12 @@ views:
       {%-    set calendars_list.calendars = calendars_list.calendars + [device_calendar] %}
       {%- endif %}
       - type: grid
+        {%- if device.device_type == "car" and device.car_is_invited and device.ha_entities.get("car_charge_type") %}
+        visibility:
+          - condition: state
+            entity: {{ device.ha_entities.get("car_charge_type").entity_id }}
+            state_not: "Not Plugged"
+        {%- endif %}
         cards:
           - type: entities
             entities:
@@ -74,12 +80,20 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- if device.car_is_invited or not device.can_use_charge_percent_constraints() %}
+              {%- set ha_entity = device.ha_entities.get("current_constraint_current_energy") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- else %}
               {%- set sensor_id = device.car_charge_percent_sensor %}
               {%- set ha_entity = device.ha_entities.get("car_soc_percentage") %}
               {%- if sensor_id != None and ha_entity != None %}
               {%-    set badges_list.badges = badges_list.badges + [(sensor_id, device.name)] %}
               {{ "- entity: " + sensor_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("best_power_value") %}
               {%- if  ha_entity != None %}
@@ -105,6 +119,10 @@ views:
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("forecast_person_full") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_clean_and_reset") %}
               {%- if  ha_entity != None %}

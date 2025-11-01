@@ -33,6 +33,7 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
+from homeassistant.components.person import DOMAIN as PERSON_DOMAIN
 
 from . import async_reload_quiet_solar
 from .entity import LOAD_NAMES
@@ -62,7 +63,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
     DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED, CONF_CAR_ODOMETER_SENSOR, \
-    CONF_CAR_ESTIMATED_RANGE_SENSOR
+    CONF_CAR_ESTIMATED_RANGE_SENSOR, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
+    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -74,6 +76,7 @@ from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
 from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
+from .ha_model.person import QSPerson
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,7 @@ LOAD_TYPES_MENU = {
     QSSolar.conf_type_name:None,
     "charger": {QSChargerOCPP.conf_type_name: None, QSChargerGeneric.conf_type_name:None}, #QSChargerWallbox.conf_type_name:None
     QSCar.conf_type_name:None,
+    QSPerson.conf_type_name:None,
     QSPool.conf_type_name:None,
     QSOnOffDuration.conf_type_name:None,
     QSClimateDuration.conf_type_name:None,
@@ -1091,6 +1095,96 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     )
 
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(
+            step_id=TYPE,
+            data_schema=schema
+        )
+
+    async def async_step_person(self, user_input=None):
+        """Configure a QSPerson instance."""
+        TYPE = QSPerson.conf_type_name
+
+        if user_input is not None:
+            # Process user input
+            user_input[DEVICE_TYPE] = TYPE
+            r = await self.async_entry_next(user_input, TYPE)
+            return r
+
+        sc_dict = self.get_common_schema(type=TYPE)
+
+        # Person entity selector
+        person_entities = [
+            ent.entity_id
+            for ent in self.hass.states.async_all([PERSON_DOMAIN])
+        ]
+
+        if len(person_entities) > 0:
+            self.add_entity_selector(sc_dict, CONF_PERSON_PERSON_ENTITY, True, entity_list=person_entities)
+        else:
+            # No person entities available
+            return self.async_abort(reason="no_person_entities")
+
+        # Get list of available cars from the data handler
+        # Exclude invited cars (guest cars) as they shouldn't be assigned to specific people
+        data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+        car_options = []
+        if data_handler and data_handler.home:
+            cars = getattr(data_handler.home, '_cars', [])
+            # Only include cars that are not invited (guest) cars
+            car_options = [car.name for car in cars if not getattr(car, 'car_is_invited', False)]
+
+        # Authorized cars - multi-select
+        if car_options:
+            default_authorized = self.config_entry.data.get(CONF_PERSON_AUTHORIZED_CARS, [])
+            sc_dict.update({
+                vol.Optional(CONF_PERSON_AUTHORIZED_CARS, description={"suggested_value": default_authorized}):
+                    selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=car_options,
+                            multiple=True,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+            })
+
+            # Preferred car - single select from authorized cars
+            default_preferred = self.config_entry.data.get(CONF_PERSON_PREFERRED_CAR)
+            if default_preferred:
+                sc_dict.update({
+                    vol.Optional(CONF_PERSON_PREFERRED_CAR, description={"suggested_value": default_preferred}):
+                        selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=car_options,
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        )
+                })
+            else:
+                sc_dict.update({
+                    vol.Optional(CONF_PERSON_PREFERRED_CAR):
+                        selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=car_options,
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        )
+                })
+
+        # Notification time - time selector for daily notification
+        default_time = self.config_entry.data.get(CONF_PERSON_NOTIFICATION_TIME)
+        if default_time:
+            sc_dict.update({
+                vol.Optional(CONF_PERSON_NOTIFICATION_TIME, description={"suggested_value": default_time}):
+                    selector.TimeSelector()
+            })
+        else:
+            sc_dict.update({
+                vol.Optional(CONF_PERSON_NOTIFICATION_TIME):
+                    selector.TimeSelector()
+            })
 
         schema = vol.Schema(sc_dict)
 

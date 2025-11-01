@@ -6,6 +6,9 @@ from operator import itemgetter
 from typing import Mapping, Any, Callable
 
 import pytz
+from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.models import LazyState
+from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform, \
     ATTR_ENTITY_ID, UnitOfElectricCurrent, UnitOfLength
 from homeassistant.config_entries import ConfigEntry
@@ -36,8 +39,9 @@ UNAVAILABLE_STATE_VALUES = [STATE_UNKNOWN, STATE_UNAVAILABLE]
 
 _LOGGER = logging.getLogger(__name__)
 
-CALENDAR_MANAGED_STRING_ID = "[Quiet Solar]"
-CALENDAR_MANAGED_STRING = f"{CALENDAR_MANAGED_STRING_ID} Managed by Quiet Solar (do not edit)"
+# NO MORE USED
+# CALENDAR_MANAGED_STRING_ID = "[Quiet Solar]"
+# CALENDAR_MANAGED_STRING = f"{CALENDAR_MANAGED_STRING_ID} Managed by Quiet Solar (do not edit)"
 
 
 def compute_energy_Wh_rieman_sum(
@@ -193,6 +197,26 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
     # do not change units
     return val
 
+async def load_from_history(hass, entity_id:str, start_time: datetime, end_time: datetime, no_attributes=True) -> list[LazyState]:
+
+    if hass is None:
+        return []
+
+    def load_history_from_db(start_time: datetime, end_time: datetime) -> list:
+        """Load history from the database."""
+        return state_changes_during_period(
+            hass,
+            start_time,
+            end_time,
+            entity_id,
+            include_start_time_state=True,
+            no_attributes=no_attributes,
+        ).get(entity_id, [])
+
+    states : list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(load_history_from_db, start_time, end_time)
+    # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
+    return states
+
 MAX_STATE_HISTORY_S = 7200
 
 class HADeviceMixin:
@@ -237,6 +261,11 @@ class HADeviceMixin:
 
         self.config_entry = config_entry
 
+        if config_entry is None:
+            self.config_entry_initialized = True
+        else:
+            self.config_entry_initialized = False
+
         self._entity_probed_state_is_numerical: dict[str, bool] = {}
         self._entity_probed_state_attached_unfiltered: dict[str, bool] = {}
         self._entity_probed_state_conversion_fn: dict[str, Callable[[float, dict], float] | None] = {}
@@ -270,10 +299,50 @@ class HADeviceMixin:
 
         self._computed_dashboard_section = None
 
+        self._entities_to_fill_from_history = set()
+
+
+
+    async def _async_bootstrap_from_history(self, entity_id:str, time: datetime):
+
+        end_time = time
+        start_time = end_time - timedelta(seconds=MAX_STATE_HISTORY_S+1)
+
+        states : list[LazyState] = await load_from_history(self.hass, entity_id, start_time, end_time, no_attributes=False)
+        if states:
+            for state in states:
+                self.add_to_history(entity_id=entity_id, state=state, time=state.last_changed)
+
+    def root_device_post_home_init(self, time: datetime):
+        # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
+        try:
+            # Asynchronously try to compute an initial km/kWh from HA history
+            if self.hass is not None:
+                for entity_id in self._entities_to_fill_from_history:
+                    self.hass.async_create_task(self._async_bootstrap_from_history(entity_id, time))
+        except Exception:
+            pass
+
+        self.device_post_home_init(time)
+
+    def device_post_home_init(self, time: datetime):
+        # to be overriden by classes below
+        pass
 
     async def user_clean_and_reset(self):
-        time = datetime.now(tz=pytz.UTC)
-        await self.clean_next_qs_scheduled_event(time)
+        pass
+        # time = datetime.now(tz=pytz.UTC)
+        # await self.clean_next_qs_scheduled_event(time)
+
+    def get_proper_local_adapted_tomorrow(self, time: datetime | None) -> datetime:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+
+        local_target_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
+        local_tomorrow = local_constraint_day + timedelta(days=1)
+        return local_tomorrow.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
 
     def get_next_time_from_hours(self, local_hours:dt_time, time_utc_now:datetime | None = None, output_in_utc=True) -> datetime | None:
 
@@ -298,70 +367,71 @@ class HADeviceMixin:
         return next_time
 
 
-    async def clean_next_qs_scheduled_event(self, time:datetime, start_time_to_check:datetime|None = None, end_time_to_check:datetime|None = None,) -> bool:
+    # NO MORE USED
+    # async def clean_next_qs_scheduled_event(self, time:datetime, start_time_to_check:datetime|None = None, end_time_to_check:datetime|None = None,) -> bool:
+    #
+    #     # by construction they can't be in the past, nor more than 24h in the future
+    #     if self.calendar is None:
+    #         return False
+    #
+    #     component = self.hass.data[DATA_COMPONENT]
+    #     entity = component.get_entity(self.calendar)
+    #
+    #     if not isinstance(entity, CalendarEntity):
+    #         return False
+    #
+    #     if not (entity.supported_features & CalendarEntityFeature.DELETE_EVENT):
+    #         return False
+    #
+    #     try:
+    #         events = await entity.async_get_events(self.hass, time - timedelta(seconds=10), time + timedelta(days=1, seconds=10))
+    #
+    #         remove = []
+    #         for e in events:
+    #             if CALENDAR_MANAGED_STRING_ID in e.description:
+    #                 # remove it
+    #                 remove.append(e)
+    #
+    #         kept_one = False
+    #         for e in remove:
+    #
+    #             if start_time_to_check is not None and end_time_to_check is not None and e.start == start_time_to_check and e.end == end_time_to_check:
+    #                 # do not remove it if it is the one we want to keep
+    #                 kept_one = True
+    #                 continue
+    #
+    #             await entity.async_delete_event(e.uid)
+    #
+    #         return kept_one
+    #
+    #     except Exception as err:
+    #         _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=err)
+    #         return False
 
-        # by construction they can't be in the past, nor more than 24h in the future
-        if self.calendar is None:
-            return False
-
-        component = self.hass.data[DATA_COMPONENT]
-        entity = component.get_entity(self.calendar)
-
-        if not isinstance(entity, CalendarEntity):
-            return False
-
-        if not (entity.supported_features & CalendarEntityFeature.DELETE_EVENT):
-            return False
-
-        try:
-            events = await entity.async_get_events(self.hass, time - timedelta(seconds=10), time + timedelta(days=1, seconds=10))
-
-            remove = []
-            for e in events:
-                if CALENDAR_MANAGED_STRING_ID in e.description:
-                    # remove it
-                    remove.append(e)
-
-            kept_one = False
-            for e in remove:
-
-                if start_time_to_check is not None and end_time_to_check is not None and e.start == start_time_to_check and e.end == end_time_to_check:
-                    # do not remove it if it is the one we want to keep
-                    kept_one = True
-                    continue
-
-                await entity.async_delete_event(e.uid)
-
-            return kept_one
-
-        except Exception as err:
-            _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=err)
-            return False
-
-
-    async def set_next_scheduled_event(self, time:datetime, start_time:datetime, end_time:datetime, description:str):
-        if self.calendar is None:
-            return
-
-        # first clean old ones if needed for the next day ... but keep if it was already created
-        found = await self.clean_next_qs_scheduled_event(time, start_time_to_check=start_time, end_time_to_check=end_time)
-
-        if found:
-            return
-
-        data = {ATTR_ENTITY_ID: self.calendar}
-        service = calendar.CREATE_EVENT_SERVICE
-        data[calendar.EVENT_START_DATETIME] = start_time
-        data[calendar.EVENT_END_DATETIME] = end_time
-        data[calendar.EVENT_SUMMARY] = description
-        data[calendar.EVENT_DESCRIPTION] = CALENDAR_MANAGED_STRING
-        domain = calendar.DOMAIN
-
-        try:
-            await self.hass.services.async_call(
-                domain, service, data, blocking=True)
-        except Exception as err:
-            _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=err)
+    # NO MORE USED
+    # async def set_next_scheduled_event(self, time:datetime, start_time:datetime, end_time:datetime, description:str):
+    #     if self.calendar is None:
+    #         return
+    #
+    #     # first clean old ones if needed for the next day ... but keep if it was already created
+    #     found = await self.clean_next_qs_scheduled_event(time, start_time_to_check=start_time, end_time_to_check=end_time)
+    #
+    #     if found:
+    #         return
+    #
+    #     data = {ATTR_ENTITY_ID: self.calendar}
+    #     service = calendar.CREATE_EVENT_SERVICE
+    #     data[calendar.EVENT_START_DATETIME] = start_time
+    #     data[calendar.EVENT_END_DATETIME] = end_time
+    #     data[calendar.EVENT_SUMMARY] = description
+    #     data[calendar.EVENT_DESCRIPTION] = CALENDAR_MANAGED_STRING
+    #     domain = calendar.DOMAIN
+    #
+    #     try:
+    #         await self.hass.services.async_call(
+    #             domain, service, data, blocking=True)
+    #     except Exception as err:
+    #         _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=err)
 
 
 
@@ -892,7 +962,8 @@ class HADeviceMixin:
                                  non_ha_entity_get_state: str | None | Callable[[str, datetime | None], tuple[
                                                                                                float | str | None, datetime | None, dict | None] | None] = None,
                                  state_invalid_values: set[str]|list[str]|None = None,
-                                 attach_unfiltered:bool = False):
+                                 attach_unfiltered:bool = False,
+                                 reload_from_history: bool = False):
         if entity_id is None:
             return
 
@@ -904,6 +975,9 @@ class HADeviceMixin:
         self._entity_probed_state_non_ha_entity_get_state[entity_id] = non_ha_entity_get_state
         self._entity_probed_state_invalid_values[entity_id] = set()
         self._entity_probed_state_attached_unfiltered[entity_id] = attach_unfiltered
+
+        if reload_from_history:
+            self._entities_to_fill_from_history.add(entity_id)
 
         self._entity_probed_state_invalid_values[entity_id].update(UNAVAILABLE_STATE_VALUES)
         if state_invalid_values:

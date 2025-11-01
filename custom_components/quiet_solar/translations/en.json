@@ -3,6 +3,7 @@
         "abort": {
             "already_configured": "Entry already configured",
             "no_devices_found": "No devices found on the network",
+            "no_person_entities": "No person entities found in Home Assistant. Please create a person first.",
             "single_instance_allowed": "Already configured. Only a single configuration possible."
         },
         "error": {
@@ -236,6 +237,18 @@
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
             },
+            "person": {
+                "data": {
+                    "device_dashboard_section": "Dashboard section",
+                    "name": "Name",
+                    "person_authorized_cars": "Authorized cars this person can drive",
+                    "person_notification_time": "Time of day to send daily notification about car readiness",
+                    "person_person_entity": "Person entity to track",
+                    "person_preferred_car": "Preferred car for this person"
+                },
+                "description": "Track a person's location and driving patterns to predict EV charging needs",
+                "title": "Add a Person"
+            },
             "pool": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
@@ -280,6 +293,7 @@
                     "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
                     "home": "Create a Home",
                     "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
+                    "person": "Add a Person",
                     "pool": "Add a pool",
                     "solar": "Add a Solar Panel Plant"
                 },
@@ -388,6 +402,12 @@
             },
             "qs_car_estimated_range_km": {
                 "name": "Estimated Range (km)"
+            },
+            "qs_car_forecast_person_full": {
+                "name": "Forecast for Person"
+            },
+            "qs_car_forecast_person_name": {
+                "name": "Forecasted Person"
             },
             "qs_car_soc_percent": {
                 "name": "Current Charge"
@@ -678,6 +698,18 @@
                 },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
+            },
+            "person": {
+                "data": {
+                    "device_dashboard_section": "Dashboard section",
+                    "name": "Name",
+                    "person_authorized_cars": "Authorized cars this person can drive",
+                    "person_notification_time": "Time of day to send daily notification about car readiness",
+                    "person_person_entity": "Person entity to track",
+                    "person_preferred_car": "Preferred car for this person"
+                },
+                "description": "Track a person's location and driving patterns to predict EV charging needs",
+                "title": "Add a Person"
             },
             "pool": {
                 "data": {

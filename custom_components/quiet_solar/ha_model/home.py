@@ -1,6 +1,7 @@
 import copy
 import logging
 import pickle
+from bisect import bisect, bisect_left
 from enum import StrEnum
 from operator import itemgetter
 from os.path import join
@@ -9,9 +10,9 @@ from datetime import datetime, timedelta
 
 import aiofiles.os
 import pytz
-from homeassistant.components.recorder.history import state_changes_during_period
+from haversine import haversine, Unit
+
 from homeassistant.components.recorder.models import LazyState
-from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from .dynamic_group import QSDynamicGroup
@@ -26,8 +27,9 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
+from ..ha_model.person import QSPerson
 
-from ..ha_model.device import HADeviceMixin, convert_power_to_w
+from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
 from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps
@@ -53,6 +55,10 @@ _LOGGER = logging.getLogger(__name__)
 MAX_SENSOR_HISTORY_S = 60*60*24*7
 
 POWER_ALIGNMENT_TOLERANCE_S = 120
+
+HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
+HOME_PERSON_CAR_MIN_SEGMENT_S = 30
+HOME_PERSON_CAR_MIN_OVERLAP_S = 30
 
 class QSforecastValueSensor:
 
@@ -105,6 +111,191 @@ class QSforecastValueSensor:
 
 
 
+
+def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
+    # First pass: identify which seg1 overlaps with which seg2(s)
+    seg1_to_seg2 = {}  # seg1_idx -> list of seg2_idx
+    seg2_to_seg1 = {}  # seg2_idx -> list of seg1_idx
+    overlap_segments = []
+
+    for i, v in enumerate(segments_1):
+        seg1_start = v[0]
+        seg1_end = v[1]
+        seg1_to_seg2[i] = []
+        for j, (seg2_start, seg2_end) in enumerate(segments_2):
+            if j not in seg2_to_seg1:
+                seg2_to_seg1[j] = []
+            latest_start = max(seg1_start, seg2_start)
+            earliest_end = min(seg1_end, seg2_end)
+            if latest_start < earliest_end:
+                seg1_to_seg2[i].append((j, latest_start, earliest_end))
+                seg2_to_seg1[j].append(i)
+
+    # Second pass: only count overlaps where both segments overlap with exactly one segment from the other list
+    for i, overlapping_seg2_list in seg1_to_seg2.items():
+        if len(overlapping_seg2_list) == 1:
+            j, latest_start, earliest_end = overlapping_seg2_list[0]
+            # Check reverse: does seg2[j] overlap with only seg1[i]?
+            duration_overlap = abs((earliest_end - latest_start).total_seconds())
+            if len(seg2_to_seg1[j]) == 1 and duration_overlap > min_overlap:
+                seg1 = segments_1[i]
+                seg2 = segments_2[j]
+                mx_length = max((seg1[1] - seg1[0]).total_seconds(), (seg2[1] - seg2[0]).total_seconds())
+                overlap_score = abs((earliest_end - latest_start).total_seconds())/mx_length
+                overlap_segments.append((latest_start, earliest_end, seg1, seg2, overlap_score, duration_overlap))
+
+    overlap_segments = sorted(overlap_segments, key=lambda x: x[0])
+
+    return overlap_segments
+
+def map_location_path(states_1: list[LazyState],states_2: list[LazyState], start:datetime, end:datetime, small_distance_threshold_m: float = 250) -> tuple[list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+    """
+    Map two GPS paths based on timestamps.
+    Returns a list of tuples: (time, lat1, lon1, lat2, lon2)
+    """
+
+    path_1 = []
+    segments_1_not_home = []
+    path_2 = []
+    segments_2_not_home = []
+
+
+    timings = set()
+
+    home_latitude = None
+    home_longitude = None
+
+    home_bigger_radius_m = min(180.0, small_distance_threshold_m)
+
+    num_home = 0
+    for path, state_list, path_not_home in [(path_1, states_1, segments_1_not_home), (path_2, states_2, segments_2_not_home)]:
+        current_not_home_segment : list[None|datetime]= [None, None]
+        for state in state_list:
+            try:
+                time = state.last_updated
+                attr = state.attributes
+                if attr is not None:
+                    time = attr.get("last_updated", time)
+
+                if time < start:
+                    time = start
+                elif time > end:
+                    time = end
+
+                if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
+                    continue
+
+                lat = None
+                lon = None
+
+                if "latitude"  in attr and "longitude" in attr:
+                    lat = float(attr.get("latitude"))
+                    lon = float(attr.get("longitude"))
+
+
+                if state.state != "home":
+                    if lat is not None and lon is not None:
+                        path.append((time, (lat, lon)))
+                        timings.add(time)
+                    if current_not_home_segment[0] is None:
+                        current_not_home_segment[0] = time
+                else:
+                    if lat is not None and lon is not None:
+                        num_home += 1
+                        if home_latitude is None or home_longitude is None:
+                            home_latitude = 0
+                            home_longitude = 0
+
+                        home_latitude += float(attr.get("latitude"))
+                        home_longitude += float(attr.get("longitude"))
+
+                    if current_not_home_segment[0] is not None:
+                        current_not_home_segment[1] = time
+                        path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
+                        current_not_home_segment = [None, None]
+
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        if current_not_home_segment[0] is not None and end is not None:
+            current_not_home_segment[1] = end
+            path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
+
+        if home_latitude is not None:
+            home_latitude = home_latitude / max(1, num_home)
+        if home_longitude is not None:
+            home_longitude = home_longitude / max(1, num_home)
+
+    # find all overlapping segement and compute the overlap duration
+
+
+    # only get segments that are only overlappin one segments else it means the car or the person went home in between
+    # so we do know that those segments are in fact nor really relevant
+    # find all overlapping segments and compute the overlap duration
+    # only count segments that overlap with exactly one segment from the other list (bidirectional check)
+
+    timings = sorted(timings)
+    def interpolate_positions(ts1, ts2, target_time):
+        delta = abs((ts2[0] - ts1[0]).total_seconds())
+        if delta == 0:
+            return (ts1[0], ts2[1])
+        lat = ts1[1][0] + (ts2[1][0] - ts1[1][0]) * ((target_time - ts1[0]).total_seconds()) / delta
+        lon = ts1[1][1] + (ts2[1][1] - ts1[1][1]) * ((target_time - ts1[0]).total_seconds()) / delta
+        return (target_time, (lat, lon))
+
+    mapped_path = []
+    for t in timings:
+        t1, p1, _, _ = get_value_from_time_series(path_1, t, interpolate_positions)
+        if p1 is None:
+            continue
+        t2, p2, _, _ = get_value_from_time_series(path_2, t, interpolate_positions)
+        if p2 is None:
+            continue
+
+        if home_latitude is not None and home_longitude is not None:
+            # check that the position are far away enough from the home position
+            dh2 = haversine(p2, (home_latitude, home_longitude), unit=Unit.METERS)
+            if dh2 < home_bigger_radius_m:
+                continue
+
+            dh1 = haversine(p1, (home_latitude, home_longitude), unit=Unit.METERS)
+            if dh1 < home_bigger_radius_m:
+                continue
+
+
+        dist = haversine(p1, p2, unit=Unit.METERS)
+        mapped_path.append((t, dist))
+
+    # now find the time segments where distance is small, ie < small_distance_threshold_m
+    segments = []
+    segment_start = None
+    segment_distances = []
+
+    for i, (t, dist) in enumerate(mapped_path):
+        if dist < small_distance_threshold_m:
+            # Start a new segment or continue existing one
+            if segment_start is None:
+                segment_start = t
+                segment_distances = [dist]
+            else:
+                segment_distances.append(dist)
+        else:
+            # End current segment if one exists
+            if segment_start is not None:
+                segment_end = mapped_path[i-1][0]
+                avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
+                segments.append((segment_start, segment_end, avg_distance))
+                segment_start = None
+                segment_distances = []
+
+    # Handle case where last segment extends to the end
+    if segment_start is not None:
+        segment_end = mapped_path[-1][0]
+        avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
+        segments.append((segment_start, segment_end, avg_distance))
+
+    return segments, segments_1_not_home, segments_2_not_home
+
 class QSHome(QSDynamicGroup):
 
     conf_type_name = CONF_TYPE_NAME_QSHome
@@ -116,6 +307,7 @@ class QSHome(QSDynamicGroup):
 
         self._chargers: list[QSChargerGeneric] = []
         self._cars: list[QSCar] = []
+        self._persons: list = []
 
         self._all_devices: list[HADeviceMixin] = []
         self._disabled_devices: list[HADeviceMixin] = []
@@ -229,11 +421,254 @@ class QSHome(QSDynamicGroup):
         self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
         # self.register_all_on_change_states()
         self._last_solve_done  : datetime | None = None
+        self._last_forecast_probe_time  : datetime | None = None
 
         self.add_device(self)
 
         self._init_completed = False
 
+    async def _compute_mileage_for_period_per_person(self, start: datetime, end: datetime):
+
+        persons_result = {}
+        person_positions_cache = {}
+        person_not_home_cache = {}
+
+        car_result = {}
+
+
+        for car in self._cars:
+
+            car_positions = None
+            car_segments_not_home = None
+
+            for person in self._persons:
+
+                if car.name in person.authorized_cars:
+
+                    if car_positions is None:
+                        car_positions = await load_from_history(self.hass, car.car_tracker, start, end,
+                                                                no_attributes=False)
+
+                    if person_positions_cache.get(person) is None:
+                        person_positions = await load_from_history(self.hass, person.person_entity_id, start, end,
+                                                                   no_attributes=False)
+                        person_positions_cache[person] = person_positions
+                    else:
+                        person_positions = person_positions_cache.get(person)
+
+                    gps_segments, segments_person_not_home, segments_car_not_home = map_location_path(
+                        person_positions, car_positions, start=start, end=end, small_distance_threshold_m=250.0)
+
+                    segments_person_not_home = [s for s in segments_person_not_home if
+                                           (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S]
+                    segments_car_not_home = [s for s in segments_car_not_home if
+                                           (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S]
+
+
+                    overlap_not_home_segments = _segments_strong_overlap(segments_person_not_home, segments_car_not_home,
+                                                                         min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
+
+                    overlap_gps_segments = _segments_strong_overlap(gps_segments, segments_car_not_home,
+                                                                    min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
+
+                    if person not in person_not_home_cache:
+                        person_not_home_cache[person] = segments_person_not_home
+
+                    # segments_car_not_home will always be the same as car_positions not changing
+                    if car_segments_not_home is None:
+                        car_segments_not_home = {}
+                        for seg_start, seg_end in segments_car_not_home:
+                            car_segments_not_home[seg_start] = [seg_start, seg_end, {}, False]
+
+                    for s_s, s_e, person_not_home, car_not_home, overlap_score, duration_overlap in overlap_not_home_segments:
+                        if car_segments_not_home.get(car_not_home[0]) is not None:
+                            existing = car_segments_not_home.get(car_not_home[0])[2]
+                            existing.setdefault(person, [(None, None, None), (None, None, None)])[1] = (car_not_home, person_not_home, overlap_score)
+
+
+                    for s_s, s_e, gps_segment, car_not_home, overlap_score, duration_overlap in overlap_gps_segments:
+                        if car_segments_not_home.get(car_not_home[0]) is not None:
+                            existing = car_segments_not_home.get(car_not_home[0])[2]
+                            existing.setdefault(person, [(None, None, None), (None, None, None)])[0] = (car_not_home, gps_segment, overlap_score)
+
+
+            if car_segments_not_home is None or len(car_segments_not_home) == 0:
+                continue
+
+            car_segments_not_home = [v for k, v in car_segments_not_home.items()]
+            car_segments_not_home = sorted(car_segments_not_home, key=lambda x: x[0])
+            car_result[car] = car_segments_not_home
+
+
+        for car, car_segments_not_home in car_result.items():
+
+            for i, v in enumerate(car_segments_not_home):
+
+                seg_start, seg_end, p_res, treated = v
+
+                if len(p_res) == 0 or treated:
+                    # mark as treated anyway
+                    car_segments_not_home[i][3] = True
+                    continue
+
+                persons_in_overlapping_segments = {k:[0] for k in p_res}
+
+                segs = [(car, i)]
+
+                # we will have to cross all cars segment to see the overlapping ones that may have the same person
+                for c2, cs2 in car_result.items():
+                    if c2.name == car.name:
+                        continue
+
+                    # find overlapping segments... terrible n^2 one ... but should be ok for now
+                    for j, v in enumerate(cs2):
+                        seg2_start, seg2_end, p2_res, treated_2 = v
+                        if len(p2_res) == 0 or treated_2:
+                            continue
+                        latest_start = max(seg_start, seg2_start)
+                        earliest_end = min(seg_end, seg2_end)
+                        if latest_start < earliest_end:
+                            # overlapping segments
+                            segs.append((c2, j))
+                            for person in p2_res:
+                                persons_in_overlapping_segments.setdefault(person, []).append(len(segs)-1)
+
+                # compute a score matrix for all persons here
+                num_persons = len(persons_in_overlapping_segments)
+                persons = [(p, ps) for p, ps in persons_in_overlapping_segments.items()]
+                scores = np.zeros(( num_persons, len(segs)), dtype=np.float64)
+
+                for pi, (person, seg_indices) in enumerate(persons):
+                    for seg_idx in seg_indices:
+                        c, si = segs[seg_idx]
+                        seg_start2, seg_end2, p_res2, treated_2 = car_result[c][si]
+                        coverage_person_near_car = 0.0
+                        coverage_person_not_home = 0.0
+
+                        if p_res2.get(person) is not None:
+                            car_not_home, person_not_home, overlap_score_not_home = p_res2.get(person)[1]
+                            if car_not_home is not None and person_not_home is not None:
+                                coverage_person_not_home = overlap_score_not_home
+
+                            car_not_home, gps_segment, overlap_score_near_car = p_res2.get(person)[0]
+                            if car_not_home is not None and gps_segment is not None:
+                                coverage_person_near_car = overlap_score_near_car
+
+                            # if coverage_person_not_home > 0.7 and coverage_person_near_car > 0.0:
+                            #     score = 10000.0 * (1 + coverage_person_not_home + 100 * coverage_person_near_car)
+                            # elif coverage_person_not_home > 0.3 and coverage_person_near_car > 0.0:
+                            #     score = 100.0 * (1 + coverage_person_not_home + 100 * coverage_person_near_car)
+                            # elif coverage_person_not_home > 0.9:
+                            #     score = 1 + coverage_person_not_home + 100 * coverage_person_near_car
+                            # else:
+                            #     score = 0.0
+                            scores[pi, seg_idx] = coverage_person_not_home +  coverage_person_near_car
+
+                # now get the max of teh matric iteratively unitl we find the proper person for the segment 0
+                # (the one we are working on) and we remove also the found candidate from all other segments
+
+                found_person_idx = None
+                while True:
+                    max_idx = np.unravel_index(np.argmax(scores, axis=None), scores.shape)
+                    max_person_idx = max_idx[0]
+                    max_seg_idx = max_idx[1]
+                    max_score = scores[max_person_idx, max_seg_idx]
+
+                    if max_score == 0.0:
+                        # no more candidate.. iit means no person for the current segment at all?
+                        break
+
+                    person, seg_indices = persons[max_person_idx]
+
+                    if max_seg_idx == 0:
+                        # found the best person for our original segment
+                        found_person_idx = max_person_idx
+                        break
+                    else:
+                        # remove this person from all segments
+                        for si in seg_indices:
+                            scores[max_person_idx, si] = 0.0
+
+
+                # in all case we will mark it as treated, it will never be used again in any comparison
+                car_segments_not_home[i][3] = True
+                if found_person_idx is not None:
+                    person, seg_indices = persons[found_person_idx]
+                    # assign this person to the original segment
+                    car_segments_not_home[i][2] = {person: car_segments_not_home[i][2][person]}
+
+                    #remove it from all other overlapping segment from above:
+                    for si in seg_indices:
+                        if si == 0:
+                            continue
+                        c, sidx = segs[si]
+                        car_result[c][sidx][2].pop(person, None)
+                else:
+                    # no person found for that segment
+                    car_segments_not_home[i][2] = {}
+
+
+        unassigned_segment_per_car = {}
+
+        for car, car_segments_not_home in car_result.items():
+
+            for i, v in enumerate(car_segments_not_home):
+
+                seg_start, seg_end, p_res, treated = v
+
+                if len(p_res) == 0:
+                    car_unassigned_list = unassigned_segment_per_car.setdefault(car, [])
+                    car_unassigned_list.append((seg_start, seg_end))
+                    continue
+
+                # ok we normally do have ONLY ONE assigned person here now
+                for person in p_res:
+                    dist = await car.get_car_mileage_on_period_km(seg_start - timedelta(minutes=5), seg_end + timedelta(minutes=5))
+                    if dist is not None and dist > 0.0:
+                        persons_result.setdefault(person, [0.0, None])[0] += dist
+                        if persons_result[person][1] is None:
+                            persons_result[person][1] = seg_start
+                        else:
+                            persons_result[person][1] = min(persons_result[person][1], seg_start)
+
+
+        for car, unassigned_car_segments in unassigned_segment_per_car.items():
+
+            if len(unassigned_car_segments) > 0:
+                # try to assign these unassigned segments to the best matching person: the default one for the car if any
+                default_person = None
+                for person in self._persons:
+                    preferred_car_name = person.preferred_car
+                    if preferred_car_name is not None and preferred_car_name == car.name:
+                        default_person = person
+                        break
+                if default_person is not None:
+                    for seg_start, seg_end, person in unassigned_car_segments:
+                        dist = await car.get_car_mileage_on_period_km(seg_start, seg_end)
+                        if dist is not None and dist > 0.0:
+                            if default_person not in persons_result:
+                                persons_result[default_person] = [0.0, None]
+                            persons_result[default_person][0] += dist
+                            if persons_result[person][1] is None:
+                                persons_result[person][1] = seg_start
+                            else:
+                                persons_result[person][1] = min(persons_result[person][1], seg_start)
+
+
+        for person in persons_result:
+            segments_person_not_home = person_not_home_cache.get(person)
+
+            if segments_person_not_home is not None and len(segments_person_not_home) > 0:
+                if segments_person_not_home[0][0] <= start:
+                    # ok the first not home is across the start time check the lower car segment for the person
+                    if len(segments_person_not_home) > 1:
+                        persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[1][0])
+                else:
+                    persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[0][0])
+            else:
+                persons_result[person][1] = None
+
+        return persons_result
 
     async def async_set_off_grid_mode(self, off_grid:bool):
 
@@ -798,6 +1233,10 @@ class QSHome(QSDynamicGroup):
                 self._chargers.append(device)
         elif isinstance(device, QSSolar):
             self._solar_plant = device
+        elif isinstance(device, QSPerson):
+            if device not in self._persons:
+                self._persons.append(device)
+
 
         if isinstance(device, AbstractLoad):
             if device not in self._all_loads:
@@ -824,7 +1263,7 @@ class QSHome(QSDynamicGroup):
 
         if device == self:
             # we can't remove home....
-            return 
+            return
 
         device.home = self
 
@@ -843,6 +1282,12 @@ class QSHome(QSDynamicGroup):
                 _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers")
         elif isinstance(device, QSSolar):
             self._solar_plant = None
+
+        if isinstance(device, QSPerson):
+            try:
+                self._persons.remove(device)
+            except ValueError:
+                _LOGGER.warning(f"Attempted to remove person {device.name} that was not in the list of persons")
 
         if isinstance(device, AbstractLoad):
             try:
@@ -910,9 +1355,14 @@ class QSHome(QSDynamicGroup):
                 return False
 
         for device in self._all_devices:
-            if isinstance(device, AbstractDevice):
-                if device.qs_enable_device:
-                    device.device_post_home_init(time)
+            if getattr(device, "config_entry_initialized", True) is False:
+                return False
+
+        for device in self._all_devices:
+            if isinstance(device, AbstractDevice) and device.qs_enable_device:
+                if isinstance(device, HADeviceMixin):
+                    device.root_device_post_home_init(time)
+
 
         self._init_completed = True
         return True
@@ -938,12 +1388,104 @@ class QSHome(QSDynamicGroup):
                 self.force_next_solve()
 
 
+    async def _prepare_data_for_dump(self, start, end, person_entities):
+        car_data = []
+        for car in self._cars:
+
+            car_positions = None
+            car_odos = None
+
+            if car.car_tracker:
+                car_positions = await load_from_history(self.hass, car.car_tracker, start, end,
+                                                        no_attributes=False)
+            if car_positions is None:
+                car_positions = []
+
+            if car.car_odometer_sensor:
+                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start, end,
+                                                   no_attributes=False)
+            if car_odos is None:
+                car_odos = []
+
+            car_data.append((car.name, car_positions, car_odos))
+
+        person_data = []
+        for person_entity_id in person_entities:
+            person_positions = await load_from_history(self.hass, person_entity_id, start, end, no_attributes=False)
+            if person_positions is None:
+                person_positions = []
+
+            person_data.append((person_entity_id, person_positions))
+
+        return  [start, end, car_data, person_data]
+
+
+    async def dump_person_car_data_for_debug(self, time:datetime, storage_path:str):
+
+        local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_shifted = local - timedelta(
+            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)  # we shift to 4am to have mileage from 4am to 4am,
+        local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
+        local_day = datetime(local.year, local.month, local.day)
+
+        local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        if local_day_shifted != local_day: # we are before 4am of the current day take the day before
+            local_day_utc = local_day_utc - timedelta(days=1)
+
+        from homeassistant.components.person import DOMAIN as PERSON_DOMAIN
+
+        person_entities = [
+            ent.entity_id
+            for ent in self.hass.states.async_all([PERSON_DOMAIN])
+        ]
+
+        # we are after 4am of the current day, we can recompute the last 14 days
+        # we shift to 4am to have mileage from 4am to 4am,
+
+        data_to_save = [] # list of (start, end, [(car_name, car_positions, car_odos)], [(person, person_positions)])
+        min_start = None
+        max_end = None
+
+        for d in range(0, 14):
+            start = local_day_utc - timedelta(days=d+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+            end = local_day_utc - timedelta(days=d) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+
+            if min_start is None or start < min_start:
+                min_start = start
+            if max_end is None or end > max_end:
+                max_end = end
+
+            range_data = await self._prepare_data_for_dump(start, end, person_entities)
+            data_to_save.append(range_data)
+
+        final_data = {
+            "full_range": await self._prepare_data_for_dump(min_start, max_end, person_entities),
+            "per_day": data_to_save,
+            "time":time,
+            "local_day_utc": local_day_utc
+        }
+
+        file_path = join(storage_path, f"person_and_car.pickle")
+
+        def _pickle_save(file_path, obj):
+            with open(file_path, 'wb') as file:
+                pickle.dump(obj, file)
+
+        await self.hass.async_add_executor_job(
+            _pickle_save, file_path, final_data
+        )
+
+
     async def update_forecast_probers(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             ]:
             return
+
+        prev_time = self._last_forecast_probe_time
+        self._last_forecast_probe_time  = time
 
         if self.finished_setup(time) is False:
             _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
@@ -958,6 +1500,110 @@ class QSHome(QSDynamicGroup):
 
         for name, prober in self.home_solar_forecast_sensor_values_providers.items():
             self.home_solar_forecast_sensor_values[name] = prober.push_and_get(time)
+
+        if prev_time is not None:
+            # car  / person forecasts probers
+            # to be called at end of day to compute the finished day of cars mileage
+
+            prev_local = prev_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            prev_local_shifted = prev_local - timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS) # we shift to 4am to have mileage from 4am to 4am,
+            prev_local_day_shifted = datetime(prev_local_shifted.year, prev_local_shifted.month, prev_local_shifted.day)
+            prev_local_day = datetime(prev_local.year, prev_local.month, prev_local.day)
+
+            local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            local_shifted = local - timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS) # we shift to 4am to have mileage from 4am to 4am,
+            local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
+            local_day = datetime(local.year, local.month, local.day)
+
+            # first check the existing values for the persons, if one is empty
+            # we should recompute everyone as much as possible
+            has_empty_person = False
+            for person in self._persons:
+                if person.should_recompute_history():
+                    has_empty_person = True
+                    break
+
+            local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+            if has_empty_person and local_day_shifted == local_day:
+
+                # we are after 4am of the current day, we can recompute the last 14 days
+                # we shift to 4am to have mileage from 4am to 4am,
+                for d in range(0, 14):
+                    await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
+
+                for person in self._persons:
+                    person.has_been_initialized = True
+
+            if local_day_shifted > prev_local_day_shifted and local_day_shifted == local_day:
+                # we changed day, we can compute the previous day
+                await self._compute_and_store_person_car_forecasts(local_day_utc)
+
+
+    async def _compute_and_store_person_car_forecasts(self, local_day_utc:datetime, day_shift:int=0):
+
+        start = local_day_utc - timedelta(days=day_shift+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+        end = local_day_utc - timedelta(days=day_shift) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+        persons_mileage = await self._compute_mileage_for_period_per_person(start, end)
+        for person in persons_mileage:
+            if persons_mileage[person][0] > 0:
+                person.add_to_mileage_history(day=start, mileage=persons_mileage[person][0],
+                                              leave_time=persons_mileage[person][1])
+
+    async def get_best_person_next_need_for_car(self, time:datetime, car:QSCar) -> tuple[bool | None, datetime | None, float | None, QSPerson | None]:
+
+        p_s = []
+        for person in self._persons:
+            p_leave_time, p_mileage = person.get_person_next_need(time)
+            if p_leave_time is not None:
+                p_s.append((person, p_leave_time, p_mileage))
+
+        # sort by mileage:
+        p_s = sorted(p_s, key=lambda x: x[2], reverse=True)
+        covered_cars = set()
+        for person, p_leave_time, p_mileage in p_s:
+
+            p_cars = person.get_authorized_cars()
+
+            best_car = None
+            best_val = None
+
+            for p_car in p_cars:
+                if p_car.name in covered_cars:
+                    continue
+                # take the car that is the closest to the needed mileage
+                is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                if is_covered is not None:
+                    if best_val is None:
+                        best_val = (is_covered, current_soc, needed_soc, diff_energy)
+                        best_car = p_car
+                    else:
+                        use_new = False
+                        if is_covered:
+                            if best_val[0] is False:
+                                use_new = True
+                            else:
+                                # both cover, take the one with closer energy
+                                if diff_energy < best_val[3]:
+                                    use_new = True
+                        else:
+                            if best_val[0] is True:
+                                use_new = False
+                            else:
+                                # both not cover, take the one with less energy to charge
+                                if diff_energy < best_val[3]:
+                                    use_new = True
+                        if use_new:
+                            best_val = (is_covered, current_soc, needed_soc, diff_energy)
+                            best_car = p_car
+
+            if best_car is not None:
+                covered_cars.add(best_car.name)
+
+                if best_car.name == car.name:
+                    return (best_val[0], p_leave_time, best_val[2], person)
+
+        return (None, None, None, None)
 
 
     async def update_all_states(self, time: datetime):
@@ -1012,7 +1658,7 @@ class QSHome(QSDynamicGroup):
 
         if self._battery is not None:
             all_loads = self._all_loads
-            all_extended_loads = [self._battery]
+            all_extended_loads : list[AbstractDevice] = [self._battery]
             all_extended_loads.extend(self._all_loads)
         else:
             all_loads = all_extended_loads = self._all_loads
@@ -1172,6 +1818,7 @@ class QSHome(QSDynamicGroup):
 
         debugs = {"now":time}
 
+        await self.dump_person_car_data_for_debug(time, storage_path)
 
         file_path = join(storage_path, "debug_conf.pickle")
 
@@ -1224,26 +1871,6 @@ class QSHomeConsumptionHistoryAndForecast:
         if self.home_non_controlled_consumption is not None:
             file_path = join(path, self.home_non_controlled_consumption.file_name)
             await self.home_non_controlled_consumption.save_values(file_path)
-
-    async def load_from_history(self, entity_id:str, start_time: datetime, end_time: datetime) -> list[LazyState]:
-
-        if self.hass is None:
-            return []
-
-        def load_history_from_db(start_time: datetime, end_time: datetime) -> list:
-            """Load history from the database."""
-            return state_changes_during_period(
-                self.hass,
-                start_time,
-                end_time,
-                entity_id,
-                include_start_time_state=True,
-                no_attributes=True,
-            ).get(entity_id, [])
-
-        states : list[LazyState] = await recorder_get_instance(self.hass).async_add_executor_job(load_history_from_db, start_time, end_time)
-        # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
-        return states
 
     async def init_forecasts(self, time: datetime):
 
@@ -2246,7 +2873,7 @@ class QSSolarHistoryVals:
         else:
             start_time = time - timedelta(days=BUFFER_SIZE_DAYS-1)
 
-        states : list[LazyState] = await self.forecast.load_from_history(self.entity_id, start_time, end_time)
+        states : list[LazyState] = await load_from_history(self.hass, self.entity_id, start_time, end_time)
 
         # states : ordered LazySates
         # we will fill INTERVALS_IN_MN slots with the mean of the values in the state

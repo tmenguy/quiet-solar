@@ -13,6 +13,7 @@ from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
 from .ha_model.on_off_duration import QSOnOffDuration
+from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice
@@ -22,8 +23,7 @@ from .const import (
     MANUFACTURER, ENTITY_ID_FORMAT, )
 from .ha_model.device import HADeviceMixin
 
-
-LOAD_TYPE_LIST = [QSHome, QSBattery, QSSolar, QSChargerOCPP, QSChargerWallbox, QSChargerGeneric, QSCar, QSPool, QSOnOffDuration, QSClimateDuration, QSDynamicGroup]
+LOAD_TYPE_LIST = [QSHome, QSBattery, QSSolar, QSChargerOCPP, QSChargerWallbox, QSChargerGeneric, QSCar, QSPerson, QSPool, QSOnOffDuration, QSClimateDuration, QSDynamicGroup]
 LOAD_TYPE__DICT = {t.conf_type_name:t for t in LOAD_TYPE_LIST}
 
 LOAD_NAMES = {
@@ -34,6 +34,7 @@ LOAD_NAMES = {
     QSChargerOCPP.conf_type_name: "charger",
     QSChargerWallbox.conf_type_name: "charger",
     QSChargerGeneric.conf_type_name: "charger",
+    QSPerson.conf_type_name : "person",
     QSCar.conf_type_name : "car",
     QSPool.conf_type_name:"pool",
     QSOnOffDuration.conf_type_name: "on/off",

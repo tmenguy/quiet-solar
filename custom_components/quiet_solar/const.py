@@ -15,6 +15,7 @@ CONF_TYPE_NAME_QSChargerOCPP = "charger_ocpp"
 CONF_TYPE_NAME_QSChargerWallbox = "charger_wallbox"
 CONF_TYPE_NAME_QSChargerGeneric = "charger_generic"
 CONF_TYPE_NAME_QSCar = "car"
+CONF_TYPE_NAME_QSPerson = "person"
 CONF_TYPE_NAME_QSPool = "pool"
 CONF_TYPE_NAME_QSOnOffDuration = "on_off_duration"
 CONF_TYPE_NAME_QSClimateDuration = "climate"
@@ -43,6 +44,7 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSChargerOCPP: None,
     CONF_TYPE_NAME_QSChargerWallbox:None,
     CONF_TYPE_NAME_QSChargerGeneric:None,
+    CONF_TYPE_NAME_QSPerson:"others",
     CONF_TYPE_NAME_QSCar:"cars",
     CONF_TYPE_NAME_QSPool:"pools",
     CONF_TYPE_NAME_QSOnOffDuration:"others",
@@ -143,6 +145,11 @@ CONF_MOBILE_APP = "mobile_app"
 CONF_MOBILE_APP_URL = "mobile_app_url"
 CONF_MOBILE_APP_NOTHING = "No Notifications"
 
+CONF_PERSON_PERSON_ENTITY = "person_person_entity"
+CONF_PERSON_AUTHORIZED_CARS = "person_authorized_cars"
+CONF_PERSON_PREFERRED_CAR = "person_preferred_car"
+CONF_PERSON_NOTIFICATION_TIME = "person_notification_time"
+
 CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
 
@@ -183,9 +190,14 @@ SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
 
+SENSOR_CAR_FORECAST_PERSON_NAME = "qs_car_forecast_person_name"
+SENSOR_CAR_FORECAST_PERSON_FULL = "qs_car_forecast_person_full"
+
 # EV autonomy/efficiency sensors
 SENSOR_CAR_ESTIMATED_RANGE_KM = "qs_car_estimated_range_km"
 SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
+
+SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
@@ -259,6 +271,7 @@ CAR_CHARGE_TYPE_SCHEDULE = "Scheduled"
 CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY = "Solar Priority"
 CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY = "Solar"
 CAR_CHARGE_TYPE_UNKNOWN = "Unknown"
+CAR_CHARGE_TYPE_PERSON_AUTOMATED = "Person Automated"
 CAR_EFFICIENCY_KM_PER_KWH = "car_efficiency_km_per_kwh"
 
 CAR_HARD_WIRED_CHARGER = "Hard Wired Charger"

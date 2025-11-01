@@ -5,24 +5,25 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytz
+from haversine import haversine, Unit
+from homeassistant.components.recorder.models import LazyState
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder import get_instance as recorder_get_instance
 from homeassistant.components import number
 
-from .device import convert_distance_to_km
+from .device import convert_distance_to_km, load_from_history
+
 from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
     CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
-    CAR_CHARGE_TYPE_NOT_PLUGGED, CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_TARGET_MET, DEVICE_TYPE, \
-    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, \
-    CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH, CONF_CALENDAR, CONF_DEVICE_EFFICIENCY, CAR_HARD_WIRED_CHARGER
+    CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
+    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER
 from ..ha_model.device import HADeviceMixin
-from ..home_model.constraints import MultiStepsPowerLoadConstraintChargePercent, LoadConstraint, DATETIME_MAX_UTC
+from ..home_model.constraints import get_readable_date_string
 from ..home_model.load import AbstractDevice
 from datetime import time as dt_time
 
@@ -35,6 +36,7 @@ CAR_MAX_EFFICIENCY_HISTORY_S = 3600*24*31
 
 CAR_DEFAULT_CAPACITY = 100000 # 100 kWh
 
+CAR_MINIMUM_LEFT_RANGE_KM = 30.0
 
 class QSCar(HADeviceMixin, AbstractDevice):
 
@@ -142,7 +144,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas_graph = {}
 
         self.charger = None
+
         self.do_force_next_charge = False
+        self.do_next_charge_time : datetime | None = None
 
         self._next_charge_target = None
         self._next_charge_target_energy = None
@@ -161,6 +165,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._decreasing_segments: list[list[tuple[float, float]|None|int]] = []
         self._dec_seg_count = 0
+
+        self.forecast_person_name: str | None = None
+        self.forecast_person_full: str | None = None
 
         self.reset()
 
@@ -188,6 +195,98 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter)
 
 
+
+    async def get_car_mileage_on_period_km(self, from_time: datetime, to_time: datetime) -> float | None:
+
+        res = None
+
+        if self.car_odometer_sensor is not None:
+            car_odometers : list[LazyState] = await load_from_history(self.hass, self.car_odometer_sensor, from_time - timedelta(days=2), to_time, no_attributes=False)
+
+            prev_state = None
+            from_state = None
+            for odo_state in car_odometers:
+                if odo_state is None or odo_state.state == STATE_UNKNOWN or odo_state.state == STATE_UNAVAILABLE:
+                    continue
+                try:
+                    v = float(odo_state.state)
+                except (TypeError, ValueError):
+                    continue
+
+                if odo_state.last_changed > from_time:
+                    if prev_state is not None:
+                        from_state = prev_state
+                    else:
+                        from_state = odo_state
+                    break
+                else:
+                    prev_state = odo_state
+
+            to_state = None
+            for odo_state in reversed(car_odometers):
+                if odo_state is None or odo_state.state == STATE_UNKNOWN or odo_state.state == STATE_UNAVAILABLE:
+                    continue
+                try:
+                    v = float(odo_state.state)
+                except (TypeError, ValueError):
+                    continue
+
+                to_state = odo_state
+                break
+
+            if from_state is None or to_state is None:
+                res =  None
+            else:
+
+                from_km, _ = convert_distance_to_km(float(from_state.state), from_state.attributes)
+                to_km, _ = convert_distance_to_km(float(to_state.state), to_state.attributes)
+
+                return to_km - from_km
+
+        if res is None and self.car_tracker is not None:
+            car_positions = await load_from_history(self.hass, self.car_tracker, from_time, to_time, no_attributes=False)
+
+            prev_pos = None
+            for car_position in car_positions:
+                if car_position is None or car_position.state == STATE_UNKNOWN or car_position.state == STATE_UNAVAILABLE:
+                    continue
+
+                state_attr: dict[str, Any] = car_position.attributes
+
+                if state_attr is None:
+                    continue
+
+                latitude = state_attr.get("latitude", None)
+                longitude = state_attr.get("longitude", None)
+
+                if latitude is None or longitude is None:
+                    continue
+
+                cur_pos = (float(latitude), float(longitude))
+
+                if prev_pos is not None:
+                    res_add = haversine(prev_pos, cur_pos, unit=Unit.KILOMETERS)
+                    if res is None:
+                        res = 0.0
+                    res += res_add
+
+                prev_pos = cur_pos
+
+        return res
+
+    async def get_best_person_next_need(self, time:datetime) -> tuple[bool | None, datetime | None, float | None, Any | None]:
+        if self.home:
+            is_person_covered, next_usage_time, person_min_target_charge, person = await self.home.get_best_person_next_need_for_car(time, self)
+
+            if person is not None:
+                self.forecast_person_name = person.name
+                usage_str = get_readable_date_string(next_usage_time)
+                self.forecast_person_full = f"{person.name}: {usage_str} at {person_min_target_charge}%"
+            else:
+                self.forecast_person_name = None
+                self.forecast_person_full = None
+
+        return (None, None, None, None)
 
 
 
@@ -283,6 +382,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def device_post_home_init(self, time: datetime):
         # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
+        super().device_post_home_init(time)
         try:
             # Asynchronously try to compute an initial km/kWh from HA history
             if self.hass is not None:
@@ -471,8 +571,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.calendar = self._conf_calendar
         self.charger = None
         self.do_force_next_charge = False
+        self.do_next_charge_time= None
         self.user_attached_charger_name = None
         self._qs_bump_solar_priority = False
+        self.forecast_person_name = None
+        self.forecast_person_full = None
 
 
     def attach_charger(self, charger):
@@ -627,6 +730,65 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return delta
 
+
+
+    def get_computed_range_efficiency_km_per_percent(self, time:datetime, delta_soc:float=0.0) -> float | None:
+
+        if time is None:
+            time = datetime.now(pytz.UTC)
+
+        current_soc = self.get_car_charge_percent(time)
+        car_estimate = self.get_car_estimated_range_km_from_sensor(time)
+
+        if current_soc is not None and car_estimate is not None and current_soc > 0.0:
+            return car_estimate / float(current_soc)
+
+        best_segment = None
+        # from the more recent to the older
+        for i in range(len(self._efficiency_segments) - 1, -1, -1):
+            seg = self._efficiency_segments[i]
+            if (time - seg[4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
+                break
+
+            if seg[0] == 0 or seg[1] == 0:
+                continue
+
+            if best_segment is None or (abs(seg[1] - delta_soc) < abs(best_segment[1] - delta_soc)):
+                best_segment = seg
+
+        if best_segment is not None:
+            return (best_segment[0] / best_segment[1])
+
+        if self._km_per_kwh is not None:
+            return (self._km_per_kwh * (float(self.car_battery_capacity) / 1000.0)) / 100.0
+
+        return None
+
+
+    def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
+
+        target_range_km = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
+        current_range_km = self.get_estimated_range_km(time)
+
+        current_soc = self.get_car_charge_percent(time)
+        km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
+
+        if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
+            return None, None, None, None
+
+        needed_soc = min(100.0, target_range_km / km_per_percent)
+
+        diff_energy = (abs(needed_soc - current_soc)*self.car_battery_capacity)/100.0
+
+        if current_range_km >= target_range_km:
+            return True, current_soc, needed_soc, diff_energy
+        else:
+            return False, current_soc, needed_soc, diff_energy
+
+
+
+
+
     def get_car_estimated_range_km(self, from_soc=100.0, to_soc=0.0, time: datetime | None = None) -> float | None:
 
         # not really useful no?
@@ -637,58 +799,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         delta_soc = abs(from_soc - to_soc)
 
+        eff_perc = self.get_computed_range_efficiency_km_per_percent(time, delta_soc)
 
-        current_soc = self.get_car_charge_percent(time)
-        car_estimate = self.get_car_estimated_range_km_from_sensor(time)
-
-        car_estimated_distance = None
-        soc_distance = None
-        efficiency_distance = None
-
-
-        if current_soc is not None and car_estimate is not None:
-            car_estimated_distance = (delta_soc*car_estimate)/float(current_soc)
-
-        if car_estimated_distance is None:
-
-            best_segment = None
-            # from the more recent to the older
-            for i in range(len(self._efficiency_segments)-1, -1, -1):
-                seg = self._efficiency_segments[i]
-                if (time - seg[4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
-                    break
-
-                if seg[0] == 0 or seg[1] == 0:
-                    continue
-
-                if best_segment is None or (abs(seg[1] - delta_soc) < abs(best_segment[1] - delta_soc)):
-                    best_segment = seg
-
-            soc_distance = None
-            if best_segment is not None:
-                soc_distance = delta_soc*(best_segment[0] / best_segment[1])
-
-            if soc_distance is None:
-                eff = self._km_per_kwh
-                if eff is not None:
-                    if self.car_battery_capacity is not None and self.car_battery_capacity > 0:
-                        energy_kwh = (delta_soc / 100.0) * (float(self.car_battery_capacity) / 1000.0)
-                        efficiency_distance = energy_kwh * eff
-
-
-        result = car_estimated_distance
-        if result is None:
-            result = soc_distance
-        if result is None:
-            result = efficiency_distance
-
-        _LOGGER.debug(
-            f"get_car_estimated_range_km: Car {self.name} from_soc {from_soc} to_soc {to_soc} delta_soc {delta_soc} car_estimated_distance {car_estimated_distance} soc_distance {soc_distance} efficiency_distance {efficiency_distance} result {result}")
+        result = None
+        if eff_perc is not None:
+            result = eff_perc * delta_soc
 
         return result
 
 
     def get_estimated_range_km(self, time: datetime | None = None) -> float | None:
+
+        res = self.get_car_estimated_range_km_from_sensor(time)
+        if res is not None:
+            return res
 
         soc = self.get_car_charge_percent(time)
         if soc is None:
@@ -1127,16 +1251,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
     async def add_default_charge_at_datetime(self, end_charge:datetime):
-        if self.calendar is None:
+        if self.can_add_default_charge() is False:
             return
-        start_time = end_charge
-        end_time = end_charge + timedelta(seconds=60*30)
-        time = datetime.now(pytz.UTC)
-        await self.set_next_scheduled_event(time, start_time, end_time, f"Charge {self.name}")
+        self.do_next_charge_time = end_charge
+        # start_time = end_charge
+        # end_time = end_charge + timedelta(seconds=60*30)
+        # time = datetime.now(pytz.UTC)
+        # await self.set_next_scheduled_event(time, start_time, end_time, f"Charge {self.name}")
 
 
     async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None):
-        if self.calendar is None:
+        if self.can_add_default_charge() is False:
             return
 
         if default_charge_time is None:
@@ -1149,12 +1274,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await self.add_default_charge_at_datetime(next_time)
 
 
-    async def add_default_charge(self):
+    async def user_add_default_charge(self):
         if self.can_add_default_charge():
             await self.add_default_charge_at_dt_time(self.default_charge_time)
 
     def can_add_default_charge(self) -> bool:
-        if self.charger is not None and self.calendar is not None:
+        if self.charger is not None:
             return True
         return False
 
@@ -1258,7 +1383,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return f"{value}%"
 
-    async def set_next_charge_target_percent(self, value:int|float|str):
+    async def set_next_charge_target_percent(self, value:int|float|str, do_update_charger:bool=True):
 
         if isinstance(value, str):
             if "default" in value:
@@ -1279,7 +1404,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         new_target = await self.setup_car_charge_target_if_needed()
 
-        if self.charger and new_target:
+        if do_update_charger and self.charger and new_target:
             time = datetime.now(pytz.UTC)
             if await self.charger.do_run_check_load_activity_and_constraints(time):
                 self.home.force_next_solve()

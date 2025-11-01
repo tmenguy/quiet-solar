@@ -24,12 +24,32 @@ from .const import (
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT, HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT,
     SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
-    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM
+    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    SENSOR_CAR_FORECAST_PERSON_NAME, SENSOR_CAR_FORECAST_PERSON_FULL
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
 from .ha_model.home import QSHome
+from .ha_model.person import QSPerson
 from .home_model.load import AbstractDevice, AbstractLoad
+
+
+def create_ha_sensor_for_QSPerson(device: QSPerson):
+    entities = []
+
+    load_current_command = QSSensorEntityDescription(
+        key="person_mileage_prediction",
+        translation_key=SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        device_class=SensorDeviceClass.DISTANCE,
+        value_fn_and_attr=lambda device, key: device.get_person_mileage_prediction(),
+    )
+    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+
+
+
+    return entities
 
 
 def create_ha_sensor_for_QSCar(device: QSCar):
@@ -104,7 +124,6 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-
     load_current_command = QSSensorEntityDescription(
         key="car_charge_time",
         translation_key=SENSOR_CAR_CHARGE_TIME,
@@ -112,7 +131,17 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
+    load_current_command = QSSensorEntityDescription(
+        key="forecast_person_name",
+        translation_key=SENSOR_CAR_FORECAST_PERSON_NAME,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
+    load_current_command = QSSensorEntityDescription(
+        key="forecast_person_full",
+        translation_key=SENSOR_CAR_FORECAST_PERSON_FULL,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
     return entities
 
@@ -266,6 +295,8 @@ def create_ha_sensor(device: AbstractDevice):
         ret.extend(create_ha_sensor_for_QSCharger(device))
     elif isinstance(device, QSHome):
         ret.extend(create_ha_sensor_for_QSHome(device))
+    elif isinstance(device, QSPerson):
+        ret.extend(create_ha_sensor_for_QSPerson(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_sensor_for_Load(device))
@@ -309,6 +340,8 @@ class QSSensorEntityDescription(SensorEntityDescription):
     """Describes Quiet Solar sensor entity."""
     qs_is_none_unavailable: bool  = False
     value_fn: Callable[[AbstractDevice, str], Any] | None = None
+    value_fn_and_attr: Callable[[AbstractDevice, str], tuple[Any,Any]] | None = None
+
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
@@ -328,10 +361,15 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
 
-        if self.entity_description.value_fn is None:
-            state = getattr(self.device, self.entity_description.key)
-        else:
+        extra_attr = {}
+
+        if self.entity_description.value_fn is not None:
             state = self.entity_description.value_fn(self.device, self.entity_description.key)
+        elif self.entity_description.value_fn_and_attr is not None:
+            state, extra_attr = self.entity_description.value_fn_and_attr(self.device, self.entity_description.key)
+        else:
+            state = getattr(self.device, self.entity_description.key)
+
 
         self._set_availabiltiy()
 
@@ -346,7 +384,11 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
                 return
 
         self._attr_native_value = state
+        if extra_attr is not None:
+            # only set if we have some
+            self._attr_extra_state_attributes = extra_attr # or self._attr_extra_state_attributes.update(extra_attr) ?
         self.async_write_ha_state()
+
 
 
 @dataclass

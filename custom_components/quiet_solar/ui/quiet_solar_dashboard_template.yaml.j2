@@ -65,6 +65,7 @@ views:
               {%- endif %}
               {%- endif %}
               {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}
+              {% if ha.get("forecast_person_name") %}forecasted_person: {{ ha.get("forecast_person_name").entity_id }}{% endif %}
               {% if ha.get("qs_load_clean_and_reset") %}reset: {{ ha.get("qs_load_clean_and_reset").entity_id }}{% endif %}
               {% if ha.get("car_charge_type") %}charge_type: {{ ha.get("car_charge_type").entity_id }}{% endif %}
               {% if ha.get("car_charge_time") %}charge_time: {{ ha.get("car_charge_time").entity_id }}{% endif %}

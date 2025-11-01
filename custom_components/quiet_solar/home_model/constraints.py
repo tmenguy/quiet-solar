@@ -22,12 +22,43 @@ from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FA
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def get_readable_date_string(time:datetime | None, for_small_standalone: bool = False) -> str:
+    if time is None or time == DATETIME_MAX_UTC:
+        if for_small_standalone:
+            return "--:--"
+        else:
+            return ""
+    else:
+        local_target_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
+        local_today = date.today()
+        local_today = datetime(local_today.year, local_today.month, local_today.day)
+        local_tomorrow = local_today + timedelta(days=1)
+        local_now = datetime.now(tz=pytz.UTC).replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
+        if for_small_standalone:
+            if local_now + timedelta(days=1) > local_target_date:
+                # the target hour/mn/ss is enough to describe unambiguously the target date vs now
+                target = local_target_date.strftime("%H:%M")
+            else:
+                target = local_target_date.strftime("%y-%m-%d\n%H:%M")
+        elif local_constraint_day == local_today:
+            target = "today " + local_target_date.strftime("%H:%M")
+        elif local_constraint_day == local_tomorrow:
+            target = "tomorrow " + local_target_date.strftime("%H:%M")
+        else:
+            target = local_target_date.strftime("%Y-%m-%d %H:%M")
+
+    return target
+
 class LoadConstraint(object):
 
     def __init__(self,
                  time: datetime | None = None,
                  load = None,
                  load_param: str | None = None,
+                 load_info: dict | None = None,
                  from_user: bool = False,
                  artificial_step_to_final_value: None|int|float = None,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
@@ -44,6 +75,7 @@ class LoadConstraint(object):
         :param time: the time at constraint creation
         :param load: the load that the constraint is applied to
         :param load_param: the load param that the constraint is applied to
+        :param load_info: additional load information dictionary, SIMPLE dict ... direct HA serialization safe
         :param type: of CONSTRAINT_TYPE_* behaviour of the constraint
         :param start_of_constraint: constraint start time if None the constraint start asap, depends on the type
         :param end_of_constraint: constraint end time if None the constraint is always active, depends on the type
@@ -54,6 +86,7 @@ class LoadConstraint(object):
 
         self.load = load
         self.load_param = load_param
+        self.load_info = load_info
         self.from_user = from_user
         self.artificial_step_to_final_value = artificial_step_to_final_value
         self.type = type
@@ -85,6 +118,7 @@ class LoadConstraint(object):
             self._internal_initial_value = 0.0
 
         self.target_value = target_value
+        self.requested_target_value = target_value
 
         if current_value is None:
             self.current_value = self._internal_initial_value
@@ -122,12 +156,24 @@ class LoadConstraint(object):
         target_s = f"{self.target_value}"
         if self.artificial_step_to_final_value is not None:
             target_s = f"{self.target_value} -> {self.artificial_step_to_final_value}"
-        return f"Constraint for {self.load.name} ({self.load_param} {self.initial_value}/{target_s}/{self.type})"
+
+        extra_s = ""
+        if self.load_param:
+            extra_s += f"{self.load_param} "
+        if self.load_info:
+            extra_s += f"{self.load_info} "
+
+        return f"Constraint for {self.load.name} ({extra_s}{self.initial_value}/{target_s}/{self.type})"
 
     @property
     def stable_name(self):
         target_value = self._get_target_value_for_readable()
-        return f"Constraint for {self.load.name} ({self.load_param} {target_value}/{self.type})"
+        extra_s = ""
+        if self.load_param:
+            extra_s += f"{self.load_param} "
+        if self.load_info:
+            extra_s += f"{self.load_info} "
+        return f"Constraint for {self.load.name} ({extra_s}{target_value}/{self.type})"
 
     def __eq__(self, other):
         if other is None:
@@ -208,6 +254,7 @@ class LoadConstraint(object):
             "qs_class_type": self.__class__.__name__,
             "type": self.type,
             "load_param": self.load_param,
+            "load_info": self.load_info,
             "from_user": self.from_user,
             "artificial_step_to_final_value": self.artificial_step_to_final_value,
             "initial_value": self.initial_value,
@@ -254,33 +301,8 @@ class LoadConstraint(object):
             return 100.0 * (self.current_value - init_val) / (target_val - init_val)
 
     def get_readable_next_target_date_string(self, for_small_standalone:bool=False) -> str:
-        if self.end_of_constraint == DATETIME_MAX_UTC:
-            if for_small_standalone:
-                return "--:--"
-            else:
-                return ""
-        else:
-            local_target_date = self.end_of_constraint.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
-            local_today = date.today()
-            local_today = datetime(local_today.year, local_today.month, local_today.day)
-            local_tomorrow = local_today + timedelta(days=1)
-            local_now = datetime.now(tz=pytz.UTC).replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        return get_readable_date_string(self.end_of_constraint, for_small_standalone=for_small_standalone)
 
-            if for_small_standalone:
-                if local_now +  timedelta(days=1) > local_target_date:
-                    # the target hour/mn/ss is enough to describe unambiguously the target date vs now
-                    target = local_target_date.strftime("%H:%M")
-                else:
-                    target = local_target_date.strftime("%y-%m-%d\n%H:%M")
-            elif local_constraint_day == local_today:
-                target = "today " + local_target_date.strftime("%H:%M")
-            elif local_constraint_day == local_tomorrow:
-                target = "tomorrow " + local_target_date.strftime("%H:%M")
-            else:
-                target = local_target_date.strftime("%Y-%m-%d %H:%M")
-
-        return target
 
     def _get_target_value_for_readable(self) -> int|float:
         target_value = self.target_value
@@ -307,7 +329,14 @@ class LoadConstraint(object):
 
         prefix = ""
         if self.load_param:
-            prefix = f"{self.load_param}: "
+            prefix = f"{self.load_param}"
+        if self.load_info:
+            prefix += "("
+            for k,v in self.load_info.items():
+                prefix += f"{k}={v} "
+            prefix += ")"
+        if prefix != "":
+            prefix = f"{prefix}: "
 
         if target_date:
             target_date = f" {target_date}"
@@ -418,7 +447,7 @@ class LoadConstraint(object):
         """ Return the best duration to meet the constraint."""
 
 
-    def best_duration_extenstion_to_push_constraint(self, time:datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
+    def best_duration_extension_to_push_constraint(self, time:datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
 
         duration_s = self.best_duration_to_meet() + end_constraint_min_tolerancy
         duration_s = max(timedelta(seconds=1200),
@@ -1350,41 +1379,31 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def __init__(self, **kwargs):
 
-        end_ct = kwargs.get("end_of_constraint")
-        if end_ct is None:
-            end_ct = DATETIME_MAX_UTC
+        super().__init__(**kwargs)
 
+        end_ct = self.end_of_constraint
         if end_ct < DATETIME_MAX_UTC:
 
-            time = kwargs.get("time")
-            if time is None:
-                time = datetime.now(pytz.UTC)
-
-            start_time = kwargs.get("start_of_constraint")
-            if start_time is None:
+            start_time = self.start_of_constraint
+            if start_time == DATETIME_MIN_UTC:
+                time = kwargs.get("time")
+                if time is None:
+                    time = datetime.now(pytz.UTC)
                 start_time = time
 
-            start_value = kwargs.get("current_value")
-            if start_value is None:
-                start_value = kwargs.get("initial_value", 0.0)
-
-            end_value = kwargs.get("target_value")
+            start_value = self.current_value
+            end_value = self.requested_target_value
 
             if end_value is not None:
-                load = kwargs.get("load")
-                if load is not None:
-                    efficiency_factor = load.efficiency_factor
-                else:
-                    efficiency_factor = 1.0
-
-                duration_s = efficiency_factor * (end_value - start_value)
+                # here everything is pure timing : no efficiency factor to be used
+                duration_s = (end_value - start_value)
 
                 # check if we need to clamp the target value to what is possible
                 if duration_s > 0 and duration_s > (end_ct - start_time).total_seconds():
                     # we cannot fill that much in the time available, so clamp it, minimum is 1s here...
-                    kwargs["target_value"] = start_value + max(1.0, ((end_ct - start_time).total_seconds())/efficiency_factor)
+                    self.target_value = start_value + max(1.0, ((end_ct - start_time).total_seconds()))
 
-        super().__init__(**kwargs)
+
 
     def _get_readable_target_value_string(self) -> str:
         target_value = self._get_target_value_for_readable()
@@ -1402,7 +1421,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
             target_string = f"{int(target_value / 60)}mn"
         return target_string
 
-    def best_duration_extenstion_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
+    def best_duration_extension_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
         return self.best_duration_to_meet()
 
 

@@ -118,13 +118,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         else:
             return state.state == self.expected_state_from_command_or_user(command)
 
-
-    def get_proper_local_adapted_tomorrow(self, time: datetime) -> datetime:
-        local_target_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        local_constraint_day = datetime(local_target_date.year, local_target_date.month, local_target_date.day)
-        local_tomorrow = local_constraint_day + timedelta(days=1)
-        return local_tomorrow.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
         if self.external_user_initiated_state is not None:
             # we say all is good ... but we don't do anything
