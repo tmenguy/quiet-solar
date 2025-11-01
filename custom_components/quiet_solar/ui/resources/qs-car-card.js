@@ -178,8 +178,6 @@ class QsCarCard extends HTMLElement {
     const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); }
-      .forecasted-person { position: absolute; top: var(--pad); left: var(--pad); font-size: 0.9rem; font-weight: 600; color: var(--secondary-text-color); display: flex; align-items: center; gap: 6px; }
-      .forecasted-person ha-icon { --mdc-icon-size: 18px; }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:300px; margin-left:auto; margin-right:auto; }
@@ -218,8 +216,8 @@ class QsCarCard extends HTMLElement {
       .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height: 1.1; white-space: pre-line; }
       .ring .mini-icon { --mdc-icon-size: 18px; color: var(--primary-text-color); }
       .ring .mini-range { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .mini-range-now { color: var(--primary-text-color); font-weight:700; font-size: .95rem; line-height:1; margin-top:0; transform: translateY(-8px); }
-      .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height:1; margin-top:0; margin-bottom:0; transform: translateY(-8px); }
+      .ring .mini-range-now { color: var(--primary-text-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; transform: translateY(-8px); }
+      .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; margin-bottom:0; transform: translateY(-8px); }
       .disabled .ring .mini-range-target { color: var(--secondary-text-color); }
       .ring .mini-range:empty, .ring .mini-range-now:empty, .ring .mini-range-target:empty { display:none; }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
@@ -370,11 +368,12 @@ class QsCarCard extends HTMLElement {
     const forecastedPersonStr = sForecastedPerson?.state;
     const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
 
+    const displayTitle = showForecastedPerson ? `${title} (${forecastedPersonStr})` : title;
+
     this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''}">
         <style>${css}</style>
-        ${showForecastedPerson ? `<div class="forecasted-person"><ha-icon icon="mdi:account"></ha-icon><span>${forecastedPersonStr}</span></div>` : ''}
-        <div class="card-title">${title}</div>
+        <div class="card-title">${displayTitle}</div>
         <div class="top"></div>
 
         <div class="hero">
