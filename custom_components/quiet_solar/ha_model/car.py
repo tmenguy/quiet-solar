@@ -286,6 +286,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self.forecast_person_name = None
                 self.forecast_person_full = None
 
+            return is_person_covered, next_usage_time, person_min_target_charge, person
+
         return (None, None, None, None)
 
 
