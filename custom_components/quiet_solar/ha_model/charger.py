@@ -2646,6 +2646,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             car_charge_mandatory = None
             car_charge_person = None
 
+
+            if self.car.do_force_next_charge is True and self.car.do_next_charge_time is not None:
+                # both are set ... we will ignore the time based one
+                self.car.do_next_charge_time = None
+
+
             # in case a user pressed the button ....clean everything and force the charge
             if self.car.do_force_next_charge is True:
 
@@ -2687,6 +2693,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 # update the constraints to follow the new as fast target
                                 self.set_live_constraints(time, self._constraints)
                             break
+                if force_constraint is not None and self.car.do_next_charge_time is not None:
+                    # we should kill the force constraint and push a time based one...it will be done just below
+                    # to be sure the time based one is pushed
+                    force_constraint = None
 
             if force_constraint is not None:
                 # reset the next charge force state

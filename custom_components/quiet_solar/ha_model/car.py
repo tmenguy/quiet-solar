@@ -1252,33 +1252,41 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.amp_to_power_1p, self.car_charger_min_charge, self.car_charger_max_charge
 
 
-    async def add_default_charge_at_datetime(self, end_charge:datetime):
+    async def add_default_charge_at_datetime(self, end_charge:datetime) -> bool:
         if self.can_add_default_charge() is False:
-            return
+            return False
         self.do_next_charge_time = end_charge
         # start_time = end_charge
         # end_time = end_charge + timedelta(seconds=60*30)
         # time = datetime.now(pytz.UTC)
         # await self.set_next_scheduled_event(time, start_time, end_time, f"Charge {self.name}")
+        return True
 
 
-    async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None):
+    async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None) -> bool:
         if self.can_add_default_charge() is False:
-            return
+            return False
 
         if default_charge_time is None:
             _LOGGER.error(f"Car {self.name} cannot add default charge at None time")
-            return
+            return False
 
         # compute the next occurrence of the default charge time
         next_time = self.get_next_time_from_hours(local_hours=default_charge_time, output_in_utc=True)
 
-        await self.add_default_charge_at_datetime(next_time)
+        return await self.add_default_charge_at_datetime(next_time)
 
 
     async def user_add_default_charge(self):
         if self.can_add_default_charge():
-            await self.add_default_charge_at_dt_time(self.default_charge_time)
+
+            res = await self.add_default_charge_at_dt_time(self.default_charge_time)
+
+            if res and self.charger:
+                self.do_force_next_charge = False
+                time = datetime.now(pytz.UTC)
+                if await self.charger.do_run_check_load_activity_and_constraints(time):
+                    self.home.force_next_solve()
 
     def can_add_default_charge(self) -> bool:
         if self.charger is not None:
@@ -1293,6 +1301,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def force_charge_now(self):
         if self.can_force_a_charge_now():
             self.do_force_next_charge = True
+            self.do_next_charge_time = None
+            if self.charger:
+                time = datetime.now(pytz.UTC)
+                if await self.charger.do_run_check_load_activity_and_constraints(time):
+                    self.home.force_next_solve()
 
     def can_use_charge_percent_constraints(self):
 
