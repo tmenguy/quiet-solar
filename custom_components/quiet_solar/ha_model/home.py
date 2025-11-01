@@ -1517,27 +1517,33 @@ class QSHome(QSDynamicGroup):
 
             # first check the existing values for the persons, if one is empty
             # we should recompute everyone as much as possible
-            has_empty_person = False
-            for person in self._persons:
-                if person.should_recompute_history():
-                    has_empty_person = True
-                    break
 
             local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
-            if has_empty_person and local_day_shifted == local_day:
+            if local_day_shifted == local_day:
+                # we are after 4am of the current day,
 
-                # we are after 4am of the current day, we can recompute the last 14 days
-                # we shift to 4am to have mileage from 4am to 4am,
-                for d in range(0, 14):
-                    await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
-
+                has_person_to_recompute = False
                 for person in self._persons:
-                    person.has_been_initialized = True
+                    if person.should_recompute_history(time):
+                        has_person_to_recompute = True
+                        break
 
-            if local_day_shifted > prev_local_day_shifted and local_day_shifted == local_day:
-                # we changed day, we can compute the previous day
-                await self._compute_and_store_person_car_forecasts(local_day_utc)
+                if has_person_to_recompute:
+
+                    # we are after 4am of the current day, we can recompute the last 14 days
+                    # we shift to 4am to have mileage from 4am to 4am,
+                    for d in range(0, 14):
+                        await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
+
+                    for person in self._persons:
+                        person.has_been_initialized = True
+
+                    _LOGGER.warning("update_forecast_probers: recomputed person historical data")
+
+                if local_day_shifted != prev_local_day_shifted:
+                    # we changed day, we can compute the previous day
+                    await self._compute_and_store_person_car_forecasts(local_day_utc)
 
 
     async def _compute_and_store_person_car_forecasts(self, local_day_utc:datetime, day_shift:int=0):

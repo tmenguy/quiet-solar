@@ -60,7 +60,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             is_numerical=False
         )
 
-    def should_recompute_history(self) -> bool:
+    def should_recompute_history(self, time:datetime) -> bool:
 
         if self.authorized_cars is None or len(self.authorized_cars) == 0:
             return False
@@ -68,7 +68,11 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.has_been_initialized is False:
             return True
 
-        return len(self.historical_mileage_data) == 0
+        if len(self.historical_mileage_data) > 0:
+            if (time - self.historical_mileage_data[-1][0]) > timedelta(hours=40):
+                return True
+
+        return False
 
     def add_to_mileage_history(self, day:datetime, mileage:float, leave_time:datetime) -> None:
 
@@ -90,8 +94,11 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
             self.historical_mileage_data.insert(insert_idx, (day, mileage, leave_time, week_day))
 
-        if len(self.historical_mileage_data) > MAX_HISTORICAL_DATA_DAYS: # keeps only 2 weeks of data
-            self.historical_mileage_data.pop(0)
+        while True:
+            if len(self.historical_mileage_data) > MAX_HISTORICAL_DATA_DAYS: # keeps only 2 weeks of data
+                self.historical_mileage_data.pop(0)
+            else:
+                break
 
         self._last_request_prediction_time = None
 
@@ -221,7 +228,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
                     self.add_to_mileage_history( day, float(mileage), leave_time )
                 except Exception as ex:
-                    _LOGGER.warning(f"QSPerson:device_post_home_init: error parsing historical entry {e} : {ex}")
+                    _LOGGER.warning(f"QSPerson {self.name} :device_post_home_init: error parsing historical entry {e} : {ex}")
 
             self.predicted_mileage = current_attributes.get("predicted_mileage", None)
 
@@ -229,8 +236,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             if self.predicted_leave_time is not None:
                 self.predicted_leave_time = datetime.fromisoformat(self.predicted_leave_time)
 
+            self.has_been_initialized = current_attributes.get("has_been_initialized", False)
             if len(self.historical_mileage_data) != 0:
                 self.has_been_initialized = True
+
+            if self.has_been_initialized is False:
+                _LOGGER.warning("QSPerson {self.name} :device_post_home_init: no initialization need compute")
 
 
     def get_person_mileage_prediction(self) -> tuple[Any | None, dict | None]:
@@ -245,10 +256,15 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.predicted_leave_time is not None:
             serialized_leave_time = self.predicted_leave_time.isoformat()
 
-        return    self.predicted_mileage, {
+        state_value = 0.0
+        if self.predicted_mileage is not None:
+            state_value = self.predicted_mileage
+
+        return    state_value, {
             "historical_data": self.serializable_historical_data,
             "predicted_mileage": self.predicted_mileage,
-            "predicted_leave_time": serialized_leave_time
+            "predicted_leave_time": serialized_leave_time,
+            "has_been_initialized" : self.has_been_initialized
         }
 
     def is_person_home(self, time: datetime, for_duration: float | None = None) -> bool | None:
