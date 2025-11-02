@@ -209,16 +209,18 @@ class QsCarCard extends HTMLElement {
       .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; text-align:center; width: 180px; margin: 0 auto; }
       .ring .soc-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
+      .ring .soc-block .charge-type-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); margin-bottom: 2px; }
       .ring .stack > * { text-align:center; }
       .ring .mini-grid { display:grid; grid-template-columns: repeat(3, 60px); grid-auto-rows: auto; width:180px; margin: 0 auto; justify-items:center; align-items:center; row-gap:4px; column-gap:0; }
       .ring .mini-grid.extra { row-gap:0; margin-top:2px; margin-bottom:6px; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:0; }
+      .ring .target-cell { display:flex; flex-direction:column; align-items:center; gap:2px; }
       .ring .mini-title { color: var(--secondary-text-color); font-weight:700; font-size: .7rem; letter-spacing:.2px; white-space: nowrap; }
       .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height: 1.1; white-space: pre-line; }
       .ring .mini-icon { --mdc-icon-size: 18px; color: var(--primary-text-color); }
       .ring .mini-range { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .mini-range-now { color: var(--primary-text-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; transform: translateY(-8px); }
-      .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; margin-bottom:0; transform: translateY(-8px); }
+      .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; margin-bottom:0; }
       .disabled .ring .mini-range-target { color: var(--secondary-text-color); }
       .ring .mini-range:empty, .ring .mini-range-now:empty, .ring .mini-range-target:empty { display:none; }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
@@ -441,6 +443,7 @@ class QsCarCard extends HTMLElement {
             <div class="center">
               <div class="stack">
                 <div class="soc-block">
+                  ${chargeIcon ? `<ha-icon class="charge-type-icon" icon="${chargeIcon}"></ha-icon>` : ''}
                   <div class="pct" style="margin-bottom:0;">${displaySocValue}</div>
                   ${useEnergyMode ? '' : `<div class="mini-range-now" aria-label="current range">${rangeNowStr}</div>`}
                 </div>
@@ -451,16 +454,12 @@ class QsCarCard extends HTMLElement {
                   <div class="mini-title">${chargeTimeLabel}</div>
 
                   <div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}"><ha-icon icon="mdi:rabbit"></ha-icon></div>
-                  <div id="target_value" class="target-value">${displayTargetValue}</div>
+                  <div class="target-cell">
+                    <div id="target_value" class="target-value">${displayTargetValue}</div>
+                    ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
+                  </div>
                   <div id="time_btn" class="time-btn">${chargeTime}</div>
                 </div>
-                ${useEnergyMode ? '' : `
-                <div class="mini-grid extra">
-                  <div></div>
-                  <div><div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div></div>
-                  <div></div>
-                </div>
-                `}
                 </div>
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div class="mini-title">Solar priority</div>
