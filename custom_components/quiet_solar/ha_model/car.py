@@ -1527,24 +1527,33 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def set_user_selected_charger_by_name(self, charger_name: str | None):
 
         # if the car is already attached to a charger, we detach it
+        orig_charger = self.charger
+        new_charger = None
+
         if self.charger is not None and self.charger.name != charger_name:
             self.detach_charger()
 
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
             self.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
-            return
+        else:
+            self.user_attached_charger_name = None
 
-        self.user_attached_charger_name = None
+            if charger_name is not None:
+                charger = None
+                for c in self.home._chargers:
+                    if c.name == charger_name:
+                        charger = c
+                        break
 
-        if charger_name is not None:
-            charger = None
-            for c in self.home._chargers:
-                if c.name == charger_name:
-                    charger = c
-                    break
+                if charger is not None:
+                    await charger.set_user_selected_car_by_name(car_name=self.name)
+                    new_charger = charger
 
-            if charger is not None:
-                await charger.set_user_selected_car_by_name(car_name=self.name)
+        if new_charger is not None:
+            await new_charger.update_charger_for_user_change()
+
+        if orig_charger is not None:
+            await orig_charger.update_charger_for_user_change()
 
     async def user_clean_and_reset(self):
         charger = self.charger
