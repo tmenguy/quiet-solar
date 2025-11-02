@@ -10,7 +10,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
     BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE, \
-    BUTTON_LOAD_CLEAN_AND_RESET, BUTTON_HOME_GENERATE_YAML_DASHBOARD, BUTTON_HOME_LIGHT_RESET_HISTORY
+    BUTTON_DEVICE_CLEAN_AND_RESET, BUTTON_HOME_GENERATE_YAML_DASHBOARD, BUTTON_HOME_LIGHT_RESET_HISTORY, \
+    BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
@@ -66,7 +67,7 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
     qs_force_next_charge = QSButtonEntityDescription(
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
-        async_press=lambda x: x.device.force_charge_now(),
+        async_press=lambda x: x.device.user_force_charge_now(),
         is_available=lambda x: x.device.can_force_a_charge_now()
     )
 
@@ -89,7 +90,7 @@ def create_ha_button_for_QSCar(device: QSCar):
     qs_force_next_charge = QSButtonEntityDescription(
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
-        async_press=lambda x: x.device.force_charge_now(),
+        async_press=lambda x: x.device.user_force_charge_now(),
         is_available=lambda x: x.device.can_force_a_charge_now()
     )
 
@@ -103,14 +104,6 @@ def create_ha_button_for_QSCar(device: QSCar):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge))
-
-    qs_reset_history = QSButtonEntityDescription(
-        key=BUTTON_LOAD_CLEAN_AND_RESET,
-        translation_key=BUTTON_LOAD_CLEAN_AND_RESET,
-        async_press=lambda x: x.device.user_clean_and_reset(),
-    )
-
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
 
     return entities
 
@@ -127,15 +120,6 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
 
 
-    qs_reset_history = QSButtonEntityDescription(
-        key=BUTTON_LOAD_CLEAN_AND_RESET,
-        translation_key=BUTTON_LOAD_CLEAN_AND_RESET,
-        async_press=lambda x: x.device.user_clean_and_reset(),
-    )
-
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
-
-
     if device.support_user_override():
         qs_reset_override = QSButtonEntityDescription(
             key=BUTTON_LOAD_RESET_OVERRIDE_STATE,
@@ -146,6 +130,31 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
         entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_override))
 
     return entities
+
+def create_ha_button_for_AbstractDevice(device: AbstractDevice):
+    entities = []
+
+
+    qs_reset_history = QSButtonEntityDescription(
+        key=BUTTON_DEVICE_CLEAN_AND_RESET,
+        translation_key=BUTTON_DEVICE_CLEAN_AND_RESET,
+        async_press=lambda x: x.device.user_clean_and_reset(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+
+
+    qs_reset_history = QSButtonEntityDescription(
+        key=BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
+        translation_key=BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
+        async_press=lambda x: x.device.user_clean_constraints(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
+
+
+    return entities
+
 
 def create_ha_button(device: AbstractDevice):
 
@@ -161,6 +170,10 @@ def create_ha_button(device: AbstractDevice):
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_button_for_AbstractLoad(device))
+
+    if isinstance(device, AbstractDevice):
+        ret.extend(create_ha_button_for_AbstractDevice(device))
+
     return ret
 
 async def async_setup_entry(

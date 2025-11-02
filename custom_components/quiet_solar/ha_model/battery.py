@@ -45,11 +45,6 @@ class QSBattery(HADeviceMixin, Battery):
         self.is_charge_from_grid_current = None
 
 
-    async def user_clean_and_reset(self):
-        await super().user_clean_and_reset()
-        await self.clean_and_reset()
-
-
     @property
     def current_charge(self) -> float | None:
         percent = self.get_sensor_latest_possible_valid_value(entity_id=self.charge_percent_sensor)

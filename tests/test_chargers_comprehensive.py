@@ -608,8 +608,8 @@ class TestQSChargerGenericBasics(unittest.TestCase):
         mock_detach.assert_called_once()
         self.assertIsNone(charger._asked_for_reboot_at_time)
     
-    def test_reset_load_only(self):
-        """Test the reset_load_only method."""
+    def test_command_and_constraint_reset(self):
+        """Test the command_and_constraint_reset method."""
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(**self.charger_config)
         
@@ -617,9 +617,9 @@ class TestQSChargerGenericBasics(unittest.TestCase):
         mock_car = MagicMock()
         charger.car = mock_car
         
-        charger.reset_load_only()
+        charger.command_and_constraint_reset()
         
-        # Car should still be attached after reset_load_only
+        # Car should still be attached after command_and_constraint_reset
         self.assertEqual(charger.car, mock_car)
     
     def test_get_current_selected_car_option_user_attached(self):

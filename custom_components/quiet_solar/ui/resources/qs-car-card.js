@@ -601,16 +601,16 @@ class QsCarCard extends HTMLElement {
                   // Check if already in "As Fast As Possible" mode
                   const isAlreadyForcing = sChargeType?.state === 'As Fast As Possible';
 
-                  if (isAlreadyForcing && e.reset) {
+                  if (isAlreadyForcing && e.clean_constraints) {
                       // Show reset dialog
                       showDialog({
                           title: 'Stop Force Charging',
-                          message: 'This will stop the current charge and reset the car state.\nOk to proceed for the reset?',
+                          message: 'This will stop the current charge.\nOk to proceed?',
                           buttons: [
                               {text: 'Cancel', variant: 'secondary'},
                               {
                                   text: 'Reset', variant: 'danger', onClick: async () => {
-                                      await this._press(e.reset);
+                                      await this._press(e.clean_constraints);
                                   }
                               },
                           ]
@@ -644,18 +644,38 @@ class QsCarCard extends HTMLElement {
                   ev.preventDefault();
                   if (this._root?.querySelector('.disabled')) return;
 
-                  const currentHour = Math.floor(nextTimeMins / 60);
-                  const currentMin = nextTimeMins % 60;
+                  // Use chargeTime if it's valid (not "--:--"), otherwise fall back to nextTimeMins
+                  let defaultHour, defaultMin;
+                  if (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':')) {
+                      const chargeMins = parseTimeToMinutes(chargeTime);
+                      defaultHour = Math.floor(chargeMins / 60);
+                      defaultMin = chargeMins % 60;
+                      // Round up to the next 5-minute multiple
+                      defaultMin = Math.ceil(defaultMin / 5) * 5;
+                      if (defaultMin === 60) {
+                          defaultMin = 0;
+                          defaultHour = (defaultHour + 1) % 24;
+                      }
+                  } else {
+                      defaultHour = Math.floor(nextTimeMins / 60);
+                      defaultMin = nextTimeMins % 60;
+                      // Round up to the next 5-minute multiple
+                      defaultMin = Math.ceil(defaultMin / 5) * 5;
+                      if (defaultMin === 60) {
+                          defaultMin = 0;
+                          defaultHour = (defaultHour + 1) % 24;
+                      }
+                  }
 
                   const customContent = `
             <p>Select the next time the charge of the car should end:</p>
             <div class="time-picker">
               <select id="dialog_hour_select">
-                ${Array.from({length: 24}, (_, h) => `<option value="${h}" ${currentHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
+                ${Array.from({length: 24}, (_, h) => `<option value="${h}" ${defaultHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
               </select>
               <span>:</span>
               <select id="dialog_minute_select">
-                ${[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => `<option value="${m}" ${currentMin === m ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('')}
+                ${[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => `<option value="${m}" ${defaultMin === m ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('')}
               </select>
             </div>
           `;
@@ -669,7 +689,7 @@ class QsCarCard extends HTMLElement {
                               text: 'Reset',
                               variant: 'danger',
                               onClick: async () => {
-                                  if (e.reset) await this._press(e.reset);
+                                  if (e.clean_constraints) await this._press(e.clean_constraints);
                               }
                           },
                           {

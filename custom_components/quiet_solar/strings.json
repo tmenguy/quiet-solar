@@ -638,8 +638,11 @@
       "qs_load_mark_current_constraint_done": {
         "name": "Force Current Constraint Done"
       },
-      "qs_load_clean_and_reset": {
+      "qs_device_clean_and_reset": {
         "name": "BEWARE: Force Reset"
+      },
+      "qs_device_clean_command_and_constraints": {
+        "name": "Clean Constraints"
       },
       "qs_load_reset_override_state": {
         "name": "Reset User Override"

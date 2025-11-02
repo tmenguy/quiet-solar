@@ -1667,25 +1667,37 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._power_steps = []
 
-        self._auto_constraints_cleand_at_user_reset : list[LoadConstraint] = []
+        self._auto_constraints_cleaned_at_user_reset : list[LoadConstraint] = []
 
+    async def update_charger_for_user_change(self):
+        time = datetime.now(pytz.UTC)
+        if await self.do_run_check_load_activity_and_constraints(time):
+            self.home.force_next_solve()
 
-
-    async def user_clean_and_reset(self):
+    async def _user_clean_charger(self, do_full_clean_and_reset):
 
         # find any automated constraint
         time = datetime.now(pytz.UTC)
-
         auto_constraints = []
         for ct in self._constraints:
             if ct.is_constraint_active_for_time_period(time):
                 if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param and ct.load_info is not None and "person" in ct.load_info and ct.from_user is False:
                     auto_constraints.append(ct)
 
-        await super().user_clean_and_reset()
-        await self.clean_and_reset()
+        if do_full_clean_and_reset:
+            await super().user_clean_and_reset()
+        else:
+            await super().user_clean_constraints()
 
-        self._auto_constraints_cleand_at_user_reset = auto_constraints
+        self._auto_constraints_cleaned_at_user_reset = auto_constraints
+
+        await self.update_charger_for_user_change()
+
+    async def user_clean_and_reset(self):
+        await self._user_clean_charger(do_full_clean_and_reset=True)
+
+    async def user_clean_constraints(self):
+        await self._user_clean_charger(do_full_clean_and_reset=False)
 
     @property
     def charger_group(self) -> QSChargerGroup:
@@ -2126,7 +2138,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._reset_state_machine()
         self._asked_for_reboot_at_time = None
         self.qs_bump_solar_priority = False
-        self._auto_constraints_cleand_at_user_reset = []
+        self._auto_constraints_cleaned_at_user_reset = []
         self.reset_boot_data()
 
     def _reset_state_machine(self):
@@ -2472,9 +2484,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return True
         return False
 
-    async def force_charge_now(self):
+    async def user_force_charge_now(self):
         if self.can_force_a_charge_now():
-            await self.car.force_charge_now()
+            await self.car.user_force_charge_now()
 
 
     def device_post_home_init(self, time:datetime):
@@ -2656,7 +2668,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car.do_force_next_charge is True:
 
                 do_force_solve = True
-                self.reset_load_only() # cleanup any previous constraints to force this one!
+                self.command_and_constraint_reset() # cleanup any previous constraints to force this one!
 
                 if car_initial_value >= target_charge:
                     _LOGGER.info(
@@ -2680,6 +2692,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     _LOGGER.info(
                         f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_SOC()} pushed forces constraint {force_constraint.name}")
                     do_force_solve = True
+
             else:
                 # we may have an as fast as possible constraint still active ... if so we need to update it
                 for ct in self._constraints:
@@ -2711,7 +2724,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     # the constraint will be launched and the start time was the one pushed here : reset it
                     do_force_solve = True
-                    self.reset_load_only() # cleanup any previous constraints to force this one!
+                    self.command_and_constraint_reset() # cleanup any previous constraints to force this one!
 
                     user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
@@ -2815,7 +2828,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                    load_info={"person": person.name},
                                                                    for_full_reset=False)
 
-                    for old_ct in self._auto_constraints_cleand_at_user_reset:
+                    for old_ct in self._auto_constraints_cleaned_at_user_reset:
                         if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
                             if abs(old_ct.end_of_constraint - next_usage_time) < timedelta(minutes=15) and abs(old_ct.target_value - person_min_target_charge) < 3.0:
                                 # ok found one ... that was reset by the user ... we should not add it back

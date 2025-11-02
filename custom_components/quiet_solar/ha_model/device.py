@@ -329,11 +329,6 @@ class HADeviceMixin:
         # to be overriden by classes below
         pass
 
-    async def user_clean_and_reset(self):
-        pass
-        # time = datetime.now(tz=pytz.UTC)
-        # await self.clean_next_qs_scheduled_event(time)
-
     def get_proper_local_adapted_tomorrow(self, time: datetime | None) -> datetime:
         if time is None:
             time = datetime.now(tz=pytz.UTC)

@@ -106,7 +106,8 @@ class AbstractDevice(object):
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
-        self._local_reset()
+        self.command_and_constraint_reset()
+        self.reset_daily_load_datas()
 
         self._ack_command(None, None)
 
@@ -169,7 +170,7 @@ class AbstractDevice(object):
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
 
-    def _local_reset(self):
+    def command_and_constraint_reset(self):
         _LOGGER.info(f"Reset device {self.name}")
         self._constraints: list[LoadConstraint | None] = []
         self.current_command : LoadCommand | None = None
@@ -180,16 +181,17 @@ class AbstractDevice(object):
         self.running_command_last_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
         self.running_command_num_relaunch_after_invalid: int = 0
-        self.num_on_off : int = 0
-        self.reset_daily_load_datas()
 
     # for class overcharging reset
     def reset(self):
-        self._local_reset()
+        self.command_and_constraint_reset()
+        self.reset_daily_load_datas()
 
-    async def clean_and_reset(self):
+    async def user_clean_and_reset(self):
         self.reset()
 
+    async def user_clean_constraints(self):
+        self.command_and_constraint_reset()
 
     @property
     def qs_enable_device(self) -> bool:
@@ -634,10 +636,6 @@ class AbstractLoad(AbstractDevice):
 
         self.externally_initialized_constraints = True
 
-
-
-
-
     async def do_probe_state_change(self, time: datetime):
 
         if self.qs_enable_device is False:
@@ -669,8 +667,8 @@ class AbstractLoad(AbstractDevice):
         return True
 
 
-    def reset_load_only(self):
-        super().reset()
+    def command_and_constraint_reset(self):
+        super().command_and_constraint_reset()
         self._last_completed_constraint = None
         self._last_pushed_end_constraint_from_agenda = None
 
@@ -739,7 +737,7 @@ class AbstractLoad(AbstractDevice):
         if for_full_reset:
             self.reset()
         else:
-            self.reset_load_only()
+            self.command_and_constraint_reset()
 
         # if not full reset : do not remember the last completed constraint .... (ex: a plugged car, when plugging in, forget any previously stored constraint)
         if for_full_reset is False:
@@ -756,7 +754,7 @@ class AbstractLoad(AbstractDevice):
 
     def reset(self):
         _LOGGER.info(f"Reset load {self.name}")
-        self.reset_load_only()
+        super().reset()
 
     async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
         if self.qs_enable_device is False:
@@ -1146,12 +1144,19 @@ class AbstractLoad(AbstractDevice):
             if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
                 await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
 
-    async def clean_and_reset(self):
-        await super().clean_and_reset()
+
+    async def user_clean_and_reset(self):
+        await super().user_clean_and_reset()
         time = datetime.now(tz=pytz.UTC)
-        _LOGGER.info(f"clean_and_reset: {self.name}")
+        _LOGGER.info(f"user_clean_and_reset: {self.name}")
         await self.launch_command(time=time, command=CMD_IDLE,
-                                  ctxt=f"clean_and_reset: {self.name}")
+                                  ctxt=f"user_clean_and_reset: {self.name}")
+
+
+    # no need to overcharge in Load as in device user_clean_constraints is
+    # already calling command_and_constraint_reset overridden in Load
+    # async def user_clean_constraints(self):
+    #    self.command_and_constraint_reset()
 
     async def async_reset_override_state(self):
 

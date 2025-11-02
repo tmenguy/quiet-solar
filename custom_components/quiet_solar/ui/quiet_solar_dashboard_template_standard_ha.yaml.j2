@@ -124,7 +124,7 @@ views:
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_load_clean_and_reset") %}
+              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
@@ -132,6 +132,15 @@ views:
               {{ "    action: toggle" }}
               {{ "  confirmation:" }}
               {{ "    text: This will Reset all constraints and states of this charger." }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_device_clean_command_and_constraints") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will Reset all constraints of this charger." }}
               {%- endif %}
             {% elif device.device_type == "climate" -%}
               {%- set ha_entity = device.ha_entities.get("qs_enable_device") %}

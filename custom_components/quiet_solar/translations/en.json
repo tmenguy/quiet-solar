@@ -303,6 +303,12 @@
     },
     "entity": {
         "button": {
+            "qs_device_clean_and_reset": {
+                "name": "BEWARE: Force Reset"
+            },
+            "qs_device_clean_command_and_constraints": {
+                "name": "Clean Constraints"
+            },
             "qs_home_generate_yaml_dashboard": {
                 "name": "Re-Generate YAML Dashboard"
             },
@@ -314,9 +320,6 @@
             },
             "qs_home_serialize_for_debug": {
                 "name": "Quiet Solar Dump for Debug"
-            },
-            "qs_load_clean_and_reset": {
-                "name": "BEWARE: Force Reset"
             },
             "qs_load_mark_current_constraint_done": {
                 "name": "Force Current Constraint Done"

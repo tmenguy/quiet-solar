@@ -39,7 +39,7 @@ def test_create_ha_button_for_charger():
     """Test creating buttons for charger device."""
     mock_charger = create_mock_device("charger")
     mock_charger.data_handler = MagicMock()
-    mock_charger.force_charge_now = AsyncMock()
+    mock_charger.user_force_charge_now = AsyncMock()
     mock_charger.user_add_default_charge = AsyncMock()
     mock_charger.can_force_a_charge_now = MagicMock(return_value=True)
     mock_charger.can_add_default_charge = MagicMock(return_value=True)
@@ -54,7 +54,7 @@ def test_create_ha_button_for_car():
     """Test creating buttons for car device."""
     mock_car = create_mock_device("car")
     mock_car.data_handler = MagicMock()
-    mock_car.force_charge_now = AsyncMock()
+    mock_car.user_force_charge_now = AsyncMock()
     mock_car.user_add_default_charge = AsyncMock()
     mock_car.user_clean_and_reset = AsyncMock()
     mock_car.can_force_a_charge_now = MagicMock(return_value=True)

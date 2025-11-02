@@ -1284,9 +1284,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             if res and self.charger:
                 self.do_force_next_charge = False
-                time = datetime.now(pytz.UTC)
-                if await self.charger.do_run_check_load_activity_and_constraints(time):
-                    self.home.force_next_solve()
+                await self.charger.update_charger_for_user_change()
 
     def can_add_default_charge(self) -> bool:
         if self.charger is not None:
@@ -1298,14 +1296,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True
         return False
 
-    async def force_charge_now(self):
+    async def user_force_charge_now(self):
         if self.can_force_a_charge_now():
             self.do_force_next_charge = True
             self.do_next_charge_time = None
             if self.charger:
-                time = datetime.now(pytz.UTC)
-                if await self.charger.do_run_check_load_activity_and_constraints(time):
-                    self.home.force_next_solve()
+                await self.charger.update_charger_for_user_change()
 
     def can_use_charge_percent_constraints(self):
 
@@ -1420,9 +1416,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         new_target = await self.setup_car_charge_target_if_needed()
 
         if do_update_charger and self.charger and new_target:
-            time = datetime.now(pytz.UTC)
-            if await self.charger.do_run_check_load_activity_and_constraints(time):
-                self.home.force_next_solve()
+            await self.charger.update_charger_for_user_change()
 
     def get_car_target_charge_option_percent(self):
         return self.get_car_option_charge_from_value_percent(self.get_car_target_SOC())
@@ -1475,9 +1469,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._next_charge_target_energy = value
 
         if self.charger:
-            time = datetime.now(pytz.UTC)
-            if await self.charger.do_run_check_load_activity_and_constraints(time):
-                self.home.force_next_solve()
+            await self.charger.update_charger_for_user_change()
 
     def get_car_target_charge_energy(self) -> int | float:
         if self._next_charge_target_energy is None:
@@ -1555,10 +1547,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 await charger.set_user_selected_car_by_name(car_name=self.name)
 
     async def user_clean_and_reset(self):
+        charger = self.charger
         await super().user_clean_and_reset()
-        if self.charger is not None:
-            await self.charger.user_clean_and_reset()
-        await self.clean_and_reset()
+        if charger is not None:
+            await charger.user_clean_and_reset()
+
+
+    async def user_clean_constraints(self):
+        charger = self.charger
+        await super().user_clean_constraints()
+        if charger is not None:
+            await charger.user_clean_constraints()
 
 
     @property
