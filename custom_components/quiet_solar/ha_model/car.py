@@ -1508,8 +1508,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     continue
             if charger.is_optimistic_plugged(time):
                 options.append(charger.name)
-            else:
-                charger.user_attached_car_name = None
 
         options.append(FORCE_CAR_NO_CHARGER_CONNECTED)
         return options
@@ -1546,11 +1544,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         break
 
                 if charger is not None:
+                    # this one will update the charger
                     await charger.set_user_selected_car_by_name(car_name=self.name)
-                    new_charger = charger
-
-        if new_charger is not None:
-            await new_charger.update_charger_for_user_change()
 
         if orig_charger is not None:
             await orig_charger.update_charger_for_user_change()

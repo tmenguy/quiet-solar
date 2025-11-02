@@ -481,7 +481,9 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
             serialized_constraint = self.device._last_pushed_end_constraint_from_agenda.to_dict()
             self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT] = serialized_constraint
 
-        self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = self.device.get_to_be_saved_info()
+        to_be_updated_info = {}
+        self.device.update_to_be_saved_info(to_be_updated_info)
+        self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = to_be_updated_info
 
         self.async_write_ha_state()
 

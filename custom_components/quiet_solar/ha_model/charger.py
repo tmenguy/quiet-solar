@@ -1669,6 +1669,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._auto_constraints_cleaned_at_user_reset : list[LoadConstraint] = []
 
+
+
+
+
+    def update_to_be_saved_info(self, data_to_update:dict):
+        super().update_to_be_saved_info(data_to_update)
+        data_to_update["user_attached_car_name"] = self.user_attached_car_name
+
+    def use_saved_info(self, stored_load_info:dict):
+        super().use_saved_info(stored_load_info)
+        self.user_attached_car_name = stored_load_info.get("user_attached_car_name", None)
+
+
+
+
+
     async def update_charger_for_user_change(self):
         time = datetime.now(pytz.UTC)
         if await self.do_run_check_load_activity_and_constraints(time):
@@ -2438,7 +2454,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             options.extend([self._default_generic_car.name, CHARGER_NO_CAR_CONNECTED])
             return options
         else:
-            self.user_attached_car_name = None
             return [CHARGER_NO_CAR_CONNECTED]
 
     def get_current_selected_car_option(self) -> str|None:
@@ -2454,9 +2469,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.user_attached_car_name = car_name
         if self.car is not None and self.car.name != car_name:
             self.detach_car()
-            time = datetime.now(pytz.UTC)
-            if await self.do_run_check_load_activity_and_constraints(time):
-                self.home.force_next_solve()
+
+        await self.update_charger_for_user_change()
 
     @property
     def default_charge_time(self) -> dt_time | None:
@@ -2499,7 +2513,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_time_adjusted = None
 
         old_connected_car_name = None
-        if self._constraints is not None and len(self._constraints) > 0:
+        if self.user_attached_car_name is not None:
+            if self.user_attached_car_name != CHARGER_NO_CAR_CONNECTED:
+                old_connected_car_name = self.user_attached_car_name
+                _LOGGER.info(f"device_post_home_init: found a stored user attached car to be kept with {old_connected_car_name}")
+                self._boot_car = self.home.get_car_by_name(old_connected_car_name)
+                if self._boot_car is not None:
+                    self._boot_car.user_attached_charger_name = self.name
+        elif self._constraints is not None and len(self._constraints) > 0:
             for ct in self._constraints:
                 old_connected_car_name = ct.load_param
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
@@ -2513,36 +2534,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     continue
                 _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
                 break
-        if old_connected_car_name is None and self._last_completed_constraint is not None:
-            old_connected_car_name = self._last_completed_constraint.load_param
-            _LOGGER.info(f"device_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
 
-        if old_connected_car_name is None and self._last_pushed_end_constraint_from_agenda is not None:
-            old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
-            _LOGGER.info(f"device_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
+            if old_connected_car_name is None and self._last_completed_constraint is not None:
+                old_connected_car_name = self._last_completed_constraint.load_param
+                _LOGGER.info(f"device_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
 
-        self._boot_car = None
-        if old_connected_car_name is not None:
-            self._boot_car = self.home.get_car_by_name(old_connected_car_name)
-            if self._boot_car is not None and self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
-                _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
-                self._boot_car = None
+            if old_connected_car_name is None and self._last_pushed_end_constraint_from_agenda is not None:
+                old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
+                _LOGGER.info(f"device_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
 
-        # clean a bit the non user constraints we only need to keep those ones, as the other ones will be recomputed
-        to_be_kept = []
-        for ct in self._constraints:
-            if ct.from_user is True:
-                to_be_kept.append(ct)
-
-        self._constraints = []
-
-        for ct in to_be_kept:
-            self.push_live_constraint(time, ct)
-
-        if len(to_be_kept) > 0 and self._boot_car:
-            # force the car!
-            self._boot_car.user_attached_charger_name = self.name
-            self.user_attached_car_name = self._boot_car.name
+            self._boot_car = None
+            if old_connected_car_name is not None:
+                self._boot_car = self.home.get_car_by_name(old_connected_car_name)
+                if self._boot_car is not None and self._boot_car.user_attached_charger_name ==  FORCE_CAR_NO_CHARGER_CONNECTED:
+                    _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
+                    self._boot_car = None
 
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:

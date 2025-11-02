@@ -284,8 +284,20 @@ class AbstractDevice(object):
     def efficiency_factor(self):
         return 100.0 / self.efficiency
 
-    def get_to_be_saved_info(self) -> dict:
-        return {"num_on_off": self.num_on_off}
+    def update_to_be_saved_info(self, data_to_update:dict):
+        data_to_update["num_on_off"] = self.num_on_off
+
+    def use_saved_info(self, stored_load_info:dict):
+        self.num_on_off = stored_load_info.get("num_on_off", 0)
+
+        if self.num_on_off > 0 and self.num_on_off % 2 == 1:
+            # because of a reboot we may need a bit more ...
+            self.num_on_off -= 1
+
+        if self.num_max_on_off is not None:
+            if self.num_max_on_off - self.num_on_off <= 2:
+                self.num_on_off = self.num_max_on_off - 2
+
 
     def reset_daily_load_datas(self, time:datetime | None = None):
         self.num_on_off = 0
@@ -624,15 +636,7 @@ class AbstractLoad(AbstractDevice):
             self._last_pushed_end_constraint_from_agenda = None
 
         if stored_load_info:
-            self.num_on_off =  stored_load_info.get("num_on_off", 0)
-
-            if self.num_on_off > 0 and self.num_on_off % 2 == 1:
-                # because of a reboot we may need a bit more ...
-                self.num_on_off -= 1
-
-            if self.num_max_on_off is not None:
-                if self.num_max_on_off - self.num_on_off <= 2:
-                    self.num_on_off = self.num_max_on_off - 2
+            self.use_saved_info(stored_load_info)
 
         self.externally_initialized_constraints = True
 

@@ -43,7 +43,7 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_car_by_name(option),
 
     )
-    entities.append(QSUserOverrideSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+    entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
 def create_ha_select_for_QSCar(device: QSCar):

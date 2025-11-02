@@ -521,10 +521,13 @@ class QsCarCard extends HTMLElement {
           };
           chargerSel?.addEventListener('focus', startC);
           chargerSel?.addEventListener('blur', endC);
-          chargerSel?.addEventListener('change', (ev) => {
+          chargerSel?.addEventListener('change', async (ev) => {
               const option = ev.target.value;
               if (!option) return; // ignore placeholder
-              this._select(e.charger_select, option);
+              await this._select(e.charger_select, option);
+              // Clear the interaction flag and force re-render to show the updated state
+              this._isInteractingCharger = false;
+              this._render();
           });
           // In disconnected mode, force placeholder selection and disable the control
           // Do not force selection index; placeholder is marked selected in markup and remains interactive
