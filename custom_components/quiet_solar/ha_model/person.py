@@ -47,6 +47,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         super().__init__(**kwargs)
 
+        # everything is in local time, not UTC
         self.historical_mileage_data : list[tuple[datetime,float,datetime, int]]= []
         self.serializable_historical_data : list[dict] = []
         self.predicted_mileage : float | None = None
@@ -137,6 +138,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         today_week_day = local_time.weekday()
         tomorrow_week_day = (today_week_day +1) %7
 
+        # all below is in local time
         predicted_mileage_today, predicted_leave_time_today = self._get_best_week_day_guess(today_week_day)
         predicted_mileage_tomorrow, predicted_leave_time_tomorrow = self._get_best_week_day_guess(tomorrow_week_day)
 
@@ -164,6 +166,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.predicted_leave_time = tomorrow_leave_time
                 self.predicted_mileage = predicted_mileage_tomorrow
 
+        if self.predicted_leave_time is not None:
             _LOGGER.info(f"_compute_person_next_need: for {self.name} mileage: {self.predicted_mileage}km at {self.predicted_leave_time.time().isoformat()}")
 
         return self.predicted_leave_time, self.predicted_mileage
