@@ -21,7 +21,7 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED
+    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED, SENSOR_CAR_PERSON_FORECAST
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice
 from datetime import time as dt_time
@@ -220,6 +220,28 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # do not use the property to not trigger an unnecessary compute of the people allocation
         self._user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
 
+    def get_car_person_readable_forecast_mileage(self):
+
+        person = self.current_forecasted_person
+        if person is None:
+            return "No forecasted person"
+
+        if person is not None:
+            forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
+
+            is_covered, current_soc, needed_soc, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(
+                person.predicted_mileage, person.predicted_leave_time)
+            if is_covered is None:
+                name_post_fix = f"{forecast_str}"
+            else:
+                if is_covered:
+                    name_post_fix = f"OK!: {forecast_str}"
+                else:
+                    name_post_fix = f"Need charge: {forecast_str}"
+
+            return f"{person.name}: {name_post_fix}"
+
+        return None
 
     def get_car_persons_options(self) -> list[str]:
         options = []
@@ -285,6 +307,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # now we should recompute all car assignment with this new one, and update everything that should be updated
             if do_need_update and self.home:
                 self.home.get_best_persons_cars_allocations(force_update=True)
+                person_forecast_entity = self.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
+                if person_forecast_entity is not None:
+                    time = datetime.now(tz=pytz.UTC)
+                    person_forecast_entity.async_update_callback(time)
 
         return None
 

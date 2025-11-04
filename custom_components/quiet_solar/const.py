@@ -189,7 +189,7 @@ SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
-
+SENSOR_CAR_PERSON_FORECAST = "qs_car_person_forecast"
 # EV autonomy/efficiency sensors
 SENSOR_CAR_ESTIMATED_RANGE_KM = "qs_car_estimated_range_km"
 SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"

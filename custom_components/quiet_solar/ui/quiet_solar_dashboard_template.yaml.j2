@@ -52,6 +52,8 @@ views:
               {% if e %}attached_person: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("default_charge_time") %}
               {% if e %}next_time: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_person_forecast") %}
+              {% if e %}person_forecast: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_next_car_charge_force_now") %}
               {% if e %}force_now: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_next_car_charge_add_default") %}

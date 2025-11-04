@@ -83,7 +83,7 @@ class QsCarCard extends HTMLElement {
       const sChargeTime = this._entity(e.charge_time);
       const sRangeNow = this._entity(e.range_now);
       const sRangeTarget = this._entity(e.range_target);
-      // const sForecastedPerson = this._entity(e.forecasted_person);
+      const sPersonForecast = this._entity(e.person_forecast);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
       let soc = this._percent(sSoc?.state);
@@ -186,6 +186,7 @@ class QsCarCard extends HTMLElement {
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:300px; margin-left:auto; margin-right:auto; }
       .below .pill { width:100%; justify-content:center; }
+      .forecast-row { text-align:center; width:300px; margin: 4px auto 0; color: var(--secondary-text-color); font-weight:600; font-size: .85rem; }
       .below-line { width:300px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
       .below-line.full > button { width: 100%; justify-content: center; position: relative; }
@@ -396,6 +397,12 @@ class QsCarCard extends HTMLElement {
       const personOptionsHtml = shouldShowPersonPlaceholder
           ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
           : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${o}</option>`).join('');
+
+      // Person forecast string
+      const personForecastStr = sPersonForecast?.state || '';
+      const validPersonForecast = personForecastStr && personForecastStr.toLowerCase() !== 'none' && personForecastStr.toLowerCase() !== 'unknown' && personForecastStr.toLowerCase() !== 'unavailable' && personForecastStr.trim() !== '';
+      const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
+
       const activeGradId = isFaulted ? gradFaultId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId));
       const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
@@ -493,6 +500,7 @@ class QsCarCard extends HTMLElement {
             </select>
           </div>
         </div>
+        <div class="forecast-row">Forecast: ${forecastDisplay}</div>
         <div class="below">
           <div class="pill">
             <ha-icon icon="mdi:ev-station"></ha-icon>

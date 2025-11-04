@@ -597,6 +597,9 @@
       "qs_car_charge_time": {
         "name": "Charge ETA"
       },
+      "qs_car_person_forecast:": {
+        "name": "Person Forecasted Mileage"
+      },
       "qs_car_forecast_person_name": {
         "name": "Forecasted Person"
       },

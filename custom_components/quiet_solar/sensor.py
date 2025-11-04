@@ -24,7 +24,8 @@ from .const import (
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT, HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT,
     SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
-    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM
+    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    SENSOR_CAR_PERSON_FORECAST
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -42,9 +43,6 @@ def create_ha_sensor_for_QSPerson(device: QSPerson):
         value_fn_and_attr=lambda device, key: device.get_person_mileage_serialized_prediction(),
     )
     entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
-
-
-
     return entities
 
 
@@ -127,6 +125,13 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
+
+    load_current_command = QSSensorEntityDescription(
+        key=SENSOR_CAR_PERSON_FORECAST,
+        translation_key=SENSOR_CAR_PERSON_FORECAST,
+        value_fn=lambda device, key: device.get_car_person_readable_forecast_mileage(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
     return entities
 
