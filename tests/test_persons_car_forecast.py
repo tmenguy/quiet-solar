@@ -881,7 +881,7 @@ class TestPersonsCarForecast:
             num_days = min(14, len(per_day_data))
             print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days-1}:")
 
-            local_day_2, local_day_shifted_2, local_day_utc_2 = mock_home._compute_person_needed_time_and_date(time)
+            local_day_2, local_day_shifted_2, local_day_utc_2, is_passed = mock_home._compute_person_needed_time_and_date(time)
 
             assert local_day_utc_2 == local_day_utc, \
                 f"Computed local_day_utc {local_day_utc_2} does not match stored {local_day_utc}"

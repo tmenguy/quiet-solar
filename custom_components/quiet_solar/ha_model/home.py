@@ -1535,12 +1535,12 @@ class QSHome(QSDynamicGroup):
             # car  / person forecasts probers
             # to be called at end of day to compute the finished day of cars mileage
 
-            prev_local_day, prev_local_day_shifted, prev_local_day_utc = self._compute_person_needed_time_and_date(prev_time)
-            local_day, local_day_shifted, local_day_utc = self._compute_person_needed_time_and_date(time)
+            prev_local_day, prev_local_day_shifted, prev_local_day_utc, prev_is_passed_limit = self._compute_person_needed_time_and_date(prev_time)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(time)
 
             # first check the existing values for the persons, if one is empty
             # we should recompute everyone as much as possible
-            if local_day_shifted == local_day:
+            if is_passed_limit:
                 # we are after 4am of the current day,
 
                 has_person_to_recompute = False
@@ -1570,7 +1570,11 @@ class QSHome(QSDynamicGroup):
         local_day = datetime(local.year, local.month, local.day, tzinfo=None)
         local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
-        return local_day, local_day_shifted, local_day_utc
+        is_passed_limit = False
+        if time > local_day_utc + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS):
+            is_passed_limit = True
+
+        return local_day, local_day_shifted, local_day_utc, is_passed_limit
 
 
 
@@ -1582,9 +1586,9 @@ class QSHome(QSDynamicGroup):
         for person in self._persons:
             person.historical_mileage_data = []
 
-        local_day, local_day_shifted, local_day_utc = self._compute_person_needed_time_and_date(time)
+        local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(time)
 
-        if local_day_shifted == local_day:
+        if is_passed_limit:
             delta = 0
         else:
             delta = 1

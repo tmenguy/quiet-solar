@@ -31,7 +31,7 @@ def test_create_ha_button_for_home():
     
     entities = create_ha_button_for_QSHome(mock_home)
     
-    assert len(entities) == 4  # Reset history, serialize debug, generate yaml
+    assert len(entities) == 5  # Reset history, serialize debug, generate yaml
     assert all(isinstance(e, QSButtonEntity) for e in entities)
 
 
