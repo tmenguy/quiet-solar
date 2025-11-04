@@ -881,17 +881,21 @@ class TestPersonsCarForecast:
             num_days = min(14, len(per_day_data))
             print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days-1}:")
 
+            local_day_2, local_day_shifted_2, local_day_utc_2 = mock_home._compute_person_needed_time_and_date(time)
+
+            assert local_day_utc_2 == local_day_utc, \
+                f"Computed local_day_utc {local_day_utc_2} does not match stored {local_day_utc}"
 
             for d in range(0, num_days):
                 print(f"  Processing day_shift={d}", end="")
                 await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
                 print(" ✓")
 
-
             # check time
 
             for person in mock_home._persons:
                 leave_time, mileage = person._compute_person_next_need(check_time)
+
                 if "thomas" in person.name.lower():
                     assert mileage is not None
                     assert int(mileage) == 26, f"Expected 26km for Thomas, got {mileage}"

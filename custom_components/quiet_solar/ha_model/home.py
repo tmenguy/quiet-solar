@@ -1470,14 +1470,14 @@ class QSHome(QSDynamicGroup):
             for ent in self.hass.states.async_all([PERSON_DOMAIN])
         ]
 
-        # we are after 4am of the current day, we can recompute the last 14 days
+        # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
         # we shift to 4am to have mileage from 4am to 4am,
 
         data_to_save = [] # list of (start, end, [(car_name, car_positions, car_odos)], [(person, person_positions)])
         min_start = None
         max_end = None
 
-        for d in range(0, 14):
+        for d in range(0, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS):
             start = local_day_utc - timedelta(days=d+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
             end = local_day_utc - timedelta(days=d) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
 
@@ -1535,21 +1535,11 @@ class QSHome(QSDynamicGroup):
             # car  / person forecasts probers
             # to be called at end of day to compute the finished day of cars mileage
 
-            prev_local = prev_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            prev_local_shifted = prev_local - timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS) # we shift to 4am to have mileage from 4am to 4am,
-            prev_local_day_shifted = datetime(prev_local_shifted.year, prev_local_shifted.month, prev_local_shifted.day)
-            prev_local_day = datetime(prev_local.year, prev_local.month, prev_local.day)
-
-            local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            local_shifted = local - timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS) # we shift to 4am to have mileage from 4am to 4am,
-            local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
-            local_day = datetime(local.year, local.month, local.day)
+            prev_local_day, prev_local_day_shifted, prev_local_day_utc = self._compute_person_needed_time_and_date(prev_time)
+            local_day, local_day_shifted, local_day_utc = self._compute_person_needed_time_and_date(time)
 
             # first check the existing values for the persons, if one is empty
             # we should recompute everyone as much as possible
-
-            local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-
             if local_day_shifted == local_day:
                 # we are after 4am of the current day,
 
@@ -1560,28 +1550,39 @@ class QSHome(QSDynamicGroup):
                         has_person_to_recompute = True
 
                 if has_person_to_recompute:
-
-                    # we are after 4am of the current day, we can recompute the last 14 days
+                    # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
                     # we shift to 4am to have mileage from 4am to 4am,
                     await self.recompute_people_historical_data(time)
 
                 if local_day_shifted != prev_local_day_shifted:
                     # we changed day, we can compute the previous day
                     await self._compute_and_store_person_car_forecasts(local_day_utc)
+                    _LOGGER.info(f"update_forecast_probers: compute prev day {local_day_shifted}/{prev_local_day_shifted} -> {local_day_utc}")
 
             self.get_best_persons_cars_allocations(time)
+
+    def _compute_person_needed_time_and_date(self, time:datetime):
+
+        local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_shifted = local - timedelta(
+            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)  # we shift to 4am to have mileage from 4am to 4am,
+        local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day, tzinfo=None)
+        local_day = datetime(local.year, local.month, local.day, tzinfo=None)
+        local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        return local_day, local_day_shifted, local_day_utc
+
+
 
     async def recompute_people_historical_data(self, time: datetime | None = None):
 
         if time is None:
             time = datetime.now(tz=pytz.UTC)
-        local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        local_shifted = local - timedelta(
-            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
-        # we shift to 4am to have mileage from 4am to 4am,
-        local_day = datetime(local.year, local.month, local.day)
-        local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
-        local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        for person in self._persons:
+            person.historical_mileage_data = []
+
+        local_day, local_day_shifted, local_day_utc = self._compute_person_needed_time_and_date(time)
 
         if local_day_shifted == local_day:
             delta = 0
@@ -1592,6 +1593,7 @@ class QSHome(QSDynamicGroup):
 
         for person in self._persons:
             person.has_been_initialized = True
+            person.update_person_forecast(force_update=True)
 
         _LOGGER.warning("update_forecast_probers: recomputed all persons historical data")
 
