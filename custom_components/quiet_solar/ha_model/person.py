@@ -160,6 +160,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.predicted_leave_time = tomorrow_leave_time
                 self.predicted_mileage = predicted_mileage_tomorrow
 
+            _LOGGER.info(f"_compute_person_next_need: for {self.name} mileage: {self.predicted_mileage}km at {self.predicted_leave_time.time().isoformat()}")
+
         return self.predicted_leave_time, self.predicted_mileage
 
 
