@@ -217,6 +217,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                     leave_time_str = e.get("leave_time", None)
 
                     if day_str is None or mileage is None or leave_time_str is None:
+                        _LOGGER.warning(
+                            f"device_post_home_init: QSPerson {self.name} error in saved data {e}")
                         continue
 
                     day = datetime.fromisoformat(day_str)
@@ -224,7 +226,15 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
                     self.add_to_mileage_history( day, float(mileage), leave_time )
                 except Exception as ex:
-                    _LOGGER.warning(f"QSPerson {self.name} :device_post_home_init: error parsing historical entry {e} : {ex}")
+                    _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}")
+
+
+            str_hist_data = "".join([str(e) for e in self.historical_mileage_data])
+
+            local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            today_week_day = local_time.weekday()
+            tomorrow_week_day = (today_week_day + 1) % 7
+            _LOGGER.info(f"device_post_home_init: QSPerson {self.name} td/tw {today_week_day}/{tomorrow_week_day}: hist_data {str_hist_data}")
 
             # recompute those, no need to read
 
@@ -240,7 +250,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.has_been_initialized = True
 
             if self.has_been_initialized is False:
-                _LOGGER.warning(f"QSPerson {self.name} :device_post_home_init: no initialization need compute")
+                _LOGGER.warning(f"device_post_home_init: QSPerson {self.name}: no initialization need compute")
 
     def update_person_forecast(self, time:datetime| None = None, force_update:bool=False) -> tuple[datetime | None, float | None]:
         if time is None:
