@@ -81,8 +81,6 @@
                     "default_car_charge": "Default car charge in %",
                     "device_efficiency": "Car charging power efficiency in %",
                     "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
-                    "mobile_app": "Select a mobile app send notifications",
-                    "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name"
                 },
                 "description": "Add some car information to define when and how it is connected to your charger",
@@ -240,6 +238,8 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
+                    "mobile_app": "Select a mobile app send notifications",
+                    "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",
                     "person_notification_time": "Time of day to send daily notification about car readiness",
@@ -559,8 +559,6 @@
                     "default_car_charge": "Default car charge in %",
                     "device_efficiency": "Car charging power efficiency in %",
                     "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
-                    "mobile_app": "Select a mobile app send notifications",
-                    "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name"
                 },
                 "description": "Add some car information to define when and how it is connected to your charger",
@@ -708,6 +706,8 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
+                    "mobile_app": "Select a mobile app send notifications",
+                    "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",
                     "person_notification_time": "Time of day to send daily notification about car readiness",

@@ -66,14 +66,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.authorized_cars is None or len(self.authorized_cars) == 0:
             return False
 
-        if self.has_been_initialized is False:
-            return True
+        return not self.has_been_initialized
 
-        if len(self.historical_mileage_data) > 0:
-            if (time - self.historical_mileage_data[-1][0]) > timedelta(hours=40):
-                return True
-
-        return False
 
     def add_to_mileage_history(self, day:datetime, mileage:float, leave_time:datetime) -> None:
 
@@ -231,25 +225,28 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 except Exception as ex:
                     _LOGGER.warning(f"QSPerson {self.name} :device_post_home_init: error parsing historical entry {e} : {ex}")
 
-            self.predicted_mileage = current_attributes.get("predicted_mileage", None)
+            # recompute those, no need to read
 
-            self.predicted_leave_time = current_attributes.get("predicted_leave_time", None)
-            if self.predicted_leave_time is not None:
-                self.predicted_leave_time = datetime.fromisoformat(self.predicted_leave_time)
+            # self.predicted_mileage = current_attributes.get("predicted_mileage", None)
+            # self.predicted_leave_time = current_attributes.get("predicted_leave_time", None)
+            # if self.predicted_leave_time is not None:
+            #    self.predicted_leave_time = datetime.fromisoformat(self.predicted_leave_time)
+
+            self.update_person_forecast(time, force_update=True)
 
             self.has_been_initialized = current_attributes.get("has_been_initialized", False)
             if len(self.historical_mileage_data) != 0:
                 self.has_been_initialized = True
 
             if self.has_been_initialized is False:
-                _LOGGER.warning("QSPerson {self.name} :device_post_home_init: no initialization need compute")
+                _LOGGER.warning(f"QSPerson {self.name} :device_post_home_init: no initialization need compute")
 
     def update_person_forecast(self, time:datetime| None = None, force_update:bool=False) -> tuple[datetime | None, float | None]:
         if time is None:
             time = datetime.now(tz=pytz.UTC)
         if self._last_request_prediction_time is None or \
                 (time - self._last_request_prediction_time).total_seconds() > FORECAST_AUTO_REFRESH_RATE_S or \
-                self.predicted_leave_time is not None and self.predicted_leave_time < time or\
+                (self.predicted_leave_time is not None and self.predicted_leave_time < time) or \
                 force_update:
             self._compute_person_next_need(time)
             self._last_request_prediction_time = time

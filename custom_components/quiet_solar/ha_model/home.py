@@ -1557,8 +1557,9 @@ class QSHome(QSDynamicGroup):
                 has_person_to_recompute = False
                 for person in self._persons:
                     if person.should_recompute_history(time):
+                        _LOGGER.warning(f"update_forecast_probers: {person.name} not initialized")
                         has_person_to_recompute = True
-                        break
+
 
                 if has_person_to_recompute:
 
@@ -1570,7 +1571,7 @@ class QSHome(QSDynamicGroup):
                     for person in self._persons:
                         person.has_been_initialized = True
 
-                    _LOGGER.warning("update_forecast_probers: recomputed person historical data")
+                    _LOGGER.warning("update_forecast_probers: recomputed all persons historical data")
 
                 if local_day_shifted != prev_local_day_shifted:
                     # we changed day, we can compute the previous day
