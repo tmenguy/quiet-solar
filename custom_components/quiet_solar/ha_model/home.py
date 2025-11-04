@@ -1627,10 +1627,10 @@ class QSHome(QSDynamicGroup):
 
             for person in self._persons:
 
+                p_leave_time, p_mileage = person.update_person_forecast(time, force_update=True)
+
                 if person.name in covered_persons:
                     continue
-
-                p_leave_time, p_mileage = person.update_person_forecast(time, force_update=True)
 
                 if p_leave_time is not None:
                     p_s.append((person, p_leave_time, p_mileage))
@@ -1699,7 +1699,7 @@ class QSHome(QSDynamicGroup):
                     covered_cars.add(car_name)
                     covered_persons.add(person.name)
                     car.current_forecasted_person = person
-                _LOGGER.debug("Person-Car Allocation: Car:%s -> Person:%s", car_name, person.name)
+                _LOGGER.debug("get_best_persons_cars_allocations: Car:%s -> Person:%s", car_name, person.name)
 
             for car in self._cars:
 
@@ -1719,6 +1719,7 @@ class QSHome(QSDynamicGroup):
                         if person is not None:
                             covered_persons.add(person.name)
                             car.current_forecasted_person = person
+                            self._last_persons_car_allocation[car.name] = person
                             _LOGGER.warning("get_best_persons_cars_allocations: last resort by user selection: Car:%s -> Person:%s", car.name, person.name)
                             continue
                 if car.current_forecasted_person is None:
@@ -1727,6 +1728,7 @@ class QSHome(QSDynamicGroup):
                         if person.name not in covered_persons:
                             covered_persons.add(person.name)
                             car.current_forecasted_person = person
+                            self._last_persons_car_allocation[car.name] = person
                         else:
                             person = None
                     if person is None:
@@ -1739,9 +1741,17 @@ class QSHome(QSDynamicGroup):
                                 if p_car.name == car.name:
                                     covered_persons.add(person.name)
                                     car.current_forecasted_person = person
+                                    self._last_persons_car_allocation[car.name] = person
                                     _LOGGER.info("get_best_persons_cars_allocations: last resort by preferred car: Car:%s -> Person:%s", car.name, person.name)
                                     break
 
+            str_p_c = ""
+            for car_name, person in self._last_persons_car_allocation.items():
+                str_p_c += f"{car_name}->{person.name} "
+            if len(str_p_c) == 0:
+                str_p_c = "No allocations"
+
+            _LOGGER.info(f"get_best_persons_cars_allocations: {str_p_c}")
 
         return self._last_persons_car_allocation
 
