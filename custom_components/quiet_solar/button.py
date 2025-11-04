@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
     BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE, \
     BUTTON_DEVICE_CLEAN_AND_RESET, BUTTON_HOME_GENERATE_YAML_DASHBOARD, BUTTON_HOME_LIGHT_RESET_HISTORY, \
-    BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS
+    BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS, BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
@@ -47,6 +47,17 @@ def create_ha_button_for_QSHome(device: QSHome):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_serialize_debug))
+
+
+    home_serialize_debug = QSButtonEntityDescription(
+        key=BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA,
+        translation_key=BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA,
+        async_press=lambda x: x.device.recompute_people_historical_data(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_serialize_debug))
+
+
 
 
     home_generate_yaml = QSButtonEntityDescription(

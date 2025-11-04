@@ -10,16 +10,13 @@ from datetime import time as dt_time
 
 from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
-    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME
-from ..ha_model.device import HADeviceMixin, load_from_history
+    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import get_readable_date_string
-from ..home_model.load import AbstractDevice, get_value_from_time_series
-
-
+from ..home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_HISTORICAL_DATA_DAYS = 14 # keep last 14 days of data
 FORECAST_AUTO_REFRESH_RATE_S = 30*60 # 1 hours
 
 class QSPerson(HADeviceMixin, AbstractDevice):
@@ -95,7 +92,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             self.historical_mileage_data.insert(insert_idx, (day, mileage, leave_time, week_day))
 
         while True:
-            if len(self.historical_mileage_data) > MAX_HISTORICAL_DATA_DAYS: # keeps only 2 weeks of data
+            if len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS: # keeps only 2 weeks of data
                 self.historical_mileage_data.pop(0)
             else:
                 break

@@ -23,7 +23,7 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
-    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED
+    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -439,7 +439,6 @@ class QSHome(QSDynamicGroup):
         person_not_home_cache = {}
 
         car_result = {}
-
 
         for car in self._cars:
 
@@ -1560,18 +1559,11 @@ class QSHome(QSDynamicGroup):
                         _LOGGER.warning(f"update_forecast_probers: {person.name} not initialized")
                         has_person_to_recompute = True
 
-
                 if has_person_to_recompute:
 
                     # we are after 4am of the current day, we can recompute the last 14 days
                     # we shift to 4am to have mileage from 4am to 4am,
-                    for d in range(0, 14):
-                        await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
-
-                    for person in self._persons:
-                        person.has_been_initialized = True
-
-                    _LOGGER.warning("update_forecast_probers: recomputed all persons historical data")
+                    await self.recompute_people_historical_data(time)
 
                 if local_day_shifted != prev_local_day_shifted:
                     # we changed day, we can compute the previous day
@@ -1579,6 +1571,29 @@ class QSHome(QSDynamicGroup):
 
             self.get_best_persons_cars_allocations(time)
 
+    async def recompute_people_historical_data(self, time: datetime | None = None):
+
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_shifted = local - timedelta(
+            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+        # we shift to 4am to have mileage from 4am to 4am,
+        local_day = datetime(local.year, local.month, local.day)
+        local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
+        local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        if local_day_shifted == local_day:
+            delta = 0
+        else:
+            delta = 1
+        for d in range(delta, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS+delta):
+            await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
+
+        for person in self._persons:
+            person.has_been_initialized = True
+
+        _LOGGER.warning("update_forecast_probers: recomputed all persons historical data")
 
     async def _compute_and_store_person_car_forecasts(self, local_day_utc:datetime, day_shift:int=0):
 

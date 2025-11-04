@@ -667,6 +667,9 @@
       },
       "qs_next_car_charge_add_default": {
         "name": "Add Charge"
+      },
+      "qs_home_recompute_people_historical_data": {
+        "name": "Recompute People Historical Data"
       }
     },
     "switch": {

@@ -315,6 +315,9 @@
             "qs_home_light_reset_history": {
                 "name": "Light Reset Quiet Solar History"
             },
+            "qs_home_recompute_people_historical_data": {
+                "name": "Recompute People Historical Data"
+            },
             "qs_home_reset_history": {
                 "name": "Full Reset Quiet Solar History from DB"
             },
@@ -414,6 +417,9 @@
             },
             "qs_car_forecast_person_name": {
                 "name": "Forecasted Person"
+            },
+            "qs_car_person_forecast:": {
+                "name": "Person Forecasted Mileage"
             },
             "qs_car_soc_percent": {
                 "name": "Current Charge"

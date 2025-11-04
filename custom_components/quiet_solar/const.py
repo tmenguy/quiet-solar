@@ -225,6 +225,7 @@ BUTTON_HOME_RESET_HISTORY = "qs_home_reset_history"
 BUTTON_HOME_LIGHT_RESET_HISTORY = "qs_home_light_reset_history"
 BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 BUTTON_HOME_GENERATE_YAML_DASHBOARD = "qs_home_generate_yaml_dashboard"
+BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA = "qs_home_recompute_people_historical_data"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"
@@ -279,3 +280,5 @@ CAR_HARD_WIRED_CHARGER = "Hard Wired Charger"
 
 MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12
+
+MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30 # keep last 14 days of data
