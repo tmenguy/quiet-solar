@@ -140,7 +140,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         self.predicted_mileage = None
 
         if predicted_mileage_today is None and predicted_mileage_tomorrow is None:
-            pass
+            if len(self.historical_mileage_data) > 0:
+                _LOGGER.warning(f"_compute_person_next_need: EMPTY PREDICTED_TIME for {self.name}")
         else:
 
             if predicted_leave_time_today is not None:
