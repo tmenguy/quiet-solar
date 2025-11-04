@@ -229,7 +229,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                     _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}")
 
 
-            str_hist_data = "".join([str(e) for e in self.historical_mileage_data])
+            str_hist_data = ""
+            for day, mileage, leave_time, week_day in self.historical_mileage_data:
+                str_hist_data += f"[{day.date().isoformat()},{mileage},{leave_time.time().isoformat()},{week_day}] "
 
             local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             today_week_day = local_time.weekday()
@@ -271,7 +273,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.predicted_mileage is None or self.predicted_leave_time is None:
             return "No forecast"
         else:
-            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time)}"
+            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True)}"
 
     def get_person_mileage_serialized_prediction(self) -> tuple[Any | None, dict | None]:
         """Predict the person's mileage for the next day."""
