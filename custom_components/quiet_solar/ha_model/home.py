@@ -1715,7 +1715,7 @@ class QSHome(QSDynamicGroup):
 
             for car_name, person in self._last_persons_car_allocation.items():
                 car = self.get_car_by_name(car_name)
-                if car:
+                if car is not None:
                     covered_cars.add(car_name)
                     covered_persons.add(person.name)
                     car.current_forecasted_person = person
@@ -1736,7 +1736,7 @@ class QSHome(QSDynamicGroup):
                     # we shouldn't be there ...
                     if car.user_selected_person_name_for_car not in covered_persons:
                         person = self.get_person_by_name(car.user_selected_person_name_for_car)
-                        if person is not None:
+                        if person is not None and person.name not in covered_persons:
                             covered_persons.add(person.name)
                             car.current_forecasted_person = person
                             self._last_persons_car_allocation[car.name] = person
