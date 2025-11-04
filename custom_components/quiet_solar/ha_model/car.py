@@ -208,32 +208,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.home.get_best_persons_cars_allocations(force_update=True)
 
     def _car_person_option(self, person_name: str):
-        if person_name == FORCE_CAR_NO_PERSON_ATTACHED:
-            return FORCE_CAR_NO_PERSON_ATTACHED
-
-        person = None
-        if self.home:
-            for p_person in self.home._persons:
-                if p_person.name == person_name:
-                    person = p_person
-                    break
-        if person is not None:
-            forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
-
-            is_covered, current_soc, needed_soc, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(
-                person.predicted_mileage, person.predicted_leave_time)
-            if is_covered is None:
-                name_post_fix = "No forecast"
-            else:
-                if is_covered:
-                    name_post_fix = f"OK ({forecast_str})"
-                else:
-                    name_post_fix = f"Needs charge ({forecast_str})"
-
-            return f"{person.name}: {name_post_fix}"
-
-
-        return None
+        return person_name
 
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
@@ -290,7 +265,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             # do not use the property to not trigger an unnecessary compute of the people allocation
             do_need_update = False
-            new_value = option.split(":", 1)[0].strip()
+            new_value = option
 
             if new_value != self.user_selected_person_name_for_car:
                 do_need_update = True

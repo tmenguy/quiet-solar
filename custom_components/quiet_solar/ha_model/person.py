@@ -71,6 +71,10 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
     def add_to_mileage_history(self, day:datetime, mileage:float, leave_time:datetime) -> None:
 
+        if leave_time is None:
+            _LOGGER.warning("add_to_mileage_history: Leave time not provided for person %s", self.name)
+            return
+
         day = day.replace(tzinfo=pytz.UTC).astimezone(tz=None)
         leave_time = leave_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
         week_day = day.weekday()
@@ -233,7 +237,10 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
             str_hist_data = ""
             for day, mileage, leave_time, week_day in self.historical_mileage_data:
-                str_hist_data += f"[{day.date().isoformat()},{mileage},{leave_time.time().isoformat()},{week_day}] "
+                if leave_time is None:
+                    str_hist_data += f"[{day},{mileage},NONE,{week_day}] "
+                else:
+                    str_hist_data += f"[{day.date().isoformat()},{mileage},{leave_time.time().isoformat()},{week_day}] "
 
             local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             today_week_day = local_time.weekday()
