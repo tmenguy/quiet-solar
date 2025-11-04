@@ -43,7 +43,7 @@ class QsCarCard extends HTMLElement {
     this._hass = hass;
     if (!this._root) return;
     // Avoid re-rendering while user is interacting with selects or a modal is open
-    if (this._isInteracting || this._isInteractingCharger || this._modalOpen || this._isInteractingTarget) return;
+    if (this._isInteracting || this._isInteractingCharger || this._isInteractingPerson || this._modalOpen || this._isInteractingTarget) return;
     this._render();
   }
 
@@ -74,6 +74,8 @@ class QsCarCard extends HTMLElement {
       const sSoc = this._entity(e.soc);
       const sPower = this._entity(e.power);
       const selCharger = this._entity(e.charger_select);
+      const selPerson = this._entity(e.attached_person);
+
       const selLimit = this._entity(e.next_limit);
       const swPriority = this._entity(e.bump_priority);
       const tNext = this._entity(e.next_time);
@@ -81,7 +83,7 @@ class QsCarCard extends HTMLElement {
       const sChargeTime = this._entity(e.charge_time);
       const sRangeNow = this._entity(e.range_now);
       const sRangeTarget = this._entity(e.range_target);
-      const sForecastedPerson = this._entity(e.forecasted_person);
+      // const sForecastedPerson = this._entity(e.forecasted_person);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
       let soc = this._percent(sSoc?.state);
@@ -92,6 +94,7 @@ class QsCarCard extends HTMLElement {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",
           "Faulted": "mdi:emoticon-dead",
+          "No Power To Car": "mdi:flash-off",
           "Not Charging": "mdi:battery-off",
           "Target Met": "mdi:battery-high",
           "As Fast As Possible": "mdi:rabbit",
@@ -372,7 +375,9 @@ class QsCarCard extends HTMLElement {
       const gradDisabledId = `gradD-${Math.floor(Math.random() * 1e6)}`;
       const gradFaultId = `gradF-${Math.floor(Math.random() * 1e6)}`;
       const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
-      const isFaulted = (sChargeType?.state || '').toLowerCase() === 'faulted';
+      const chargeTypeState = (sChargeType?.state || '').toLowerCase();
+      const isFaulted = chargeTypeState === 'faulted' || chargeTypeState === 'unknown' || chargeTypeState === 'not charging' || chargeTypeState === 'no power to car';
+
       const chargerOptions = selCharger?.attributes?.options || [];
       const chargerState = (selCharger?.state || '').trim();
       const stateLc = chargerState.toLowerCase();
@@ -381,13 +386,23 @@ class QsCarCard extends HTMLElement {
       const chargerOptionsHtml = shouldShowPlaceholder
           ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
           : chargerOptions.map(o => `<option ${o === chargerState ? 'selected' : ''}>${o}</option>`).join('');
+
+      // Person selector options
+      const personOptions = selPerson?.attributes?.options || [];
+      const personState = (selPerson?.state || '').trim();
+      const personStateLc = personState.toLowerCase();
+      const personInvalidStates = ['unavailable', 'unknown', 'none'];
+      const shouldShowPersonPlaceholder = !personState || personInvalidStates.includes(personStateLc) || !personOptions.includes(personState);
+      const personOptionsHtml = shouldShowPersonPlaceholder
+          ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
+          : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${o}</option>`).join('');
       const activeGradId = isFaulted ? gradFaultId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId));
       const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
-      const forecastedPersonStr = sForecastedPerson?.state;
-      const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
-
-      const displayTitle = showForecastedPerson ? `${title} (${forecastedPersonStr})` : title;
+      //const forecastedPersonStr = sForecastedPerson?.state;
+      //const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
+      //const displayTitle = showForecastedPerson ? `${title} (${forecastedPersonStr})` : title;
+      const displayTitle = title;
 
       this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''}">
@@ -472,6 +487,14 @@ class QsCarCard extends HTMLElement {
 
         <div class="below">
           <div class="pill">
+            <ha-icon icon="mdi:account"></ha-icon>
+            <select id="person">
+              ${personOptionsHtml}
+            </select>
+          </div>
+        </div>
+        <div class="below">
+          <div class="pill">
             <ha-icon icon="mdi:ev-station"></ha-icon>
             <select id="charger">
               ${chargerOptionsHtml}
@@ -509,6 +532,27 @@ class QsCarCard extends HTMLElement {
       const root = this._root;
       const ids = (k) => root.getElementById(k);
       const withEntityId = (id) => ({entity_id: id});
+
+      if (selPerson) {
+          const personSel = ids('person');
+          const startP = () => {
+              this._isInteractingPerson = true;
+          };
+          const endP = () => {
+              this._isInteractingPerson = false;
+              this._render();
+          };
+          personSel?.addEventListener('focus', startP);
+          personSel?.addEventListener('blur', endP);
+          personSel?.addEventListener('change', async (ev) => {
+              const option = ev.target.value;
+              if (!option) return; // ignore placeholder
+              await this._select(e.attached_person, option);
+              // Clear the interaction flag and force re-render to show the updated state
+              this._isInteractingPerson = false;
+              this._render();
+          });
+      }
 
       if (selCharger) {
           const chargerSel = ids('charger');

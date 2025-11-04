@@ -23,7 +23,7 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
-    MAX_POWER_INFINITE
+    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -59,6 +59,8 @@ POWER_ALIGNMENT_TOLERANCE_S = 120
 HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
 HOME_PERSON_CAR_MIN_SEGMENT_S = 30
 HOME_PERSON_CAR_MIN_OVERLAP_S = 30
+
+HOME_PERSON_CAR_ALLOCATION_CACHE_S = 10*60
 
 class QSforecastValueSensor:
 
@@ -427,6 +429,9 @@ class QSHome(QSDynamicGroup):
 
         self._init_completed = False
 
+        self._last_persons_car_allocation : dict[str,QSPerson] = {}
+        self._last_persons_car_allocation_time : datetime | None = None
+
     async def _compute_mileage_for_period_per_person(self, start: datetime, end: datetime):
 
         persons_result = {}
@@ -616,6 +621,9 @@ class QSHome(QSDynamicGroup):
 
                 seg_start, seg_end, p_res, treated = v
 
+                if seg_start is None or seg_end is None:
+                    continue
+
                 if len(p_res) == 0:
                     car_unassigned_list = unassigned_segment_per_car.setdefault(car, [])
                     car_unassigned_list.append((seg_start, seg_end))
@@ -643,16 +651,16 @@ class QSHome(QSDynamicGroup):
                         default_person = person
                         break
                 if default_person is not None:
-                    for seg_start, seg_end, person in unassigned_car_segments:
+                    for seg_start, seg_end in unassigned_car_segments:
                         dist = await car.get_car_mileage_on_period_km(seg_start, seg_end)
                         if dist is not None and dist > 0.0:
                             if default_person not in persons_result:
                                 persons_result[default_person] = [0.0, None]
                             persons_result[default_person][0] += dist
-                            if persons_result[person][1] is None:
-                                persons_result[person][1] = seg_start
+                            if persons_result[default_person][1] is None:
+                                persons_result[default_person][1] = seg_start
                             else:
-                                persons_result[person][1] = min(persons_result[person][1], seg_start)
+                                persons_result[default_person][1] = min(persons_result[default_person][1], seg_start)
 
 
         for person in persons_result:
@@ -666,6 +674,7 @@ class QSHome(QSDynamicGroup):
                 else:
                     persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[0][0])
             else:
+                _LOGGER.info(f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None")
                 persons_result[person][1] = None
 
         return persons_result
@@ -955,6 +964,19 @@ class QSHome(QSDynamicGroup):
         for car in self._cars:
             if car.name == name:
                 return car
+        return None
+
+    def get_person_by_name(self, name: str) -> QSPerson | None:
+        for person in self._persons:
+            if person.name == name:
+                return person
+        return None
+
+    def get_preferred_person_for_car(self, car:QSCar) -> QSPerson | None:
+        for person in self._persons:
+            preferred_car_name = person.preferred_car
+            if preferred_car_name is not None and preferred_car_name == car.name:
+                return person
         return None
 
     def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
@@ -1324,7 +1346,7 @@ class QSHome(QSDynamicGroup):
         except ValueError:
             _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices")
 
-    def finished_setup(self, time: datetime) -> bool:
+    async def finish_setup(self, time: datetime) -> bool:
         """
         Check if the home setup is finished.
         This is used to determine if the home is ready to be used.
@@ -1364,6 +1386,15 @@ class QSHome(QSDynamicGroup):
                     device.root_device_post_home_init(time)
 
 
+        self.get_best_persons_cars_allocations(time, force_update=True)
+
+        for device in self._all_devices:
+            try:
+                await device.update_states(time)
+            except Exception as err:
+                if isinstance(device, AbstractDevice):
+                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=err)
+
         self._init_completed = True
         return True
 
@@ -1376,7 +1407,7 @@ class QSHome(QSDynamicGroup):
             ]:
             return
 
-        if self.finished_setup(time) is False:
+        if await self.finish_setup(time) is False:
             _LOGGER.info("update_loads_constraints: Home not finished setup, skipping")
             return
 
@@ -1487,7 +1518,7 @@ class QSHome(QSDynamicGroup):
         prev_time = self._last_forecast_probe_time
         self._last_forecast_probe_time  = time
 
-        if self.finished_setup(time) is False:
+        if await self.finish_setup(time) is False:
             _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
             return
 
@@ -1545,71 +1576,208 @@ class QSHome(QSDynamicGroup):
                     # we changed day, we can compute the previous day
                     await self._compute_and_store_person_car_forecasts(local_day_utc)
 
+            self.get_best_persons_cars_allocations(time)
+
 
     async def _compute_and_store_person_car_forecasts(self, local_day_utc:datetime, day_shift:int=0):
 
         start = local_day_utc - timedelta(days=day_shift+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
         end = local_day_utc - timedelta(days=day_shift) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+
         persons_mileage = await self._compute_mileage_for_period_per_person(start, end)
+
         for person in persons_mileage:
-            if persons_mileage[person][0] > 0:
+            if persons_mileage[person][1] is not None and persons_mileage[person][0] is not None and persons_mileage[person][0] > 0:
                 person.add_to_mileage_history(day=start, mileage=persons_mileage[person][0],
                                               leave_time=persons_mileage[person][1])
 
-    async def get_best_person_next_need_for_car(self, time:datetime, car:QSCar) -> tuple[bool | None, datetime | None, float | None, QSPerson | None]:
 
-        p_s = []
-        for person in self._persons:
-            p_leave_time, p_mileage = person.get_person_next_need(time)
-            if p_leave_time is not None:
-                p_s.append((person, p_leave_time, p_mileage))
+    def get_best_persons_cars_allocations(self, time:datetime | None=None, force_update=False) -> dict[str,QSPerson]:
 
-        # sort by mileage:
-        p_s = sorted(p_s, key=lambda x: x[2], reverse=True)
-        covered_cars = set()
-        for person, p_leave_time, p_mileage in p_s:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
 
-            p_cars = person.get_authorized_cars()
+        if self._last_persons_car_allocation_time is None or force_update or (time - self._last_persons_car_allocation_time).total_seconds() > HOME_PERSON_CAR_ALLOCATION_CACHE_S:
+            self._last_persons_car_allocation_time = time
+            self._last_persons_car_allocation = {}
 
-            best_car = None
-            best_val = None
+            covered_cars = set()
+            covered_persons = set()
 
-            for p_car in p_cars:
-                if p_car.name in covered_cars:
+
+            for car in self._cars:
+                car.current_forecasted_person = None
+
+                if car.user_selected_person_name_for_car is None:
                     continue
-                # take the car that is the closest to the needed mileage
-                is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
-                if is_covered is not None:
-                    if best_val is None:
-                        best_val = (is_covered, current_soc, needed_soc, diff_energy)
-                        best_car = p_car
-                    else:
-                        use_new = False
-                        if is_covered:
-                            if best_val[0] is False:
-                                use_new = True
-                            else:
-                                # both cover, take the one with closer energy
-                                if diff_energy < best_val[3]:
-                                    use_new = True
+
+                if car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
+                    covered_cars.add(car.name)
+                    continue
+
+                p_per = self.get_person_by_name(car.user_selected_person_name_for_car)
+                if p_per is not None:
+                    self._last_persons_car_allocation[car.name] = p_per
+                    covered_persons.add(p_per.name)
+                    covered_cars.add(car.name)
+
+            p_s = []
+
+
+            for person in self._persons:
+
+                if person.name in covered_persons:
+                    continue
+
+                p_leave_time, p_mileage = person.update_person_forecast(time, force_update=True)
+
+                if p_leave_time is not None:
+                    p_s.append((person, p_leave_time, p_mileage))
+
+
+            # sort by mileage:
+            p_s = sorted(p_s, key=lambda x: x[2], reverse=True)
+
+            # we want to minimize the charged energy...while giving the preferred car to its person if possible
+            car_person_list_energy_diff =[]
+            car_person_list_preferred_diff = []
+
+            for person, p_leave_time, p_mileage in p_s:
+
+                if person.name in covered_persons:
+                    continue
+
+                p_cars = person.get_authorized_cars()
+
+                for p_car in p_cars:
+
+                    if p_car.name in covered_cars:
+                        continue
+
+                    is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                    if is_covered is not None:
+                        #diff energy > 0
+                        score_energy_diff = diff_energy
+                        score_preferred_diff = diff_energy
+
+                        if person.preferred_car != p_car.name:
+                            score_preferred_diff += 10000
+
+                        if is_covered is False:
+                            score_energy_diff    += 10000*10000 # big penalty for not covering the needed mileage
+                            score_preferred_diff += 10000*10000
+
+                        car_person_list_energy_diff.append( (score_energy_diff, p_car, person, is_covered) )
+                        car_person_list_preferred_diff.append( (score_preferred_diff, p_car, person, is_covered) )
+
+
+
+            # sort by score
+            car_person_list_energy_diff    = sorted(car_person_list_energy_diff, key=lambda x: x[0])
+            car_person_list_preferred_diff = sorted(car_person_list_preferred_diff, key=lambda x: x[0])
+
+            diff_energy_car_name_to_person_1, num_uncovered_alloc_1, num_covered_alloc_1, num_preferred_alloc_1 = self._allocate_person_car(car_person_list_energy_diff)
+            diff_energy_car_name_to_person_2, num_uncovered_alloc_2, num_covered_alloc_2, num_preferred_alloc_2 = self._allocate_person_car(car_person_list_preferred_diff)
+
+            if num_uncovered_alloc_1 < num_uncovered_alloc_2:
+                result_energy = diff_energy_car_name_to_person_1
+            elif num_uncovered_alloc_2 < num_uncovered_alloc_1:
+                result_energy = diff_energy_car_name_to_person_2
+            else:
+                # same number of uncovered allocated, take the one with more preferred allocated
+                if num_preferred_alloc_1 >= num_preferred_alloc_2:
+                    result_energy = diff_energy_car_name_to_person_1
+                else:
+                    result_energy = diff_energy_car_name_to_person_2
+
+            self._last_persons_car_allocation.update(result_energy)
+
+            for car_name, person in self._last_persons_car_allocation.items():
+                car = self.get_car_by_name(car_name)
+                if car:
+                    covered_cars.add(car_name)
+                    covered_persons.add(person.name)
+                    car.current_forecasted_person = person
+                _LOGGER.debug("Person-Car Allocation: Car:%s -> Person:%s", car_name, person.name)
+
+            for car in self._cars:
+
+                if car.name in covered_cars:
+                    continue
+                if car.car_is_invited:
+                    continue
+                if car.current_forecasted_person is not None:
+                    continue
+                if car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
+                    car.current_forecasted_person = None
+                    continue
+                if car.user_selected_person_name_for_car is not None:
+                    # we shouldn't be there ...
+                    if car.user_selected_person_name_for_car not in covered_persons:
+                        person = self.get_person_by_name(car.user_selected_person_name_for_car)
+                        if person is not None:
+                            covered_persons.add(person.name)
+                            car.current_forecasted_person = person
+                            _LOGGER.warning("get_best_persons_cars_allocations: last resort by user selection: Car:%s -> Person:%s", car.name, person.name)
+                            continue
+                if car.current_forecasted_person is None:
+                    person = self.get_preferred_person_for_car(car)
+                    if person is not None:
+                        if person.name not in covered_persons:
+                            covered_persons.add(person.name)
+                            car.current_forecasted_person = person
                         else:
-                            if best_val[0] is True:
-                                use_new = False
-                            else:
-                                # both not cover, take the one with less energy to charge
-                                if diff_energy < best_val[3]:
-                                    use_new = True
-                        if use_new:
-                            best_val = (is_covered, current_soc, needed_soc, diff_energy)
-                            best_car = p_car
+                            person = None
+                    if person is None:
+                        # try to find another person
+                        for person in self._persons:
+                            if person.name in covered_persons:
+                                continue
 
-            if best_car is not None:
-                covered_cars.add(best_car.name)
+                            for p_car in person.get_authorized_cars():
+                                if p_car.name == car.name:
+                                    covered_persons.add(person.name)
+                                    car.current_forecasted_person = person
+                                    _LOGGER.info("get_best_persons_cars_allocations: last resort by preferred car: Car:%s -> Person:%s", car.name, person.name)
+                                    break
 
-                if best_car.name == car.name:
-                    return (best_val[0], p_leave_time, best_val[2], person)
 
-        return (None, None, None, None)
+        return self._last_persons_car_allocation
+
+
+    def _allocate_person_car(self, car_person_list):
+
+        to_be_covered_car_name = set()
+        to_be_covered_people_name = set()
+
+        for score, car, person, is_covered in car_person_list:
+            to_be_covered_car_name.add(car.name)
+            to_be_covered_people_name.add(person.name)
+
+        diff_energy_car_name_to_person = {}
+
+        num_preferred_allocated = 0
+        num_covered_allocated = 0
+        num_uncovered_allocated = 0
+        for score, car, person, is_covered in car_person_list:
+            if person.name not in to_be_covered_people_name:
+                continue
+            if car.name not in to_be_covered_car_name:
+                continue
+            to_be_covered_people_name.remove(person.name)
+            to_be_covered_car_name.remove(car.name)
+
+            diff_energy_car_name_to_person[car.name] = person
+
+            if is_covered is True:
+                num_covered_allocated += 1
+            else:
+                num_uncovered_allocated += 1
+
+            if person.preferred_car == car.name:
+                num_preferred_allocated += 1
+
+        return diff_energy_car_name_to_person, num_uncovered_allocated, num_covered_allocated, num_preferred_allocated
 
 
     async def update_all_states(self, time: datetime):
@@ -1619,7 +1787,7 @@ class QSHome(QSDynamicGroup):
             ]:
             return
 
-        if self.finished_setup(time) is False:
+        if await self.finish_setup(time) is False:
             _LOGGER.info("update_all_states: Home not finished setup, skipping")
             return
 
@@ -1653,7 +1821,7 @@ class QSHome(QSDynamicGroup):
             ]:
             return
 
-        if self.finished_setup(time) is False:
+        if await self.finish_setup(time) is False:
             _LOGGER.info("update_loads: Home not finished setup, skipping")
             return
 

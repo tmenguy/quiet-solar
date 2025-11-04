@@ -124,11 +124,14 @@ class QSBattery(HADeviceMixin, Battery):
 
         _LOGGER.info(f"set_charge_from_grid: battery {charge_from_grid} {self.charge_from_grid_switch} {action}")
 
-        await self.hass.services.async_call(
-            domain=Platform.SWITCH,
-            service=action,
-            target={"entity_id": self.charge_from_grid_switch}
-        )
+        try:
+            await self.hass.services.async_call(
+                domain=Platform.SWITCH,
+                service=action,
+                target={"entity_id": self.charge_from_grid_switch}
+            )
+        except Exception as e:
+            _LOGGER.error(f"set_charge_from_grid: battery error setting charge from grid {e}")
 
     async def is_charge_from_grid(self) -> bool | None:
         if self.charge_from_grid_switch is None:
@@ -166,9 +169,12 @@ class QSBattery(HADeviceMixin, Battery):
 
         _LOGGER.info(f"set_max_discharging_power:battery {val} {self.max_discharge_number} {domain} {service} {data}")
 
-        await self.hass.services.async_call(
-            domain, service, data, blocking=blocking
-        )
+        try:
+            await self.hass.services.async_call(
+                domain, service, data, blocking=blocking
+            )
+        except Exception as e:
+            _LOGGER.error(f"set_max_discharging_power: battery error setting max discharging power {e}")
 
     def get_max_discharging_power(self):
         res = None
@@ -235,9 +241,12 @@ class QSBattery(HADeviceMixin, Battery):
 
         _LOGGER.info(f"set_max_charging_power: battery {val} {self.max_charge_number} {domain} {service} {data}")
 
-        await self.hass.services.async_call(
-            domain, service, data, blocking=blocking
-        )
+        try:
+            await self.hass.services.async_call(
+                domain, service, data, blocking=blocking
+            )
+        except Exception as e:
+            _LOGGER.error(f"set_max_charging_power: battery error setting max charging power {e}")
 
     def get_current_battery_asked_change_for_outside_production_system(self) -> float:
 

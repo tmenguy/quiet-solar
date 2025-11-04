@@ -690,6 +690,9 @@
       "selected_charger_for_car": {
         "name": "Connected Charger:"
       },
+      "selected_person_for_car": {
+        "name": "Attached Person:"
+      },
       "selected_next_charge_limit_for_car": {
         "name": "Next Charge Limit"
       },

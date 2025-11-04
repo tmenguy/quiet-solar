@@ -164,6 +164,10 @@ class AbstractDevice(object):
             return self.home.voltage
         return 230.0
 
+    async def async_get_info_from_storage(self, time:datetime, stored_device_info: dict | None):
+        if stored_device_info:
+            self.use_saved_extra_device_info(stored_device_info)
+
     def update_available_amps_for_group(self, idx:int, amps:list[float | int], add:bool):
         """Update the available amps for the group based on the device's configuration."""
         if self.father_device is not None:
@@ -284,10 +288,11 @@ class AbstractDevice(object):
     def efficiency_factor(self):
         return 100.0 / self.efficiency
 
-    def update_to_be_saved_info(self, data_to_update:dict):
+
+    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         data_to_update["num_on_off"] = self.num_on_off
 
-    def use_saved_info(self, stored_load_info:dict):
+    def use_saved_extra_device_info(self, stored_load_info: dict):
         self.num_on_off = stored_load_info.get("num_on_off", 0)
 
         if self.num_on_off > 0 and self.num_on_off % 2 == 1:
@@ -481,7 +486,11 @@ class AbstractDevice(object):
         if self.running_command is not None:
             _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
             self.running_command_num_relaunch += 1
-            is_command_set = await self.execute_command(time, self.running_command)
+            try:
+                is_command_set = await self.execute_command(time, self.running_command)
+            except Exception as err:
+                _LOGGER.error(f"Error while executing command {self.running_command.command} for load {self.name} : {err}", exc_info=err)
+                is_command_set = None
             self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
@@ -616,8 +625,10 @@ class AbstractLoad(AbstractDevice):
         return False
 
 
-    def load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_load_info: dict | None, stored_from_agenda: dict | None):
-        self.reset()
+    async def async_load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_from_agenda: dict | None):
+
+        self.command_and_constraint_reset()
+
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
             if cs_load is not None:
@@ -634,9 +645,6 @@ class AbstractLoad(AbstractDevice):
             self._last_pushed_end_constraint_from_agenda = LoadConstraint.new_from_saved_dict(time, self, stored_from_agenda)
         else:
             self._last_pushed_end_constraint_from_agenda = None
-
-        if stored_load_info:
-            self.use_saved_info(stored_load_info)
 
         self.externally_initialized_constraints = True
 
@@ -656,7 +664,7 @@ class AbstractLoad(AbstractDevice):
             self._last_hash_state = new_hash
 
 
-    async def on_device_state_change(self, time: datetime, device_change_type:str):
+    async def on_device_state_change(self, time: datetime, device_change_type:str, title: str|None =None, message: str|None =None):
         pass
 
 

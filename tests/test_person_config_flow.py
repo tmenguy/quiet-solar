@@ -127,7 +127,7 @@ class TestQSPersonConfigFlow(unittest.TestCase):
         # In a real implementation, we would check the schema's select options
         # For now, we verify that the form is created successfully with the filtered list
 
-    def test_person_step_with_person_entities(self):
+    def test_person_step_with_user_input(self):
         """Test people config step with user input."""
         # Add person entities
         self.fake_hass.states.set("person.john_doe", "home", {})

@@ -36,6 +36,10 @@ class QSDataHandler:
         self._refresh_states_interval = 4
         self._refresh_forecast_probers_interval = 30
 
+        self.async_update_loads_re_entry = True
+        self.async_update_all_states_re_entry = True
+        self.async_update_forecast_probers_re_entry = True
+
 
     def _add_device(self, config_entry: ConfigEntry ):
         type = config_entry.data.get(DEVICE_TYPE)
@@ -105,16 +109,37 @@ class QSDataHandler:
             )
 
 
-
-
     async def async_update_loads(self, event_time: datetime) -> None:
-        await self.home.update_loads(event_time)
+        if self.async_update_loads_re_entry is False:
+            _LOGGER.info("Re-entry detected in async_update_loads, skipping this run.")
+            return
+        try:
+            self.async_update_loads_re_entry = False
+            await self.home.update_loads(event_time)
+        except Exception as e:
+            _LOGGER.error("Error updating loads: %s", e)
+        self.async_update_loads_re_entry = True
 
     async def async_update_all_states(self, event_time: datetime) -> None:
-        await self.home.update_all_states(event_time)
+        if self.async_update_all_states_re_entry is False:
+            _LOGGER.info("Re-entry detected in async_update_all_states, skipping this run.")
+            return
+        try:
+            self.async_update_all_states_re_entry = False
+            await self.home.update_all_states(event_time)
+        except Exception as e:
+            _LOGGER.error("Error updating all states: %s", e)
+        self.async_update_all_states_re_entry = True
 
     async def async_update_forecast_probers(self, event_time: datetime) -> None:
-        await self.home.update_forecast_probers(event_time)
-
+        if self.async_update_forecast_probers_re_entry is False:
+            _LOGGER.info("Re-entry detected in async_update_forecast_probers, skipping this run.")
+            return
+        try:
+            self.async_update_forecast_probers_re_entry = False
+            await self.home.update_forecast_probers(event_time)
+        except Exception as e:
+            _LOGGER.error("Error updating forecast probers: %s", e)
+        self.async_update_forecast_probers_re_entry = True
 
 

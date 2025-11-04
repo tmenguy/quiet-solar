@@ -43,6 +43,7 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_car_by_name(option),
 
     )
+    # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
 
@@ -57,11 +58,11 @@ def create_ha_select_for_QSCar(device: QSCar):
         async_set_current_option_fn=lambda device, key, option: device.set_user_selected_charger_by_name(option),
 
     )
-    # use QSBaseSelect as it needs to be recomputed every time
+    # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
 
 
-    # the selector will automatically be in kwh or % depending on teh car capabilities
+    # the selector will automatically be in kwh or % depending on the car capabilities
     selected_car_description = QSSelectEntityDescription(
         key="selected_next_charge_limit_for_car",
         translation_key="selected_next_charge_limit_for_car",
@@ -70,6 +71,18 @@ def create_ha_select_for_QSCar(device: QSCar):
         async_set_current_option_fn=lambda device, key, option: device.set_next_charge_target(option),
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
+
+
+    # the person force selector
+    selected_car_description = QSSelectEntityDescription(
+        key="selected_person_for_car",
+        translation_key="selected_person_for_car",
+        get_available_options_fn=lambda device, key: device.get_car_persons_options(),
+        get_current_option_fn=lambda device, key: device.get_car_person_option(),
+        async_set_current_option_fn=lambda device, key, option: device.set_user_person_for_car(option),
+    )
+    # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the car device infos
+    entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
 
     return entities
 

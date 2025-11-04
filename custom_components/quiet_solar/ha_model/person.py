@@ -12,6 +12,7 @@ from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
     CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME
 from ..ha_model.device import HADeviceMixin, load_from_history
+from ..home_model.constraints import get_readable_date_string
 from ..home_model.load import AbstractDevice, get_value_from_time_series
 
 
@@ -19,7 +20,7 @@ from ..home_model.load import AbstractDevice, get_value_from_time_series
 _LOGGER = logging.getLogger(__name__)
 
 MAX_HISTORICAL_DATA_DAYS = 14 # keep last 14 days of data
-FORECAST_AUTO_REFRESH_RATE_S = 60*60 # 1 hours
+FORECAST_AUTO_REFRESH_RATE_S = 30*60 # 1 hours
 
 class QSPerson(HADeviceMixin, AbstractDevice):
     """
@@ -131,7 +132,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         return best_mileage, best_leave_time
 
-    def get_person_next_need(self, time:datetime) -> tuple[datetime | None, float | None]:
+    def _compute_person_next_need(self, time:datetime) -> tuple[datetime | None, float | None]:
 
         local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
 
@@ -243,22 +244,34 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             if self.has_been_initialized is False:
                 _LOGGER.warning("QSPerson {self.name} :device_post_home_init: no initialization need compute")
 
-
-    def get_person_mileage_prediction(self) -> tuple[Any | None, dict | None]:
-        """Predict the person's mileage for the next day."""
-
-        time = datetime.now(tz=pytz.UTC)
-        if self._last_request_prediction_time is None or (time - self._last_request_prediction_time).total_seconds() > FORECAST_AUTO_REFRESH_RATE_S:
-            self.get_person_next_need(time)
+    def update_person_forecast(self, time:datetime| None = None, force_update:bool=False) -> tuple[datetime | None, float | None]:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        if self._last_request_prediction_time is None or \
+                (time - self._last_request_prediction_time).total_seconds() > FORECAST_AUTO_REFRESH_RATE_S or \
+                self.predicted_leave_time is not None and self.predicted_leave_time < time or\
+                force_update:
+            self._compute_person_next_need(time)
             self._last_request_prediction_time = time
+
+        return self.predicted_leave_time, self.predicted_mileage
+
+    def get_forecast_readable_string(self) -> str:
+        """Get a human-readable string of the person's forecast."""
+        self.update_person_forecast()
+
+        if self.predicted_mileage is None or self.predicted_leave_time is None:
+            return "No forecast"
+        else:
+            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time)}"
+
+    def get_person_mileage_serialized_prediction(self) -> tuple[Any | None, dict | None]:
+        """Predict the person's mileage for the next day."""
+        state_value = self.get_forecast_readable_string()
 
         serialized_leave_time = None
         if self.predicted_leave_time is not None:
             serialized_leave_time = self.predicted_leave_time.isoformat()
-
-        state_value = 0.0
-        if self.predicted_mileage is not None:
-            state_value = self.predicted_mileage
 
         return    state_value, {
             "historical_data": self.serializable_historical_data,

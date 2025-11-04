@@ -30,6 +30,7 @@ class QSOnOffDuration(QSBiStateDuration):
         """ return the translation key for the select """
         return "on_off_mode"
 
+    # exception catched above execute_command
     async def execute_command_system(self, time: datetime, command:LoadCommand) -> bool | None:
         if command.is_like(CMD_ON):
             action = SERVICE_TURN_ON
@@ -39,6 +40,8 @@ class QSOnOffDuration(QSBiStateDuration):
             raise ValueError("Invalid command")
 
         _LOGGER.info(f"Executing on/off command {action} on {self.bistate_entity}")
+
+        # exception catched above execute_command
         await self.hass.services.async_call(
             domain=Platform.SWITCH,
             service=action,

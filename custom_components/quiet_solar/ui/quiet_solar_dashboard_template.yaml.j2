@@ -48,6 +48,8 @@ views:
               {% if e %}bump_priority: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("selected_next_charge_limit_for_car") %}
               {% if e %}next_limit: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("selected_person_for_car") %}
+              {% if e %}attached_person: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("default_charge_time") %}
               {% if e %}next_time: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_next_car_charge_force_now") %}
@@ -65,7 +67,6 @@ views:
               {%- endif %}
               {%- endif %}
               {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}
-              {% if ha.get("forecast_person_name") %}forecasted_person: {{ ha.get("forecast_person_name").entity_id }}{% endif %}
               {% if ha.get("qs_device_clean_and_reset") %}reset: {{ ha.get("qs_device_clean_and_reset").entity_id }}{% endif %}
               {% if ha.get("qs_device_clean_command_and_constraints") %}clean_constraints: {{ ha.get("qs_device_clean_command_and_constraints").entity_id }}{% endif %}
               {% if ha.get("car_charge_type") %}charge_type: {{ ha.get("car_charge_type").entity_id }}{% endif %}

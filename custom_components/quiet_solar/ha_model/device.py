@@ -18,9 +18,9 @@ from homeassistant.util.unit_conversion import PowerConverter, DistanceConverter
 from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
-    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING, CONF_MOBILE_APP_URL, \
+    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_URL, \
     FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, \
-    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin
+    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_ERROR
 from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice
 
@@ -213,7 +213,11 @@ async def load_from_history(hass, entity_id:str, start_time: datetime, end_time:
             no_attributes=no_attributes,
         ).get(entity_id, [])
 
-    states : list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(load_history_from_db, start_time, end_time)
+    try:
+        states : list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(load_history_from_db, start_time, end_time)
+    except Exception as err:
+        _LOGGER.error(f"Error loading history for entity {entity_id} from {start_time} to {end_time}: {err}", exc_info=err)
+        states = []
     # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
     return states
 
@@ -233,10 +237,10 @@ class HADeviceMixin:
         self.phase_3_amps_sensor = kwargs.pop(CONF_PHASE_3_AMPS_SENSOR, None)
 
 
-        self.mobile_app = kwargs.pop(CONF_MOBILE_APP, CONF_MOBILE_APP_NOTHING)
+        self.mobile_app = kwargs.pop(CONF_MOBILE_APP, None)
 
 
-        if self.mobile_app is None or self.mobile_app == CONF_MOBILE_APP_NOTHING:
+        if self.mobile_app is None:
             self.mobile_app = None
 
         self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
@@ -535,8 +539,8 @@ class HADeviceMixin:
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR
 
-    async def on_device_state_change(self, time: datetime, device_change_type:str):
-        await self.on_device_state_change_helper(time, device_change_type)
+    async def on_device_state_change(self, time: datetime, device_change_type:str, title: str|None =None, message: str|None =None):
+        await self.on_device_state_change_helper(time, device_change_type, title=title, message=message)
 
     async def on_device_state_change_helper(self, time: datetime, device_change_type: str, **kwargs):
 
@@ -557,7 +561,12 @@ class HADeviceMixin:
                 if isinstance(self, AbstractLoad):
                     if self._last_completed_constraint is not None:
                         message = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
+            elif device_change_type == DEVICE_ERROR:
+                message = f"An error has occurred for load {load_name}. Please check the system."
 
+        if device_change_type == DEVICE_ERROR:
+            if kwargs.get("title") is None:
+                title = f"ATTENTION NEEDED, ERROR for {load_name}"
 
         _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
 
@@ -574,11 +583,14 @@ class HADeviceMixin:
 
             _LOGGER.info(f"Full Sending notification for load {load_name} app: {mobile_app} with: {data}")
 
-            await self.hass.services.async_call(
-                domain=Platform.NOTIFY,
-                service=mobile_app,
-                service_data=data,
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain=Platform.NOTIFY,
+                    service=mobile_app,
+                    service_data=data,
+                )
+            except Exception as err:
+                _LOGGER.error(f"Error sending notification for load {load_name} app: {mobile_app} {err}", exc_info=err)
 
     def get_best_power_HA_entity(self):
         if self.accurate_power_sensor is not None:

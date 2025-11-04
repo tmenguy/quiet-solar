@@ -127,6 +127,7 @@ CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 
 CHARGER_NO_CAR_CONNECTED = "No car connected"
 FORCE_CAR_NO_CHARGER_CONNECTED = "Force Car not connected"
+FORCE_CAR_NO_PERSON_ATTACHED = "Force no person for car"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
@@ -143,7 +144,6 @@ CONF_CAR_ODOMETER_SENSOR = "car_odometer_sensor"
 CONF_CAR_ESTIMATED_RANGE_SENSOR = "car_estimated_range_sensor"
 CONF_MOBILE_APP = "mobile_app"
 CONF_MOBILE_APP_URL = "mobile_app_url"
-CONF_MOBILE_APP_NOTHING = "No Notifications"
 
 CONF_PERSON_PERSON_ENTITY = "person_person_entity"
 CONF_PERSON_AUTHORIZED_CARS = "person_authorized_cars"
@@ -189,9 +189,6 @@ SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
-
-SENSOR_CAR_FORECAST_PERSON_NAME = "qs_car_forecast_person_name"
-SENSOR_CAR_FORECAST_PERSON_FULL = "qs_car_forecast_person_full"
 
 # EV autonomy/efficiency sensors
 SENSOR_CAR_ESTIMATED_RANGE_KM = "qs_car_estimated_range_km"
@@ -263,9 +260,11 @@ ENTITY_ID_FORMAT = DOMAIN + ".{}"
 
 DEVICE_CHANGE_CONSTRAINT = "change_constraint"
 DEVICE_CHANGE_CONSTRAINT_COMPLETED = "change_constraint_completed"
+DEVICE_ERROR = "device_error"
 
 CAR_CHARGE_TYPE_NOT_PLUGGED = "Not Plugged"
 CAR_CHARGE_TYPE_FAULTED = "Faulted"
+CAR_CHARGE_NO_POWER_ERROR = "No Power To Car"
 CAR_CHARGE_TYPE_NOT_CHARGING = "Not Charging"
 CAR_CHARGE_TYPE_TARGET_MET = "Target Met"
 CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE = "As Fast As Possible"

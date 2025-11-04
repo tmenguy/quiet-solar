@@ -2,7 +2,7 @@ import bisect
 import logging
 from operator import itemgetter
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import pytz
 from haversine import haversine, Unit
@@ -21,11 +21,13 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER
+    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED
 from ..ha_model.device import HADeviceMixin
-from ..home_model.constraints import get_readable_date_string
 from ..home_model.load import AbstractDevice
 from datetime import time as dt_time
+
+if TYPE_CHECKING:
+    from ..ha_model.person import QSPerson
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,8 +138,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         if a % 3 == 0 and a // 3 >= self.car_charger_min_charge and a // 3 <= self.car_charger_max_charge:
                             self.conf_customized_amp_to_power_3p[a//3] = self.customized_amp_to_power_3p[a//3] = self.amp_to_power_3p[a//3] = val
 
-
-
         self._salvable_dampening = {}
 
         self._dampening_deltas = {}
@@ -166,12 +166,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._decreasing_segments: list[list[tuple[float, float]|None|int]] = []
         self._dec_seg_count = 0
 
-        self.forecast_person_name: str | None = None
-        self.forecast_person_full: str | None = None
+        self.current_forecasted_person : QSPerson | None = None
 
         self.reset()
 
-
+        self._user_selected_person_name_for_car : str | None = None
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
                                       is_numerical=True)
@@ -194,6 +193,125 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       is_numerical=True,
                                       non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter)
 
+    # make a property out of user_selected_person_name_for_car
+    @property
+    def user_selected_person_name_for_car(self) -> str | None:
+        return self._user_selected_person_name_for_car
+
+    @user_selected_person_name_for_car.setter
+    def user_selected_person_name_for_car(self, value: str | None):
+        do_update = False
+        if value != self._user_selected_person_name_for_car:
+            do_update = True
+        self._user_selected_person_name_for_car = value
+        if do_update and self.home is not None:
+            self.home.get_best_persons_cars_allocations(force_update=True)
+
+    def _car_person_option(self, person_name: str):
+        if person_name == FORCE_CAR_NO_PERSON_ATTACHED:
+            return FORCE_CAR_NO_PERSON_ATTACHED
+
+        person = None
+        if self.home:
+            for p_person in self.home._persons:
+                if p_person.name == person_name:
+                    person = p_person
+                    break
+        if person is not None:
+            forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
+
+            is_covered, current_soc, needed_soc, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(
+                person.predicted_mileage, person.predicted_leave_time)
+            if is_covered is None:
+                name_post_fix = "No forecast"
+            else:
+                if is_covered:
+                    name_post_fix = f"OK ({forecast_str})"
+                else:
+                    name_post_fix = f"Needs charge ({forecast_str})"
+
+            return f"{person.name}: {name_post_fix}"
+
+
+        return None
+
+    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
+        super().update_to_be_saved_extra_device_info(data_to_update)
+        # do not use the property, but teh underlying model
+        data_to_update["user_selected_person_name_for_car"] = self._user_selected_person_name_for_car
+
+    def use_saved_extra_device_info(self, stored_load_info: dict):
+        super().use_saved_extra_device_info(stored_load_info)
+        # do not use the property to not trigger an unnecessary compute of the people allocation
+        self._user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
+
+
+    def get_car_persons_options(self) -> list[str]:
+        options = []
+        if self.home:
+
+            # get the possible persons for the house and their needed charge
+            for person in self.home._persons:
+
+                if self.name not in person.authorized_cars:
+                    continue
+
+                opt_person = self._car_person_option(person.name)
+                if opt_person is not None:
+                    options.append(opt_person)
+
+        options.append(FORCE_CAR_NO_PERSON_ATTACHED)
+        return options
+
+
+    def get_car_person_option(self) -> str | None:
+
+        p_name = None
+        if self.user_selected_person_name_for_car is not None:
+            p_name = self.user_selected_person_name_for_car
+        elif self.current_forecasted_person is not None:
+            p_name = self.current_forecasted_person.name
+
+        # check the attributed one if any by the home
+        if p_name is not None:
+            return self._car_person_option(p_name)
+
+        return None
+
+
+    async def set_user_person_for_car(self, option:str):
+
+        if option is None:
+            # user_selected_person_name_for_car will trigger an update if needed
+            self.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+        elif option == FORCE_CAR_NO_PERSON_ATTACHED:
+            # user_selected_person_name_for_car will trigger an update if needed
+            self.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+        else:
+            # do not use the property to not trigger an unnecessary compute of the people allocation
+            do_need_update = False
+            new_value = option.split(":", 1)[0].strip()
+
+            if new_value != self.user_selected_person_name_for_car:
+                do_need_update = True
+
+            self._user_selected_person_name_for_car = new_value
+
+            if self.home:
+                for car in self.home._cars:
+                    if car.name == self.name:
+                        continue
+
+                    if car.user_selected_person_name_for_car == new_value:
+                        # do not use the property to not trigger an unnecessary compute of the people allocation
+                        car._user_selected_person_name_for_car = None
+                        do_need_update = True
+
+            # now we should recompute all car assignment with this new one, and update everything that should be updated
+            if do_need_update and self.home:
+                self.home.get_best_persons_cars_allocations(force_update=True)
+
+        return None
 
 
     async def get_car_mileage_on_period_km(self, from_time: datetime, to_time: datetime) -> float | None:
@@ -276,17 +394,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def get_best_person_next_need(self, time:datetime) -> tuple[bool | None, datetime | None, float | None, Any | None]:
         if self.home:
-            is_person_covered, next_usage_time, person_min_target_charge, person = await self.home.get_best_person_next_need_for_car(time, self)
+            self.home.get_best_persons_cars_allocations(time)
+
+            person = self.current_forecasted_person
 
             if person is not None:
-                self.forecast_person_name = person.name
-                usage_str = get_readable_date_string(next_usage_time)
-                self.forecast_person_full = f"{person.name}: {usage_str} at {person_min_target_charge}%"
-            else:
-                self.forecast_person_name = None
-                self.forecast_person_full = None
 
-            return is_person_covered, next_usage_time, person_min_target_charge, person
+                next_usage_time, p_mileage = person.update_person_forecast(time)
+                is_person_covered, current_soc, person_min_target_charge, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+
+                return is_person_covered, next_usage_time, person_min_target_charge, person
 
         return (None, None, None, None)
 
@@ -576,8 +693,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.do_next_charge_time= None
         self.user_attached_charger_name = None
         self._qs_bump_solar_priority = False
-        self.forecast_person_name = None
-        self.forecast_person_full = None
+        if self.home:
+            self.current_forecasted_person = self.home.get_preferred_person_for_car(self)
+        else:
+            self.current_forecasted_person = None
 
 
     def attach_charger(self, charger):
@@ -767,13 +886,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return None
 
 
-    def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
+    def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float | None, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
 
-        target_range_km = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
-        current_range_km = self.get_estimated_range_km(time)
+        km_per_percent = current_soc = current_range_km = None
 
-        current_soc = self.get_car_charge_percent(time)
-        km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
+        if target_range_km is not None:
+            target_range_km = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
+            current_range_km = self.get_estimated_range_km(time)
+
+            current_soc = self.get_car_charge_percent(time)
+            km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
 
         if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
             return None, None, None, None
@@ -857,9 +979,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             data[number.ATTR_VALUE] = int(percent)
             domain = number.DOMAIN
 
-            await self.hass.services.async_call(
-                domain, service, data
-            )
+            try:
+                await self.hass.services.async_call(
+                    domain, service, data
+                )
+            except Exception as exc:
+                _LOGGER.error(f"Car {self.name} failed to set max charge limit to {percent}%: {exc}")
 
     def car_can_limit_its_soc(self):
         if self.car_charge_percent_max_number is None:
@@ -1553,6 +1678,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def user_clean_and_reset(self):
         charger = self.charger
         await super().user_clean_and_reset()
+
+        self.user_attached_charger_name = None
+        self.user_selected_person_name_for_car = None  # asked full reset, reset the user selected person,will trigger person allocation
+
+        self.reset()  # will detach the car
         if charger is not None:
             await charger.user_clean_and_reset()
 

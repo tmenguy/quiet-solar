@@ -590,7 +590,7 @@ class TestPersonsCarForecast:
 
                     # Try to get prediction for tomorrow
                     tomorrow = test_time + timedelta(days=1)
-                    next_leave_time, next_mileage = person.get_person_next_need(tomorrow)
+                    next_leave_time, next_mileage = person._compute_person_next_need(tomorrow)
 
                     print(f"  Next predicted leave time: {next_leave_time}")
                     print(f"  Next predicted mileage: {next_mileage}")
@@ -891,7 +891,7 @@ class TestPersonsCarForecast:
             # check time
 
             for person in mock_home._persons:
-                leave_time, mileage = person.get_person_next_need(check_time)
+                leave_time, mileage = person._compute_person_next_need(check_time)
                 if "thomas" in person.name.lower():
                     assert mileage is not None
                     assert int(mileage) == 26, f"Expected 26km for Thomas, got {mileage}"
@@ -910,23 +910,23 @@ class TestPersonsCarForecast:
                 is_person_covered, next_usage_time, person_min_target_charge, person =  await car.get_best_person_next_need(check_time)
 
                 if "tesla" in car.name.lower():
-                    assert "magali" in person.name.lower(), f"Expected Magali for Tesla, got {person.name if person else None}"
+                    assert "magali" in person.name.lower(), f"Expected magali for Tesla, got {person.name if person else None}"
                     assert int(person_min_target_charge) == 20
                     assert is_person_covered
                     assert next_usage_time == datetime.fromisoformat("2025-10-31 07:26:37.830195+00:00")
                 elif "twingo" in car.name.lower():
-                    assert person is None
+                    assert "brice" in person.name.lower(), f"Expected brice for Twingo, got {person.name if person else None}"
                     assert person_min_target_charge is None
                 elif "zoe" in car.name.lower():
-                    assert "arthur" in person.name.lower(), f"Expected Arthur for Zoe, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 20
+                    assert "thomas" in person.name.lower(), f"Expected thomas for Zoe, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 18
+                    assert is_person_covered
+                    assert next_usage_time == datetime.fromisoformat("2025-10-31 08:48:31.806986+00:00")
+                elif "buz" in car.name.lower():
+                    assert "arthur" in person.name.lower(), f"Expected arthur for ID.buzz, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 12
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-10-30 17:14:54.184629+00:00")
-                elif "buz" in car.name.lower():
-                    assert "thomas" in person.name.lower(), f"Expected Thomas for ID.buzz, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 10
-                    assert is_person_covered is False
-                    assert next_usage_time == datetime.fromisoformat("2025-10-31 08:48:31.806986+00:00")
 
 
                 print(f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}")
@@ -961,7 +961,7 @@ class TestPersonsCarForecast:
                     test_time = person_and_car_data.get("time")
                     if test_time:
                         tomorrow = test_time + timedelta(days=1)
-                        next_leave_time, next_mileage = person.get_person_next_need(tomorrow)
+                        next_leave_time, next_mileage = person._compute_person_next_need(tomorrow)
                         print(f"  Predicted for tomorrow: {next_mileage}km at {next_leave_time}")
 
                         if next_mileage is not None:

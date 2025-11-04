@@ -47,6 +47,7 @@ class QSClimateDuration(QSBiStateDuration):
         """ return the translation key for the select """
         return "climate_mode"
 
+    # exception catched above execute_command
     async def execute_command_system(self, time: datetime, command:LoadCommand) -> bool | None:
 
         if command.is_like(CMD_ON):
@@ -62,6 +63,7 @@ class QSClimateDuration(QSBiStateDuration):
         data[climate.ATTR_HVAC_MODE] =hvac_mode
         domain = climate.DOMAIN
 
+        # exception catched above execute_command
         await self.hass.services.async_call(
             domain, service, data
         )

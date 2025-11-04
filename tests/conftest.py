@@ -98,6 +98,10 @@ class FakeServices:
         """Check if service is registered."""
         return (domain, service) in self.registered
 
+    def async_services_for_domain(self, domain: str) -> List[str]:
+        """Get all service names for a domain."""
+        return [service for d, service in self.registered if d == domain]
+
 
 class FakeBus:
     """Fake event bus."""

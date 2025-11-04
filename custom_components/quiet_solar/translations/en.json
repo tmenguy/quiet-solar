@@ -391,6 +391,9 @@
             },
             "selected_next_charge_limit_for_car": {
                 "name": "Next Charge Limit"
+            },
+            "selected_person_for_car": {
+                "name": "Attached Person:"
             }
         },
         "sensor": {

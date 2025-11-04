@@ -62,7 +62,7 @@ def test_create_ha_button_for_car():
     
     entities = create_ha_button_for_QSCar(mock_car)
     
-    assert len(entities) == 3  # Force charge, add default, clean and reset
+    assert len(entities) == 2  # Force charge, add default
 
 
 def test_create_ha_button_for_load():
@@ -82,7 +82,7 @@ def test_create_ha_button_for_load():
     
     entities = create_ha_button_for_AbstractLoad(mock_load)
     
-    assert len(entities) == 3  # Mark done, clean/reset, reset override
+    assert len(entities) == 2  # Mark done,  reset override
 
 
 def test_create_ha_button_for_load_no_override():
@@ -101,7 +101,7 @@ def test_create_ha_button_for_load_no_override():
     
     entities = create_ha_button_for_AbstractLoad(mock_load)
     
-    assert len(entities) == 2  # Only mark done and clean/reset
+    assert len(entities) == 1  # Only mark done and clean/reset
 
 
 def test_qs_button_entity_init():
