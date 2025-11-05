@@ -146,6 +146,7 @@ CONF_MOBILE_APP = "mobile_app"
 CONF_MOBILE_APP_URL = "mobile_app_url"
 
 CONF_PERSON_PERSON_ENTITY = "person_person_entity"
+CONF_PERSON_TRACKER = "person_tracker"
 CONF_PERSON_AUTHORIZED_CARS = "person_authorized_cars"
 CONF_PERSON_PREFERRED_CAR = "person_preferred_car"
 CONF_PERSON_NOTIFICATION_TIME = "person_notification_time"

@@ -10,7 +10,8 @@ from datetime import time as dt_time
 
 from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
-    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
+    CONF_PERSON_TRACKER
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import get_readable_date_string
 from ..home_model.load import AbstractDevice
@@ -29,6 +30,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
     def __init__(self, **kwargs):
         self.person_entity_id = kwargs.pop(CONF_PERSON_PERSON_ENTITY, None)
+        self.person_tracker_id = kwargs.pop(CONF_PERSON_TRACKER, None)
 
         # Extract authorized cars list, preferred car, and notification time from config
         self.authorized_cars = []
@@ -60,8 +62,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         )
 
     def get_tracker_id(self) -> str | None:
-        if self.mobile_app is not None:
-            return self.mobile_app
+        if self.person_tracker_id is not None:
+            return self.person_tracker_id
         else:
             return self.person_entity_id
 

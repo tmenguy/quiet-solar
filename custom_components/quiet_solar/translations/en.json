@@ -238,13 +238,14 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
-                    "mobile_app": "Select a mobile app send notifications",
+                    "mobile_app": "Select a mobile app to send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",
                     "person_notification_time": "Time of day to send daily notification about car readiness",
                     "person_person_entity": "Person entity to track",
-                    "person_preferred_car": "Preferred car for this person"
+                    "person_preferred_car": "Preferred car for this person",
+                    "person_tracker": "Person preferred location tracker"
                 },
                 "description": "Track a person's location and driving patterns to predict EV charging needs",
                 "title": "Add a Person"
@@ -712,13 +713,14 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
-                    "mobile_app": "Select a mobile app send notifications",
+                    "mobile_app": "Select a mobile app to send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",
                     "person_notification_time": "Time of day to send daily notification about car readiness",
                     "person_person_entity": "Person entity to track",
-                    "person_preferred_car": "Preferred car for this person"
+                    "person_preferred_car": "Preferred car for this person",
+                    "person_tracker": "Person preferred location tracker"
                 },
                 "description": "Track a person's location and driving patterns to predict EV charging needs",
                 "title": "Add a Person"

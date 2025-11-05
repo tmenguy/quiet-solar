@@ -64,7 +64,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
     DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED, CONF_CAR_ODOMETER_SENSOR, \
     CONF_CAR_ESTIMATED_RANGE_SENSOR, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
-    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME
+    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, CONF_PERSON_TRACKER
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -1125,6 +1125,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         else:
             # No person entities available
             return self.async_abort(reason="no_person_entities")
+
+        self.add_entity_selector(sc_dict, CONF_PERSON_TRACKER, False, domain=[DEVICE_TRACKER_DOMAIN])
 
         # Get list of available cars from the data handler
         # Exclude invited cars (guest cars) as they shouldn't be assigned to specific people

@@ -226,11 +226,12 @@
         "data": {
           "name": "Name",
           "person_person_entity": "Person entity to track",
+          "person_tracker" : "Person preferred location tracker",
           "person_authorized_cars": "Authorized cars this person can drive",
           "person_preferred_car": "Preferred car for this person",
           "person_notification_time": "Time of day to send daily notification about car readiness",
           "device_dashboard_section": "Dashboard section",
-          "mobile_app": "Select a mobile app for positioning and send notifications",
+          "mobile_app": "Select a mobile app to send notifications",
           "mobile_app_url": "Open the mobile app at this relative URL"
         }
       },
@@ -503,6 +504,7 @@
         "data": {
           "name": "[%key:component::quiet_solar::config::step::person::data::name%]",
           "person_person_entity": "[%key:component::quiet_solar::config::step::person::data::person_person_entity%]",
+          "person_tracker": "[%key:component::quiet_solar::config::step::person::data::person_tracker%]",
           "person_authorized_cars": "[%key:component::quiet_solar::config::step::person::data::person_authorized_cars%]",
           "person_preferred_car": "[%key:component::quiet_solar::config::step::person::data::person_preferred_car%]",
           "person_notification_time": "[%key:component::quiet_solar::config::step::person::data::person_notification_time%]",
