@@ -50,6 +50,9 @@ class TestPersonsCarForecast:
             config_entry=config_entry,
             name="Test Home"
         )
+        home.latitude = 43.6346599933627
+        home.longitude = 6.988867074251175
+        home.radius = 100.0
         return home
 
     @pytest.fixture

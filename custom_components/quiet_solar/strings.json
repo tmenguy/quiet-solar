@@ -230,7 +230,7 @@
           "person_preferred_car": "Preferred car for this person",
           "person_notification_time": "Time of day to send daily notification about car readiness",
           "device_dashboard_section": "Dashboard section",
-          "mobile_app": "Select a mobile app send notifications",
+          "mobile_app": "Select a mobile app for positioning and send notifications",
           "mobile_app_url": "Open the mobile app at this relative URL"
         }
       },

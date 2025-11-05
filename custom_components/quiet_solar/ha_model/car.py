@@ -1482,15 +1482,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 if v > current_soc:
                     options.add(v)
         else:
-            if current_soc < 90:
-                first = int(current_soc // 10 + 1)
-                if first < 10:
-                    for i in range(first, 10):
-                        options.add(i * 10)
-
-            # 85 is a special case, as it is usefull for NMC cars
-            if current_soc < 85:
-                options.add(85)
+            if current_soc < 95:
+                first = int(current_soc // 5 + 1)
+                if first < 20:
+                    for i in range(first, 20):
+                        options.add(i * 5)
 
         # if current_soc < self.car_default_charge:
         # always add the default

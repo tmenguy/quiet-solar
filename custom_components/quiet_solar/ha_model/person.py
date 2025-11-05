@@ -59,6 +59,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             is_numerical=False
         )
 
+    def get_tracker_id(self) -> str | None:
+        if self.mobile_app is not None:
+            return self.mobile_app
+        else:
+            return self.person_entity_id
+
     def should_recompute_history(self, time:datetime) -> bool:
 
         if self.authorized_cars is None or len(self.authorized_cars) == 0:

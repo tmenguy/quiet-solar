@@ -150,153 +150,6 @@ def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
 
     return overlap_segments
 
-def map_location_path(states_1: list[LazyState],states_2: list[LazyState], start:datetime, end:datetime, small_distance_threshold_m: float = 250) -> tuple[list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
-    """
-    Map two GPS paths based on timestamps.
-    Returns a list of tuples: (time, lat1, lon1, lat2, lon2)
-    """
-
-    path_1 = []
-    segments_1_not_home = []
-    path_2 = []
-    segments_2_not_home = []
-
-
-    timings = set()
-
-    home_latitude = None
-    home_longitude = None
-
-    home_bigger_radius_m = min(180.0, small_distance_threshold_m)
-
-    num_home = 0
-    for path, state_list, path_not_home in [(path_1, states_1, segments_1_not_home), (path_2, states_2, segments_2_not_home)]:
-        current_not_home_segment : list[None|datetime]= [None, None]
-        for state in state_list:
-            try:
-                time = state.last_updated
-                attr = state.attributes
-                if attr is not None:
-                    time = attr.get("last_updated", time)
-
-                if time < start:
-                    time = start
-                elif time > end:
-                    time = end
-
-                if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
-                    continue
-
-                lat = None
-                lon = None
-
-                if "latitude"  in attr and "longitude" in attr:
-                    lat = float(attr.get("latitude"))
-                    lon = float(attr.get("longitude"))
-
-
-                if state.state != "home":
-                    if lat is not None and lon is not None:
-                        path.append((time, (lat, lon)))
-                        timings.add(time)
-                    if current_not_home_segment[0] is None:
-                        current_not_home_segment[0] = time
-                else:
-                    if lat is not None and lon is not None:
-                        num_home += 1
-                        if home_latitude is None or home_longitude is None:
-                            home_latitude = 0
-                            home_longitude = 0
-
-                        home_latitude += float(attr.get("latitude"))
-                        home_longitude += float(attr.get("longitude"))
-
-                    if current_not_home_segment[0] is not None:
-                        current_not_home_segment[1] = time
-                        path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
-                        current_not_home_segment = [None, None]
-
-            except (ValueError, TypeError, KeyError):
-                continue
-
-        if current_not_home_segment[0] is not None and end is not None:
-            current_not_home_segment[1] = end
-            path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
-
-        if home_latitude is not None:
-            home_latitude = home_latitude / max(1, num_home)
-        if home_longitude is not None:
-            home_longitude = home_longitude / max(1, num_home)
-
-    # find all overlapping segement and compute the overlap duration
-
-
-    # only get segments that are only overlappin one segments else it means the car or the person went home in between
-    # so we do know that those segments are in fact nor really relevant
-    # find all overlapping segments and compute the overlap duration
-    # only count segments that overlap with exactly one segment from the other list (bidirectional check)
-
-    timings = sorted(timings)
-    def interpolate_positions(ts1, ts2, target_time):
-        delta = abs((ts2[0] - ts1[0]).total_seconds())
-        if delta == 0:
-            return (ts1[0], ts2[1])
-        lat = ts1[1][0] + (ts2[1][0] - ts1[1][0]) * ((target_time - ts1[0]).total_seconds()) / delta
-        lon = ts1[1][1] + (ts2[1][1] - ts1[1][1]) * ((target_time - ts1[0]).total_seconds()) / delta
-        return (target_time, (lat, lon))
-
-    mapped_path = []
-    for t in timings:
-        t1, p1, _, _ = get_value_from_time_series(path_1, t, interpolate_positions)
-        if p1 is None:
-            continue
-        t2, p2, _, _ = get_value_from_time_series(path_2, t, interpolate_positions)
-        if p2 is None:
-            continue
-
-        if home_latitude is not None and home_longitude is not None:
-            # check that the position are far away enough from the home position
-            dh2 = haversine(p2, (home_latitude, home_longitude), unit=Unit.METERS)
-            if dh2 < home_bigger_radius_m:
-                continue
-
-            dh1 = haversine(p1, (home_latitude, home_longitude), unit=Unit.METERS)
-            if dh1 < home_bigger_radius_m:
-                continue
-
-
-        dist = haversine(p1, p2, unit=Unit.METERS)
-        mapped_path.append((t, dist))
-
-    # now find the time segments where distance is small, ie < small_distance_threshold_m
-    segments = []
-    segment_start = None
-    segment_distances = []
-
-    for i, (t, dist) in enumerate(mapped_path):
-        if dist < small_distance_threshold_m:
-            # Start a new segment or continue existing one
-            if segment_start is None:
-                segment_start = t
-                segment_distances = [dist]
-            else:
-                segment_distances.append(dist)
-        else:
-            # End current segment if one exists
-            if segment_start is not None:
-                segment_end = mapped_path[i-1][0]
-                avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
-                segments.append((segment_start, segment_end, avg_distance))
-                segment_start = None
-                segment_distances = []
-
-    # Handle case where last segment extends to the end
-    if segment_start is not None:
-        segment_end = mapped_path[-1][0]
-        avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
-        segments.append((segment_start, segment_end, avg_distance))
-
-    return segments, segments_1_not_home, segments_2_not_home
 
 class QSHome(QSDynamicGroup):
 
@@ -328,8 +181,6 @@ class QSHome(QSDynamicGroup):
         self.grid_active_power_sensor_inverted: bool = False
 
         self.qs_home_is_off_grid = False
-
-
 
         self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
@@ -432,6 +283,24 @@ class QSHome(QSDynamicGroup):
         self._last_persons_car_allocation : dict[str,QSPerson] = {}
         self._last_persons_car_allocation_time : datetime | None = None
 
+        try:
+            # Get the home zone entity
+            home_zone = self.hass.states.get("zone.home")
+
+            if home_zone is None:
+                _LOGGER.warning("Home zone not found")
+
+            # Extract coordinates from zone attributes
+            self.latitude = float(home_zone.attributes.get("latitude"))
+            self.longitude = float(home_zone.attributes.get("longitude"))
+            self.radius = float(home_zone.attributes.get("radius", 100.0))
+
+        except Exception as err:
+            _LOGGER.error(f"Error getting home coordinates: {err}")
+            self.latitude = None
+            self.longitude = None
+            self.radius = None
+
     async def _compute_mileage_for_period_per_person(self, start: datetime, end: datetime):
 
         persons_result = {}
@@ -460,7 +329,7 @@ class QSHome(QSDynamicGroup):
                     else:
                         person_positions = person_positions_cache.get(person)
 
-                    gps_segments, segments_person_not_home, segments_car_not_home = map_location_path(
+                    gps_segments, segments_person_not_home, segments_car_not_home = self.map_location_path(
                         person_positions, car_positions, start=start, end=end, small_distance_threshold_m=250.0)
 
                     segments_person_not_home = [s for s in segments_person_not_home if
@@ -677,6 +546,182 @@ class QSHome(QSDynamicGroup):
                 persons_result[person][1] = None
 
         return persons_result
+
+    def map_location_path(self, states_1: list[LazyState], states_2: list[LazyState], start: datetime, end: datetime,
+                          small_distance_threshold_m: float = 250) -> tuple[
+        list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+        """
+        Map two GPS paths based on timestamps.
+        Returns a list of tuples: (time, lat1, lon1, lat2, lon2)
+        """
+
+        path_1 = []
+        segments_1_not_home = []
+        path_2 = []
+        segments_2_not_home = []
+
+        timings = set()
+
+        home_latitude = None
+        home_longitude = None
+
+        home_bigger_radius_m = min(180.0, small_distance_threshold_m)
+
+        num_home = 0
+        for path, state_list, path_not_home in [(path_1, states_1, segments_1_not_home),
+                                                (path_2, states_2, segments_2_not_home)]:
+            current_not_home_segment: list[None | datetime] = [None, None]
+            last_at_home = None
+            for state in state_list:
+                try:
+                    time = state.last_updated
+                    attr = state.attributes
+                    if attr is not None:
+                        time = attr.get("last_updated", time)
+
+                    if time < start:
+                        time = start
+                    elif time > end:
+                        time = end
+
+                    if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
+                        continue
+
+                    lat = None
+                    lon = None
+                    tracker = None
+
+                    if "latitude" in attr and "longitude" in attr:
+                        lat = float(attr.get("latitude"))
+                        lon = float(attr.get("longitude"))
+                        tracker = attr.get("source")
+
+                    if lat is not None and lon is not None:
+                        path.append((time, (lat, lon,  tracker)))
+                        timings.add(time)
+
+                    if state.state != "home":
+                        # starting of a new not home segment
+                        if current_not_home_segment[0] is None:
+                            if last_at_home is not None:
+                                current_not_home_segment[0] = last_at_home
+                            else:
+                                current_not_home_segment[0] = time
+                    else:
+                        if lat is not None and lon is not None:
+                            num_home += 1
+                            if home_latitude is None or home_longitude is None:
+                                home_latitude = 0
+                                home_longitude = 0
+
+                            home_latitude += float(attr.get("latitude"))
+                            home_longitude += float(attr.get("longitude"))
+
+                        last_at_home = time
+
+                        # close current not home segment
+                        if current_not_home_segment[0] is not None:
+                            current_not_home_segment[1] = time
+                            path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
+                            current_not_home_segment = [None, None]
+
+                except (ValueError, TypeError, KeyError):
+                    continue
+
+            if current_not_home_segment[0] is not None and end is not None:
+                current_not_home_segment[1] = end
+                path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
+
+        if home_latitude is not None:
+            home_latitude = home_latitude / max(1, num_home)
+        if home_longitude is not None:
+            home_longitude = home_longitude / max(1, num_home)
+
+        if home_latitude is not None and home_longitude is not None:
+            if self.latitude is not None and self.longitude is not None:
+                dhh = haversine((self.latitude, self.longitude), (home_latitude, home_longitude), unit=Unit.METERS)
+                if dhh > home_bigger_radius_m or (self.radius is not None and dhh > self.radius):
+                    _LOGGER.warning(f"map_location_path: Home point seems to be too far away from zone home, ignoring home position")
+                    home_latitude = self.latitude
+                    home_longitude = self.longitude
+        else:
+            home_latitude = self.latitude
+            home_longitude = self.longitude
+
+
+        # find all overlapping segment and compute the overlap duration
+
+        # only get segments that are only overlappin one segments else it means the car or the person went home in between
+        # so we do know that those segments are in fact nor really relevant
+        # find all overlapping segments and compute the overlap duration
+        # only count segments that overlap with exactly one segment from the other list (bidirectional check)
+
+        timings = sorted(timings)
+
+        def interpolate_positions(ts1, ts2, target_time):
+            delta = abs((ts2[0] - ts1[0]).total_seconds())
+            if delta == 0:
+                return (ts1[0], ts2[1])
+            lat = ts1[1][0] + (ts2[1][0] - ts1[1][0]) * ((target_time - ts1[0]).total_seconds()) / delta
+            lon = ts1[1][1] + (ts2[1][1] - ts1[1][1]) * ((target_time - ts1[0]).total_seconds()) / delta
+            return (target_time, (lat, lon))
+
+        mapped_path = []
+        for t in timings:
+            t1, p1, f1, idx1 = get_value_from_time_series(path_1, t, interpolate_positions)
+            if p1 is None:
+                continue
+            t2, p2, f2, idx2 = get_value_from_time_series(path_2, t, interpolate_positions)
+            if p2 is None:
+                continue
+
+            dh1 = dh2 = None
+
+            if home_latitude is not None and home_longitude is not None:
+                # check that the position are far away enough from the home position
+                dh2 = haversine((p2[0], p2[1]), (home_latitude, home_longitude), unit=Unit.METERS)
+                if dh2 < home_bigger_radius_m:
+                    continue
+
+                dh1 = haversine((p1[0], p1[1]), (home_latitude, home_longitude), unit=Unit.METERS)
+                if dh1 < home_bigger_radius_m:
+                    continue
+
+            tracker_1 = path_1[idx1][1]
+            tracker_2 = path_2[idx2][1]
+
+            dist = haversine((p1[0], p1[1]), (p2[0], p2[1]),  unit=Unit.METERS)
+            mapped_path.append((t, dist, dh1, dh2, tracker_1, tracker_2))
+
+        # now find the time segments where distance is small, ie < small_distance_threshold_m
+        segments = []
+        segment_start = None
+        segment_distances = []
+
+        for i, (t, dist, dh1, dh2, gps1, gps2) in enumerate(mapped_path):
+            if dist < small_distance_threshold_m:
+                # Start a new segment or continue existing one
+                if segment_start is None:
+                    segment_start = t
+                    segment_distances = [dist]
+                else:
+                    segment_distances.append(dist)
+            else:
+                # End current segment if one exists
+                if segment_start is not None:
+                    segment_end = mapped_path[i - 1][0]
+                    avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
+                    segments.append((segment_start, segment_end, avg_distance))
+                    segment_start = None
+                    segment_distances = []
+
+        # Handle case where last segment extends to the end
+        if segment_start is not None:
+            segment_end = mapped_path[-1][0]
+            avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
+            segments.append((segment_start, segment_end, avg_distance))
+
+        return segments, segments_1_not_home, segments_2_not_home
 
     async def async_set_off_grid_mode(self, off_grid:bool):
 
@@ -1092,7 +1137,11 @@ class QSHome(QSDynamicGroup):
                     else:
                         max_battery_discharge = 0
 
-                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
+                    sol_p = solar_production
+                    if sol_p is None:
+                        sol_p = -1.0
+
+                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, sol_p, max_battery_discharge )
                     self.home_available_power = max(0.0, maximum_production_output - solar_production_minus_battery)
 
 
@@ -1418,7 +1467,7 @@ class QSHome(QSDynamicGroup):
                 self.force_next_solve()
 
 
-    async def _prepare_data_for_dump(self, start, end, person_entities):
+    async def _prepare_data_for_dump(self, start, end):
         car_data = []
         for car in self._cars:
 
@@ -1440,8 +1489,12 @@ class QSHome(QSDynamicGroup):
             car_data.append((car.name, car_positions, car_odos))
 
         person_data = []
-        for person_entity_id in person_entities:
-            person_positions = await load_from_history(self.hass, person_entity_id, start, end, no_attributes=False)
+        for person in self._persons:
+
+            person_entity_id = person.person_entity_id
+            tracker = person.get_tracker_id()
+
+            person_positions = await load_from_history(self.hass, tracker, start, end, no_attributes=False)
             if person_positions is None:
                 person_positions = []
 
@@ -1452,23 +1505,10 @@ class QSHome(QSDynamicGroup):
 
     async def dump_person_car_data_for_debug(self, time:datetime, storage_path:str):
 
-        local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        local_shifted = local - timedelta(
-            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)  # we shift to 4am to have mileage from 4am to 4am,
-        local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day)
-        local_day = datetime(local.year, local.month, local.day)
 
-        local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-
-        if local_day_shifted != local_day: # we are before 4am of the current day take the day before
+        local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(time)
+        if is_passed_limit is False:
             local_day_utc = local_day_utc - timedelta(days=1)
-
-        from homeassistant.components.person import DOMAIN as PERSON_DOMAIN
-
-        person_entities = [
-            ent.entity_id
-            for ent in self.hass.states.async_all([PERSON_DOMAIN])
-        ]
 
         # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
         # we shift to 4am to have mileage from 4am to 4am,
@@ -1486,11 +1526,11 @@ class QSHome(QSDynamicGroup):
             if max_end is None or end > max_end:
                 max_end = end
 
-            range_data = await self._prepare_data_for_dump(start, end, person_entities)
+            range_data = await self._prepare_data_for_dump(start, end)
             data_to_save.append(range_data)
 
         final_data = {
-            "full_range": await self._prepare_data_for_dump(min_start, max_end, person_entities),
+            "full_range": await self._prepare_data_for_dump(min_start, max_end),
             "per_day": data_to_save,
             "time":time,
             "local_day_utc": local_day_utc

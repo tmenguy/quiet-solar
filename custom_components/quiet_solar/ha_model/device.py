@@ -239,10 +239,6 @@ class HADeviceMixin:
 
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, None)
 
-
-        if self.mobile_app is None:
-            self.mobile_app = None
-
         self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
         if self.mobile_app_url is None or len(self.mobile_app_url) == 0:
             self.mobile_app_url = None
