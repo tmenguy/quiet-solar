@@ -59,6 +59,7 @@ POWER_ALIGNMENT_TOLERANCE_S = 120
 HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
 HOME_PERSON_CAR_MIN_SEGMENT_S = 30
 HOME_PERSON_CAR_MIN_OVERLAP_S = 30
+HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S = 15*60
 
 HOME_PERSON_CAR_ALLOCATION_CACHE_S = 10*60
 
@@ -112,7 +113,30 @@ class QSforecastValueSensor:
         return value
 
 
+def _segments_weak_sub_on_main_overlap(segments_subs, segments_main, min_overlap=0):
 
+    overlap_segments = []
+
+    for s_main in segments_main:
+        seg_main_start = s_main[0]
+        seg_main_end = s_main[1]
+        for s_sub in segments_subs:
+            seg_sub_start = s_sub[0]
+            seg_sub_end = s_sub[1]
+            latest_start = max(seg_main_start, seg_sub_start)
+            earliest_end = min(seg_main_end, seg_sub_end)
+            if latest_start < earliest_end:
+                duration_overlap = abs((earliest_end - latest_start).total_seconds())
+                if duration_overlap > min_overlap:
+                    seg1 = s_sub
+                    seg2 = s_main
+                    mx_length = max((seg1[1] - seg1[0]).total_seconds(), (seg2[1] - seg2[0]).total_seconds())
+                    overlap_score = abs((earliest_end - latest_start).total_seconds())/mx_length
+                    overlap_segments.append((latest_start, earliest_end, seg1, seg2, overlap_score, duration_overlap))
+
+    overlap_segments = sorted(overlap_segments, key=lambda x: x[0])
+
+    return overlap_segments
 
 def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
     # First pass: identify which seg1 overlaps with which seg2(s)
@@ -341,8 +365,8 @@ class QSHome(QSDynamicGroup):
                     overlap_not_home_segments = _segments_strong_overlap(segments_person_not_home, segments_car_not_home,
                                                                          min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
 
-                    overlap_gps_segments = _segments_strong_overlap(gps_segments, segments_car_not_home,
-                                                                    min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
+                    overlap_gps_segments = _segments_weak_sub_on_main_overlap(gps_segments, segments_car_not_home,
+                                                                              min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
 
                     if person not in person_not_home_cache:
                         person_not_home_cache[person] = segments_person_not_home
@@ -356,13 +380,18 @@ class QSHome(QSDynamicGroup):
                     for s_s, s_e, person_not_home, car_not_home, overlap_score, duration_overlap in overlap_not_home_segments:
                         if car_segments_not_home.get(car_not_home[0]) is not None:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
-                            existing.setdefault(person, [(None, None, None), (None, None, None)])[1] = (car_not_home, person_not_home, overlap_score)
+                            if existing.get(person) is None:
+                                existing[person] = [0.0, 0.0]
+                            existing[person][1] += overlap_score
 
 
                     for s_s, s_e, gps_segment, car_not_home, overlap_score, duration_overlap in overlap_gps_segments:
                         if car_segments_not_home.get(car_not_home[0]) is not None:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
-                            existing.setdefault(person, [(None, None, None), (None, None, None)])[0] = (car_not_home, gps_segment, overlap_score)
+                            if existing.get(person) is None:
+                                existing[person] = [0.0, 0.0]
+                            existing[person][0] += overlap_score
+
 
 
             if car_segments_not_home is None or len(car_segments_not_home) == 0:
@@ -419,13 +448,9 @@ class QSHome(QSDynamicGroup):
                         coverage_person_not_home = 0.0
 
                         if p_res2.get(person) is not None:
-                            car_not_home, person_not_home, overlap_score_not_home = p_res2.get(person)[1]
-                            if car_not_home is not None and person_not_home is not None:
-                                coverage_person_not_home = overlap_score_not_home
+                            coverage_person_not_home = p_res2.get(person)[1]
+                            coverage_person_near_car = p_res2.get(person)[0]
 
-                            car_not_home, gps_segment, overlap_score_near_car = p_res2.get(person)[0]
-                            if car_not_home is not None and gps_segment is not None:
-                                coverage_person_near_car = overlap_score_near_car
 
                             # if coverage_person_not_home > 0.7 and coverage_person_near_car > 0.0:
                             #     score = 10000.0 * (1 + coverage_person_not_home + 100 * coverage_person_near_car)
@@ -571,7 +596,7 @@ class QSHome(QSDynamicGroup):
         for path, state_list, path_not_home in [(path_1, states_1, segments_1_not_home),
                                                 (path_2, states_2, segments_2_not_home)]:
             current_not_home_segment: list[None | datetime] = [None, None]
-            last_at_home = None
+            last_unknown_start = None
             for state in state_list:
                 try:
                     time = state.last_updated
@@ -585,6 +610,8 @@ class QSHome(QSDynamicGroup):
                         time = end
 
                     if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
+                        if last_unknown_start is not None:
+                            last_unknown_start = time
                         continue
 
                     lat = None
@@ -603,8 +630,8 @@ class QSHome(QSDynamicGroup):
                     if state.state != "home":
                         # starting of a new not home segment
                         if current_not_home_segment[0] is None:
-                            if last_at_home is not None:
-                                current_not_home_segment[0] = last_at_home
+                            if last_unknown_start is not None:
+                                current_not_home_segment[0] = last_unknown_start
                             else:
                                 current_not_home_segment[0] = time
                     else:
@@ -617,8 +644,6 @@ class QSHome(QSDynamicGroup):
                             home_latitude += float(attr.get("latitude"))
                             home_longitude += float(attr.get("longitude"))
 
-                        last_at_home = time
-
                         # close current not home segment
                         if current_not_home_segment[0] is not None:
                             current_not_home_segment[1] = time
@@ -626,7 +651,9 @@ class QSHome(QSDynamicGroup):
                             current_not_home_segment = [None, None]
 
                 except (ValueError, TypeError, KeyError):
-                    continue
+                    pass
+                last_unknown_start = None
+
 
             if current_not_home_segment[0] is not None and end is not None:
                 current_not_home_segment[1] = end
@@ -668,10 +695,10 @@ class QSHome(QSDynamicGroup):
 
         mapped_path = []
         for t in timings:
-            t1, p1, f1, idx1 = get_value_from_time_series(path_1, t, interpolate_positions)
+            t1, p1, f1, idx1 = get_value_from_time_series(path_1, t) #, interpolate_positions)
             if p1 is None:
                 continue
-            t2, p2, f2, idx2 = get_value_from_time_series(path_2, t, interpolate_positions)
+            t2, p2, f2, idx2 = get_value_from_time_series(path_2, t) #, interpolate_positions)
             if p2 is None:
                 continue
 
@@ -721,7 +748,24 @@ class QSHome(QSDynamicGroup):
             avg_distance = sum(segment_distances) / len(segment_distances) if segment_distances else 0.0
             segments.append((segment_start, segment_end, avg_distance))
 
-        return segments, segments_1_not_home, segments_2_not_home
+        merged_segments = []
+        for seg in segments:
+            if len(merged_segments) == 0:
+                merged_segments.append(seg)
+            else:
+                last_seg = merged_segments[-1]
+                # If segments are close in time, merge them
+                if (seg[0] - last_seg[1]).total_seconds() <= HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S:
+                    new_end = seg[1]
+                    d1 = (last_seg[1] -  last_seg[0]).total_seconds()
+                    d2 = (seg[1] -  seg[0]).total_seconds()
+                    avg_distance = ((last_seg[2]*d1) + (seg[2]*d2)) / (d1 + d2)
+                    merged_segments[-1] = (last_seg[0], new_end, avg_distance)
+                else:
+                    merged_segments.append(seg)
+
+
+        return merged_segments, segments_1_not_home, segments_2_not_home
 
     async def async_set_off_grid_mode(self, off_grid:bool):
 
