@@ -1477,16 +1477,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
         options = set()
         options.add(100)
 
-        if self.car_charge_percent_max_number_steps and len(self.car_charge_percent_max_number_steps) >= 1:
-            for v in self.car_charge_percent_max_number_steps:
-                if v > current_soc:
-                    options.add(v)
-        else:
-            if current_soc < 95:
-                first = int(current_soc // 5 + 1)
-                if first < 20:
-                    for i in range(first, 20):
-                        options.add(i * 5)
+        # no need in fact to limit the possible values as the steps are ony for the charge max limit
+        # but in fact we will stop charging with the percent of the car target SOC
+        # if self.car_charge_percent_max_number_steps and len(self.car_charge_percent_max_number_steps) >= 1:
+        #     for v in self.car_charge_percent_max_number_steps:
+        #         if v > current_soc:
+        #             options.add(v)
+        # else:
+        if current_soc < 95:
+            first = int(current_soc // 5 + 1)
+            if first < 20:
+                for i in range(first, 20):
+                    options.add(i * 5)
 
         # if current_soc < self.car_default_charge:
         # always add the default
