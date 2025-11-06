@@ -19,8 +19,10 @@ from homeassistant.components import calendar
 
 from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
     CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_CHANGE_CONSTRAINT, DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_PHASE_1_AMPS_SENSOR, \
-    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_ERROR
+    FLOATING_PERIOD_S, DEVICE_STATUS_CHANGE_CONSTRAINT, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, \
+    CONF_PHASE_1_AMPS_SENSOR, \
+    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_STATUS_CHANGE_ERROR, \
+    DEVICE_STATUS_CHANGE_NOTIFY
 from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice
 
@@ -548,21 +550,24 @@ class HADeviceMixin:
 
 
         if message is None:
-            if device_change_type == DEVICE_CHANGE_CONSTRAINT:
+            if device_change_type == DEVICE_STATUS_CHANGE_CONSTRAINT:
                 if isinstance(self, AbstractLoad):
                     message = self.get_active_readable_name(time, filter_for_human_notification=True)
                 else:
                     message = "WRONG STATE"
-            elif device_change_type == DEVICE_CHANGE_CONSTRAINT_COMPLETED:
+            elif device_change_type == DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED:
                 if isinstance(self, AbstractLoad):
                     if self._last_completed_constraint is not None:
                         message = "COMPLETED: " + self._last_completed_constraint.get_readable_name_for_load()
-            elif device_change_type == DEVICE_ERROR:
+            elif device_change_type == DEVICE_STATUS_CHANGE_ERROR:
                 message = f"An error has occurred for load {load_name}. Please check the system."
 
-        if device_change_type == DEVICE_ERROR:
+        if device_change_type == DEVICE_STATUS_CHANGE_ERROR:
             if kwargs.get("title") is None:
                 title = f"ATTENTION NEEDED, ERROR for {load_name}"
+        if device_change_type == DEVICE_STATUS_CHANGE_NOTIFY:
+            if kwargs.get("title") is None:
+                title = f"Notification for {load_name}"
 
         _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
 

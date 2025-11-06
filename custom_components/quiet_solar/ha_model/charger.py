@@ -105,7 +105,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_FAULTED, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, \
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
     CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
-    CONF_TYPE_NAME_QSCar, DEVICE_TYPE, CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_ERROR
+    CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
 from ..ha_model.car import QSCar
@@ -2651,14 +2651,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.clean_constraints_for_load_param_and_info(time, load_param=best_car.name, for_full_reset=True)
                 self.attach_car(best_car, time)
 
-            is_person_covered, next_usage_time, person_min_target_charge, person = await self.car.get_best_person_next_need(time)
-
-            if person is not None:
-                _LOGGER.warning(f"==> TODO REMOVE RESET plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
-                person = None
-                is_person_covered = None
-
-
             # we have to check if the car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
             is_target_percent = True
             if self.car.can_use_charge_percent_constraints():
@@ -2842,6 +2834,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             do_force_solve = True
 
                         realized_charge_target = target_charge
+
+            if is_target_percent:
+                is_person_covered, next_usage_time, person_min_target_charge, person = await self.car.get_best_person_next_need(time)
+
+                if person is not None:
+                    await person.notify_of_forecast_if_needed(time,
+                                                              force_notify=False,
+                                                              notify_car_with_charger=True,
+                                                              user_ct=user_timed_constraint,
+                                                              orce_ct=force_constraint)
+                    _LOGGER.warning(f"==> TODO REMOVE RESET plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
+                    person = None
+                    is_person_covered = None
 
             # now there is a nice intermediate one : check if we can add an automatic constraint based on a person usage
             # for the car to have some minimum charge when needed
@@ -3769,7 +3774,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     _LOGGER.error(f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} expected to be charging but no power detected going to the car over the last {CHARGER_CHECK_REAL_POWER_WINDOW_S} seconds")
                     if self.possible_charge_error_start_time is None:
                         self.possible_charge_error_start_time = time
-                        await self.on_device_state_change(time=time, device_change_type=DEVICE_ERROR, message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected")
+                        await self.on_device_state_change(time=time, device_change_type=DEVICE_STATUS_CHANGE_ERROR, message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected")
                 else:
                     self.possible_charge_error_start_time = None
 

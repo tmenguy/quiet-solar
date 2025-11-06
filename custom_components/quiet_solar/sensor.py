@@ -282,9 +282,6 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
 
-
-
-
     return entities
 
 def create_ha_sensor(device: AbstractDevice):

@@ -13,8 +13,8 @@ from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
-    CONF_DEVICE_EFFICIENCY, DEVICE_CHANGE_CONSTRAINT, \
-    DEVICE_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
+    CONF_DEVICE_EFFICIENCY, DEVICE_STATUS_CHANGE_CONSTRAINT, \
+    DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
     CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
 
 import slugify
@@ -659,7 +659,7 @@ class AbstractLoad(AbstractDevice):
             # do not notify just after a reset (self._last_hash_state None)
             if (self._last_hash_state is not None and self._last_hash_state != new_hash):
                 _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
-                await self.on_device_state_change(time, DEVICE_CHANGE_CONSTRAINT)
+                await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT)
 
             self._last_hash_state = new_hash
 
@@ -772,7 +772,7 @@ class AbstractLoad(AbstractDevice):
         if self.qs_enable_device is False:
             return
         self._last_completed_constraint = constraint
-        await self.on_device_state_change(time, DEVICE_CHANGE_CONSTRAINT_COMPLETED)
+        await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
 
 
     def get_active_readable_name(self, time:datetime | None = None, filter_for_human_notification=False) -> str | None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytz
 
-from custom_components.quiet_solar.ha_model.home import QSHome
+from custom_components.quiet_solar.ha_model.home import QSHome, HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.car import QSCar
 from tests.conftest import FakeHass, FakeConfigEntry
@@ -288,10 +288,7 @@ class TestPersonsCarForecast:
             side_effect=mock_load_from_history
         ):
             # Get local day UTC for testing
-            local = test_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            local_shifted = local - timedelta(hours=4)  # HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS
-            local_day = datetime(local.year, local.month, local.day)
-            local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
 
             # Run the method under test
             await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=0)
@@ -488,9 +485,7 @@ class TestPersonsCarForecast:
             side_effect=mock_load_from_history
         ):
             # Process multiple days
-            local = test_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            local_day = datetime(local.year, local.month, local.day)
-            local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
 
             # Process last 3 days (or fewer if less data available)
             num_days = min(3, len(per_day_data))
@@ -574,9 +569,7 @@ class TestPersonsCarForecast:
             side_effect=mock_load_from_history
         ):
             # Process multiple days to build history
-            local = test_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            local_day = datetime(local.year, local.month, local.day)
-            local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
 
             # Process several days
             num_days = min(5, len(per_day_data))

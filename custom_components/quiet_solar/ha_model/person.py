@@ -11,9 +11,10 @@ from datetime import time as dt_time
 from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
     CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    CONF_PERSON_TRACKER
+    CONF_PERSON_TRACKER, DEVICE_STATUS_CHANGE_NOTIFY
 from ..ha_model.device import HADeviceMixin
-from ..home_model.constraints import get_readable_date_string
+from ..home_model.constraints import get_readable_date_string, LoadConstraint, \
+    MultiStepsPowerLoadConstraintChargePercent
 from ..home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         self.authorized_cars : list[str] = kwargs.pop(CONF_PERSON_AUTHORIZED_CARS, [])
         self.preferred_car  : str | None = kwargs.pop(CONF_PERSON_PREFERRED_CAR, None)
         self.notification_time : str | None = kwargs.pop(CONF_PERSON_NOTIFICATION_TIME, None)
+        self.notification_dt_time : dt_time | None = None
+        if self.notification_time is not None:
+            self.notification_dt_time = dt_time.fromisoformat(self.notification_time)
 
         if self.preferred_car is not None and self.preferred_car not in self.authorized_cars:
             self.authorized_cars.append(self.preferred_car)
@@ -54,6 +58,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         self.has_been_initialized = False
         self._last_request_prediction_time : datetime | None = None
+
+        self._last_forecast_notification_call_time : datetime | None = None
 
         # Attach state probes
         self.attach_ha_state_to_probe(
@@ -73,7 +79,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             return False
 
         return not self.has_been_initialized
-
 
     def add_to_mileage_history(self, day:datetime, mileage:float, leave_time:datetime) -> None:
 
@@ -156,7 +161,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         else:
 
             if predicted_leave_time_today is not None:
-                today_leave_time = datetime.combine(local_time.date(), predicted_leave_time_today).astimezone(tz=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+                today_leave_time = datetime.combine(local_time.date(), predicted_leave_time_today, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
             else:
                 today_leave_time = None
 
@@ -165,8 +170,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.predicted_mileage = predicted_mileage_today
             elif predicted_leave_time_tomorrow is not None:
                 tomorrow_leave_time = datetime.combine(local_time.date() + timedelta(days=1),
-                                                       predicted_leave_time_tomorrow).astimezone(tz=None).replace(
-                    tzinfo=None).astimezone(tz=pytz.UTC)
+                                                       predicted_leave_time_tomorrow, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
                 self.predicted_leave_time = tomorrow_leave_time
                 self.predicted_mileage = predicted_mileage_tomorrow
@@ -175,7 +179,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             _LOGGER.info(f"_compute_person_next_need: for {self.name} mileage: {self.predicted_mileage}km at {self.predicted_leave_time.time().isoformat()}")
 
         return self.predicted_leave_time, self.predicted_mileage
-
 
     def get_authorized_cars(self) -> list[QSCar]:
 
@@ -292,9 +295,94 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         else:
             return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True)}"
 
+
+    async def notify_of_forecast_if_needed(self, time: datetime | None = None,
+                                           force_notify:bool= False,
+                                           notify_car_with_charger:bool= False,
+                                           user_ct:LoadConstraint|None=None,
+                                           force_ct:LoadConstraint|None=None):
+        """Notify the user of the forecasted mileage."""
+        if time is None:
+            time = datetime.now(tz=pytz.UTC).astimezone(tz=None)
+
+        if self.notification_dt_time and self.mobile_app and self._last_forecast_notification_call_time is not None:
+
+            local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            today_notify_utc = datetime.combine(local_time.date(), self.notification_dt_time, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+            title = None
+            message = None
+            if force_notify or (self._last_forecast_notification_call_time < today_notify_utc and time >= today_notify_utc):
+                # send notification
+                if self.predicted_mileage is None or self.predicted_leave_time is None:
+                    title = "No Prediction for you for tomorrow!"
+                    message = "Check in your Home Assistant to see which car you need."
+                else:
+                    self.home.get_best_persons_cars_allocations(time, force_update=True)
+
+                    predicted_car = None
+                    for car in self.home._cars:
+                        if car.current_forecasted_person is not None:
+                            if car.current_forecasted_person.name == self.name:
+                                predicted_car = car
+                                break
+
+                    prediction_time = get_readable_date_string(self.predicted_leave_time)
+
+                    if predicted_car is None:
+                        title = "Your Daily Mileage Prediction: No allocated car"
+                        message = f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}."
+                    else:
+                        if (predicted_car.charger is not None and notify_car_with_charger) or (predicted_car.charger is None and not notify_car_with_charger):
+
+                            is_covered, current_soc, needed_soc, diff_energy = predicted_car.get_adapt_target_percent_soc_to_reach_range_km(
+                                self.predicted_mileage, self.predicted_leave_time)
+
+                            if is_covered:
+                                title = f"Your Mileage Prediction: get the {predicted_car.name}, it is already ready!"
+                                message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                           f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip.")
+
+                            else:
+                                usable_ct = None
+                                if force_ct is not None:
+                                    usable_ct = force_ct
+                                elif user_ct is not None:
+                                    usable_ct = user_ct
+
+                                ct_target_soc = None
+                                if usable_ct is not None and isinstance(usable_ct,
+                                                                        MultiStepsPowerLoadConstraintChargePercent):
+                                    ct_target_soc = usable_ct.target_value
+
+                                if ct_target_soc is not None:
+                                    if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
+                                        title = f"BEWARE: Your car Prediction is the {predicted_car.name}, it has a scheduled charge that WON'T cover your trip!"
+                                        message = (
+                                            f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
+                                            f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}")
+
+                                    else:
+                                        title = f"Daily Mileage Prediction: get the {predicted_car.name}, it has a scheduled charge that works!"
+                                        message = (
+                                            f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                            f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
+
+                                else:
+                                    title = f"Your Daily Mileage Prediction: get the {predicted_car.name}, I'll charge it for you!"
+                                    message = (f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                               f" The {predicted_car.name} current charge is {current_soc:.0f}%, I will charge it to {needed_soc:.0f}% to cover your trip.")
+
+                if message is not None:
+                    await self.on_device_state_change(time, device_change_type=DEVICE_STATUS_CHANGE_NOTIFY, title=title,message=message)
+        
+        self._last_forecast_notification_call_time = time
+
     def get_person_mileage_serialized_prediction(self) -> tuple[Any | None, dict | None]:
         """Predict the person's mileage for the next day."""
         state_value = self.get_forecast_readable_string()
+
+        self.hass.create_task(self.notify_of_forecast_if_needed(), name="QSPerson notify_of_forecast task")
 
         serialized_leave_time = None
         if self.predicted_leave_time is not None:
@@ -306,33 +394,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             "predicted_leave_time": serialized_leave_time,
             "has_been_initialized" : self.has_been_initialized
         }
-
-    def is_person_home(self, time: datetime, for_duration: float | None = None) -> bool | None:
-        """Check if the person is home, optionally for a specific duration."""
-        if self.person_entity_id is None:
-            return None
-
-        if for_duration is not None:
-            contiguous_status = self.get_last_state_value_duration(
-                self.person_entity_id,
-                states_vals=["home"],
-                num_seconds_before=8*for_duration,
-                time=time
-            )[0]
-
-            if contiguous_status is not None:
-                return contiguous_status >= for_duration and contiguous_status > 0
-            else:
-                return None
-        else:
-            latest_state = self.get_sensor_latest_possible_valid_value(
-                entity_id=self.person_entity_id, time=time
-            )
-
-            if latest_state is None:
-                return None
-
-            return latest_state.lower() == "home"
 
     def get_platforms(self):
         """Return the platforms that this device supports."""

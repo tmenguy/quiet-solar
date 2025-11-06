@@ -33,27 +33,6 @@ class TestQSPerson(unittest.TestCase):
         assert person.person_entity_id == "person.john_doe"
 
 
-    def test_is_person_home(self):
-        """Test checking if person is home."""
-        person = QSPerson(
-            hass=self.fake_hass,
-            home=self.home,
-            config_entry=None,
-            name="John Doe",
-            person_person_entity="person.john_doe"
-        )
-
-        # Mock the get_sensor_latest_possible_valid_value method
-        with patch.object(person, 'get_sensor_latest_possible_valid_value', return_value="home"):
-            time = datetime.now(pytz.UTC)
-            is_home = person.is_person_home(time)
-            assert is_home is True
-
-        with patch.object(person, 'get_sensor_latest_possible_valid_value', return_value="away"):
-            time = datetime.now(pytz.UTC)
-            is_home = person.is_person_home(time)
-            assert is_home is False
-
 
 class TestQSPersonCarCorrelation(unittest.TestCase):
     """Test QSPerson car correlation functionality."""
