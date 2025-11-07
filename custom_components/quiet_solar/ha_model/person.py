@@ -299,8 +299,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
     async def notify_of_forecast_if_needed(self, time: datetime | None = None,
                                            notify_reason:str= PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
-                                           user_ct:LoadConstraint|None=None,
-                                           force_ct:LoadConstraint|None=None):
+                                           user_ct:LoadConstraint  |None=None,
+                                           force_ct:LoadConstraint |None=None,
+                                           person_ct:LoadConstraint|None=None):
         """Notify the user of the forecasted mileage."""
         if self.mobile_app is None:
             return # no mobile app configured
@@ -343,7 +344,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         elif notify_reason == PERSON_NOTIFY_REASON_CHANGED_CAR:
             do_notify = True
 
-
         if do_notify:
 
             self.update_person_forecast(time)
@@ -354,59 +354,72 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         predicted_car = car
                         break
 
-            # send notification
-            if self.predicted_mileage is None or self.predicted_leave_time is None:
-                if predicted_car is None:
-                    title = "No Prediction for you for tomorrow!"
-                    message = "Check in your Home Assistant to see which car you need."
-                else:
-                    title = f"No Prediction for you for tomorrow with the {predicted_car.name}!"
-                    message = f"Check in your Home Assistant to see if there is what you need."
-            else:
-                prediction_time = get_readable_date_string(self.predicted_leave_time)
+            if message is None and title is None:
 
-                if predicted_car is None:
-                    title = "No allocated car !"
-                    message = f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}."
-                else:
-
-                    is_covered, current_soc, needed_soc, diff_energy = predicted_car.get_adapt_target_percent_soc_to_reach_range_km(
-                        self.predicted_mileage, self.predicted_leave_time)
-
-                    if is_covered:
-                        title = f"{predicted_car.name}: OK, it is already ready!"
-                        message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                   f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip.")
-
+                # send notification
+                if self.predicted_mileage is None or self.predicted_leave_time is None:
+                    if predicted_car is None:
+                        title = "No Prediction for you for tomorrow!"
+                        message = "Check in your Home Assistant to see which car you need."
                     else:
-                        usable_ct = None
-                        if force_ct is not None:
-                            usable_ct = force_ct
-                        elif user_ct is not None:
-                            usable_ct = user_ct
+                        title = f"No Prediction for you for tomorrow with the {predicted_car.name}!"
+                        message = f"Check in your Home Assistant to see if there is what you need."
+                else:
+                    prediction_time = get_readable_date_string(self.predicted_leave_time)
 
-                        ct_target_soc = None
-                        if usable_ct is not None and isinstance(usable_ct,
-                                                                MultiStepsPowerLoadConstraintChargePercent):
-                            ct_target_soc = usable_ct.target_value
+                    if predicted_car is None:
+                        title = "No allocated car !"
+                        message = f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}."
+                    else:
 
-                        if ct_target_soc is not None:
-                            if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
-                                title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
-                                message = (
-                                    f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
-                                    f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}")
+                        is_covered, current_soc, needed_soc, diff_energy = predicted_car.get_adapt_target_percent_soc_to_reach_range_km(
+                            self.predicted_mileage, self.predicted_leave_time)
 
-                            else:
-                                title = f"{predicted_car.name}: OK it has a scheduled charge that works!"
-                                message = (
-                                    f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                    f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
+                        if is_covered:
+                            title = f"{predicted_car.name}: OK, it is already ready!"
+                            message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                       f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip.")
 
                         else:
-                            title = f"{predicted_car.name}: Check it, I'll charge it for you!"
-                            message = (f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                       f" The {predicted_car.name} current charge is {current_soc:.0f}%, I will charge it to {needed_soc:.0f}% to cover your trip.")
+                            usable_ct = None
+                            if force_ct is not None:
+                                usable_ct = force_ct
+                            elif user_ct is not None:
+                                usable_ct = user_ct
+
+                            ct_target_soc = None
+                            if usable_ct is not None and isinstance(usable_ct,
+                                                                    MultiStepsPowerLoadConstraintChargePercent):
+                                ct_target_soc = usable_ct.target_value
+
+                            if ct_target_soc is not None:
+                                if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
+                                    title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
+                                    message = (
+                                        f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
+                                        f"The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}")
+
+                                else:
+                                    title = f"{predicted_car.name}: OK it has a scheduled charge that works!"
+                                    message = (
+                                        f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                        f"The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
+
+                            else:
+                                if person_ct is not None:
+                                    if person_ct.target_value >= needed_soc and person_ct.end_of_constraint <= self.predicted_leave_time:
+                                        title = f"{predicted_car.name}: Check it, I'll charge it for you!"
+                                        message = (f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                                   f"The {predicted_car.name} current charge is {current_soc:.0f}%, I will charge it to {needed_soc:.0f}% to cover your trip.")
+                                    else:
+                                        title = f"{predicted_car.name}: BEWARE check what I've done"
+                                        message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                                   f"The {predicted_car.name} current charge is {current_soc:.0f}%, Charge it to {needed_soc:.0f}% to cover your trip.")
+                                else:
+                                    title = f"{predicted_car.name}: BEWARE your trip is not covered"
+                                    message = (
+                                        f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                        f"The {predicted_car.name} current charge is {current_soc:.0f}%, Charge it to {needed_soc:.0f}% to cover your trip.")
 
             if message is not None:
                 _LOGGER.info(f"notify_of_forecast_if_needed: Notifying person {self.name} :reason {notify_reason} {title} / {message}")

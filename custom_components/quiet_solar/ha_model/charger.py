@@ -106,7 +106,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
     CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
     CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR, \
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, CAR_CHARGE_ERROR
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
 from ..ha_model.car import QSCar
@@ -1688,8 +1688,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         super().use_saved_extra_device_info(stored_load_info)
         self.user_attached_car_name = stored_load_info.get("user_attached_car_name", None)
 
-
-
     async def update_charger_for_user_change(self):
         time = datetime.now(pytz.UTC)
         if await self.do_run_check_load_activity_and_constraints(time):
@@ -2081,7 +2079,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     is_before_battery = ct.is_before_battery
 
         return is_before_battery
-
 
     def get_normalized_score(self, ct:LoadConstraint|None, time:datetime, score_span:int = 0) -> float:
         if self.car is None:
@@ -2678,12 +2675,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             user_timed_constraint = None
             car_charge_mandatory = None
             car_charge_person = None
+            person_to_notify = None
+            is_person_covered = None
+            next_usage_time = None
+            person_min_target_charge = None
+            person = None
 
+            if is_target_percent:
+                is_person_covered, next_usage_time, person_min_target_charge, person = await self.car.get_best_person_next_need(time)
+                person_to_notify = person
 
             if self.car.do_force_next_charge is True and self.car.do_next_charge_time is not None:
                 # both are set ... we will ignore the time based one
                 self.car.do_next_charge_time = None
-
 
             # in case a user pressed the button ....clean everything and force the charge
             if self.car.do_force_next_charge is True:
@@ -2837,100 +2841,96 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         realized_charge_target = target_charge
 
             if is_target_percent:
-                is_person_covered, next_usage_time, person_min_target_charge, person = await self.car.get_best_person_next_need(time)
 
                 if person is not None:
-                    await person.notify_of_forecast_if_needed(time,
-                                                              notify_reason=PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
-                                                              user_ct=user_timed_constraint,
-                                                              force_ct=force_constraint)
-                    _LOGGER.warning(f"==> TODO REMOVE RESET plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
-                    person = None
-                    is_person_covered = None
 
-            # now there is a nice intermediate one : check if we can add an automatic constraint based on a person usage
-            # for the car to have some minimum charge when needed
-            # first check it is possible to add it ... and if it was not added  then removed before because of and end user reset
-            if is_target_percent and user_timed_constraint is None and force_constraint is None:
+                    if next_usage_time is None or person_min_target_charge is None or is_person_covered is None:
+                        person = None
+                    elif is_person_covered is False:
+                        _LOGGER.warning(f"plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
+                    else:
+                        person = None
 
-                # first check (and remove) any previous person based constraint ... if different from the current one
-                # we found and removed a previous person based constraint, or anything not as it should be there
-                if person is not None and is_person_covered is not None and is_person_covered is False:
+                # now there is a nice intermediate one : check if we can add an automatic constraint based on a person usage
+                # for the car to have some minimum charge when needed
+                # first check it is possible to add it ... and if it was not added  then removed before because of and end user reset
+                if user_timed_constraint is None and force_constraint is None:
 
-                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                   load_info={"person": person.name},
-                                                                   for_full_reset=False)
+                    # first check (and remove) any previous person based constraint ... if different from the current one
+                    # we found and removed a previous person based constraint, or anything not as it should be there
+                    if person is not None:
 
-                    for old_ct in self._auto_constraints_cleaned_at_user_reset:
-                        if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
-                            if abs(old_ct.end_of_constraint - next_usage_time) < timedelta(minutes=15) and abs(old_ct.target_value - person_min_target_charge) < 3.0:
-                                # ok found one ... that was reset by the user ... we should not add it back
-                                is_person_covered = True
-                                break
+                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                       load_info={"person": person.name},
+                                                                       for_full_reset=False)
 
-
-                do_remove_all_person_constraints = True
-
-                if person is not None and is_person_covered is not None and is_person_covered is False and next_usage_time is not None and person_min_target_charge and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
-
-                    is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value,
-                                                            target_charge=person_min_target_charge,
-                                                            is_target_percent=is_target_percent)
-
-                    if is_car_charged is False:
-                        do_remove_all_person_constraints = False
-
-                        # we should check if there is not an existing person constraint and replace it by this one?
-                        target_charge = person_min_target_charge
-
-
-                        for ct in self._constraints:
-                            if ct.is_constraint_active_for_time_period(time):
-                                if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param == self.car.name and ct.load_info is not None and ct.load_info.get("person") == person.name:
-                                    # ok found one ... check if it is ok
-                                    if ct.target_value != target_charge or ct.end_of_constraint != next_usage_time:
-                                        # we now remove it and re-add it below
-                                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                                       load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
-                                                                                       for_full_reset=False)
-                                    else:
-                                        car_charge_person = ct
+                        for old_ct in self._auto_constraints_cleaned_at_user_reset:
+                            if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
+                                if abs(old_ct.end_of_constraint - next_usage_time) < timedelta(minutes=15) and abs(old_ct.target_value - person_min_target_charge) < 3.0:
+                                    # ok found one ... that was reset by the user ... we should not add it back
+                                    person = None
                                     break
 
 
+                    do_remove_all_person_constraints = True
 
-                        if car_charge_person is None:
-                            # ok we do know we want to add a constraint to have at least this charge at this time
-                            await self.car.set_next_charge_target_percent(target_charge, do_update_charger=False)
+                    if person is not None and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
 
-                            car_charge_person = ConstraintClass(
-                                total_capacity_wh=self.car.car_battery_capacity,
-                                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                time=time,
-                                load=self,
-                                load_param=self.car.name,
-                                load_info={"person": person.name},
-                                from_user=False,
-                                initial_value=car_initial_value,
-                                target_value=target_charge,
-                                power_steps=self._power_steps,
-                                support_auto=True
-                            )
+                        is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value,
+                                                                target_charge=person_min_target_charge,
+                                                                is_target_percent=is_target_percent)
 
-                            if self.push_live_constraint(time, car_charge_person):
-                                _LOGGER.info(
-                                    f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}")
-                                do_force_solve = True
+                        if is_car_charged is False:
+                            do_remove_all_person_constraints = False
 
-                        realized_charge_target = target_charge
+                            # we should check if there is not an existing person constraint and replace it by this one?
+                            target_charge = person_min_target_charge
 
-                if do_remove_all_person_constraints:
-                    # we should remove ALL previous person based constraints from this car
-                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                   load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
-                                                                   for_full_reset=False)
+                            for ct in self._constraints:
+                                if ct.is_constraint_active_for_time_period(time):
+                                    if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param == self.car.name and ct.load_info is not None and ct.load_info.get("person") == person.name:
+                                        # ok found one ... check if it is ok
+                                        if ct.target_value != target_charge or ct.end_of_constraint != next_usage_time:
+                                            # we now remove it and re-add it below
+                                            self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                                           load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                                                                                           for_full_reset=False)
+                                        else:
+                                            car_charge_person = ct
+                                        break
 
 
+
+                            if car_charge_person is None:
+                                # ok we do know we want to add a constraint to have at least this charge at this time
+                                await self.car.set_next_charge_target_percent(target_charge, do_update_charger=False)
+
+                                car_charge_person = ConstraintClass(
+                                    total_capacity_wh=self.car.car_battery_capacity,
+                                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                    time=time,
+                                    load=self,
+                                    load_param=self.car.name,
+                                    load_info={"person": person.name},
+                                    from_user=False,
+                                    initial_value=car_initial_value,
+                                    target_value=target_charge,
+                                    power_steps=self._power_steps,
+                                    support_auto=True
+                                )
+
+                                if self.push_live_constraint(time, car_charge_person):
+                                    _LOGGER.info(
+                                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}")
+                                    do_force_solve = True
+
+                            realized_charge_target = target_charge
+
+                    if do_remove_all_person_constraints:
+                        # we should remove ALL previous person based constraints from this car
+                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
+                                                                       load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                                                                       for_full_reset=False)
 
             if realized_charge_target is None or (is_target_percent and realized_charge_target < self.car.car_default_charge):
 
@@ -3000,6 +3000,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: plugged car {self.car.name} default charge: {self.car.car_default_charge}% pushed filler constraint {car_charge_best_effort.name}")
                         do_force_solve = True
+
+            if person_to_notify is not None:
+                await person_to_notify.notify_of_forecast_if_needed(time,
+                                                                    notify_reason=PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
+                                                                    user_ct=user_timed_constraint,
+                                                                    force_ct=force_constraint,
+                                                                    person_ct=car_charge_person)
+
 
         return do_force_solve
 
