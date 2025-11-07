@@ -238,6 +238,8 @@ class QsCarCard extends HTMLElement {
       .ring .rabbit-btn.on ha-icon { color: #2196F3; }
       .ring .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; }
       .ring .time-btn:hover { border-color: var(--primary-color); background: rgba(255,255,255,.08); }
+      .ring .time-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
+      .ring .time-btn.on { color: #2196F3; }
 
       .grid { display:grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap:16px; margin-top: 16px; }
       @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
@@ -480,7 +482,7 @@ class QsCarCard extends HTMLElement {
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
                   </div>
-                  <div id="time_btn" class="time-btn">${chargeTime}</div>
+                  <div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>
                 </div>
                 </div>
                 <div class="center-controls" style="flex-direction:column; gap:4px;">

@@ -362,7 +362,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         title = "No Prediction for you for tomorrow!"
                         message = "Check in your Home Assistant to see which car you need."
                     else:
-                        title = f"No Prediction for you for tomorrow with the {predicted_car.name}!"
+                        title = f"{predicted_car.name}: No Prediction for you for tomorrow"
                         message = f"Check in your Home Assistant to see if there is what you need."
                 else:
                     prediction_time = get_readable_date_string(self.predicted_leave_time)
