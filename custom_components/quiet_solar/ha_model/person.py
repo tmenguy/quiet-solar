@@ -11,7 +11,8 @@ from datetime import time as dt_time
 from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
     CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    CONF_PERSON_TRACKER, DEVICE_STATUS_CHANGE_NOTIFY
+    CONF_PERSON_TRACKER, DEVICE_STATUS_CHANGE_NOTIFY, PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER, \
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, PERSON_NOTIFY_REASON_CHANGED_CAR
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import get_readable_date_string, LoadConstraint, \
     MultiStepsPowerLoadConstraintChargePercent
@@ -297,8 +298,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
 
     async def notify_of_forecast_if_needed(self, time: datetime | None = None,
-                                           force_notify:bool= False,
-                                           notify_car_with_charger:bool= False,
+                                           notify_reason:str= PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
                                            user_ct:LoadConstraint|None=None,
                                            force_ct:LoadConstraint|None=None):
         """Notify the user of the forecasted mileage."""
@@ -312,20 +312,52 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
             title = None
             message = None
-            if force_notify or (self._last_forecast_notification_call_time < today_notify_utc and time >= today_notify_utc):
+            predicted_car = None
+            daily_notification = self._last_forecast_notification_call_time < today_notify_utc and time >= today_notify_utc
+
+            for car in self.home._cars:
+                if car.current_forecasted_person is not None:
+                    if car.current_forecasted_person.name == self.name:
+                        predicted_car = car
+                        break
+
+            charger = None
+            if predicted_car is not None:
+                charger = predicted_car.charger
+
+            do_notify = False
+
+            if notify_reason == PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER:
+                do_notify = daily_notification and charger is None
+                if do_notify:
+                    await self.home.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
+            elif notify_reason == PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS:
+                do_notify = daily_notification and charger is not None
+                if do_notify:
+                    await self.home.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
+            elif notify_reason == PERSON_NOTIFY_REASON_CHANGED_CAR:
+                do_notify = True
+
+
+            if do_notify:
+
+                self.update_person_forecast(time)
+
+                for car in self.home._cars:
+                    if car.current_forecasted_person is not None:
+                        if car.current_forecasted_person.name == self.name:
+                            predicted_car = car
+                            break
+
                 # send notification
                 if self.predicted_mileage is None or self.predicted_leave_time is None:
-                    title = "No Prediction for you for tomorrow!"
-                    message = "Check in your Home Assistant to see which car you need."
+                    if predicted_car is None:
+                        title = "No Prediction for you for tomorrow!"
+                        message = "Check in your Home Assistant to see which car you need."
+                    else:
+                        title = f"No Prediction for you for tomorrow with the {predicted_car.name}!"
+                        message = f"Check in your Home Assistant to see if there is what you need."
                 else:
-                    self.home.get_best_persons_cars_allocations(time, force_update=True)
-
-                    predicted_car = None
-                    for car in self.home._cars:
-                        if car.current_forecasted_person is not None:
-                            if car.current_forecasted_person.name == self.name:
-                                predicted_car = car
-                                break
 
                     prediction_time = get_readable_date_string(self.predicted_leave_time)
 
@@ -382,7 +414,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         """Predict the person's mileage for the next day."""
         state_value = self.get_forecast_readable_string()
 
-        self.hass.create_task(self.notify_of_forecast_if_needed(), name="QSPerson notify_of_forecast task")
+        self.hass.create_task(self.notify_of_forecast_if_needed(), name="QSPerson notify_of_forecast task in get_person_mileage_serialized_prediction")
 
         serialized_leave_time = None
         if self.predicted_leave_time is not None:

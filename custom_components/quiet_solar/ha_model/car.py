@@ -205,7 +205,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             do_update = True
         self._user_selected_person_name_for_car = value
         if do_update and self.home is not None:
-            self.home.get_best_persons_cars_allocations(force_update=True)
+            self.hass.create_task(self.home.get_best_persons_cars_allocations(force_update=True),
+                                  name="QSCar get_best_persons_cars_allocations task in user_selected_person_name_for_car")
+
 
     def _car_person_option(self, person_name: str):
         return person_name
@@ -306,7 +308,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             # now we should recompute all car assignment with this new one, and update everything that should be updated
             if do_need_update and self.home:
-                self.home.get_best_persons_cars_allocations(force_update=True)
+                await self.home.get_best_persons_cars_allocations(force_update=True)
                 person_forecast_entity = self.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
                 if person_forecast_entity is not None:
                     time = datetime.now(tz=pytz.UTC)
@@ -395,7 +397,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def get_best_person_next_need(self, time:datetime) -> tuple[bool | None, datetime | None, float | None, Any | None]:
         if self.home:
-            self.home.get_best_persons_cars_allocations(time)
+            await self.home.get_best_persons_cars_allocations(time)
 
             person = self.current_forecasted_person
 

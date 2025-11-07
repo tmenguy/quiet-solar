@@ -23,7 +23,8 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
-    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
+    PERSON_NOTIFY_REASON_CHANGED_CAR
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -1478,7 +1479,7 @@ class QSHome(QSDynamicGroup):
                     device.root_device_post_home_init(time)
 
 
-        self.get_best_persons_cars_allocations(time, force_update=True)
+        await self.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
 
         for device in self._all_devices:
             try:
@@ -1643,7 +1644,7 @@ class QSHome(QSDynamicGroup):
                     await self._compute_and_store_person_car_forecasts(local_day_utc)
                     _LOGGER.info(f"update_forecast_probers: compute prev day {local_day_shifted}/{prev_local_day_shifted} -> {local_day_utc}")
 
-            self.get_best_persons_cars_allocations(time)
+            await self.get_best_persons_cars_allocations(time)
 
     def _compute_person_needed_time_and_date(self, time:datetime):
 
@@ -1698,19 +1699,26 @@ class QSHome(QSDynamicGroup):
                                               leave_time=persons_mileage[person][1])
 
 
-    def get_best_persons_cars_allocations(self, time:datetime | None=None, force_update=False) -> dict[str,QSPerson]:
+    async def get_best_persons_cars_allocations(self, time:datetime | None=None, force_update=False, do_notify=True) -> dict[str,QSPerson]:
 
         if time is None:
             time = datetime.now(tz=pytz.UTC)
 
-        if self._last_persons_car_allocation_time is None or force_update or (time - self._last_persons_car_allocation_time).total_seconds() > HOME_PERSON_CAR_ALLOCATION_CACHE_S:
+        if self._last_persons_car_allocation_time is None or \
+                force_update or \
+                (time - self._last_persons_car_allocation_time).total_seconds() > HOME_PERSON_CAR_ALLOCATION_CACHE_S:
+
             self._last_persons_car_allocation_time = time
             self._last_persons_car_allocation = {}
 
             covered_cars = set()
             covered_persons = set()
 
+            initial_car_allocated_persons = {}
+
             for car in self._cars:
+                initial_car_allocated_persons[car.name] = car.current_forecasted_person
+
                 car.current_forecasted_person = None
 
                 if car.user_selected_person_name_for_car is None:
@@ -1864,6 +1872,21 @@ class QSHome(QSDynamicGroup):
                 str_p_c = "No allocations"
 
             _LOGGER.info(f"get_best_persons_cars_allocations: {str_p_c}")
+
+            if do_notify:
+                persons_to_notify = set()
+                for car in self._cars:
+                    initial_person : QSPerson | None = initial_car_allocated_persons.get(car.name, None)
+                    if initial_person is not None and car.current_forecasted_person is None:
+                        persons_to_notify.add(initial_person)
+                    elif initial_person is None and car.current_forecasted_person is not None:
+                        persons_to_notify.add(car.current_forecasted_person)
+                    elif initial_person is not None and car.current_forecasted_person is not None and initial_person.name != car.current_forecasted_person.name:
+                        persons_to_notify.add(initial_person)
+                        persons_to_notify.add(car.current_forecasted_person)
+
+                for person in persons_to_notify:
+                    await person.notify_of_forecast_if_needed(notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
 
         return self._last_persons_car_allocation
 

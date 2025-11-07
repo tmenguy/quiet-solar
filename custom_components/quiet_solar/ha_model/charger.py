@@ -105,7 +105,8 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CAR_CHARGE_TYPE_NOT_CHARGING, CAR_CHARGE_TYPE_FAULTED, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE, \
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
     CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
-    CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR
+    CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR, \
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
 from ..ha_model.car import QSCar
@@ -2840,10 +2841,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if person is not None:
                     await person.notify_of_forecast_if_needed(time,
-                                                              force_notify=False,
-                                                              notify_car_with_charger=True,
+                                                              notify_reason=PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
                                                               user_ct=user_timed_constraint,
-                                                              orce_ct=force_constraint)
+                                                              force_ct=force_constraint)
                     _LOGGER.warning(f"==> TODO REMOVE RESET plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}")
                     person = None
                     is_person_covered = None
