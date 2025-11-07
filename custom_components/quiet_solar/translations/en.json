@@ -238,7 +238,7 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
-                    "mobile_app": "Select a mobile app to send notifications",
+                    "mobile_app_for_notifications": "Select a mobile app to send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",
@@ -713,7 +713,7 @@
             "person": {
                 "data": {
                     "device_dashboard_section": "Dashboard section",
-                    "mobile_app": "Select a mobile app to send notifications",
+                    "mobile_app_for_notifications": "Select a mobile app to send notifications",
                     "mobile_app_url": "Open the mobile app at this relative URL",
                     "name": "Name",
                     "person_authorized_cars": "Authorized cars this person can drive",

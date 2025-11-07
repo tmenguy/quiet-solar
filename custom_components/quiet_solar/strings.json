@@ -231,7 +231,7 @@
           "person_preferred_car": "Preferred car for this person",
           "person_notification_time": "Time of day to send daily notification about car readiness",
           "device_dashboard_section": "Dashboard section",
-          "mobile_app": "Select a mobile app to send notifications",
+          "mobile_app_for_notifications": "Select a mobile app to send notifications",
           "mobile_app_url": "Open the mobile app at this relative URL"
         }
       },
@@ -509,7 +509,7 @@
           "person_preferred_car": "[%key:component::quiet_solar::config::step::person::data::person_preferred_car%]",
           "person_notification_time": "[%key:component::quiet_solar::config::step::person::data::person_notification_time%]",
           "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
-          "mobile_app": "[%key:component::quiet_solar::config::step::person::data::mobile_app%]",
+          "mobile_app_for_notifications": "[%key:component::quiet_solar::config::step::person::data::mobile_app_for_notifications%]",
           "mobile_app_url": "[%key:component::quiet_solar::config::step::person::data::mobile_app_url%]"
         }
       },
