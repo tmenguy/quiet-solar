@@ -167,6 +167,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dec_seg_count = 0
 
         self.current_forecasted_person : QSPerson | None = None
+        self._current_forecasted_person_name_from_boot : str | None = None
 
         self.reset()
 
@@ -217,10 +218,47 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # do not use the property, but teh underlying model
         data_to_update["user_selected_person_name_for_car"] = self._user_selected_person_name_for_car
 
+        forecasted_name = None
+        if self.current_forecasted_person is not None:
+            forecasted_name = self.current_forecasted_person.name
+        data_to_update["current_forecasted_person_name_from_boot"] = forecasted_name
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         # do not use the property to not trigger an unnecessary compute of the people allocation
         self._user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
+        self._current_forecasted_person_name_from_boot = stored_load_info.get("current_forecasted_person_name_from_boot", None)
+
+
+    def device_post_home_init(self, time: datetime):
+        # should happen after all config entry setup and all
+
+        super().device_post_home_init(time)
+
+        if self._current_forecasted_person_name_from_boot is not None:
+            if self.home:
+                person = self.home.get_person_by_name(self._current_forecasted_person_name_from_boot)
+                if person is not None:
+                    self.current_forecasted_person = person
+
+        if self._user_selected_person_name_for_car is not None:
+            if self._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
+                self.current_forecasted_person = None
+            else:
+                if self.home:
+                    person = self.home.get_person_by_name(self._user_selected_person_name_for_car)
+                    if person is None:
+                        self._user_selected_person_name_for_car = None
+                        self.current_forecasted_person = None
+                    else:
+                        self.current_forecasted_person = person
+        # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
+        try:
+            # Asynchronously try to compute an initial km/kWh from HA history
+            if self.hass is not None:
+                self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
+        except Exception:
+            pass
 
     def get_car_person_readable_forecast_mileage(self):
 
@@ -502,15 +540,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
         return list(parent)
 
-    def device_post_home_init(self, time: datetime):
-        # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
-        super().device_post_home_init(time)
-        try:
-            # Asynchronously try to compute an initial km/kWh from HA history
-            if self.hass is not None:
-                self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
-        except Exception:
-            pass
+
 
 
     def _add_soc_odo_value_to_segments(self, soc:float, odo:float, time:datetime):

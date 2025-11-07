@@ -1478,9 +1478,6 @@ class QSHome(QSDynamicGroup):
                 if isinstance(device, HADeviceMixin):
                     device.root_device_post_home_init(time)
 
-
-        await self.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
-
         for device in self._all_devices:
             try:
                 await device.update_states(time)

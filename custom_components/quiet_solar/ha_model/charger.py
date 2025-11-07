@@ -2884,24 +2884,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             do_remove_all_person_constraints = False
 
                             # we should check if there is not an existing person constraint and replace it by this one?
-                            target_charge = person_min_target_charge
-
                             for ct in self._constraints:
                                 if ct.is_constraint_active_for_time_period(time):
                                     if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param == self.car.name and ct.load_info is not None and ct.load_info.get("person") == person.name:
-                                        # ok found one ... check if it is ok
-                                        if ct.target_value != target_charge or ct.end_of_constraint != next_usage_time:
-                                            # we now remove it and re-add it below
-                                            self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                                           load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
-                                                                                           for_full_reset=False)
-                                        else:
-                                            car_charge_person = ct
+                                        # ok found one ...
+                                        car_charge_person = ct
+                                        need_ct_update = False
+                                        if car_charge_person.end_of_constraint != next_usage_time:
+                                            car_charge_person.end_of_constraint = next_usage_time
+                                            need_ct_update = True
+                                        if car_charge_person.target_value != target_charge:
+                                            car_charge_person.target_value = target_charge
+                                            need_ct_update = True
+                                        if need_ct_update:
+                                            do_force_solve = True
+                                            # update the constraints to follow the new  target
+                                            self.set_live_constraints(time, self._constraints)
                                         break
 
 
-
                             if car_charge_person is None:
+
+                                target_charge = person_min_target_charge
+
                                 # ok we do know we want to add a constraint to have at least this charge at this time
                                 await self.car.set_next_charge_target_percent(target_charge, do_update_charger=False)
 
@@ -2915,6 +2920,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     from_user=False,
                                     initial_value=car_initial_value,
                                     target_value=target_charge,
+                                    end_of_constraint=next_usage_time,
                                     power_steps=self._power_steps,
                                     support_auto=True
                                 )
