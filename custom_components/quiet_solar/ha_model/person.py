@@ -421,9 +421,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
                                         f"The {predicted_car.name} current charge is {current_soc:.0f}%, Charge it to {needed_soc:.0f}% to cover your trip.")
 
-            if message is not None:
+            if message is not None and title is not None:
                 _LOGGER.info(f"notify_of_forecast_if_needed: Notifying person {self.name} :reason {notify_reason} {title} / {message}")
-                await self.on_device_state_change(time, device_change_type=DEVICE_STATUS_CHANGE_NOTIFY, title=title,message=message)
+                await self.on_device_state_change(time, device_change_type=DEVICE_STATUS_CHANGE_NOTIFY, title=title, message=message)
         
         self._last_forecast_notification_call_time = time
 

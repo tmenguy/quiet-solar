@@ -142,7 +142,7 @@ CONF_CAR_CUSTOM_POWER_CHARGE_VALUES = "car_use_custom_power_charge_values"
 CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P = "car_is_custom_power_charge_values_3p"
 CONF_CAR_ODOMETER_SENSOR = "car_odometer_sensor"
 CONF_CAR_ESTIMATED_RANGE_SENSOR = "car_estimated_range_sensor"
-CONF_MOBILE_APP = "mobile_app"
+CONF_MOBILE_APP = "mobile_app_for_notifications"
 CONF_MOBILE_APP_URL = "mobile_app_url"
 
 CONF_PERSON_PERSON_ENTITY = "person_person_entity"
