@@ -463,6 +463,7 @@ class QsCarCard extends HTMLElement {
               />
               ` : ''}
               <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)'}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
+              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${isDisconnected ? 'var(--secondary-text-color)' : 'var(--primary-color)'}" font-size="${useEnergyMode ? '11' : '13'}" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${useEnergyMode ? Math.round(parseTargetEnergy(target) ?? (Number(sSoc?.state || 0) / 1000)) : Math.round(targetPct ?? soc)}</text>
             </svg>
             <div class="center">
               <div class="stack">
@@ -938,6 +939,12 @@ class QsCarCard extends HTMLElement {
               const pos = polar(center.cx, center.cy, ringCirc, angSnap);
               handle.setAttribute('cx', pos.x.toFixed(2));
               handle.setAttribute('cy', pos.y.toFixed(2));
+              const handleText = this._root.getElementById('target_handle_text');
+              if (handleText) {
+                  handleText.setAttribute('x', pos.x.toFixed(2));
+                  handleText.setAttribute('y', pos.y.toFixed(2));
+                  handleText.textContent = Math.round(snapValue);
+              }
               const tv = this._root.getElementById('target_value');
               if (tv) tv.innerHTML = useEnergyMode ? `${Math.round(snapValue)}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>` : `${snapValue}%`;
           };
