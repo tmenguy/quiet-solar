@@ -366,7 +366,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 prediction_time = get_readable_date_string(self.predicted_leave_time)
 
                 if predicted_car is None:
-                    title = "Your Daily Mileage Prediction: No allocated car"
+                    title = "No allocated car !"
                     message = f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}."
                 else:
 
@@ -374,7 +374,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         self.predicted_mileage, self.predicted_leave_time)
 
                     if is_covered:
-                        title = f"Your Mileage Prediction: get the {predicted_car.name}, it is already ready!"
+                        title = f"{predicted_car.name}: OK, it is already ready!"
                         message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
                                    f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip.")
 
@@ -392,19 +392,19 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
                         if ct_target_soc is not None:
                             if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
-                                title = f"BEWARE: Your car Prediction is the {predicted_car.name}, it has a scheduled charge that WON'T cover your trip!"
+                                title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
                                 message = (
                                     f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
                                     f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}")
 
                             else:
-                                title = f"Daily Mileage Prediction: get the {predicted_car.name}, it has a scheduled charge that works!"
+                                title = f"{predicted_car.name}: OK it has a scheduled charge that works!"
                                 message = (
                                     f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
                                     f" The {predicted_car.name} current charge is {current_soc:.0f}%, the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
 
                         else:
-                            title = f"Your Daily Mileage Prediction: get the {predicted_car.name}, I'll charge it for you!"
+                            title = f"{predicted_car.name}: Check it, I'll charge it for you!"
                             message = (f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
                                        f" The {predicted_car.name} current charge is {current_soc:.0f}%, I will charge it to {needed_soc:.0f}% to cover your trip.")
 
