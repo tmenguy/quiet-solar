@@ -239,8 +239,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                             f"device_post_home_init: QSPerson {self.name} error in saved data {e}")
                         continue
 
-                    day = datetime.fromisoformat(day_str)
-                    leave_time = datetime.fromisoformat(leave_time_str)
+                    day = datetime.fromisoformat(day_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+                    leave_time = datetime.fromisoformat(leave_time_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
                     self.add_to_mileage_history( day, float(mileage), leave_time )
                 except Exception as ex:
@@ -435,7 +435,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         serialized_leave_time = None
         if self.predicted_leave_time is not None:
-            serialized_leave_time = self.predicted_leave_time.isoformat()
+            serialized_leave_time = self.predicted_leave_time.replace(tzinfo=pytz.UTC).astimezone(tz=None).isoformat()
 
         return    state_value, {
             "historical_data": self.serializable_historical_data,
