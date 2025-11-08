@@ -344,11 +344,11 @@ class QSHome(QSDynamicGroup):
                 if car.name in person.authorized_cars:
 
                     if car_positions is None:
-                        car_positions = await load_from_history(self.hass, car.car_tracker, start, end,
+                        car_positions = await load_from_history(self.hass, car.car_tracker, start - timedelta(hours=1), end,
                                                                 no_attributes=False)
 
                     if person_positions_cache.get(person) is None:
-                        person_positions = await load_from_history(self.hass, person.person_entity_id, start, end,
+                        person_positions = await load_from_history(self.hass, person.get_tracker_id(), start - timedelta(hours=1), end,
                                                                    no_attributes=False)
                         person_positions_cache[person] = person_positions
                     else:
@@ -561,15 +561,19 @@ class QSHome(QSDynamicGroup):
             segments_person_not_home = person_not_home_cache.get(person)
 
             if segments_person_not_home is not None and len(segments_person_not_home) > 0:
-                if segments_person_not_home[0][0] <= start:
-                    # ok the first not home is across the start time check the lower car segment for the person
-                    if len(segments_person_not_home) > 1:
-                        persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[1][0])
+                spnh_idx = 0
+                while segments_person_not_home[spnh_idx][0] < start:
+                    spnh_idx += 1
+                    if spnh_idx >= len(segments_person_not_home):
+                        break
+                if spnh_idx >= len(segments_person_not_home):
+                    # all segments after before start
+                    _LOGGER.info(
+                        f"_compute_mileage_for_period_per_person: No not home segments after start for person {person.name}, setting start time to None")
                 else:
-                    persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[0][0])
+                    persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[spnh_idx][0])
             else:
                 _LOGGER.info(f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None")
-                persons_result[person][1] = None
 
         return persons_result
 
@@ -605,9 +609,7 @@ class QSHome(QSDynamicGroup):
                     if attr is not None:
                         time = attr.get("last_updated", time)
 
-                    if time < start:
-                        time = start
-                    elif time > end:
+                    if time > end:
                         time = end
 
                     if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
@@ -1517,13 +1519,13 @@ class QSHome(QSDynamicGroup):
             car_odos = None
 
             if car.car_tracker:
-                car_positions = await load_from_history(self.hass, car.car_tracker, start, end,
+                car_positions = await load_from_history(self.hass, car.car_tracker, start - timedelta(hours=1), end,
                                                         no_attributes=False)
             if car_positions is None:
                 car_positions = []
 
             if car.car_odometer_sensor:
-                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start, end,
+                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start - timedelta(hours=1), end,
                                                    no_attributes=False)
             if car_odos is None:
                 car_odos = []
@@ -1536,7 +1538,7 @@ class QSHome(QSDynamicGroup):
             person_entity_id = person.person_entity_id
             tracker = person.get_tracker_id()
 
-            person_positions = await load_from_history(self.hass, tracker, start, end, no_attributes=False)
+            person_positions = await load_from_history(self.hass, tracker, start - timedelta(hours=1), end, no_attributes=False)
             if person_positions is None:
                 person_positions = []
 
@@ -1749,7 +1751,6 @@ class QSHome(QSDynamicGroup):
             p_s = sorted(p_s, key=lambda x: x[2], reverse=True)
 
             # we want to minimize the charged energy...while giving the preferred car to its person if possible
-            car_person_list_energy_diff =[]
             car_person_list_preferred_diff = []
 
             for person, p_leave_time, p_mileage in p_s:
@@ -1767,38 +1768,21 @@ class QSHome(QSDynamicGroup):
                     is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
                     if is_covered is not None:
                         #diff energy > 0
-                        score_energy_diff = diff_energy
-                        score_preferred_diff = diff_energy
+                        score_preferred_diff = diff_energy / 1000.0  #kwh
 
                         if person.preferred_car != p_car.name:
                             score_preferred_diff += 10000
 
                         if is_covered is False:
-                            score_energy_diff    += 10000*10000 # big penalty for not covering the needed mileage
-                            score_preferred_diff += 10000*10000
+                            score_preferred_diff += 10000*10000 # big penalty for not covering the needed mileage
 
-                        car_person_list_energy_diff.append( (score_energy_diff, p_car, person, is_covered) )
                         car_person_list_preferred_diff.append( (score_preferred_diff, p_car, person, is_covered) )
 
 
 
             # sort by score
-            car_person_list_energy_diff    = sorted(car_person_list_energy_diff, key=lambda x: x[0])
             car_person_list_preferred_diff = sorted(car_person_list_preferred_diff, key=lambda x: x[0])
-
-            diff_energy_car_name_to_person_1, num_uncovered_alloc_1, num_covered_alloc_1, num_preferred_alloc_1 = self._allocate_person_car(car_person_list_energy_diff)
-            diff_energy_car_name_to_person_2, num_uncovered_alloc_2, num_covered_alloc_2, num_preferred_alloc_2 = self._allocate_person_car(car_person_list_preferred_diff)
-
-            if num_uncovered_alloc_1 < num_uncovered_alloc_2:
-                result_energy = diff_energy_car_name_to_person_1
-            elif num_uncovered_alloc_2 < num_uncovered_alloc_1:
-                result_energy = diff_energy_car_name_to_person_2
-            else:
-                # same number of uncovered allocated, take the one with more preferred allocated
-                if num_preferred_alloc_1 >= num_preferred_alloc_2:
-                    result_energy = diff_energy_car_name_to_person_1
-                else:
-                    result_energy = diff_energy_car_name_to_person_2
+            result_energy, num_uncovered_alloc, num_covered_alloc, num_preferred_alloc = self._allocate_person_car(car_person_list_preferred_diff)
 
             self._last_persons_car_allocation.update(result_energy)
 
@@ -1890,12 +1874,8 @@ class QSHome(QSDynamicGroup):
 
     def _allocate_person_car(self, car_person_list):
 
-        to_be_covered_car_name = set()
-        to_be_covered_people_name = set()
-
-        for score, car, person, is_covered in car_person_list:
-            to_be_covered_car_name.add(car.name)
-            to_be_covered_people_name.add(person.name)
+        covered_car_name = set()
+        covered_people_name = set()
 
         diff_energy_car_name_to_person = {}
 
@@ -1903,12 +1883,12 @@ class QSHome(QSDynamicGroup):
         num_covered_allocated = 0
         num_uncovered_allocated = 0
         for score, car, person, is_covered in car_person_list:
-            if person.name not in to_be_covered_people_name:
+            if person.name in covered_car_name:
                 continue
-            if car.name not in to_be_covered_car_name:
+            if car.name in covered_car_name:
                 continue
-            to_be_covered_people_name.remove(person.name)
-            to_be_covered_car_name.remove(car.name)
+            covered_people_name.add(person.name)
+            covered_car_name.add(car.name)
 
             diff_energy_car_name_to_person[car.name] = person
 
