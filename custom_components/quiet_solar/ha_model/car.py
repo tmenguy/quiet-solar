@@ -444,6 +444,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 next_usage_time, p_mileage = person.update_person_forecast(time)
                 is_person_covered, current_soc, person_min_target_charge, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
 
+                if next_usage_time is not None:
+                    # round the next usage time to the prev 30 minutes
+                    next_usage_time = next_usage_time.replace(second=0, microsecond=0)
+                    minute = (next_usage_time.minute // 30) * 30
+                    next_usage_time = next_usage_time.replace(minute=minute)
+
                 return is_person_covered, next_usage_time, person_min_target_charge, person
 
         return (None, None, None, None)
