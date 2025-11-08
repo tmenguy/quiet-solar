@@ -127,7 +127,7 @@ CHARGER_MIN_REBOOT_DURATION_S = 120
 CHARGER_STATE_REFRESH_INTERVAL_S = 14
 CHARGER_ADAPTATION_WINDOW_S = 45
 CHARGER_CHECK_STATE_WINDOW_S = 15
-CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 120
+CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 180
 
 
 
@@ -1778,6 +1778,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if power == 0:
             return [0,0,0]
 
+        if self.car is None:
+            return [0,0,0]
+
         steps = self.car.get_charge_power_per_phase_A(is_3p)[0]
         resp = self._get_amps_from_power_steps(steps, power, safe_border=True)
 
@@ -2159,6 +2162,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_time = None
         self._boot_car = None
         self._boot_time_adjusted = None
+        self._boot_constraints = []
+        self._boot_last_completed_constraint = None
+        self._boot_last_pushed_end_constraint_from_agenda = None
 
     def reset(self):
         _LOGGER.info(f"Charger reset {self.name}")
@@ -2569,6 +2575,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     _LOGGER.info(f"device_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it")
                     self._boot_car = None
 
+        self._boot_last_completed_constraint = self._last_completed_constraint
+        self._boot_last_pushed_end_constraint_from_agenda = self._last_pushed_end_constraint_from_agenda
+        self._boot_constraints = self._constraints
+        self._constraints = []
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
@@ -2626,6 +2636,19 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             best_car = self.get_best_car(time)
 
+            if self._boot_car is not None and best_car is not None and best_car.name == self._boot_car.name and self._boot_constraints and len(self._constraints) == 0:
+                # we are back to the boot car ... we need to restore the constraints that were active at boot time
+                self._last_completed_constraint = self._boot_last_completed_constraint
+                self._last_pushed_end_constraint_from_agenda = self._boot_last_pushed_end_constraint_from_agenda
+                for ct in self._boot_constraints:
+                    if ct.load_param == best_car.name:
+                        if self.push_live_constraint(time, ct):
+                            do_force_solve = True
+
+                self._boot_constraints = []
+                self._boot_last_completed_constraint = None
+                self._boot_last_pushed_end_constraint_from_agenda = None
+
             # user forced a "deconnection"
             if best_car is None:
                 _LOGGER.info("check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option")
@@ -2646,7 +2669,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # we may have some saved constraints that have been loaded already from the storage at init
                 # so we need to check if they are still valid
                 _LOGGER.info(f"check_load_activity_and_constraints: plugging car {best_car.name} not connected: reset and attach car")
-                self.clean_constraints_for_load_param_and_info(time, load_param=best_car.name, for_full_reset=True)
+                if self._boot_car is not None and self._boot_car.name == best_car.name:
+                    do_full_reset = False
+                else:
+                    do_full_reset = True
+                self.clean_constraints_for_load_param_and_info(time, load_param=best_car.name, for_full_reset=do_full_reset)
                 self.attach_car(best_car, time)
 
             # we have to check if the car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
