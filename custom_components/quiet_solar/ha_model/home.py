@@ -64,6 +64,8 @@ HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S = 15*60
 
 HOME_PERSON_CAR_ALLOCATION_CACHE_S = 10*60
 
+HOME_SEGMENT_PRE_DELTA_TIMEDELTA = timedelta(minutes=30)
+
 class QSforecastValueSensor:
 
     _stored_values: list[tuple[datetime, float]]
@@ -344,11 +346,11 @@ class QSHome(QSDynamicGroup):
                 if car.name in person.authorized_cars:
 
                     if car_positions is None:
-                        car_positions = await load_from_history(self.hass, car.car_tracker, start - timedelta(hours=1), end,
+                        car_positions = await load_from_history(self.hass, car.car_tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
                                                                 no_attributes=False)
 
                     if person_positions_cache.get(person) is None:
-                        person_positions = await load_from_history(self.hass, person.get_tracker_id(), start - timedelta(hours=1), end,
+                        person_positions = await load_from_history(self.hass, person.get_tracker_id(), start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
                                                                    no_attributes=False)
                         person_positions_cache[person] = person_positions
                     else:
@@ -570,10 +572,14 @@ class QSHome(QSDynamicGroup):
                     # all segments after before start
                     _LOGGER.info(
                         f"_compute_mileage_for_period_per_person: No not home segments after start for person {person.name}, setting start time to None")
+                    if persons_result[person][1] <= start:
+                        persons_result[person][1] = None
                 else:
-                    persons_result[person][1] = min(persons_result[person][1], segments_person_not_home[spnh_idx][0])
+                    persons_result[person][1] = max(start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0]))
             else:
                 _LOGGER.info(f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None")
+                if persons_result[person][1] <= start:
+                    persons_result[person][1] = None
 
         return persons_result
 
@@ -1519,13 +1525,13 @@ class QSHome(QSDynamicGroup):
             car_odos = None
 
             if car.car_tracker:
-                car_positions = await load_from_history(self.hass, car.car_tracker, start - timedelta(hours=1), end,
+                car_positions = await load_from_history(self.hass, car.car_tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
                                                         no_attributes=False)
             if car_positions is None:
                 car_positions = []
 
             if car.car_odometer_sensor:
-                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start - timedelta(hours=1), end,
+                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
                                                    no_attributes=False)
             if car_odos is None:
                 car_odos = []
@@ -1538,7 +1544,7 @@ class QSHome(QSDynamicGroup):
             person_entity_id = person.person_entity_id
             tracker = person.get_tracker_id()
 
-            person_positions = await load_from_history(self.hass, tracker, start - timedelta(hours=1), end, no_attributes=False)
+            person_positions = await load_from_history(self.hass, tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end, no_attributes=False)
             if person_positions is None:
                 person_positions = []
 
