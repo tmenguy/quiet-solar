@@ -1184,18 +1184,19 @@ class QSHome(QSDynamicGroup):
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
                 maximum_production_output = self.get_current_maximum_production_output_power()
 
-                if solar_production_minus_battery + self.home_available_power >= maximum_production_output:
+                if solar_production_minus_battery + self.home_available_power > (1.05*maximum_production_output): # 5% tolerance
                     if self._battery is not None:
                         max_battery_discharge = self._battery.battery_get_current_possible_max_discharge_power()
                     else:
                         max_battery_discharge = 0
 
-                    sol_p = solar_production
-                    if sol_p is None:
-                        sol_p = -1.0
+                    if self._solar_plant is not None:
+                        solar_production = self._solar_plant.solar_production
+                    else:
+                        solar_production = -1
 
-                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, sol_p, max_battery_discharge )
-                    self.home_available_power = max(0.0, maximum_production_output - solar_production_minus_battery)
+                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
+                    self.home_available_power = max(0.0, 1.05*(maximum_production_output - solar_production_minus_battery))
 
 
             self.grid_consumption_power = grid_consumption
@@ -1223,21 +1224,28 @@ class QSHome(QSDynamicGroup):
 
     def get_current_maximum_production_output_power(self) -> float:
 
-        maximum_production_output = MAX_POWER_INFINITE
-
         if self._solar_plant is not None and self._solar_plant.solar_max_output_power_value:
             # we need to check if what is available will "really" be available to consume by any dynamic load ...
-            maximum_production_output = self._solar_plant.solar_max_output_power_value
-
-        if self._battery is not None:
-            max_battery_discharge = self._battery.battery_get_current_possible_max_discharge_power()
+            maximum_solar_production_output = float(self._solar_plant.solar_max_output_power_value)
         else:
-            max_battery_discharge = 0
+            maximum_solar_production_output = 0.0
+
+        is_dc_coupled = False
+        if self._battery is not None:
+            max_battery_discharge = float(self._battery.battery_get_current_possible_max_discharge_power())
+            is_dc_coupled = self._battery.is_dc_coupled
+        else:
+            max_battery_discharge = 0.0
 
         # check what could really be the max production output...because we could not reach the max inverter output
         # with the current production of the solar plant + battery discharge
-        if self._solar_plant is not None and self._solar_plant.solar_production + max_battery_discharge < maximum_production_output:
-           maximum_production_output = self._solar_plant.solar_production + max_battery_discharge
+        if is_dc_coupled and maximum_solar_production_output > 0.0:
+            if self._solar_plant is not None and float(self._solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output:
+               maximum_production_output = float(self._solar_plant.solar_production) + max_battery_discharge
+            else:
+                maximum_production_output = maximum_solar_production_output
+        else:
+            maximum_production_output = maximum_solar_production_output + max_battery_discharge
 
         return maximum_production_output
 
