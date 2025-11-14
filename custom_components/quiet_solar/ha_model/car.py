@@ -59,7 +59,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._conf_car_charge_percent_max_number_steps = None
         self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
-        self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 50.0)
+        self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 30.0)
 
         self.car_efficiency_km_per_kwh_sensor : str = CAR_EFFICIENCY_KM_PER_KWH
 
@@ -927,29 +927,40 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float | None, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
 
-        km_per_percent = current_soc = current_range_km = None
+        km_per_percent = current_soc = current_range_km = minimum_ok_soc = None
+
+        minimum_ok_soc = self.get_car_minimum_ok_SOC()
 
         if target_range_km is not None:
-            target_range_km = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
             current_range_km = self.get_estimated_range_km(time)
-
             current_soc = self.get_car_charge_percent(time)
             km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
 
         if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
             return None, None, None, None
 
-        needed_soc = min(100.0, target_range_km / km_per_percent)
+        target_range_km_a = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
+        needed_soc_a = min(100.0, target_range_km_a / km_per_percent)
+        needed_soc_b = 0.0
+        target_range_km_b = 0.0
+        if minimum_ok_soc is not None:
+            # finish at home with the minimal viable soc for the car
+            needed_soc_b = min(100.0, minimum_ok_soc + (target_range_km / km_per_percent))
+            target_range_km_b = (needed_soc_b) * km_per_percent
+
+        if needed_soc_a > needed_soc_b:
+            needed_soc = needed_soc_a
+            target_range_km = target_range_km_a
+        else:
+            needed_soc = needed_soc_b
+            target_range_km = target_range_km_b
 
         diff_energy = (abs(needed_soc - current_soc)*self.car_battery_capacity)/100.0
 
-        if current_range_km >= target_range_km:
+        if current_range_km >= target_range_km or current_soc >= needed_soc:
             return True, current_soc, needed_soc, diff_energy
         else:
             return False, current_soc, needed_soc, diff_energy
-
-
-
 
 
     def get_car_estimated_range_km(self, from_soc=100.0, to_soc=0.0, time: datetime | None = None) -> float | None:

@@ -131,13 +131,14 @@ CHARGER_BOOT_TIME_DATA_EXPIRATION_S = 120
 
 
 
-CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S = 5 * 60 # to be sure the car is not asking for current anymore
-CHARGER_LONG_CONNECTION_S = 60 * 10
+CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S = 20 * 60 # to be sure the car is not asking for current anymore
 
-CHARGER_CHECK_REAL_POWER_WINDOW_S = (CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S - 60) // 2 # to check for a window below the stop asking for current time
-CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT = 10
+CHARGER_CHECK_REAL_POWER_WINDOW_S = CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S // 2 # to check for a window below the stop asking for current time
+CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT = 5.0
+
 
 CAR_CHARGER_LONG_RELATIONSHIP_S = 60 * 60
+CHARGER_LONG_CONNECTION_S = 60 * 20
 
 
 STATE_CMD_RETRY_NUMBER = 3
@@ -3793,23 +3794,32 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # in case we do have a proper soc % and we expect a charge ongoing (ie "far" from the target)
         # we can check that the charger is really delivering power to the car
 
-        if is_target_percent and sensor_result is not None and ct.target_value - sensor_result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT:
+        if is_target_percent and result is not None and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT:
             if self._expected_charge_state.value is True and \
-                self._expected_charge_state.first_time_success is not None and \
+                self._expected_charge_state.last_ping_time_success is not None and \
                     (time - self._expected_charge_state.last_ping_time_success).total_seconds() > CHARGER_CHECK_REAL_POWER_WINDOW_S:
 
-                charger_is_zero = self.is_charging_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
 
-                father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+                is_growing = self.car.is_car_charge_growing(num_seconds=CHARGER_CHECK_REAL_POWER_WINDOW_S, time=time)
 
-                if father_is_zero is not None and father_is_zero is True:
-                    # if the group is zero ... it means no power is going to the cars at all .. so not to this one either
-                    charger_is_zero = True
-                elif charger_is_zero is not None and charger_is_zero is True:
-                    # direct measure on the car is zero ... so we are sure
-                    charger_is_zero = True
-                elif charger_is_zero is not None and charger_is_zero is False:
-                    charger_is_zero = False
+                charger_is_zero = False
+
+                if is_growing is None or is_growing is False:
+                    # check power to be sure
+
+                    charger_is_zero = self.is_charging_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+
+                    father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+
+                    if father_is_zero is not None and father_is_zero is True:
+                        # if the group is zero ... it means no power is going to the cars at all .. so not to this one either
+                        charger_is_zero = True
+                    elif charger_is_zero is not None and charger_is_zero is True:
+                        # direct measure on the car is zero ... so we are sure
+                        charger_is_zero = True
+                    elif charger_is_zero is not None and charger_is_zero is False:
+                        charger_is_zero = False
+
 
                 if charger_is_zero is True:
                     _LOGGER.error(f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} expected to be charging but no power detected going to the car over the last {CHARGER_CHECK_REAL_POWER_WINDOW_S} seconds")
@@ -3818,6 +3828,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         await self.on_device_state_change(time=time, device_change_type=DEVICE_STATUS_CHANGE_ERROR, message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected")
                 else:
                     self.possible_charge_error_start_time = None
+
+                self._expected_charge_state.last_ping_time_success = time
 
         is_car_charged, result = self.is_car_charged(time, current_charge=result, target_charge=ct.target_value, is_target_percent=is_target_percent)
 

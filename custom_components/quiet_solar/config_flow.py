@@ -1061,7 +1061,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         )
                     ),
                 vol.Optional(CONF_MINIMUM_OK_CAR_CHARGE,
-                             description={"suggested_value": int(self.config_entry.data.get(CONF_MINIMUM_OK_CAR_CHARGE, 50))}):
+                             description={"suggested_value": int(self.config_entry.data.get(CONF_MINIMUM_OK_CAR_CHARGE, 30))}):
                     selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
