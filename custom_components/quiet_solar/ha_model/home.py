@@ -66,6 +66,42 @@ HOME_PERSON_CAR_ALLOCATION_CACHE_S = 10*60
 
 HOME_SEGMENT_PRE_DELTA_TIMEDELTA = timedelta(minutes=30)
 
+
+def get_time_from_state(state: LazyState | None) -> datetime | None:
+
+    if state is None:
+        return None
+
+    time = state.last_updated
+    attr = state.attributes
+
+    if attr is not None:
+        time_updated = attr.get("last_updated", None)
+        if time_updated is not None and isinstance(time_updated, str):
+            if time_updated.lower() in ["none", "null", "unknown", "unavailable"]:
+                pass
+            else:
+                try:
+                    time = datetime.fromisoformat(time_updated)
+                except Exception as e:
+                    pass
+        elif isinstance(time_updated, datetime):
+            time = time_updated
+
+    if isinstance(time, str):
+        if time.lower() in ["none", "null", "unknown", "unavailable"]:
+            return None
+        else:
+            try:
+                time = datetime.fromisoformat(time)
+            except Exception as e:
+                return None
+
+    if time is None or not isinstance(time, datetime):
+        return None
+
+    return time
+
 class QSforecastValueSensor:
 
     _stored_values: list[tuple[datetime, float]]
@@ -341,6 +377,9 @@ class QSHome(QSDynamicGroup):
             car_positions = None
             car_segments_not_home = None
 
+            if car.car_is_invited:
+                continue
+
             for person in self._persons:
 
                 if car.name in person.authorized_cars:
@@ -357,7 +396,7 @@ class QSHome(QSDynamicGroup):
                         person_positions = person_positions_cache.get(person)
 
                     gps_segments, segments_person_not_home, segments_car_not_home = self.map_location_path(
-                        person_positions, car_positions, start=start, end=end, small_distance_threshold_m=250.0)
+                        person_positions, car_positions, start=start, end=end)
 
                     segments_person_not_home = [s for s in segments_person_not_home if
                                            (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S]
@@ -381,19 +420,23 @@ class QSHome(QSDynamicGroup):
                             car_segments_not_home[seg_start] = [seg_start, seg_end, {}, False]
 
                     for s_s, s_e, person_not_home, car_not_home, overlap_score, duration_overlap in overlap_not_home_segments:
-                        if car_segments_not_home.get(car_not_home[0]) is not None:
+                        if car_segments_not_home.get(car_not_home[0]) is not None and overlap_score > 0.0:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
                             if existing.get(person) is None:
-                                existing[person] = [0.0, 0.0]
+                                existing[person] = [0.0, 0.0, min(person_not_home[0], car_not_home[0]), max(person_not_home[1], car_not_home[1])]
                             existing[person][1] += overlap_score
+                            existing[person][2] = min(existing[person][2], min(person_not_home[0], car_not_home[0]))
+                            existing[person][3] = max(existing[person][3], max(person_not_home[1], car_not_home[1]))
 
 
                     for s_s, s_e, gps_segment, car_not_home, overlap_score, duration_overlap in overlap_gps_segments:
-                        if car_segments_not_home.get(car_not_home[0]) is not None:
+                        if car_segments_not_home.get(car_not_home[0]) is not None and overlap_score > 0.0:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
                             if existing.get(person) is None:
-                                existing[person] = [0.0, 0.0]
+                                existing[person] = [0.0, 0.0, min(gps_segment[0], car_not_home[0]), max(gps_segment[1], car_not_home[1])]
                             existing[person][0] += overlap_score
+                            existing[person][2] = min(existing[person][2], min(gps_segment[0], car_not_home[0]))
+                            existing[person][3] = max(existing[person][3], max(gps_segment[1], car_not_home[1]))
 
 
 
@@ -447,23 +490,20 @@ class QSHome(QSDynamicGroup):
                     for seg_idx in seg_indices:
                         c, si = segs[seg_idx]
                         seg_start2, seg_end2, p_res2, treated_2 = car_result[c][si]
-                        coverage_person_near_car = 0.0
-                        coverage_person_not_home = 0.0
 
                         if p_res2.get(person) is not None:
                             coverage_person_not_home = p_res2.get(person)[1]
                             coverage_person_near_car = p_res2.get(person)[0]
 
+                            score = 0.0
+                            if coverage_person_not_home > 0.9 and coverage_person_near_car == 0.0:
+                                score = coverage_person_not_home +  coverage_person_near_car
+                            elif coverage_person_not_home == 0.0 and coverage_person_near_car > 0.0:
+                                score = coverage_person_not_home +  coverage_person_near_car
+                            elif coverage_person_not_home > 0.0 and coverage_person_near_car > 0.0:
+                                score = coverage_person_not_home + coverage_person_near_car
 
-                            # if coverage_person_not_home > 0.7 and coverage_person_near_car > 0.0:
-                            #     score = 10000.0 * (1 + coverage_person_not_home + 100 * coverage_person_near_car)
-                            # elif coverage_person_not_home > 0.3 and coverage_person_near_car > 0.0:
-                            #     score = 100.0 * (1 + coverage_person_not_home + 100 * coverage_person_near_car)
-                            # elif coverage_person_not_home > 0.9:
-                            #     score = 1 + coverage_person_not_home + 100 * coverage_person_near_car
-                            # else:
-                            #     score = 0.0
-                            scores[pi, seg_idx] = coverage_person_not_home +  coverage_person_near_car
+                            scores[pi, seg_idx] = score
 
                 # now get the max of teh matric iteratively unitl we find the proper person for the segment 0
                 # (the one we are working on) and we remove also the found candidate from all other segments
@@ -476,7 +516,7 @@ class QSHome(QSDynamicGroup):
                     max_score = scores[max_person_idx, max_seg_idx]
 
                     if max_score == 0.0:
-                        # no more candidate.. iit means no person for the current segment at all?
+                        # no more candidate... it means no person for the current segment at all?
                         break
 
                     person, seg_indices = persons[max_person_idx]
@@ -527,13 +567,14 @@ class QSHome(QSDynamicGroup):
 
                 # ok we normally do have ONLY ONE assigned person here now
                 for person in p_res:
-                    dist = await car.get_car_mileage_on_period_km(seg_start - timedelta(minutes=5), seg_end + timedelta(minutes=5))
+                    _, _, s_s, s_e = p_res[person]
+                    dist = await car.get_car_mileage_on_period_km(s_s - timedelta(minutes=5), s_e + timedelta(minutes=5))
                     if dist is not None and dist > 0.0:
                         persons_result.setdefault(person, [0.0, None])[0] += dist
                         if persons_result[person][1] is None:
-                            persons_result[person][1] = seg_start
+                            persons_result[person][1] = s_s
                         else:
-                            persons_result[person][1] = min(persons_result[person][1], seg_start)
+                            persons_result[person][1] = min(persons_result[person][1], s_s)
 
 
         for car, unassigned_car_segments in unassigned_segment_per_car.items():
@@ -584,7 +625,7 @@ class QSHome(QSDynamicGroup):
         return persons_result
 
     def map_location_path(self, states_1: list[LazyState], states_2: list[LazyState], start: datetime, end: datetime,
-                          small_distance_threshold_m: float = 250) -> tuple[
+                          small_distance_threshold_m: float = 350) -> tuple[
         list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
         """
         Map two GPS paths based on timestamps.
@@ -610,10 +651,15 @@ class QSHome(QSDynamicGroup):
             last_unknown_start = None
             for state in state_list:
                 try:
-                    time = state.last_updated
+
+                    time = get_time_from_state(state)
                     attr = state.attributes
-                    if attr is not None:
-                        time = attr.get("last_updated", time)
+
+                    if time is None:
+                       continue
+
+                    if time in timings:
+                        continue
 
                     if time > end:
                         time = end
@@ -660,7 +706,7 @@ class QSHome(QSDynamicGroup):
                             current_not_home_segment = [None, None]
 
                 except (ValueError, TypeError, KeyError):
-                    pass
+                    _LOGGER.error(f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}")
                 last_unknown_start = None
 
 
@@ -1897,7 +1943,7 @@ class QSHome(QSDynamicGroup):
         num_covered_allocated = 0
         num_uncovered_allocated = 0
         for score, car, person, is_covered in car_person_list:
-            if person.name in covered_car_name:
+            if person.name in covered_people_name:
                 continue
             if car.name in covered_car_name:
                 continue

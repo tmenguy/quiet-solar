@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytz
 
-from custom_components.quiet_solar.ha_model.home import QSHome, HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS
+from custom_components.quiet_solar.const import MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+from custom_components.quiet_solar.ha_model.home import QSHome, get_time_from_state
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.car import QSCar
 from tests.conftest import FakeHass, FakeConfigEntry
@@ -19,7 +20,7 @@ class TestPersonsCarForecast:
     @pytest.fixture
     def test_data_path(self):
         """Get path to test data directory."""
-        return Path(__file__).parent / "data" / "2025_10_30_persons_and_cars"
+        return Path(__file__).parent / "data" / "2025_11_14_persons_and_cars"
 
     @pytest.fixture
     def person_and_car_data(self, test_data_path):
@@ -113,10 +114,9 @@ class TestPersonsCarForecast:
                         positions_for_car[car_tracker] = []
 
                     for state in car_positions:
-                        time = state.last_updated
-                        attr = state.attributes
-                        if attr is not None:
-                            time = attr.get("last_updated", time)
+                        time = get_time_from_state(state)
+                        if time is None:
+                            continue
                         positions_for_car[car_tracker].append((time, state))
                         # sort it
                     positions_for_car[car_tracker].sort(key=lambda x: x[0])
@@ -132,10 +132,9 @@ class TestPersonsCarForecast:
                         odos_for_car[car_odometer_sensor] = []
 
                     for state in car_odos:
-                        time = state.last_updated
-                        attr = state.attributes
-                        if attr is not None:
-                            time = attr.get("last_updated", time)
+                        time = get_time_from_state(state)
+                        if time is None:
+                            continue
                         odos_for_car[car_odometer_sensor].append((time, state))
                     odos_for_car[car_odometer_sensor].sort(key=lambda x: x[0])
 
@@ -149,10 +148,9 @@ class TestPersonsCarForecast:
                 if person_entity_id not in positions_for_person:
                     positions_for_person[person_entity_id] = []
                 for state in person_positions:
-                    time = state.last_updated
-                    attr = state.attributes
-                    if attr is not None:
-                        time = attr.get("last_updated", time)
+                    time = get_time_from_state(state)
+                    if time is None:
+                        continue
                     positions_for_person[person_entity_id].append((time, state))
                 positions_for_person[person_entity_id].sort(key=lambda x: x[0])
 
@@ -874,7 +872,7 @@ class TestPersonsCarForecast:
             # for d in range(0, 14):
             #     await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
 
-            num_days = min(14, len(per_day_data))
+            num_days = min(MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, len(per_day_data))
             print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days-1}:")
 
             local_day_2, local_day_shifted_2, local_day_utc_2, is_passed = mock_home._compute_person_needed_time_and_date(time)
@@ -887,20 +885,22 @@ class TestPersonsCarForecast:
                 await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
                 print(" ✓")
 
+
             # check time
 
             for person in mock_home._persons:
                 leave_time, mileage = person._compute_person_next_need(check_time)
+                print(f"Person {person.name} next need at {check_time}: leave at {leave_time} for {mileage}km")
 
                 if "thomas" in person.name.lower():
                     assert mileage is not None
-                    assert int(mileage) == 26, f"Expected 26km for Thomas, got {mileage}"
+                    assert int(mileage) == 57, f"Expected 57km for Thomas, got {mileage}"
                 elif "arthur" in person.name.lower():
                     assert mileage is not None
-                    assert int(mileage) == 35, f"Expected 35km for Arthur, got {mileage}"
+                    assert int(mileage) == 76, f"Expected 76km for Arthur, got {mileage}"
                 elif "magali" in person.name.lower():
                     assert mileage is not None
-                    assert int(mileage) == 59, f"Expected 59km for Magali, got {mileage}"
+                    assert int(mileage) == 37, f"Expected 37km for Magali, got {mileage}"
                 elif "brice" in person.name.lower():
                     assert mileage is None
                 print(f"Person {person.name} next need at {check_time}: leave at {leave_time} for {mileage}km")
@@ -908,28 +908,27 @@ class TestPersonsCarForecast:
 
             for car in mock_home._cars:
                 is_person_covered, next_usage_time, person_min_target_charge, person =  await car.get_best_person_next_need(check_time)
-
+                print(f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}")
                 if "tesla" in car.name.lower():
-                    assert "magali" in person.name.lower(), f"Expected magali for Tesla, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 20
+                    assert "arthur" in person.name.lower(), f"Expected arthur for Tesla, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 47
                     assert is_person_covered
-                    assert next_usage_time == datetime.fromisoformat("2025-10-31 07:26:37.830195+00:00")
+                    assert next_usage_time == datetime.fromisoformat("2025-11-15 10:30:00+00:00")
                 elif "twingo" in car.name.lower():
-                    assert "brice" in person.name.lower(), f"Expected brice for Twingo, got {person.name if person else None}"
-                    assert person_min_target_charge is None
+                    assert "magali" in person.name.lower(), f"Expected magali for Twingo, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 58
+                    assert is_person_covered is False
+                    assert next_usage_time == datetime.fromisoformat("2025-11-15 09:00:00+00:00")
                 elif "zoe" in car.name.lower():
                     assert "thomas" in person.name.lower(), f"Expected thomas for Zoe, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 18
-                    assert is_person_covered
-                    assert next_usage_time == datetime.fromisoformat("2025-10-31 08:48:31.806986+00:00")
-                elif "buz" in car.name.lower():
-                    assert "arthur" in person.name.lower(), f"Expected arthur for ID.buzz, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 12
+                    assert int(person_min_target_charge) == 48
                     assert is_person_covered is False
-                    assert next_usage_time == datetime.fromisoformat("2025-10-30 17:14:54.184629+00:00")
+                    assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
+                elif "buz" in car.name.lower():
+                    assert "brice" in person.name.lower(), f"Expected brice for ID.buzz, got {person.name if person else None}"
+                    assert person_min_target_charge is None
 
 
-                print(f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}")
 
             # Verify all persons have accumulated history
             print("\n=== Results after processing all days ===")
