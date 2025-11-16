@@ -29,7 +29,6 @@ from ..home_model.load import AbstractLoad, AbstractDevice
 import numpy as np
 
 
-from datetime import datetime, timedelta
 from homeassistant.core import HomeAssistant
 from homeassistant.components.calendar.const import DATA_COMPONENT
 from homeassistant.components.calendar import CalendarEntity
@@ -346,16 +345,16 @@ class HADeviceMixin:
         if time_utc_now is None:
             time_utc_now = datetime.now(tz=pytz.UTC)
 
-        dt_now = time_utc_now.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        dt_now_local = time_utc_now.replace(tzinfo=pytz.UTC).astimezone(tz=None)
 
-        next_time = datetime(year=dt_now.year,
-                             month=dt_now.month,
-                             day=dt_now.day,
+        next_time = datetime(year=dt_now_local.year,
+                             month=dt_now_local.month,
+                             day=dt_now_local.day,
                              hour=local_hours.hour,
                              minute=local_hours.minute,
                              second=local_hours.second)
         next_time = next_time.astimezone(tz=None)
-        if next_time < dt_now:
+        if next_time < dt_now_local:
             next_time = next_time + timedelta(days=1)
 
         if output_in_utc:

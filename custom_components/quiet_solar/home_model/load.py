@@ -1137,9 +1137,14 @@ class AbstractLoad(AbstractDevice):
             self.current_constraint_current_percent_completion = current_constraint.get_percent_completion(time)
 
         else:
-            self.current_constraint_current_value = None
-            self.current_constraint_current_energy = None
-            self.current_constraint_current_percent_completion = None
+            if self._last_completed_constraint is not None:
+                self.current_constraint_current_value = self._last_completed_constraint.target_value
+                self.current_constraint_current_energy = self._last_completed_constraint.convert_target_value_to_energy(self._last_completed_constraint.target_value)
+                self.current_constraint_current_percent_completion = 100.0
+            else:
+                self.current_constraint_current_value = None
+                self.current_constraint_current_energy = None
+                self.current_constraint_current_percent_completion = None
 
         self._last_constraint_update = time
         return force_solving

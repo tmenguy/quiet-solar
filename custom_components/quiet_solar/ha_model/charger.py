@@ -1694,8 +1694,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if await self.do_run_check_load_activity_and_constraints(time):
             self.home.force_next_solve()
 
-    async def _user_clean_charger(self, do_full_clean_and_reset):
+    async def user_clean_and_reset(self):
+        # manual reset the user selected car for charger
+        self.user_attached_car_name = None
+        await super().user_clean_and_reset()
+        await self.update_charger_for_user_change()
 
+    async def user_clean_constraints(self):
         # find any automated constraint
         time = datetime.now(pytz.UTC)
         auto_constraints = []
@@ -1704,22 +1709,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and ct.load_param and ct.load_info is not None and "person" in ct.load_info and ct.from_user is False:
                     auto_constraints.append(ct)
 
-        if do_full_clean_and_reset:
-            self.user_attached_car_name = None
-            await super().user_clean_and_reset()
-              # manual reset the user selected car for charger
-        else:
-            await super().user_clean_constraints()
-
+        await super().user_clean_constraints()
         self._auto_constraints_cleaned_at_user_reset = auto_constraints
-
         await self.update_charger_for_user_change()
-
-    async def user_clean_and_reset(self):
-        await self._user_clean_charger(do_full_clean_and_reset=True)
-
-    async def user_clean_constraints(self):
-        await self._user_clean_charger(do_full_clean_and_reset=False)
 
     @property
     def charger_group(self) -> QSChargerGroup:

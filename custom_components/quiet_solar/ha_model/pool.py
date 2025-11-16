@@ -1,6 +1,5 @@
-from datetime import datetime, date, timedelta
-
-import pytz
+from datetime import datetime
+from datetime import time as dt_time
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
@@ -15,14 +14,12 @@ class QSPool(QSOnOffDuration):
 
     def __init__(self, **kwargs):
 
-
         self.pool_steps = []
         for min_temp, max_temp, default in POOL_TEMP_STEPS:
             val =  kwargs.pop(f"water_temp_{max_temp}", default)
             self.pool_steps.append([min_temp, max_temp, val])
 
         self.pool_temperature_sensor = kwargs.pop(CONF_POOL_TEMPERATURE_SENSOR)
-
 
         super().__init__(**kwargs)
 
@@ -79,7 +76,12 @@ class QSPool(QSOnOffDuration):
         if self.bistate_mode != "bistate_mode_auto" and self.bistate_mode != "pool_winter_mode":
             return await super().check_load_activity_and_constraints(time)
         else:
-            end_schedule = self.get_proper_local_adapted_tomorrow(time)
+
+            if self.default_on_finish_time is None:
+                self.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
+
+            end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
+
             if end_schedule is not None:
 
                 # schedule the load to be launched
