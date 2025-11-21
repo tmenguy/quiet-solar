@@ -568,6 +568,9 @@ class HADeviceMixin:
             if kwargs.get("title") is None:
                 title = f"Notification for {load_name}"
 
+        if title is None:
+            title = f"What will happen for {load_name}?"
+
         _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
 
         if mobile_app is not None and message is not None:

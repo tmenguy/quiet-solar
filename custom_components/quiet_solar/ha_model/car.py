@@ -148,8 +148,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.do_force_next_charge = False
         self.do_next_charge_time : datetime | None = None
 
-        self._next_charge_target = None
-        self._next_charge_target_energy = None
+
+        self._reset_charge_targets()
+
         self.user_attached_charger_name : str | None = None
 
         self.default_charge_time: dt_time | None = None
@@ -1488,6 +1489,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return True
 
 
+    def _reset_charge_targets(self):
+        self._next_charge_target = None
+        self._next_charge_target_energy = None
+
     async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
 
         target_charge = asked_target_charge
@@ -1731,6 +1736,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.user_selected_person_name_for_car = None  # asked full reset, reset the user selected person,will trigger person allocation
 
         self.reset()  # will detach the car
+        self._reset_charge_targets()
+        await self.setup_car_charge_target_if_needed()
+
         if charger is not None:
             await charger.user_clean_and_reset()
 
@@ -1738,6 +1746,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def user_clean_constraints(self):
         charger = self.charger
         await super().user_clean_constraints()
+        self._reset_charge_targets()
+        await self.setup_car_charge_target_if_needed()
         if charger is not None:
             await charger.user_clean_constraints()
 

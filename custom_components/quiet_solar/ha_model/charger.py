@@ -1685,9 +1685,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         super().update_to_be_saved_extra_device_info(data_to_update)
         data_to_update["user_attached_car_name"] = self.user_attached_car_name
 
+        serialized_constraints = [l.to_dict() for l in self._auto_constraints_cleaned_at_user_reset]
+
+        data_to_update["auto_constraints_cleaned_at_user_reset"] = serialized_constraints
+
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         self.user_attached_car_name = stored_load_info.get("user_attached_car_name", None)
+
+        constraints_dicts = stored_load_info.get("auto_constraints_cleaned_at_user_reset", [])
+
+        time = datetime.now(pytz.UTC)
+
+        self._auto_constraints_cleaned_at_user_reset = []
+
+        if len(constraints_dicts) > 0:
+            _LOGGER.warning(f"Restoring {len(constraints_dicts)} auto constraints cleaned at user reset for charger {self.name}")
+
+        for c_dict in constraints_dicts:
+            cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
+            if cs_load is not None:
+                self._auto_constraints_cleaned_at_user_reset.append(cs_load)
+
 
     async def update_charger_for_user_change(self):
         time = datetime.now(pytz.UTC)
