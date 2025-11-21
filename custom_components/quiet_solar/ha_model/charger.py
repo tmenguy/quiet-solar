@@ -1700,9 +1700,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         self._auto_constraints_cleaned_at_user_reset = []
 
-        if len(constraints_dicts) > 0:
-            _LOGGER.warning(f"Restoring {len(constraints_dicts)} auto constraints cleaned at user reset for charger {self.name}")
-
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
             if cs_load is not None:
