@@ -21,8 +21,10 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED, SENSOR_CAR_PERSON_FORECAST
+    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED, SENSOR_CAR_PERSON_FORECAST, \
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED
 from ..ha_model.device import HADeviceMixin
+from ..home_model.constraints import DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
 from datetime import time as dt_time
 
@@ -205,6 +207,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         do_update = False
         if value != self._user_selected_person_name_for_car:
             do_update = True
+
+            if value is not None and value != FORCE_CAR_NO_PERSON_ATTACHED and self.home is not None:
+                for car in self.home._cars:
+                    if car.name == self.name:
+                        continue
+
+                    if car.user_selected_person_name_for_car == value:
+                        # do not use the property to not trigger an unnecessary compute of the people allocation
+                        car._user_selected_person_name_for_car = None
+
         self._user_selected_person_name_for_car = value
         if do_update and self.home is not None:
             self.hass.create_task(self.home.get_best_persons_cars_allocations(force_update=True),
@@ -272,8 +284,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             is_covered, current_soc, needed_soc, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(
                 person.predicted_mileage, person.predicted_leave_time)
+
             if is_covered is None:
-                name_post_fix = f"{forecast_str}"
+                name_post_fix = f"UNKNOWN!: {forecast_str}"
             else:
                 if is_covered:
                     name_post_fix = f"OK!: {forecast_str}"
@@ -319,16 +332,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def set_user_person_for_car(self, option:str):
 
+        do_need_update = False
+        new_value = option
+
+        if new_value != self.user_selected_person_name_for_car:
+            do_need_update = True
+
         if option is None:
             # user_selected_person_name_for_car will trigger an update if needed
-            self.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+            self._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
         elif option == FORCE_CAR_NO_PERSON_ATTACHED:
             # user_selected_person_name_for_car will trigger an update if needed
-            self.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+            self._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
         else:
             # do not use the property to not trigger an unnecessary compute of the people allocation
-            do_need_update = False
-            new_value = option
 
             if new_value != self.user_selected_person_name_for_car:
                 do_need_update = True
@@ -345,13 +362,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         car._user_selected_person_name_for_car = None
                         do_need_update = True
 
-            # now we should recompute all car assignment with this new one, and update everything that should be updated
-            if do_need_update and self.home:
-                await self.home.get_best_persons_cars_allocations(force_update=True)
-                person_forecast_entity = self.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
-                if person_forecast_entity is not None:
-                    time = datetime.now(tz=pytz.UTC)
-                    person_forecast_entity.async_update_callback(time)
+        # now we should recompute all car assignment with this new one, and update everything that should be updated
+        if do_need_update and self.home:
+            await self.home.get_best_persons_cars_allocations(force_update=True)
+            person_forecast_entity = self.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
+            if person_forecast_entity is not None:
+                time = datetime.now(tz=pytz.UTC)
+                person_forecast_entity.async_update_callback(time)
 
         return None
 
@@ -515,7 +532,23 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.charger is None:
             return CAR_CHARGE_TYPE_NOT_PLUGGED
         else:
-            return self.charger.get_charge_type()
+            return self.charger.get_charge_type()[0]
+
+    async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
+        if self.charger is None:
+            return False
+
+        if self.current_forecasted_person is not None:
+            self._user_selected_person_name_for_car = self.current_forecasted_person.name
+
+        type, ct =  self.charger.get_charge_type()
+        if type == CAR_CHARGE_TYPE_PERSON_AUTOMATED and ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
+            return await self.user_add_default_charge_at_datetime(ct.end_of_constraint)
+
+        return False
+
+
+
 
     def get_car_charge_time_readable_name(self):
 
@@ -546,8 +579,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             parent = set(parent)
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
         return list(parent)
-
-
 
 
     def _add_soc_odo_value_to_segments(self, soc:float, odo:float, time:datetime):
@@ -833,7 +864,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return latest_state == "home"
 
     def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float=4*3600 ) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
+        ret = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
+        return ret
 
     def get_car_charge_energy(self, time: datetime, tolerance_seconds: float=4*3600) -> float | None:
         res = self.get_car_charge_percent(time, tolerance_seconds)
@@ -852,7 +884,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
     def get_car_estimated_range_km_from_sensor(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
+        ret = self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
+        return ret
 
     def is_car_charge_growing(self,
                               num_seconds: float,
@@ -923,6 +956,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self._km_per_kwh is not None:
             return (self._km_per_kwh * (float(self.car_battery_capacity) / 1000.0)) / 100.0
 
+        _LOGGER.warning(f"get_computed_range_efficiency_km_per_percent: {self.name} no efficiency data available")
+
         return None
 
 
@@ -938,6 +973,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
 
         if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
+            _LOGGER.warning(f"get_adapt_target_percent_soc_to_reach_range_km: {self.name} error: km_per_percent {km_per_percent}, current_soc {current_soc}, current_range_km {current_range_km}, target_range_km {target_range_km}")
             return None, None, None, None
 
         target_range_km_a = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
@@ -994,14 +1030,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return None
         return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
 
-
     def get_autonomy_to_target_soc_km(self, time: datetime | None = None) -> float | None:
 
         soc = self.get_car_target_SOC()
         if soc is None:
             return None
         return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
-
 
     async def adapt_max_charge_limit(self, asked_percent):
 
@@ -1061,8 +1095,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return result
 
-
-
     def find_path(self, graph, start, end, path=None):
         if path is None:
             path = []
@@ -1094,7 +1126,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 from_power = self.amp_to_power_3p[from_amp]
         return from_power
 
-
     def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> float | None:
 
         if from_amp*from_num_phase == to_amp*to_num_phase:
@@ -1111,8 +1142,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return power
 
-
-
     def _theoretical_max_power(self, amperage:tuple[float,int] | tuple[int,int], delta_amp:float) -> float:
         if amperage[0] == 0:
             return 0.0
@@ -1120,8 +1149,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if amperage[1] == 3:
             theoretical_power = theoretical_power * 3
         return theoretical_power
-
-
 
     def _add_to_amps_power_graph(self, from_a: tuple[float,int], to_a:tuple[float,int], power_delta: int | float) -> bool:
         from_amp = int(from_a[0] * from_a[1])
@@ -1201,7 +1228,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
 
         return True
-
 
     def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
 
@@ -1420,17 +1446,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 _LOGGER.info(
                     f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}")
 
-
     def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:
         if for_3p:
             return self.amp_to_power_3p, self.car_charger_min_charge, self.car_charger_max_charge
         else:
             return self.amp_to_power_1p, self.car_charger_min_charge, self.car_charger_max_charge
 
-
-    async def add_default_charge_at_datetime(self, end_charge:datetime) -> bool:
+    async def user_add_default_charge_at_datetime(self, end_charge:datetime) -> bool:
         if self.can_add_default_charge() is False:
             return False
+
+        # fix the person name ... for whom the car is charging
+        if self.current_forecasted_person is not None:
+            self._user_selected_person_name_for_car = self.current_forecasted_person.name
+
         self.do_next_charge_time = end_charge
         # start_time = end_charge
         # end_time = end_charge + timedelta(seconds=60*30)
@@ -1438,8 +1467,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # await self.set_next_scheduled_event(time, start_time, end_time, f"Charge {self.name}")
         return True
 
-
-    async def add_default_charge_at_dt_time(self, default_charge_time:dt_time | None) -> bool:
+    async def user_add_default_charge_at_dt_time(self, default_charge_time: dt_time | None) -> bool:
         if self.can_add_default_charge() is False:
             return False
 
@@ -1450,13 +1478,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # compute the next occurrence of the default charge time
         next_time = self.get_next_time_from_hours(local_hours=default_charge_time, output_in_utc=True)
 
-        return await self.add_default_charge_at_datetime(next_time)
-
+        return await self.user_add_default_charge_at_datetime(next_time)
 
     async def user_add_default_charge(self):
         if self.can_add_default_charge():
 
-            res = await self.add_default_charge_at_dt_time(self.default_charge_time)
+            res = await self.user_add_default_charge_at_dt_time(self.default_charge_time)
 
             if res and self.charger:
                 self.do_force_next_charge = False
@@ -1474,6 +1501,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def user_force_charge_now(self):
         if self.can_force_a_charge_now():
+
+            # fix the person name ... for whom the car is charging
+            if self.current_forecasted_person is not None:
+                self._user_selected_person_name_for_car = self.current_forecasted_person.name
+
             self.do_force_next_charge = True
             self.do_next_charge_time = None
             if self.charger:
@@ -1487,7 +1519,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
 
         return True
-
 
     def _reset_charge_targets(self):
         self._next_charge_target = None
@@ -1512,12 +1543,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return self.get_car_next_charge_values_options_energy()
 
-    async def set_next_charge_target(self, value:int|float|str):
+    async def user_set_next_charge_target(self, value: int | float | str):
+
+        # the user should be fixed ... for whom the car is charging
+        if self.current_forecasted_person is not None:
+            self._user_selected_person_name_for_car = self.current_forecasted_person.name
+
+        do_update = await self.convert_auto_constraint_to_manual_if_needed()
 
         if self.can_use_charge_percent_constraints():
-            await self.set_next_charge_target_percent(value)
+            do_update = await self.set_next_charge_target_percent(value) or do_update
         else:
-            await self.set_next_charge_target_energy(value)
+            do_update = await self.set_next_charge_target_energy(value) or do_update
+
+        if do_update and self.charger:
+            await self.charger.update_charger_for_user_change()
 
     def get_car_target_charge_option(self):
         if self.can_use_charge_percent_constraints():
@@ -1572,7 +1612,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return f"{value}%"
 
-    async def set_next_charge_target_percent(self, value:int|float|str, do_update_charger:bool=True):
+    async def set_next_charge_target_percent(self, value:int|float|str, do_update_charger:bool=True) -> bool:
 
         if isinstance(value, str):
             if "default" in value:
@@ -1585,7 +1625,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     value = float(value)
                 except ValueError:
                     _LOGGER.error(f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'")
-                    return
+                    return False
 
         value = int(value)
 
@@ -1593,8 +1633,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         new_target = await self.setup_car_charge_target_if_needed()
 
-        if do_update_charger and self.charger and new_target:
-            await self.charger.update_charger_for_user_change()
+        if self.charger and new_target:
+            return True
+        return False
 
     def get_car_target_charge_option_percent(self):
         return self.get_car_option_charge_from_value_percent(self.get_car_target_SOC())
@@ -1632,7 +1673,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         value = int(float(value))//1000 # kwh
         return f"{value}kWh"
 
-    async def set_next_charge_target_energy(self, value:int|float|str):
+    async def set_next_charge_target_energy(self, value:int|float|str) -> bool:
 
         if isinstance(value, str):
             try:
@@ -1640,14 +1681,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 value = float(value)*1000.0
             except ValueError:
                 _LOGGER.error(f"Car {self.name} set_next_charge_target_energy: invalid value {value}")
-                return
+                return False
         else:
             value = float(value) * 1000.0
 
         self._next_charge_target_energy = value
 
         if self.charger:
-            await self.charger.update_charger_for_user_change()
+            return True
+        return False
 
     def get_car_target_charge_energy(self) -> int | float:
         if self._next_charge_target_energy is None:

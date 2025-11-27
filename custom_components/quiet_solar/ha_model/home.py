@@ -33,7 +33,7 @@ from ..ha_model.person import QSPerson
 from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps
+from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
     extract_name_and_index_from_dashboard_section_option, get_value_from_time_series
 from ..home_model.solver import PeriodSolver
@@ -1794,55 +1794,82 @@ class QSHome(QSDynamicGroup):
                     covered_cars.add(car.name)
 
             p_s = []
-
-
             for person in self._persons:
-
+                if person.name in covered_persons:
+                    continue
                 p_leave_time, p_mileage = person.update_person_forecast(time, force_update=True)
 
-                if person.name in covered_persons:
+                if p_mileage is None:
                     continue
 
-                if p_leave_time is not None:
-                    p_s.append((person, p_leave_time, p_mileage))
+                p_s.append((person, p_leave_time, p_mileage))
 
 
-            # sort by mileage:
-            p_s = sorted(p_s, key=lambda x: x[2], reverse=True)
-
-            # we want to minimize the charged energy...while giving the preferred car to its person if possible
-            car_person_list_preferred_diff = []
-
-            for person, p_leave_time, p_mileage in p_s:
-
-                if person.name in covered_persons:
+            c_s = []
+            c_name_to_index = {}
+            for car in self._cars:
+                if car.name in covered_cars:
                     continue
+                c_name_to_index[car.name] = len(c_s)
+                c_s.append(car)
+
+            costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
+
+            E_max = 0.0
+
+            for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
 
                 p_cars = person.get_authorized_cars()
 
                 for p_car in p_cars:
 
-                    if p_car.name in covered_cars:
+                    car_index = c_name_to_index.get(p_car.name, None)
+
+                    if car_index is None:
                         continue
 
-                    is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
-                    if is_covered is not None:
-                        #diff energy > 0
-                        score_preferred_diff = diff_energy / 1000.0  #kwh
+                    if p_leave_time is None:
+                        score = -1.0
+                    else:
+                        is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
 
-                        if person.preferred_car != p_car.name:
-                            score_preferred_diff += 10000
+                        if is_covered is None:
+                            score = -2.0
+                        elif is_covered is True:
+                            score = -3.0
+                        else:
+                            E_max = max(E_max, diff_energy)
+                            score = diff_energy
 
-                        if is_covered is False:
-                            score_preferred_diff += 10000*10000 # big penalty for not covering the needed mileage
+                    costs[person_index, car_index] = score
 
-                        car_person_list_preferred_diff.append( (score_preferred_diff, p_car, person, is_covered) )
+            penalty_not_preferred_car = (len(p_s) * E_max) + 1.0
+            maxi_val = max(1e12, (E_max + 1.0)*(1.0 + max(len(c_s), len(p_s))))
+
+            for person_index in range(len(p_s)):
+                for car_index in range(len(c_s)):
+                    if costs[person_index, car_index] == 0.0:
+                        costs[person_index, car_index] = maxi_val
+                    else:
+                        if costs[person_index, car_index] == -1.0:
+                            costs[person_index, car_index] = E_max + 1.0
+                        elif costs[person_index, car_index] == -2.0:
+                            costs[person_index, car_index] = E_max + 1.0
+                        elif costs[person_index, car_index] == -3.0:
+                            costs[person_index, car_index] = 0.0
+
+                        person, p_leave_time, p_mileage = p_s[person_index]
+                        if person.preferred_car != c_s[car_index].name:
+                            costs[person_index, car_index] += penalty_not_preferred_car
 
 
+            assignment = hungarian_algorithm(costs)
 
-            # sort by score
-            car_person_list_preferred_diff = sorted(car_person_list_preferred_diff, key=lambda x: x[0])
-            result_energy, num_uncovered_alloc, num_covered_alloc, num_preferred_alloc = self._allocate_person_car(car_person_list_preferred_diff)
+            result_energy = {}
+            for person_index, car_index in assignment.items():
+                car = c_s[car_index]
+                person, p_leave_time, p_mileage = p_s[person_index]
+                result_energy[car.name] = person
 
             self._last_persons_car_allocation.update(result_energy)
 
@@ -1930,37 +1957,6 @@ class QSHome(QSDynamicGroup):
                     await person.notify_of_forecast_if_needed(notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
 
         return self._last_persons_car_allocation
-
-
-    def _allocate_person_car(self, car_person_list):
-
-        covered_car_name = set()
-        covered_people_name = set()
-
-        diff_energy_car_name_to_person = {}
-
-        num_preferred_allocated = 0
-        num_covered_allocated = 0
-        num_uncovered_allocated = 0
-        for score, car, person, is_covered in car_person_list:
-            if person.name in covered_people_name:
-                continue
-            if car.name in covered_car_name:
-                continue
-            covered_people_name.add(person.name)
-            covered_car_name.add(car.name)
-
-            diff_energy_car_name_to_person[car.name] = person
-
-            if is_covered is True:
-                num_covered_allocated += 1
-            else:
-                num_uncovered_allocated += 1
-
-            if person.preferred_car == car.name:
-                num_preferred_allocated += 1
-
-        return diff_energy_car_name_to_person, num_uncovered_allocated, num_covered_allocated, num_preferred_allocated
 
 
     async def update_all_states(self, time: datetime):

@@ -392,6 +392,10 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                                                     MultiStepsPowerLoadConstraintChargePercent):
                                 ct_target_soc = usable_ct.target_value
 
+                            # the user should be fixed ... for whom the car is charging, no need to recompute assignements
+                            if person_ct is not None or force_ct is not None or user_ct is not None:
+                                predicted_car._user_selected_person_name_for_car = self.name
+
                             if ct_target_soc is not None:
                                 if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
                                     title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
@@ -409,7 +413,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                 if person_ct is not None:
                                     if person_ct.target_value >= needed_soc and person_ct.end_of_constraint <= self.predicted_leave_time:
                                         title = f"{predicted_car.name}: Check it, I'll charge it for you!"
-                                        message = (f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                        message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
                                                    f"The {predicted_car.name} current charge is {current_soc:.0f}%, I will charge it to {needed_soc:.0f}% to cover your trip.")
                                     else:
                                         title = f"{predicted_car.name}: BEWARE check what I've done"

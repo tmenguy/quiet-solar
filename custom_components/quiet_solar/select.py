@@ -68,7 +68,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_next_charge_limit_for_car",
         get_available_options_fn=lambda device, key: device.get_car_next_charge_values_options(),
         get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
-        async_set_current_option_fn=lambda device, key, option: device.set_next_charge_target(option),
+        async_set_current_option_fn=lambda device, key, option: device.user_set_next_charge_target(option),
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
 

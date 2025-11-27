@@ -840,7 +840,7 @@ class TestPersonsCarForecast:
                 cur_soc = 5
             if cur_soc is not None:
                 car._entity_probed_state[car.car_charge_percent_sensor] = []
-                car._add_state_history(car.car_charge_percent_sensor, cur_soc, check_time, None, None, check_time)
+                car._add_state_history(car.car_charge_percent_sensor, cur_soc, check_time, None, None)
                 soc = car.get_car_charge_percent(check_time)
                 assert soc == cur_soc, f"Expected SOC {cur_soc}% for car {car.name}, got {soc}%"
 

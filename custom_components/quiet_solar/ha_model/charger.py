@@ -2945,7 +2945,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 target_charge = person_min_target_charge
 
                                 # ok we do know we want to add a constraint to have at least this charge at this time
-                                await self.car.set_next_charge_target_percent(target_charge, do_update_charger=False)
+                                await self.car.set_next_charge_target_percent(target_charge)
 
                                 car_charge_person = ConstraintClass(
                                     total_capacity_wh=self.car.car_battery_capacity,
@@ -3510,27 +3510,31 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return contiguous_status > 0
 
-    def get_charge_type(self) -> str:
+    def get_charge_type(self) -> tuple[str, None|LoadConstraint]:
 
         # set time as now
         time = datetime.now(pytz.UTC)
 
         if self.is_charger_faulted(time):
-            return CAR_CHARGE_TYPE_FAULTED
+            return CAR_CHARGE_TYPE_FAULTED, None
 
         if self.possible_charge_error_start_time is not None:
-            return CAR_CHARGE_ERROR
+            return CAR_CHARGE_ERROR, None
 
         if self.car is None:
-            return CAR_CHARGE_TYPE_NOT_PLUGGED
+            return CAR_CHARGE_TYPE_NOT_PLUGGED, None
 
         type = CAR_CHARGE_TYPE_NOT_CHARGING
 
         constraints: list[LoadConstraint] = self._constraints
+
+        ct_ret = None
+
         for ct in constraints:
             if ct.is_constraint_active_for_time_period(time):
                 if ct.as_fast_as_possible:
                     type = CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
+
                 else:
                     if ct.end_of_constraint < DATETIME_MAX_UTC:
                         type = CAR_CHARGE_TYPE_SCHEDULE
@@ -3540,12 +3544,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
                     else:
                         type = CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY
+                ct_ret = ct
                 break
 
             elif ct.is_constraint_met(time=time):
                 type = CAR_CHARGE_TYPE_TARGET_MET
+                ct_ret = ct
 
-        return type
+        return type, ct_ret
+
+
+    def convert_auto_constraint_to_manual_if_needed(self):
+        if self.get_charge_type() == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
+            self.charger.convert_auto_constraint_to_manual_if_needed()
+
 
     async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> tuple[bool | None, bool, datetime | None]:
 
@@ -4121,6 +4133,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return res_charge_check
 
     def low_level_plug_check_now(self, time: datetime) -> tuple[bool|None, datetime]:
+
+        if self.charger_plugged is None:
+            return None, time
 
         state = self.hass.states.get(self.charger_plugged)
         if state is not None:

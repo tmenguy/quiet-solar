@@ -30,9 +30,6 @@ import numpy as np
 
 
 from homeassistant.core import HomeAssistant
-from homeassistant.components.calendar.const import DATA_COMPONENT
-from homeassistant.components.calendar import CalendarEntity
-from homeassistant.components.calendar.const import CalendarEntityFeature
 
 
 
@@ -222,7 +219,7 @@ async def load_from_history(hass, entity_id:str, start_time: datetime, end_time:
     # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
     return states
 
-MAX_STATE_HISTORY_S = 7200
+MAX_STATE_HISTORY_S = 3600*24*3  # 3 days
 
 class HADeviceMixin:
 
@@ -668,6 +665,10 @@ class HADeviceMixin:
             return None
 
         if time is None:
+
+            if tolerance_seconds is None or tolerance_seconds == 0:
+                return last_valid[1]
+
             time = datetime.now(tz=pytz.UTC)
 
         if time >= last_valid[0]:
@@ -684,7 +685,12 @@ class HADeviceMixin:
                 # HA update only changed sensor ... if it is the last valid, whatever the time, it is valid
                 return last_valid[1]
 
-            if (time - last_valid[0]).total_seconds() > tolerance_seconds:
+            last_valid_idx = bisect_left(hist_f, last_valid[0], key=itemgetter(0))
+            time_to_limit = last_valid[0]
+            if last_valid_idx < len(hist_f) - 1 and hist_f[last_valid_idx][0] == last_valid[0]:
+                time_to_limit = hist_f[last_valid_idx + 1][0]
+
+            if (time - time_to_limit).total_seconds() > tolerance_seconds:
                 return None
 
             return last_valid[1]
@@ -922,8 +928,7 @@ class HADeviceMixin:
             ) -> None:
                 """Handle sensor state changes."""
                 new_state = event.data["new_state"]
-                time = new_state.last_updated
-                self.add_to_history(new_state.entity_id, time, state=new_state)
+                self.add_to_history(new_state.entity_id, time=new_state.last_updated, state=new_state)
 
             self._unsub = async_track_state_change_event(
                 self.hass,
@@ -996,11 +1001,14 @@ class HADeviceMixin:
         if non_ha_entity_get_state is not None:
             self._entity_probed_auto.add(entity_id)
         else:
-            if update_on_change_only:
-                self._entity_on_change.add(entity_id)
-            else:
-                self._entity_on_change.add(entity_id)
-                self._entity_probed_auto.add(entity_id)
+            # if update_on_change_only:
+            #     self._entity_on_change.add(entity_id)
+            # else:
+            #     self._entity_on_change.add(entity_id)
+            #     self._entity_probed_auto.add(entity_id)
+
+            self._entity_on_change.add(entity_id)
+            self._entity_probed_auto.add(entity_id)
 
 
         if attach_unfiltered:
@@ -1068,7 +1076,10 @@ class HADeviceMixin:
                 if state is not None:
                     state_attr = state.attributes
 
-                self._add_state_history(local_entity_id, value, state_time, state, state_attr, time)
+                if time is not None:
+                    state_time = time
+
+                self._add_state_history(local_entity_id, value, state_time, state, state_attr)
         else:
             fake_state = state_getter(entity_id, time)
             if fake_state is not None:
@@ -1077,17 +1088,17 @@ class HADeviceMixin:
                 value = None
                 state_attr = {}
 
-            self._add_state_history(entity_id, value, state_time , state, state_attr, time)
+            if time is not None:
+                state_time = time
 
-    def _add_state_history(self, entity_id, value, state_time, state, state_attr, time):
+            self._add_state_history(entity_id, value, state_time , state, state_attr)
+
+    def _add_state_history(self, entity_id, value, state_time, state, state_attr):
         if state_attr is None:
             state_attr = {}
 
         if state_time is None:
-            if time is None:
-                state_time = datetime.now(tz=pytz.UTC)
-            else:
-                state_time = time
+            state_time = datetime.now(tz=pytz.UTC)
 
         if self._entity_probed_state_is_numerical[entity_id]:
             try:
