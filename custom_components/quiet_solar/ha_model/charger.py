@@ -3230,18 +3230,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                            for_duration: float | None = None,
                            check_for_val=True) -> bool | None:
 
-        if for_duration is None or for_duration < 0:
-            for_duration = 0
 
-        contiguous_status = self.get_last_state_value_duration(self._internal_fake_is_plugged_id,
-                                                               states_vals=[QSChargerStates.PLUGGED],
-                                                               num_seconds_before=8*for_duration,
-                                                               time=time,
-                                                               invert_val_probe=not check_for_val)[0]
-        if contiguous_status is None:
-            res = contiguous_status
+        if for_duration is None or for_duration <= 0.0:
+            for_duration = None
+            res = None
         else:
-            res = contiguous_status >= for_duration and contiguous_status > 0
+            contiguous_status = self.get_last_state_value_duration(self._internal_fake_is_plugged_id,
+                                                                   states_vals=[QSChargerStates.PLUGGED],
+                                                                   num_seconds_before=8*for_duration,
+                                                                   time=time,
+                                                                   invert_val_probe=not check_for_val)[0]
+            if contiguous_status is None:
+                res = contiguous_status
+            else:
+                res = contiguous_status >= for_duration and contiguous_status > 0
 
 
         if res is None and self.car:
@@ -3259,12 +3261,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 res = None
             else:
                 # only check car if we are very sure of the charger state
-                res_car =  self.car.is_car_plugged(time, for_duration)
-                if res_car is not None:
-                    if res_car is check_for_val and latest_charger_valid_state == ok_value:
-                        res = True
-                    if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
-                        res = False
+                if for_duration is None:
+                    res = latest_charger_valid_state == ok_value
+                else:
+                    res_car =  self.car.is_car_plugged(time, for_duration)
+                    if res_car is not None:
+                        if res_car is check_for_val and latest_charger_valid_state == ok_value:
+                            res = True
+                        if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
+                            res = False
 
         return res
 

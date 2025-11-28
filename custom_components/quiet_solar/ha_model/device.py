@@ -831,7 +831,7 @@ class HADeviceMixin:
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
             # get latest values
-            self.add_to_history(entity_id, time)
+            self.add_to_history(entity_id, time, ignore_unfiltered=False)
 
         from_idx = -1
         if num_seconds_before is None:
@@ -970,6 +970,16 @@ class HADeviceMixin:
 
         return f"{entity_id}_no_filters"
 
+    def get_filtered_entity_from_unfiltered(self, entity_id: str) -> str:
+
+        if entity_id.endswith("_no_filters"):
+            filtered_entity =  entity_id[:-len("_no_filters")]
+            if self._entity_probed_state_attached_unfiltered.get(filtered_entity, False) is True:
+                return filtered_entity
+
+
+        return entity_id
+
     def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
                                  transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                                  conversion_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
@@ -1040,12 +1050,18 @@ class HADeviceMixin:
 
         return time_array
 
-    def add_to_history(self, entity_id: str, time: datetime = None, state: State = None):
+    def add_to_history(self, entity_id: str, time: datetime = None, state: State = None, ignore_unfiltered: bool = True):
 
         state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
 
         if isinstance(state_getter, str) and state_getter == "FAKE_GETTER":
-            return
+            if ignore_unfiltered:
+                return
+            else:
+                unfiltered_id =  self.get_filtered_entity_from_unfiltered(entity_id)
+                if unfiltered_id is not None and unfiltered_id != entity_id:
+                    self.add_to_history(unfiltered_id, time, state, ignore_unfiltered=True)
+                return
 
         state_time: datetime | None = None
 

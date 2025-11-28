@@ -1109,7 +1109,9 @@ class QSHome(QSDynamicGroup):
                 return car
         return None
 
-    def get_person_by_name(self, name: str) -> QSPerson | None:
+    def get_person_by_name(self, name: str | None) -> QSPerson | None:
+        if name is None:
+            return None
         for person in self._persons:
             if person.name == name:
                 return person
@@ -1813,65 +1815,69 @@ class QSHome(QSDynamicGroup):
                 c_name_to_index[car.name] = len(c_s)
                 c_s.append(car)
 
-            costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
+            if len(p_s) == 0 or len(c_s) == 0:
+                # nothing to do
+                 _LOGGER.info("get_best_persons_cars_allocations: No persons or cars to allocate")
+            else:
+                costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
 
-            E_max = 0.0
+                E_max = 0.0
 
-            for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
+                for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
 
-                p_cars = person.get_authorized_cars()
+                    p_cars = person.get_authorized_cars()
 
-                for p_car in p_cars:
+                    for p_car in p_cars:
 
-                    car_index = c_name_to_index.get(p_car.name, None)
+                        car_index = c_name_to_index.get(p_car.name, None)
 
-                    if car_index is None:
-                        continue
+                        if car_index is None:
+                            continue
 
-                    if p_leave_time is None:
-                        score = -1.0
-                    else:
-                        is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
-
-                        if is_covered is None:
-                            score = -2.0
-                        elif is_covered is True:
-                            score = -3.0
+                        if p_leave_time is None:
+                            score = -1.0
                         else:
-                            E_max = max(E_max, diff_energy)
-                            score = diff_energy
+                            is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
 
-                    costs[person_index, car_index] = score
+                            if is_covered is None:
+                                score = -2.0
+                            elif is_covered is True:
+                                score = -3.0
+                            else:
+                                E_max = max(E_max, diff_energy)
+                                score = diff_energy
 
-            penalty_not_preferred_car = (len(p_s) * E_max) + 1.0
-            maxi_val = max(1e12, (E_max + 1.0)*(1.0 + max(len(c_s), len(p_s))))
+                        costs[person_index, car_index] = score
 
-            for person_index in range(len(p_s)):
-                for car_index in range(len(c_s)):
-                    if costs[person_index, car_index] == 0.0:
-                        costs[person_index, car_index] = maxi_val
-                    else:
-                        if costs[person_index, car_index] == -1.0:
-                            costs[person_index, car_index] = E_max + 1.0
-                        elif costs[person_index, car_index] == -2.0:
-                            costs[person_index, car_index] = E_max + 1.0
-                        elif costs[person_index, car_index] == -3.0:
-                            costs[person_index, car_index] = 0.0
+                penalty_not_preferred_car = (len(p_s) * E_max) + 1.0
+                maxi_val = max(1e12, (E_max + 1.0)*(1.0 + max(len(c_s), len(p_s))))
 
-                        person, p_leave_time, p_mileage = p_s[person_index]
-                        if person.preferred_car != c_s[car_index].name:
-                            costs[person_index, car_index] += penalty_not_preferred_car
+                for person_index in range(len(p_s)):
+                    for car_index in range(len(c_s)):
+                        if costs[person_index, car_index] == 0.0:
+                            costs[person_index, car_index] = maxi_val
+                        else:
+                            if costs[person_index, car_index] == -1.0:
+                                costs[person_index, car_index] = E_max + 1.0
+                            elif costs[person_index, car_index] == -2.0:
+                                costs[person_index, car_index] = E_max + 1.0
+                            elif costs[person_index, car_index] == -3.0:
+                                costs[person_index, car_index] = 0.0
+
+                            person, p_leave_time, p_mileage = p_s[person_index]
+                            if person.preferred_car != c_s[car_index].name:
+                                costs[person_index, car_index] += penalty_not_preferred_car
 
 
-            assignment = hungarian_algorithm(costs)
+                assignment = hungarian_algorithm(costs)
 
-            result_energy = {}
-            for person_index, car_index in assignment.items():
-                car = c_s[car_index]
-                person, p_leave_time, p_mileage = p_s[person_index]
-                result_energy[car.name] = person
+                result_energy = {}
+                for person_index, car_index in assignment.items():
+                    car = c_s[car_index]
+                    person, p_leave_time, p_mileage = p_s[person_index]
+                    result_energy[car.name] = person
 
-            self._last_persons_car_allocation.update(result_energy)
+                self._last_persons_car_allocation.update(result_energy)
 
             for car_name, person in self._last_persons_car_allocation.items():
                 car = self.get_car_by_name(car_name)
