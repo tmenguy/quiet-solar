@@ -3220,7 +3220,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 return contiguous_status >= for_duration and contiguous_status > 0
 
         else:
-            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id, time=time)
+            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self.charger_status_sensor, time=time)
 
             if latest_charger_valid_state is not None:
                 if invert_prob is False:
@@ -3331,7 +3331,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def check_charge_state(self, time: datetime, for_duration: float | None = None, check_for_val=True) -> bool | None:
 
         result = not check_for_val
-        if self.is_plugged(time=time, for_duration=for_duration):
+
+        res_plug = self.is_optimistic_plugged(time=time)
+
+        if res_plug is None:
+            result = None
+        elif res_plug:
 
             status_vals = self.get_car_charge_enabled_status_vals()
 
