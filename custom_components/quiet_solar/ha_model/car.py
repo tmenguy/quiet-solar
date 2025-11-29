@@ -332,7 +332,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def set_user_person_for_car(self, option:str):
 
-        do_need_update = False
+        cars_to_update = []
         new_value = option
 
         if new_value != self.user_selected_person_name_for_car:
@@ -348,7 +348,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # do not use the property to not trigger an unnecessary compute of the people allocation
 
             if new_value != self.user_selected_person_name_for_car:
-                do_need_update = True
+                cars_to_update = [self]
 
             self._user_selected_person_name_for_car = new_value
 
@@ -360,15 +360,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if car.user_selected_person_name_for_car == new_value:
                         # do not use the property to not trigger an unnecessary compute of the people allocation
                         car._user_selected_person_name_for_car = None
-                        do_need_update = True
+                        cars_to_update.append(car)
 
         # now we should recompute all car assignment with this new one, and update everything that should be updated
-        if do_need_update and self.home:
+        if len(cars_to_update) > 0 and self.home:
             await self.home.get_best_persons_cars_allocations(force_update=True)
-            person_forecast_entity = self.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
-            if person_forecast_entity is not None:
-                time = datetime.now(tz=pytz.UTC)
-                person_forecast_entity.async_update_callback(time)
+
+            for car in cars_to_update:
+                person_forecast_entity = car.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
+                if person_forecast_entity is not None:
+                    time = datetime.now(tz=pytz.UTC)
+                    person_forecast_entity.async_update_callback(time)
+
+                if car.charger:
+                    await car.charger.update_charger_for_user_change()
 
         return None
 

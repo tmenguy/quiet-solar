@@ -2590,6 +2590,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_constraints = self._constraints
         self._constraints = []
 
+
+    def command_and_constraint_reset(self):
+        super().command_and_constraint_reset()
+        # reset the next charge force state
+        self.car.do_force_next_charge = False
+        self.car.do_next_charge_time = None
+
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
