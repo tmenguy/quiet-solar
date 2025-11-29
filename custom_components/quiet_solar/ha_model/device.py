@@ -1119,14 +1119,10 @@ class HADeviceMixin:
             state_time = datetime.now(tz=pytz.UTC)
 
         if self._entity_probed_state_is_numerical[entity_id]:
-
-            if value is not None:
-                try:
-                    value = float(value)
-                except Exception as e:
-                    _LOGGER.error("_add_state_history: exception for car %s (%s) %s", self.name, value, e,
-                                  exc_info=True,
-                                  stack_info=True)
+            try:
+                value = float(value)
+            except Exception as e:
+                value = None
 
         if value is not None:
             conversion_fn = self._entity_probed_state_conversion_fn[entity_id]
