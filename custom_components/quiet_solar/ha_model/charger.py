@@ -3183,7 +3183,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             try:
                 await self.low_level_stop_charge(time)
             except Exception as e:
-                _LOGGER.warning(f"stop_charge EXCEPTION {e}")
+                _LOGGER.warning(f"stop_charge EXCEPTION {e}", exc_info=True, stack_info=True)
 
     async def start_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=True, time=time)
@@ -3193,7 +3193,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             try:
                 await self.low_level_start_charge(time)
             except Exception as e:
-                _LOGGER.warning(f"start_charge EXCEPTION {e}")
+                _LOGGER.warning(f"start_charge EXCEPTION {e}", exc_info=True, stack_info=True)
 
     def _check_charger_status(self,
                               status_vals: list[str],
@@ -3204,18 +3204,32 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if not status_vals or self.charger_status_sensor is None:
             return None
 
-        if for_duration is None or for_duration < 0:
-            for_duration = 0
+        if for_duration is None or for_duration == 0:
+            for_duration = None
 
-        contiguous_status = self.get_last_state_value_duration(self.charger_status_sensor,
-                                                               states_vals=status_vals,
-                                                               num_seconds_before=8*for_duration,
-                                                               time=time,
-                                                               invert_val_probe=invert_prob)[0]
-        if contiguous_status is None:
-            return None
+        if for_duration is not None:
+
+            contiguous_status = self.get_last_state_value_duration(self.charger_status_sensor,
+                                                                   states_vals=status_vals,
+                                                                   num_seconds_before=8*for_duration,
+                                                                   time=time,
+                                                                   invert_val_probe=invert_prob)[0]
+            if contiguous_status is None:
+                return None
+            else:
+                return contiguous_status >= for_duration and contiguous_status > 0
+
         else:
-            return contiguous_status >= for_duration and contiguous_status > 0
+            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id, time=time)
+
+            if latest_charger_valid_state is not None:
+                if invert_prob is False:
+                    return latest_charger_valid_state in status_vals
+                else:
+                    return latest_charger_valid_state not in status_vals
+            else:
+                return None
+
 
 
     def get_continuous_plug_duration(self, time: datetime) -> float | None:
@@ -3230,46 +3244,55 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                            for_duration: float | None = None,
                            check_for_val=True) -> bool | None:
 
+        if check_for_val:
+            ok_value = QSChargerStates.PLUGGED
+            not_ok_value = QSChargerStates.UN_PLUGGED
+        else:
+            ok_value = QSChargerStates.UN_PLUGGED
+            not_ok_value = QSChargerStates.PLUGGED
+
 
         if for_duration is None or for_duration <= 0.0:
             for_duration = None
-            res = None
+
+
+        if for_duration is None:
+            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id, time=time)
+            if latest_charger_valid_state is None:
+                res = None
+            else:
+                res = latest_charger_valid_state == ok_value
         else:
+
             contiguous_status = self.get_last_state_value_duration(self._internal_fake_is_plugged_id,
                                                                    states_vals=[QSChargerStates.PLUGGED],
                                                                    num_seconds_before=8*for_duration,
                                                                    time=time,
                                                                    invert_val_probe=not check_for_val)[0]
             if contiguous_status is None:
-                res = contiguous_status
+                res = None
             else:
-                res = contiguous_status >= for_duration and contiguous_status > 0
+                res = contiguous_status >= for_duration
+
+
+
+
 
 
         if res is None and self.car:
 
-            if check_for_val:
-                ok_value = QSChargerStates.PLUGGED
-                not_ok_value = QSChargerStates.UN_PLUGGED
-            else:
-                ok_value = QSChargerStates.UN_PLUGGED
-                not_ok_value = QSChargerStates.PLUGGED
-
-            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id)
+            latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id, time=time)
 
             if latest_charger_valid_state is None:
                 res = None
             else:
                 # only check car if we are very sure of the charger state
-                if for_duration is None:
-                    res = latest_charger_valid_state == ok_value
-                else:
-                    res_car =  self.car.is_car_plugged(time, for_duration)
-                    if res_car is not None:
-                        if res_car is check_for_val and latest_charger_valid_state == ok_value:
-                            res = True
-                        if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
-                            res = False
+                res_car =  self.car.is_car_plugged(time, for_duration)
+                if res_car is not None:
+                    if res_car is check_for_val and latest_charger_valid_state == ok_value:
+                        res = True
+                    if res_car is not check_for_val and latest_charger_valid_state == not_ok_value:
+                        res = False
 
         return res
 
@@ -4022,7 +4045,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     )
                     self._last_charger_state_prob_time = time
                 except Exception as e:
-                    _LOGGER.error(f"_do_update_charger_state: Error {e}")
+                    _LOGGER.error(f"_do_update_charger_state: Error {e}", exc_info=True, stack_info=True)
 
     def _find_charger_entity_id(self, device, entries, prefix, suffix):
 
@@ -4097,9 +4120,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             try:
                 result = float(state.state)
-            except TypeError:
-                result = None
-            except ValueError:
+            except Exception as e:
+                _LOGGER.error("get_max_charging_amp_per_phase: exception for car %s (%s) %s", self.name, state.state, e,
+                              exc_info=True,
+                              stack_info=True)
                 result = None
 
         return result
@@ -4115,9 +4139,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             try:
                 result = float(state.state)
-            except TypeError:
-                result = None
-            except ValueError:
+            except Exception as e:
+                _LOGGER.error("get_charging_current: exception for car %s (%s) %s", self.name, state.state, e,
+                              exc_info=True,
+                              stack_info=True)
                 result = None
 
         return result
@@ -4169,7 +4194,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 _LOGGER.info(f"Rebooting charger {self.name} at {time}")
             except Exception as e:
-                _LOGGER.error(f"low_level_reboot: Error {e}")
+                _LOGGER.error(f"low_level_reboot: Error {e}", exc_info=True, stack_info=True)
 
 
     async def low_level_set_charging_num_phases(self, num_phases: int, time: datetime) -> bool:
@@ -4187,7 +4212,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             return True
         except Exception as e:
-            _LOGGER.warning(f"low_level_set_charging_num_phases: num_phases {num_phases} Error {e}")
+            _LOGGER.warning(f"low_level_set_charging_num_phases: num_phases {num_phases} Error {e}", exc_info=True, stack_info=True)
             return False
 
     async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
@@ -4210,7 +4235,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_set_max_charging_current: Error {e}")
+            _LOGGER.warning(f"low_level_set_max_charging_current: Error {e}", exc_info=True, stack_info=True)
             done = False
         return done
 
@@ -4233,7 +4258,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             return True
         except Exception as e:
-            _LOGGER.warning(f"low_level_stop_charge: Error {e}")
+            _LOGGER.warning(f"low_level_stop_charge: Error {e}", exc_info=True, stack_info=True)
 
         return False
 
@@ -4249,7 +4274,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             return True
         except Exception as e:
-            _LOGGER.warning(f"low_level_start_charge: Error {e}")
+            _LOGGER.warning(f"low_level_start_charge: Error {e}", exc_info=True, stack_info=True)
 
         return False
 
@@ -4421,7 +4446,7 @@ class QSChargerOCPP(QSChargerGeneric):
             else:
                 _LOGGER.info(f"General OCPP notification for charger {self.name}: {message}")
         except Exception as e:
-            _LOGGER.error(f"Error handling OCPP notification for charger {self.name}: {e}")
+            _LOGGER.error(f"Error handling OCPP notification for charger {self.name}: {e}", exc_info=True, stack_info=True)
 
 
     def get_probable_entities(self) -> list[str]:
@@ -4448,7 +4473,7 @@ class QSChargerOCPP(QSChargerGeneric):
             )
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_update_data OCPP: Error {e}")
+            _LOGGER.warning(f"low_level_update_data OCPP: Error {e}", exc_info=True, stack_info=True)
             done = False
 
         return done
@@ -4467,7 +4492,7 @@ class QSChargerOCPP(QSChargerGeneric):
             )
             done = True
         except Exception as e:
-            _LOGGER.warning(f"_occp_reset_charging_profiles OCPP: Error {e}")
+            _LOGGER.warning(f"_occp_reset_charging_profiles OCPP: Error {e}", exc_info=True, stack_info=True)
             done = False
 
         return done
@@ -4555,7 +4580,7 @@ class QSChargerOCPP(QSChargerGeneric):
             )
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_set_charging_current OCPP: Error {e}")
+            _LOGGER.warning(f"low_level_set_charging_current OCPP: Error {e}", exc_info=True, stack_info=True)
             done = False
 
         #if done is False:

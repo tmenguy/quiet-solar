@@ -129,9 +129,11 @@ async def generate_dashboard_yaml(home):
 
 
     except TemplateError as err:
+        _LOGGER.error("generate_dashboard_yaml template error exception %s %s", err, exc_info=True,
+                      stack_info=True)
         raise err
     except Exception as err:
-        _LOGGER.error(f"Error rendering template: {err}", exc_info=err)
+        _LOGGER.error(f"Error rendering template: {err}", exc_info=True, stack_info=True)
         raise err
 
 

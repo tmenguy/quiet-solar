@@ -131,7 +131,7 @@ class QSBattery(HADeviceMixin, Battery):
                 target={"entity_id": self.charge_from_grid_switch}
             )
         except Exception as e:
-            _LOGGER.error(f"set_charge_from_grid: battery error setting charge from grid {e}")
+            _LOGGER.error(f"set_charge_from_grid: battery error setting charge from grid {e}", exc_info=True, stack_info=True)
 
     async def is_charge_from_grid(self) -> bool | None:
         if self.charge_from_grid_switch is None:
@@ -174,7 +174,7 @@ class QSBattery(HADeviceMixin, Battery):
                 domain, service, data, blocking=blocking
             )
         except Exception as e:
-            _LOGGER.error(f"set_max_discharging_power: battery error setting max discharging power {e}")
+            _LOGGER.error(f"set_max_discharging_power: battery error setting max discharging power {e}", exc_info=True, stack_info=True)
 
     def get_max_discharging_power(self):
         res = None
@@ -246,7 +246,7 @@ class QSBattery(HADeviceMixin, Battery):
                 domain, service, data, blocking=blocking
             )
         except Exception as e:
-            _LOGGER.error(f"set_max_charging_power: battery error setting max charging power {e}")
+            _LOGGER.error(f"set_max_charging_power: battery error setting max charging power {e}", exc_info=True, stack_info=True)
 
     def get_current_battery_asked_change_for_outside_production_system(self) -> float:
 

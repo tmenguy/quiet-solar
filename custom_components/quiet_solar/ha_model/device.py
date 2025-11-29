@@ -214,7 +214,7 @@ async def load_from_history(hass, entity_id:str, start_time: datetime, end_time:
     try:
         states : list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(load_history_from_db, start_time, end_time)
     except Exception as err:
-        _LOGGER.error(f"Error loading history for entity {entity_id} from {start_time} to {end_time}: {err}", exc_info=err)
+        _LOGGER.error(f"Error loading history for entity {entity_id} from {start_time} to {end_time}: {err}", exc_info=True, stack_info=True)
         states = []
     # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
     return states
@@ -318,8 +318,10 @@ class HADeviceMixin:
             if self.hass is not None:
                 for entity_id in self._entities_to_fill_from_history:
                     self.hass.async_create_task(self._async_bootstrap_from_history(entity_id, time))
-        except Exception:
-            pass
+        except Exception as e:
+            _LOGGER.error("root_device_post_home_init: exception: %s", e,
+                          exc_info=True, stack_info=True)
+
 
         self.device_post_home_init(time)
 
@@ -398,7 +400,7 @@ class HADeviceMixin:
     #         return kept_one
     #
     #     except Exception as err:
-    #         _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=err)
+    #         _LOGGER.error(f"Error working on calendar in clean_next_qs_scheduled_event {self.calendar} {err}", exc_info=True, stack_info=True)
     #         return False
 
     # NO MORE USED
@@ -424,7 +426,7 @@ class HADeviceMixin:
     #         await self.hass.services.async_call(
     #             domain, service, data, blocking=True)
     #     except Exception as err:
-    #         _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=err)
+    #         _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=True, stack_info=True)
 
 
 
@@ -478,7 +480,7 @@ class HADeviceMixin:
                         end_time = end_time.astimezone(tz=pytz.UTC)
                         break
             except Exception as err:
-                _LOGGER.error(f"Error reading calendar in get_next_scheduled_event {self.calendar} {err}", exc_info=err)
+                _LOGGER.error(f"Error reading calendar in get_next_scheduled_event {self.calendar} {err}", exc_info=True, stack_info=True)
 
 
         return start_time, end_time
@@ -590,7 +592,7 @@ class HADeviceMixin:
                     service_data=data,
                 )
             except Exception as err:
-                _LOGGER.error(f"Error sending notification for load {load_name} app: {mobile_app} {err}", exc_info=err)
+                _LOGGER.error(f"Error sending notification for load {load_name} app: {mobile_app} {err}", exc_info=True, stack_info=True)
 
     def get_best_power_HA_entity(self):
         if self.accurate_power_sensor is not None:
@@ -1119,9 +1121,10 @@ class HADeviceMixin:
         if self._entity_probed_state_is_numerical[entity_id]:
             try:
                 value = float(value)
-            except ValueError:
-                value = None
-            except TypeError:
+            except Exception as e:
+                _LOGGER.error("_add_state_history: exception for car %s (%s) %s", self.name, value, e,
+                              exc_info=True,
+                              stack_info=True)
                 value = None
 
         if value is not None:

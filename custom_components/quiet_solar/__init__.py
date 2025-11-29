@@ -44,7 +44,7 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
             await hass.config_entries.async_unload(entry.entry_id)
         except Exception as e:
             # Log the error but continue with the next entry
-            _LOGGER.error(f"Error unloading entry {entry.entry_id}: {e}")
+            _LOGGER.error(f"Error unloading entry {entry.entry_id}: {e}", exc_info=True, stack_info=True)
 
 
     hass.data[DOMAIN] = {}
@@ -56,7 +56,7 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
             await hass.config_entries.async_reload(entry.entry_id)
         except Exception as e:
             # Log the error but continue with the next entry
-            _LOGGER.error(f"Error reloading entry {entry.entry_id}: {e}")
+            _LOGGER.error(f"Error reloading entry {entry.entry_id}: {e}", exc_info=True, stack_info=True)
 
 @callback
 def register_reload_service(hass: HomeAssistant) -> None:
@@ -122,7 +122,7 @@ def register_ocpp_notification_listener(hass: HomeAssistant) -> None:
                                 await qs_charger.handle_ocpp_notification(message, title)
                         
         except Exception as e:
-            _LOGGER.error(f"Error in OCPP notification listener: {e}")
+            _LOGGER.error(f"Error in OCPP notification listener: {e}", exc_info=True, stack_info=True)
     
     # Listen for service call events
     hass.bus.async_listen("call_service", ocpp_notification_listener)
@@ -165,7 +165,7 @@ async def _is_notification_for_charger(hass: HomeAssistant, message: str, qs_cha
         return False
         
     except Exception as e:
-        _LOGGER.debug(f"Error matching notification to charger: {e}")
+        _LOGGER.debug(f"Error matching notification to charger: {e}", exc_info=True, stack_info=True)
         return False
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

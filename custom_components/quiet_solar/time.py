@@ -100,7 +100,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            pass
+            _LOGGER.error("async_unload_entry time: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
 
 
     return True

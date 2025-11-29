@@ -157,7 +157,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            pass
+            _LOGGER.error("async_unload_entry select: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
 
 
     return True
@@ -292,7 +292,8 @@ class QSExtraStoredDataSelect(ExtraStoredData):
             return cls(
                 restored["user_selected_option"],
             )
-        except KeyError:
+        except Exception as e:
+            _LOGGER.error("QSExtraStoredDataSelect.from_dict exception %s %s", restored,e, exc_info=True, stack_info=True)
             return None
 
 class QSUserOverrideSelectRestore(QSBaseSelectRestore):

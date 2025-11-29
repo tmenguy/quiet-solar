@@ -430,7 +430,7 @@ class AbstractDevice(object):
             try:
                 is_command_set = await self.execute_command(time, command)
             except Exception as err:
-                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=err)
+                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=True, stack_info=True)
                 is_command_set = None
 
         if is_command_set is None:
@@ -489,7 +489,7 @@ class AbstractDevice(object):
             try:
                 is_command_set = await self.execute_command(time, self.running_command)
             except Exception as err:
-                _LOGGER.error(f"Error while executing command {self.running_command.command} for load {self.name} : {err}", exc_info=err)
+                _LOGGER.error(f"Error while executing command {self.running_command.command} for load {self.name} : {err}", exc_info=True, stack_info=True)
                 is_command_set = None
             self.running_command_last_launch = time
             if is_command_set is None:

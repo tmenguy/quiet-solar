@@ -84,7 +84,7 @@ LOAD_TYPES_MENU = {
     QSHome.conf_type_name:None,
     QSBattery.conf_type_name:None,
     QSSolar.conf_type_name:None,
-    "charger": {QSChargerOCPP.conf_type_name: None, QSChargerGeneric.conf_type_name:None}, #QSChargerWallbox.conf_type_name:None
+    "charger": {QSChargerOCPP.conf_type_name: None, QSChargerGeneric.conf_type_name:None, QSChargerWallbox.conf_type_name:None },
     QSCar.conf_type_name:None,
     QSPerson.conf_type_name:None,
     QSPool.conf_type_name:None,

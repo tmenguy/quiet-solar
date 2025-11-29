@@ -117,7 +117,7 @@ class QSDataHandler:
             self.async_update_loads_re_entry = False
             await self.home.update_loads(event_time)
         except Exception as e:
-            _LOGGER.error("Error updating loads: %s", e)
+            _LOGGER.error("Error updating loads: %s", e, exc_info=True, stack_info=True)
         self.async_update_loads_re_entry = True
 
     async def async_update_all_states(self, event_time: datetime) -> None:
@@ -128,7 +128,7 @@ class QSDataHandler:
             self.async_update_all_states_re_entry = False
             await self.home.update_all_states(event_time)
         except Exception as e:
-            _LOGGER.error("Error updating all states: %s", e)
+            _LOGGER.error("Error updating all states: %s", e, exc_info=True)
         self.async_update_all_states_re_entry = True
 
     async def async_update_forecast_probers(self, event_time: datetime) -> None:
@@ -139,7 +139,7 @@ class QSDataHandler:
             self.async_update_forecast_probers_re_entry = False
             await self.home.update_forecast_probers(event_time)
         except Exception as e:
-            _LOGGER.error("Error updating forecast probers: %s", e)
+            _LOGGER.error("Error updating forecast probers: %s", e, exc_info=True)
         self.async_update_forecast_probers_re_entry = True
 
 

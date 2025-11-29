@@ -146,7 +146,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            pass
+            _LOGGER.error("async_unload_entry switch: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
 
 
     return True
@@ -174,7 +174,9 @@ class QSExtraStoredData(ExtraStoredData):
             return cls(
                 restored["native_is_on"],
             )
-        except KeyError:
+        except Exception as e:
+            _LOGGER.error("QSExtraStoredData.from_dict switch exception %s %s", restored, e, exc_info=True,
+                          stack_info=True)
             return None
 
 class QSSwitchEntity(QSDeviceEntity, SwitchEntity):

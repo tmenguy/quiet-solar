@@ -270,8 +270,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # Asynchronously try to compute an initial km/kWh from HA history
             if self.hass is not None:
                 self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
-        except Exception:
-            pass
+        except Exception as e:
+            _LOGGER.error("device_post_home_init: exception for boostrap efficiency device: %s %s", self.name, e, exc_info=True, stack_info=True)
 
     def get_car_person_readable_forecast_mileage(self):
 
@@ -673,7 +673,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         try:
             odos = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_odometer_sensor)
             socs = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_charge_percent_sensor)
-        except Exception:
+        except Exception as e:
+            _LOGGER.error("_async_bootstrap_efficiency_from_history: exception getting odos and socs %s", e, exc_info=True, stack_info=True)
             return
 
         if not odos or not socs:
@@ -795,6 +796,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.car_plugged is None:
             return None
 
+        if for_duration is None or for_duration == 0:
+            for_duration = None
+
         if for_duration is not None:
 
             contiguous_status = self.get_last_state_value_duration(self.car_plugged,
@@ -837,13 +841,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             try:
                 return float(latitude), float(longitude)
-            except ValueError:
+            except ValueError as e:
+                _LOGGER.error("get_car_coordinate conversion issue %s %s %s", latitude, longitude, e, exc_info=True,
+                              stack_info=True)
                 return None, None
 
     def is_car_home(self, time:datetime, for_duration:float|None = None) -> bool | None:
 
         if self.car_tracker is None:
             return None
+
+        if for_duration is None or for_duration == 0:
+            for_duration = None
 
         if for_duration is not None:
 
@@ -877,7 +886,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         try:
             return float(res) * self.car_battery_capacity / 100.0
-        except TypeError:
+        except Exception as e:
+            _LOGGER.error("get_car_charge_energy exception: exception for car %s (%s %s) %s", self.name, res, self.car_battery_capacity, e, exc_info=True,
+                          stack_info=True)
             return None
 
     def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
@@ -1069,7 +1080,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     domain, service, data
                 )
             except Exception as exc:
-                _LOGGER.error(f"Car {self.name} failed to set max charge limit to {percent}%: {exc}")
+                _LOGGER.error(f"Car {self.name} failed to set max charge limit to {percent}%: {exc}", exc_info=True, stack_info=True)
 
     def car_can_limit_its_soc(self):
         if self.car_charge_percent_max_number is None:
@@ -1088,10 +1099,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             else:
                 try:
                     result = int(state.state)
-                except TypeError:
+                except Exception as e:
+                    _LOGGER.error("get_max_charge_limit: exception for car %s (%s) %s", self.name, state.state, e, exc_info=True,
+                                  stack_info=True)
                     result = None
-                except ValueError:
-                    result = None
+
 
         return result
 
@@ -1623,8 +1635,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 try:
                     value = value.strip("%")
                     value = float(value)
-                except ValueError:
-                    _LOGGER.error(f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'")
+                except Exception as e:
+                    _LOGGER.error(f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'{e}", exc_info=True, stack_info=True)
                     return False
 
         value = int(value)
@@ -1679,8 +1691,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             try:
                 value = value.strip("kWh")
                 value = float(value)*1000.0
-            except ValueError:
-                _LOGGER.error(f"Car {self.name} set_next_charge_target_energy: invalid value {value}")
+            except Exception as e:
+                _LOGGER.error(f"Car {self.name} set_next_charge_target_energy: invalid value {value} {e}", exc_info=True, stack_info=True)
                 return False
         else:
             value = float(value) * 1000.0

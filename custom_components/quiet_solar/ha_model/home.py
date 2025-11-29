@@ -84,7 +84,7 @@ def get_time_from_state(state: LazyState | None) -> datetime | None:
                 try:
                     time = datetime.fromisoformat(time_updated)
                 except Exception as e:
-                    pass
+                    _LOGGER.error("get_time_from_state: exception changing last_updated %s %s", time_updated, e, exc_info=True, stack_info=True)
         elif isinstance(time_updated, datetime):
             time = time_updated
 
@@ -95,6 +95,8 @@ def get_time_from_state(state: LazyState | None) -> datetime | None:
             try:
                 time = datetime.fromisoformat(time)
             except Exception as e:
+                _LOGGER.error("get_time_from_state: exception changing %s %s", time, e, exc_info=True,
+                              stack_info=True)
                 return None
 
     if time is None or not isinstance(time, datetime):
@@ -359,7 +361,7 @@ class QSHome(QSDynamicGroup):
             self.radius = float(home_zone.attributes.get("radius", 100.0))
 
         except Exception as err:
-            _LOGGER.error(f"Error getting home coordinates: {err}")
+            _LOGGER.error(f"Error getting home coordinates: {err}", exc_info=True, stack_info=True)
             self.latitude = None
             self.longitude = None
             self.radius = None
@@ -706,7 +708,7 @@ class QSHome(QSDynamicGroup):
                             current_not_home_segment = [None, None]
 
                 except (ValueError, TypeError, KeyError):
-                    _LOGGER.error(f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}")
+                    _LOGGER.error(f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}", exc_info=True, stack_info=True)
                 last_unknown_start = None
 
 
@@ -1452,38 +1454,38 @@ class QSHome(QSDynamicGroup):
             # remove the car from the list
             try:
                 self._cars.remove(device)
-            except ValueError:
-                _LOGGER.warning(f"Attempted to remove car {device.name} that was not in the list of cars")
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove car {device.name} that was not in the list of cars {e}", exc_info=True, stack_info=True)
         elif isinstance(device, QSChargerGeneric):
             try:
                 self._chargers.remove(device)
-            except ValueError:
-                _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers")
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers {e}", exc_info=True, stack_info=True)
         elif isinstance(device, QSSolar):
             self._solar_plant = None
 
         if isinstance(device, QSPerson):
             try:
                 self._persons.remove(device)
-            except ValueError:
-                _LOGGER.warning(f"Attempted to remove person {device.name} that was not in the list of persons")
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove person {device.name} that was not in the list of persons {e}", exc_info=True, stack_info=True)
 
         if isinstance(device, AbstractLoad):
             try:
                 self._all_loads.remove(device)
-            except ValueError:
-                _LOGGER.warning(f"Attempted to remove load {device.name} that was not in the list of loads")
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove load {device.name} that was not in the list of loads {e}", exc_info=True, stack_info=True)
 
         if isinstance(device, QSDynamicGroup):
             try:
                 self._all_dynamic_groups.remove(device)
-            except ValueError:
-                _LOGGER.warning(f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups")
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups {e}", exc_info=True, stack_info=True)
 
         if isinstance(device, HADeviceMixin):
             try:
                 self._all_devices.remove(device)
-            except ValueError:
+            except Exception as e:
                 _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
 
         if isinstance(device, HADeviceMixin):
@@ -1500,8 +1502,8 @@ class QSHome(QSDynamicGroup):
     def remove_disabled_device(self, device):
         try:
             self._disabled_devices.remove(device)
-        except ValueError:
-            _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices")
+        except Exception as e:
+            _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices {e}", exc_info=True, stack_info=True)
 
     async def finish_setup(self, time: datetime) -> bool:
         """
@@ -1547,7 +1549,9 @@ class QSHome(QSDynamicGroup):
                 await device.update_states(time)
             except Exception as err:
                 if isinstance(device, AbstractDevice):
-                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=err)
+                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True)
+                else:
+                    _LOGGER.error("Error updating states for unknown element %s %s", e, exc_info=True, stack_info=True)
 
         self._init_completed = True
         return True
@@ -1980,14 +1984,17 @@ class QSHome(QSDynamicGroup):
             try:
                 await self._solar_plant.update_forecast(time)
             except Exception as err:
-                _LOGGER.error(f"Error updating solar forecast {err}", exc_info=err)
+                _LOGGER.error(f"Error updating solar forecast {err}", exc_info=True, stack_info=True)
 
         for device in self._all_devices:
             try:
                 await device.update_states(time)
             except Exception as err:
                 if isinstance(device, AbstractDevice):
-                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=err)
+                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True)
+                else:
+                    _LOGGER.error("Error updating states for unknown device: %s",  err,
+                                  exc_info=True, stack_info=True)
 
 
         if await self._consumption_forecast.init_forecasts(time):
@@ -2013,7 +2020,7 @@ class QSHome(QSDynamicGroup):
         try:
             await self.update_loads_constraints(time)
         except Exception as err:
-            _LOGGER.error(f"Error updating loads constraints {err}", exc_info=err)
+            _LOGGER.error(f"Error updating loads constraints {err}", exc_info=True, stack_info=True)
 
         if self._battery is not None:
             all_loads = self._all_loads
@@ -2036,7 +2043,7 @@ class QSHome(QSDynamicGroup):
                         # we have an issue with this command ....
                         pass
             except Exception as err:
-                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=err)
+                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
 
 
         do_force_solve = False
@@ -2052,7 +2059,7 @@ class QSHome(QSDynamicGroup):
                 if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
                     do_force_solve = True
             except Exception as err:
-                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=err)
+                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=True, stack_info=True)
 
 
         active_loads = []

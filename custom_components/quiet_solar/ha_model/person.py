@@ -244,7 +244,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
                     self.add_to_mileage_history( day, float(mileage), leave_time )
                 except Exception as ex:
-                    _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}")
+                    _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}", exc_info=True, stack_info=True)
 
 
             str_hist_data = ""

@@ -1,7 +1,11 @@
 import importlib
+import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Callable
+
+
+_LOGGER = logging.getLogger(__name__)
 
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
@@ -330,7 +334,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            pass
+            _LOGGER.error("async_unload_entry sensor: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
 
 
     return True
@@ -412,9 +416,10 @@ class QSExtraStoredData(ExtraStoredData):
                 restored["native_value"],
                 restored["native_attr"],
             )
-        except KeyError:
+        except Exception as e:
+            _LOGGER.error("QSExtraStoredData.from_dict sensor exception %s %s", restored, e, exc_info=True,
+                          stack_info=True)
             return None
-
 class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
 
     @property
