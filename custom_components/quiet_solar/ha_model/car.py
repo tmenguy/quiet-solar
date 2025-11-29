@@ -809,7 +809,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 return contiguous_status >= for_duration and contiguous_status > 0
             else:
                 return None
-
         else:
             latest_state = self.get_sensor_latest_possible_valid_value(entity_id=self.car_plugged, time=time)
 

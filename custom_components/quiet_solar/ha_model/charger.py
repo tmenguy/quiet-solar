@@ -3274,11 +3274,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 res = contiguous_status >= for_duration
 
-
-
-
-
-
         if res is None and self.car:
 
             latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(self._internal_fake_is_plugged_id, time=time)
