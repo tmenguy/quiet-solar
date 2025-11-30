@@ -61,11 +61,10 @@ views:
               {%-  if energy_mode %}
               {% if ha.get("current_constraint_current_energy") %}soc: {{ ha.get("current_constraint_current_energy").entity_id }}{% endif %}
               {%-  else %}
-              {%- set sensor_id = device.car_charge_percent_sensor %}
-              {%- set ha_entity = device.ha_entities.get("car_soc_percentage") %}
-              {%- if sensor_id != None and ha_entity != None %}
-              {%-    set badges_list.badges = badges_list.badges + [(sensor_id, device.name)] %}
-              {{ "soc: " + sensor_id }}
+              {%- set e = ha.get("car_soc_percentage") %}
+              {%- if e %}
+              {%-    set badges_list.badges = badges_list.badges + [(e.entity_id, device.name)] %}
+              {{ "soc: " + e.entity_id }}
               {%- endif %}
               {%- endif %}
               {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}

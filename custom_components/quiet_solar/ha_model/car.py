@@ -177,13 +177,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._user_selected_person_name_for_car : str | None = None
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
-                                      is_numerical=True)
+                                      is_numerical=True,
+                                      reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_plugged,
-                                      is_numerical=False)
+                                      is_numerical=False,
+                                      reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_tracker,
-                                      is_numerical=False)
+                                      is_numerical=False,
+                                      reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_odometer_sensor,
                                       conversion_fn=convert_distance_to_km,
@@ -191,7 +194,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.attach_ha_state_to_probe(self.car_estimated_range_sensor,
                                       conversion_fn=convert_distance_to_km,
-                                      is_numerical=True)
+                                      is_numerical=True,
+                                      reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_efficiency_km_per_kwh_sensor,
                                       is_numerical=True,
@@ -876,11 +880,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "home"
 
-    def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float=4*3600 ) -> float | None:
+    def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float | None = None ) -> float | None:
         ret = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
         return ret
 
-    def get_car_charge_energy(self, time: datetime, tolerance_seconds: float=4*3600) -> float | None:
+    def get_car_charge_energy(self, time: datetime, tolerance_seconds: float | None = None) -> float | None:
         res = self.get_car_charge_percent(time, tolerance_seconds)
         if res is None:
             return None
@@ -895,12 +899,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                           stack_info=True)
             return None
 
-    def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
+    def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float | None = None ) -> float | None:
         return self.get_sensor_latest_possible_valid_value(entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
-    def get_car_estimated_range_km_from_sensor(self, time: datetime | None = None, tolerance_seconds: float=24*3600 ) -> float | None:
-        ret = self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
-        return ret
+    def get_car_estimated_range_km_from_sensor(self, time: datetime | None = None, tolerance_seconds: float| None = None) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
 
     def is_car_charge_growing(self,
                               num_seconds: float,
@@ -941,7 +944,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
 
-    def get_computed_range_efficiency_km_per_percent(self, time:datetime, delta_soc:float=0.0) -> float | None:
+    def get_computed_range_efficiency_km_per_percent(self, time:datetime|None, delta_soc:float=0.0) -> float | None:
 
         if time is None:
             time = datetime.now(pytz.UTC)
@@ -978,7 +981,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float | None, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
 
-        km_per_percent = current_soc = current_range_km = minimum_ok_soc = None
+        km_per_percent = current_soc = current_range_km  = None
 
         minimum_ok_soc = self.get_car_minimum_ok_SOC()
 
