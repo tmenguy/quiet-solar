@@ -2794,6 +2794,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     # the constraint will be launched and the start time was the one pushed here : reset it
                     do_force_solve = True
+                    local_end_of_constraint = self.car.do_next_charge_time
                     self.command_and_constraint_reset() # cleanup any previous constraints to force this one!
 
                     user_timed_constraint = ConstraintClass(
@@ -2803,7 +2804,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         load=self,
                         load_param=self.car.name,
                         from_user=True,
-                        end_of_constraint=self.car.do_next_charge_time,
+                        end_of_constraint=local_end_of_constraint,
                         initial_value=car_initial_value,
                         target_value=target_charge,
                         power_steps=self._power_steps,
