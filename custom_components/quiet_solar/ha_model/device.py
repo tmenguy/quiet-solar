@@ -234,17 +234,8 @@ class HADeviceMixin:
         self.phase_2_amps_sensor = kwargs.pop(CONF_PHASE_2_AMPS_SENSOR, None)
         self.phase_3_amps_sensor = kwargs.pop(CONF_PHASE_3_AMPS_SENSOR, None)
 
-
-        self.mobile_app = kwargs.pop(CONF_MOBILE_APP, None)
-
-        self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
-        if self.mobile_app_url is None or len(self.mobile_app_url) == 0:
-            self.mobile_app_url = None
-        elif self.mobile_app_url == "/":
-            self.mobile_app_url = None
-        elif self.mobile_app_url[0] != '/':
-            self.mobile_app_url = f"/{self.mobile_app_url}"
-
+        self.mobile_app = None
+        self.mobile_app_url = None
         self.secondary_power_sensor = None
         self.best_power_value = None
 

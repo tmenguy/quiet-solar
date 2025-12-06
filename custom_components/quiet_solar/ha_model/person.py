@@ -12,7 +12,8 @@ from .car import QSCar
 from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
     CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
     CONF_PERSON_TRACKER, DEVICE_STATUS_CHANGE_NOTIFY, PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER, \
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, PERSON_NOTIFY_REASON_CHANGED_CAR
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, PERSON_NOTIFY_REASON_CHANGED_CAR, CONF_MOBILE_APP, \
+    CONF_MOBILE_APP_URL
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import get_readable_date_string, LoadConstraint, \
     MultiStepsPowerLoadConstraintChargePercent
@@ -50,6 +51,16 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             self.authorized_cars.append(self.preferred_car)
 
         super().__init__(**kwargs)
+
+        self.mobile_app = kwargs.pop(CONF_MOBILE_APP, None)
+        self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
+        if self.mobile_app_url is None or len(self.mobile_app_url) == 0:
+            self.mobile_app_url = None
+        elif self.mobile_app_url == "/":
+            self.mobile_app_url = None
+        elif self.mobile_app_url[0] != '/':
+            self.mobile_app_url = f"/{self.mobile_app_url}"
+
 
         # everything is in local time, not UTC
         self.historical_mileage_data : list[tuple[datetime,float,datetime, int]]= []
