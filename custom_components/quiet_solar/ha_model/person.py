@@ -414,7 +414,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                 car_curr_str = f"The {predicted_car.name} current charge is UNKNOWN, "
 
                             if ct_target_soc is not None:
-                                if ct_target_soc < needed_soc or usable_ct.end_of_constraint > self.predicted_leave_time:
+                                if (needed_soc is not None and ct_target_soc < needed_soc) or usable_ct.end_of_constraint > self.predicted_leave_time:
                                     title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
                                     message = (
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
@@ -427,20 +427,26 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                         f"{car_curr_str}the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
 
                             else:
+
+                                if needed_soc is not None:
+                                    needed_soc_str = f"{needed_soc:.0f}%"
+                                else:
+                                    needed_soc_str = "UNKNOWN"
+
                                 if person_ct is not None:
-                                    if person_ct.target_value >= needed_soc and person_ct.end_of_constraint <= self.predicted_leave_time:
+                                    if (needed_soc is not None and person_ct.target_value >= needed_soc) and person_ct.end_of_constraint <= self.predicted_leave_time:
                                         title = f"{predicted_car.name}: Check it, I'll charge it for you!"
                                         message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                                   f"{car_curr_str}I will charge it to {needed_soc:.0f}% to cover your trip.")
+                                                   f"{car_curr_str}I will charge it to {needed_soc_str} to cover your trip.")
                                     else:
                                         title = f"{predicted_car.name}: BEWARE check what I've done"
                                         message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                                   f"{car_curr_str}Charge it to {needed_soc:.0f}% to cover your trip.")
+                                                   f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip.")
                                 else:
                                     title = f"{predicted_car.name}: BEWARE your trip is not covered"
                                     message = (
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                        f"{car_curr_str}Charge it to {needed_soc:.0f}% to cover your trip.")
+                                        f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip.")
 
             if message is not None and title is not None:
                 _LOGGER.info(f"notify_of_forecast_if_needed: Notifying person {self.name} :reason {notify_reason} {title} / {message}")
