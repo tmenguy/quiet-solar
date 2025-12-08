@@ -331,9 +331,13 @@ class LoadConstraint(object):
         if self.load_param:
             prefix = f"{self.load_param}"
         if self.load_info:
-            prefix += "("
+            prefix += " ("
+            i = 0
             for k,v in self.load_info.items():
-                prefix += f"{k}={v} "
+                if i > 0:
+                    prefix += ", "
+                prefix += f"{k}:{v}"
+                i += 1
             prefix += ")"
         if prefix != "":
             prefix = f"{prefix}: "

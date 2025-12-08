@@ -124,6 +124,10 @@ CHARGER_MAX_POWER_AMPS_PRECISION_W = 100  # 100W precision for power
 CHARGER_MIN_REBOOT_DURATION_S = 120
 
 
+CHARGER_SOC_TARGET_TOLERANCE_PERCENT = 1.2
+CHARGER_SOC_TARGET_TOLERANCE_WH = 1100.0
+
+
 CHARGER_STATE_REFRESH_INTERVAL_S = 14
 CHARGER_ADAPTATION_WINDOW_S = 45
 CHARGER_CHECK_STATE_WINDOW_S = 15
@@ -2920,11 +2924,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     do_remove_all_person_constraints = True
 
-                    if person is not None and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
+                    if person is not None and person_min_target_charge is not None and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
 
                         is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value,
                                                                 target_charge=person_min_target_charge,
-                                                                is_target_percent=is_target_percent)
+                                                                is_target_percent=is_target_percent,
+                                                                accept_bigger_tolerance=True)
 
                         if is_car_charged is False:
                             do_remove_all_person_constraints = False
@@ -3905,7 +3910,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return (result, do_continue_constraint)
 
-    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int, is_target_percent: bool) -> tuple[bool, int|float]:
+    def is_car_charged(self, time: datetime,  current_charge: float | int | None,  target_charge: float | int, is_target_percent: bool, accept_bigger_tolerance:bool = False) -> tuple[bool, int|float]:
 
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
@@ -3914,16 +3919,33 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # force met constraint: car is charged in all cases
             result = target_charge
         elif current_charge is not None:
-            if is_target_percent and target_charge >= 100:
-                # for a car to be fully charged it has to have a stopped asking charge at minimum
-                result = min(current_charge, 99)
+
+            if accept_bigger_tolerance:
+                tolerance = CHARGER_SOC_TARGET_TOLERANCE_PERCENT
+                if is_target_percent is False:
+                    tolerance = CHARGER_SOC_TARGET_TOLERANCE_WH
+
+                if abs(current_charge - target_charge) <= tolerance:
+                    result = target_charge
+                else:
+                    ct = LoadConstraint()
+                    ct.target_value = target_charge
+                    ct.current_value = current_charge
+                    if ct.is_constraint_met(time=time, current_value=current_charge):
+                        # force met constraint
+                        result = ct.target_value
+
             else:
-                ct = LoadConstraint()
-                ct.target_value = target_charge
-                ct.current_value = current_charge
-                if ct.is_constraint_met(time=time, current_value=current_charge):
-                    # force met constraint
-                    result = ct.target_value
+                if is_target_percent and target_charge >= 100:
+                    # for a car to be fully charged it has to have a stopped asking charge at minimum
+                    result = min(current_charge, 99)
+                else:
+                    ct = LoadConstraint()
+                    ct.target_value = target_charge
+                    ct.current_value = current_charge
+                    if ct.is_constraint_met(time=time, current_value=current_charge):
+                        # force met constraint
+                        result = ct.target_value
 
         return result == target_charge, result
 
