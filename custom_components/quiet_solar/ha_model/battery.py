@@ -32,11 +32,6 @@ class QSBattery(HADeviceMixin, Battery):
 
         super().__init__(**kwargs)
 
-        # attach a solar plant if it is an hybrid battery
-        self._solar_plant : QSSolar | None = None
-        if self.is_dc_coupled:
-            self._solar_plant = self.home._solar_plant
-
         self.attach_power_to_probe(self.charge_discharge_sensor)
 
         self.attach_ha_state_to_probe(self.charge_percent_sensor,
@@ -256,13 +251,13 @@ class QSBattery(HADeviceMixin, Battery):
         if self.current_command.power_consign == 0.0:
             return 0.0
 
-        if self.home._solar_plant is None:
+        if self.is_dc_coupled is False:
             return self.current_command.power_consign
 
         if self.current_command.power_consign > 0:
-            inverter_clamp =  self.home._solar_plant.get_current_over_clamp_production_power()
+            inverter_clamp =  self.home.get_current_over_clamp_production_power()
             if inverter_clamp > 0:
-                _LOGGER.warning(f"get_current_battery_asked_change_for_outside_production_system: reduce power command {self.current_command.power_consign:.2f} by {inverter_clamp:.2f} to self.current_command.power_consign - inverter_clamp")
+                _LOGGER.warning(f"get_current_battery_asked_change_for_outside_production_system: reduce power command {self.current_command.power_consign:.2f} by {inverter_clamp:.2f} to {self.current_command.power_consign - inverter_clamp}")
             return max(0, self.current_command.power_consign - inverter_clamp)
 
         return self.current_command.power_consign

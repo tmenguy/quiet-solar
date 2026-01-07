@@ -48,6 +48,8 @@ class QSHomeMode(StrEnum):
     HOME_MODE_OFF = "home_mode_off"
     HOME_MODE_SENSORS_ONLY = "home_mode_sensors_only"
     HOME_MODE_CHARGER_ONLY = "home_mode_charger_only"
+    HOME_MODE_NO_SOLAR_NO_BATTERY = "home_mode_no_solar_no_battery"
+    HOME_MODE_NO_SOLAR = "home_mode_no_solar"
     HOME_MODE_ON = "home_mode_on"
 
 
@@ -222,7 +224,7 @@ class QSHome(QSDynamicGroup):
 
     def __init__(self, **kwargs) -> None:
 
-        self._battery: QSBattery | None = None
+        self.physical_battery: QSBattery | None = None
         self._voltage: int = 230
 
         self._chargers: list[QSChargerGeneric] = []
@@ -231,7 +233,7 @@ class QSHome(QSDynamicGroup):
 
         self._all_devices: list[HADeviceMixin] = []
         self._disabled_devices: list[HADeviceMixin] = []
-        self._solar_plant: QSSolar | None = None
+        self.physical_solar_plant: QSSolar | None = None
         self._all_loads: list[AbstractLoad] = []
         self._all_dynamic_groups: list[QSDynamicGroup] = []
         self._name_to_groups: dict[str, QSDynamicGroup] = {}
@@ -365,6 +367,27 @@ class QSHome(QSDynamicGroup):
             self.latitude = None
             self.longitude = None
             self.radius = None
+
+
+    @property
+    def battery(self) -> QSBattery | None:
+        """Return the battery device."""
+        if self.home_mode in [QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
+                              QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
+                              ]:
+            return None
+        return self.physical_battery
+
+    @property
+    def solar_plant(self) -> QSSolar | None:
+        """Return the solar plant device."""
+        if self.home_mode in [QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
+                              QSHomeMode.HOME_MODE_NO_SOLAR.value,
+                              QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
+                              ]:
+            return None
+        return self.physical_solar_plant
+
 
     async def _compute_mileage_for_period_per_person(self, start: datetime, end: datetime):
 
@@ -865,14 +888,14 @@ class QSHome(QSDynamicGroup):
 
         # ok we are in off grid mode, we need to limit the current to the max phase current of the home
         available_production_w = 0
-        if self._solar_plant is not None:
-            available_production_w = self._solar_plant.solar_production
+        if self.solar_plant is not None:
+            available_production_w = self.solar_plant.solar_production
 
-        if self._battery is not None and self._battery.battery_can_discharge():
-            available_production_w += self._battery.get_max_discharging_power()  # self._battery.max_discharge_number
+        if self.battery is not None and self.battery.battery_can_discharge():
+            available_production_w += self.battery.get_max_discharging_power()  # self.battery.max_discharge_number
 
-        if self._solar_plant and self._solar_plant.solar_max_output_power_value:
-            available_production_w = min(available_production_w, self._solar_plant.solar_max_output_power_value)
+        if self.solar_plant and self.solar_plant.solar_max_output_power_value:
+            available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
 
         if self.physical_3p:
             available_production_amp = (available_production_w / 3.0) / (self.voltage)
@@ -881,8 +904,8 @@ class QSHome(QSDynamicGroup):
 
         available_production_amp = min(self.dyn_group_max_phase_current_conf, available_production_amp)
 
-        if self._solar_plant:
-            available_production_amp = min(available_production_amp, self._solar_plant.solar_max_phase_amps)
+        if self.solar_plant:
+            available_production_amp = min(available_production_amp, self.solar_plant.solar_max_phase_amps)
 
         return min(static_amp, available_production_amp)
 
@@ -977,13 +1000,13 @@ class QSHome(QSDynamicGroup):
         return unavoidable_consumption_forecast
 
     def get_solar_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
-        if self._solar_plant:
-            return self._solar_plant.get_value_from_current_forecast(start_time)
+        if self.solar_plant:
+            return self.solar_plant.get_value_from_current_forecast(start_time)
         return (None, None)
 
     def get_solar_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
-        if self._solar_plant:
-            return self._solar_plant.get_forecast(start_time, end_time)
+        if self.solar_plant:
+            return self.solar_plant.get_forecast(start_time, end_time)
         return []
 
 
@@ -1166,19 +1189,19 @@ class QSHome(QSDynamicGroup):
         solar_production = None
 
         battery_charge = None
-        if self._battery is not None:
-            battery_charge = self._battery.get_sensor_latest_possible_valid_value(self._battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+        if self.battery is not None:
+            battery_charge = self.battery.get_sensor_latest_possible_valid_value(self.battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
 
-        if self._solar_plant is not None:
-            self._solar_plant.solar_production = 0.0
+        if self.solar_plant is not None:
+            self.solar_plant.solar_production = 0.0
             solar_production = None
-            if self._solar_plant.solar_inverter_active_power:
+            if self.solar_plant.solar_inverter_active_power:
                 # this one has the battery inside!
-                solar_production_minus_battery = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+                solar_production_minus_battery = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
-            if solar_production_minus_battery is None and self._solar_plant.solar_inverter_input_active_power:
-                solar_production = self._solar_plant.get_sensor_latest_possible_valid_value(self._solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+            if solar_production_minus_battery is None and self.solar_plant.solar_inverter_input_active_power:
+                solar_production = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
             if solar_production_minus_battery is None:
                 if solar_production is not None and battery_charge is not None:
@@ -1187,12 +1210,12 @@ class QSHome(QSDynamicGroup):
                     solar_production_minus_battery = solar_production
 
             if solar_production is not None:
-                self._solar_plant.solar_production = solar_production
+                self.solar_plant.solar_production = solar_production
             elif solar_production_minus_battery is not None:
                 if battery_charge is not None:
-                    self._solar_plant.solar_production = solar_production_minus_battery + battery_charge
+                    self.solar_plant.solar_production = solar_production_minus_battery + battery_charge
                 else:
-                    self._solar_plant.solar_production = solar_production_minus_battery
+                    self.solar_plant.solar_production = solar_production_minus_battery
 
         elif battery_charge is not None:
             solar_production_minus_battery = 0 - battery_charge
@@ -1201,8 +1224,8 @@ class QSHome(QSDynamicGroup):
         if solar_production_minus_battery is None:
             solar_production_minus_battery = 0
 
-        if self._solar_plant is not None:
-            self._solar_plant.solar_production_minus_battery = solar_production_minus_battery
+        if self.solar_plant is not None:
+            self.solar_plant.solar_production_minus_battery = solar_production_minus_battery
 
         # get grid consumption
         grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
@@ -1235,13 +1258,13 @@ class QSHome(QSDynamicGroup):
                 maximum_production_output = self.get_current_maximum_production_output_power()
 
                 if solar_production_minus_battery + self.home_available_power > (1.05*maximum_production_output): # 5% tolerance
-                    if self._battery is not None:
-                        max_battery_discharge = self._battery.battery_get_current_possible_max_discharge_power()
+                    if self.battery is not None:
+                        max_battery_discharge = self.battery.battery_get_current_possible_max_discharge_power()
                     else:
                         max_battery_discharge = 0
 
-                    if self._solar_plant is not None:
-                        solar_production = self._solar_plant.solar_production
+                    if self.solar_plant is not None:
+                        solar_production = self.solar_plant.solar_production
                     else:
                         solar_production = -1
 
@@ -1264,34 +1287,34 @@ class QSHome(QSDynamicGroup):
 
     def get_current_over_clamp_production_power(self) -> float:
 
-        if self._solar_plant is None:
+        if self.solar_plant is None:
             return 0.0
 
-        if self._solar_plant.solar_production > self._solar_plant.solar_max_output_power_value:
-            return self._solar_plant.solar_production - self._solar_plant.solar_max_output_power_value
+        if self.solar_plant.solar_production > self.solar_plant.solar_max_output_power_value:
+            return self.solar_plant.solar_production - self.solar_plant.solar_max_output_power_value
 
         return 0.0
 
     def get_current_maximum_production_output_power(self) -> float:
 
-        if self._solar_plant is not None and self._solar_plant.solar_max_output_power_value:
+        if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value:
             # we need to check if what is available will "really" be available to consume by any dynamic load ...
-            maximum_solar_production_output = float(self._solar_plant.solar_max_output_power_value)
+            maximum_solar_production_output = float(self.solar_plant.solar_max_output_power_value)
         else:
             maximum_solar_production_output = 0.0
 
         is_dc_coupled = False
-        if self._battery is not None:
-            max_battery_discharge = float(self._battery.battery_get_current_possible_max_discharge_power())
-            is_dc_coupled = self._battery.is_dc_coupled
+        if self.battery is not None:
+            max_battery_discharge = float(self.battery.battery_get_current_possible_max_discharge_power())
+            is_dc_coupled = self.battery.is_dc_coupled
         else:
             max_battery_discharge = 0.0
 
         # check what could really be the max production output...because we could not reach the max inverter output
         # with the current production of the solar plant + battery discharge
         if is_dc_coupled and maximum_solar_production_output > 0.0:
-            if self._solar_plant is not None and float(self._solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output:
-               maximum_production_output = float(self._solar_plant.solar_production) + max_battery_discharge
+            if self.solar_plant is not None and float(self.solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output:
+               maximum_production_output = float(self.solar_plant.solar_production) + max_battery_discharge
             else:
                 maximum_production_output = maximum_solar_production_output
         else:
@@ -1337,8 +1360,8 @@ class QSHome(QSDynamicGroup):
             home_amps = self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
 
 
-        if self._solar_plant:
-            solar_amps = self._solar_plant.get_device_amps_consumption(tolerance_seconds, time)
+        if self.solar_plant:
+            solar_amps = self.solar_plant.get_device_amps_consumption(tolerance_seconds, time)
             if solar_amps is not None and home_amps is not None:
                 home_amps = add_amps(home_amps, solar_amps)
 
@@ -1346,24 +1369,24 @@ class QSHome(QSDynamicGroup):
 
     def battery_can_discharge(self):
 
-        if self._battery is None:
+        if self.battery is None:
             return False
 
-        return self._battery.battery_can_discharge()
+        return self.battery.battery_can_discharge()
 
     def get_battery_charge_values(self, duration_before_s: float, time: datetime) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
-        if self._battery is None:
+        if self.battery is None:
             return []
-        return self._battery.get_state_history_data(self._battery.charge_discharge_sensor, duration_before_s, time)
+        return self.battery.get_state_history_data(self.battery.charge_discharge_sensor, duration_before_s, time)
 
 
     async def set_max_discharging_power(self, power: float | None = None, blocking: bool = False):
-        if self._battery is not None:
-            await self._battery.set_max_discharging_power(power, blocking)
+        if self.battery is not None:
+            await self.battery.set_max_discharging_power(power, blocking)
 
     async def set_max_charging_power(self, power: float | None, blocking: bool = False):
-        if self._battery is not None:
-            await self._battery.set_max_charging_power(power, blocking)
+        if self.battery is not None:
+            await self.battery.set_max_charging_power(power, blocking)
 
     def _set_topology(self):
 
@@ -1405,7 +1428,7 @@ class QSHome(QSDynamicGroup):
         device.home = self
 
         if isinstance(device, QSBattery):
-            self._battery = device
+            self.physical_battery = device
         elif isinstance(device, QSCar):
             if device not in self._cars:
                 self._cars.append(device)
@@ -1413,7 +1436,7 @@ class QSHome(QSDynamicGroup):
             if device not in self._chargers:
                 self._chargers.append(device)
         elif isinstance(device, QSSolar):
-            self._solar_plant = device
+            self.physical_solar_plant = device
         elif isinstance(device, QSPerson):
             if device not in self._persons:
                 self._persons.append(device)
@@ -1449,7 +1472,7 @@ class QSHome(QSDynamicGroup):
         device.home = self
 
         if isinstance(device, QSBattery):
-            self._battery = None
+            self.physical_battery = None
         elif isinstance(device, QSCar):
             # remove the car from the list
             try:
@@ -1462,7 +1485,7 @@ class QSHome(QSDynamicGroup):
             except Exception as e:
                 _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers {e}", exc_info=True, stack_info=True)
         elif isinstance(device, QSSolar):
-            self._solar_plant = None
+            self.physical_solar_plant = None
 
         if isinstance(device, QSPerson):
             try:
@@ -1519,11 +1542,11 @@ class QSHome(QSDynamicGroup):
             return False
 
         # check if we have a battery
-        # if self._battery is None:
+        # if self.battery is None:
         #    return False
 
         # check if we have a solar plant
-        # if self._solar_plant is None:
+        # if self.solar_plant is None:
         #    return False
 
         # check if we have at least one load ... we may have zero if they are all disabled in fact!
@@ -1551,7 +1574,7 @@ class QSHome(QSDynamicGroup):
                 if isinstance(device, AbstractDevice):
                     _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True)
                 else:
-                    _LOGGER.error("Error updating states for unknown element %s %s", e, exc_info=True, stack_info=True)
+                    _LOGGER.error("Error updating states for unknown element %s %s", err, exc_info=True, stack_info=True)
 
         self._init_completed = True
         return True
@@ -1980,9 +2003,9 @@ class QSHome(QSDynamicGroup):
             _LOGGER.info("update_all_states: Home not finished setup, skipping")
             return
 
-        if self._solar_plant:
+        if self.solar_plant:
             try:
-                await self._solar_plant.update_forecast(time)
+                await self.solar_plant.update_forecast(time)
             except Exception as err:
                 _LOGGER.error(f"Error updating solar forecast {err}", exc_info=True, stack_info=True)
 
@@ -2022,9 +2045,9 @@ class QSHome(QSDynamicGroup):
         except Exception as err:
             _LOGGER.error(f"Error updating loads constraints {err}", exc_info=True, stack_info=True)
 
-        if self._battery is not None:
+        if self.battery is not None:
             all_loads = self._all_loads
-            all_extended_loads : list[AbstractDevice] = [self._battery]
+            all_extended_loads : list[AbstractDevice] = [self.battery]
             all_extended_loads.extend(self._all_loads)
         else:
             all_loads = all_extended_loads = self._all_loads
@@ -2072,7 +2095,7 @@ class QSHome(QSDynamicGroup):
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-        if do_force_solve and (active_loads or self._battery is not None):
+        if do_force_solve and (active_loads or self.battery is not None):
 
             _LOGGER.info("DO SOLVE")
 
@@ -2082,8 +2105,8 @@ class QSHome(QSDynamicGroup):
             pv_forecast = self.get_solar_from_current_forecast(time, time + self._period)
 
             max_inverter_dc_to_ac_power = None
-            if self._solar_plant is not None and self._solar_plant.solar_max_output_power_value is not None:
-                max_inverter_dc_to_ac_power = self._solar_plant.solar_max_output_power_value
+            if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value is not None:
+                max_inverter_dc_to_ac_power = self.solar_plant.solar_max_output_power_value
 
             end_time = time + self._period
             solver = PeriodSolver(
@@ -2091,7 +2114,7 @@ class QSHome(QSDynamicGroup):
                 end_time = end_time,
                 tariffs = self.get_tariffs(time, end_time),
                 actionable_loads = active_loads,
-                battery = self._battery,
+                battery = self.battery,
                 pv_forecast  = pv_forecast,
                 unavoidable_consumption_forecast = unavoidable_consumption_forecast,
                 step_s = self._solver_step_s,
@@ -2104,11 +2127,11 @@ class QSHome(QSDynamicGroup):
 
             self._commands, self._battery_commands = solver.solve()
 
-        if self._battery and self._battery_commands is not None:
+        if self.battery and self._battery_commands is not None:
 
             while len(self._battery_commands) > 0 and self._battery_commands[0][0] < time + self._update_step_s:
                 cmd_time, command = self._battery_commands.pop(0)
-                await self._battery.launch_command(time, command, ctxt=f"launch command battery true launch at {cmd_time}")
+                await self.battery.launch_command(time, command, ctxt=f"launch command battery true launch at {cmd_time}")
                 # only launch one at a time for a given load
                 break
 
@@ -2174,8 +2197,8 @@ class QSHome(QSDynamicGroup):
         storage_path: str = join(self.hass.config.path(), DOMAIN, "debug")
         await aiofiles.os.makedirs(storage_path, exist_ok=True)
 
-        if self._solar_plant:
-            await self._solar_plant.dump_for_debug(storage_path)
+        if self.solar_plant:
+            await self.solar_plant.dump_for_debug(storage_path)
 
         time = datetime.now(pytz.UTC)
 
@@ -2286,9 +2309,9 @@ class QSHomeConsumptionHistoryAndForecast:
             is_one_bad = False
 
             battery_charge = None
-            if self.home._battery is not None:
-                if self.home._battery.charge_discharge_sensor:
-                    battery_charge = QSSolarHistoryVals(entity_id=self.home._battery.charge_discharge_sensor, forecast=self)
+            if self.home.battery is not None:
+                if self.home.battery.charge_discharge_sensor:
+                    battery_charge = QSSolarHistoryVals(entity_id=self.home.battery.charge_discharge_sensor, forecast=self)
                     s, e = await battery_charge.init(time, for_reset=True)
                     if s is None or e is None:
                         is_one_bad = True
@@ -2304,10 +2327,10 @@ class QSHomeConsumptionHistoryAndForecast:
             solar_production_minus_battery = None
             _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
             if is_one_bad is False:
-                if self.home._solar_plant is not None:
-                    if self.home._solar_plant.solar_inverter_active_power:
+                if self.home.solar_plant is not None:
+                    if self.home.solar_plant.solar_inverter_active_power:
                         # this one has the battery inside!
-                        solar_production_minus_battery =  QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_active_power, forecast=self)
+                        solar_production_minus_battery =  QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self)
                         s, e = await solar_production_minus_battery.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True
@@ -2316,8 +2339,8 @@ class QSHomeConsumptionHistoryAndForecast:
                                 strt = s
                             if e < end:
                                 end = e
-                    elif self.home._solar_plant.solar_inverter_input_active_power:
-                        solar_production_minus_battery = QSSolarHistoryVals(entity_id=self.home._solar_plant.solar_inverter_input_active_power, forecast=self)
+                    elif self.home.solar_plant.solar_inverter_input_active_power:
+                        solar_production_minus_battery = QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self)
                         s, e = await solar_production_minus_battery.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True

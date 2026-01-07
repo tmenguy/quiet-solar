@@ -90,7 +90,7 @@ class FakeServices:
         if return_response:
             return {}
     
-    def async_register(self, domain: str, service: str, service_func: Callable, schema: Any = None, supports_response: Any = None):
+    def async_register(self, domain: str, service: str, service_func: Callable, schema: Any = None, supports_response: Any = None, *, description_placeholders: Any = None):
         """Register a service."""
         self.registered.append((domain, service))
     
@@ -343,6 +343,16 @@ def create_mock_device(device_type: str, name: str = "Mock Device", **kwargs):
 # ============================================================================
 # These fixtures are for integration tests that use a real Home Assistant
 # instance. They are separate from the unit test fixtures above.
+
+
+@pytest.fixture
+def hass_storage():
+    """Fixture to provide storage dictionary for Home Assistant tests.
+
+    This fixture overrides the default mock storage to prevent teardown errors
+    when the storage tries to write data.
+    """
+    return {}
 
 
 @pytest.fixture(autouse=True)

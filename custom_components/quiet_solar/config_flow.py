@@ -1388,9 +1388,9 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
         if data_handler is not None:
             if data_handler.home is not None:
                 possible_menus = [t for t in LOAD_TYPES_MENU if t != QSHome.conf_type_name]
-                if data_handler.home._battery is not None:
+                if data_handler.home.physical_battery is not None:
                     possible_menus.remove(QSBattery.conf_type_name)
-                if data_handler.home._solar_plant is not None:
+                if data_handler.home.physical_solar_plant is not None:
                     possible_menus.remove(QSSolar.conf_type_name)
 
 

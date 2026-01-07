@@ -658,8 +658,8 @@ class QSChargerGroup(object):
                     # battery_current_charge = full_available_home_power - grid_available_home_power
                     # not exactly true : as there can be clamping by the inverter in the available power
                     # use get_battery_charge_values for real battery charge value
-                    if self.home._battery is not None:
-                        battery_asked_charge = self.home._battery.get_current_battery_asked_change_for_outside_production_system()
+                    if self.home.battery is not None:
+                        battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system()
                         # battery_asked_charge > 0 : the battery needs to charge
                         # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
@@ -926,8 +926,8 @@ class QSChargerGroup(object):
         # battery_current_charge = full_available_home_power - grid_available_home_power
         # not exactly true : as there can be clamping by the inverter in the available power
         # use get_battery_charge_values for real battery charge value
-        if self.home._battery is not None:
-            battery_asked_charge = self.home._battery.get_current_battery_asked_change_for_outside_production_system()
+        if self.home.battery is not None:
+            battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system()
             battery_can_discharge = self.home.battery_can_discharge()
             # battery_asked_charge > 0 : the battery needs to charge
             # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
@@ -2032,8 +2032,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if can_change_state:
                         do_add_0 = True
                         if cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and cs.command.power_consign > 0:
-                            if self.home._battery is not None:
-                                battery_asked_charge = self.home._battery.get_current_battery_asked_change_for_outside_production_system() # it is really adapting what was computed to get in the battery vs the situation now
+                            if self.home.battery is not None:
+                                battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system() # it is really adapting what was computed to get in the battery vs the situation now
                                 battery_can_discharge = self.home.battery_can_discharge()
                                 if battery_can_discharge and battery_asked_charge < 0:
                                     do_add_0 = False

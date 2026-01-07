@@ -743,6 +743,8 @@
           "home_mode_off": "Nothing runs",
           "home_mode_sensors_only": "Only run sensors",
           "home_mode_charger_only": "EV Charger only",
+          "home_mode_no_solar_no_battery": "No Solar No Battery",
+          "home_mode_no_solar": "No Solar but Battery On",
           "home_mode_on": "Full Quiet Solar",
           "home_mode_reset_sensors": "WARN: reset sensors from HA history"
         }
