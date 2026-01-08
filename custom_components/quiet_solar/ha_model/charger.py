@@ -651,156 +651,156 @@ class QSChargerGroup(object):
                 if grid_available_home_power is None:
                     grid_available_home_power = full_available_home_power
 
-                if full_available_home_power is not None:
-
-                    battery_asked_charge = 0.0
-
-                    # battery_current_charge = full_available_home_power - grid_available_home_power
-                    # not exactly true : as there can be clamping by the inverter in the available power
-                    # use get_battery_charge_values for real battery charge value
-                    if self.home.battery is not None:
-                        battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system()
-                        # battery_asked_charge > 0 : the battery needs to charge
-                        # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
-
+                if full_available_home_power is None or grid_available_home_power is None:
                     _LOGGER.info(
-                        f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W battery_asked_charge {battery_asked_charge}W" )
+                        f"dyn_handle: full_available_home_power or grid_available_home_power None !!! set to 0" )
+                    full_available_home_power = 0.0
+                    grid_available_home_power = 0.0
 
-                    dampened_chargers = {}
+                battery_asked_charge = 0.0
 
-                    for cs in actionable_chargers:
+                # battery_current_charge = full_available_home_power - grid_available_home_power
+                # not exactly true : as there can be clamping by the inverter in the available power
+                # use get_battery_charge_values for real battery charge value
+                if self.home.battery is not None:
+                    battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system()
+                    # battery_asked_charge > 0 : the battery needs to charge
+                    # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
-                        charger = cs.charger
+                _LOGGER.info(
+                    f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W battery_asked_charge {battery_asked_charge}W" )
 
-                        if (charger._expected_charge_state.value is True and
-                            cs.current_real_max_charging_amp >= charger.min_charge and
-                            cs.accurate_current_power is not None ):
+                dampened_chargers = {}
 
-                            charger.update_car_dampening_value(time=time,
-                                                               amperage=(cs.current_real_max_charging_amp, cs.current_active_phase_number),
-                                                               amperage_transition=None,
-                                                               power_value_or_delta=cs.accurate_current_power,
-                                                               can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
-                            dampened_chargers[charger] = cs
+                for cs in actionable_chargers:
 
+                    charger = cs.charger
 
-                    a_charging_cs = None
-                    num_charging_cs = 0
+                    if (charger._expected_charge_state.value is True and
+                        cs.current_real_max_charging_amp >= charger.min_charge and
+                        cs.accurate_current_power is not None ):
 
-                    current_reduced_states= {}
-                    for cs in actionable_chargers:
-                        # get all the minimums
-                        current_reduced_states[cs.charger] = (cs.current_real_max_charging_amp, cs.current_active_phase_number)
-
-                        if cs.charger._expected_charge_state.value is True and cs.current_real_max_charging_amp >= cs.charger.min_charge:
-                            a_charging_cs = cs
-                            num_charging_cs += 1
-
-                    # we can update a bit the dampening for the only one charging if we do have a global counter for the group
-                    num_true_charging_cs = 0
-                    charging = []
-                    reason = ""
-                    for c in self._chargers:
-
-                        if c.qs_enable_device is False:
-                            num_true_charging_cs = 0
-                            # can't dampen if the charger is not enabled
-                            reason = f"{c.name} qs disabled"
-                            break
-
-                        is_charger_zero = c.is_charging_power_zero(time=time, for_duration=CHARGER_ADAPTATION_WINDOW_S)
-                        if is_charger_zero is None:
-                            num_true_charging_cs = 0
-                            # can't dampen if the charger is not enabled
-                            reason = f"{c.name} is_charger_zero None"
-                            break
-                        elif is_charger_zero is False:
-                            num_true_charging_cs += 1
-                            charging.append(c.name)
+                        charger.update_car_dampening_value(time=time,
+                                                           amperage=(cs.current_real_max_charging_amp, cs.current_active_phase_number),
+                                                           amperage_transition=None,
+                                                           power_value_or_delta=cs.accurate_current_power,
+                                                           can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
+                        dampened_chargers[charger] = cs
 
 
-                    if num_true_charging_cs <= 1 and num_charging_cs == 1 and current_real_cars_power is not None and a_charging_cs.charger not in dampened_chargers:
-                        charger = a_charging_cs.charger
-                        # num_true_charging_cs <= because the power could be 0 for the charger, so we can dampen it to change the min_charge of the car ...
-                        car_name = "NO_CAR"
-                        if charger.car is not None:
-                            car_name = charger.car.name
-                        _LOGGER.info(
-                            f"dyn_handle: dampening simple case {charger.name}/{car_name} {current_real_cars_power}W for {a_charging_cs.current_real_max_charging_amp}A #phases{ a_charging_cs.current_active_phase_number}")
-                        a_charging_cs.charger.update_car_dampening_value(time=time,
-                                                                         amperage=(a_charging_cs.current_real_max_charging_amp, a_charging_cs.current_active_phase_number),
-                                                                         amperage_transition=None,
-                                                                         power_value_or_delta=current_real_cars_power,
-                                                                         can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
-                        dampened_chargers[charger] = a_charging_cs
-                    else:
-                        _LOGGER.info(
-                            f"dyn_handle: can't dampen simple case {num_true_charging_cs} {charging} {reason}")
+                a_charging_cs = None
+                num_charging_cs = 0
+
+                current_reduced_states= {}
+                for cs in actionable_chargers:
+                    # get all the minimums
+                    current_reduced_states[cs.charger] = (cs.current_real_max_charging_amp, cs.current_active_phase_number)
+
+                    if cs.charger._expected_charge_state.value is True and cs.current_real_max_charging_amp >= cs.charger.min_charge:
+                        a_charging_cs = cs
+                        num_charging_cs += 1
+
+                # we can update a bit the dampening for the only one charging if we do have a global counter for the group
+                num_true_charging_cs = 0
+                charging = []
+                reason = ""
+                for c in self._chargers:
+
+                    if c.qs_enable_device is False:
+                        num_true_charging_cs = 0
+                        # can't dampen if the charger is not enabled
+                        reason = f"{c.name} qs disabled"
+                        break
+
+                    is_charger_zero = c.is_charging_power_zero(time=time, for_duration=CHARGER_ADAPTATION_WINDOW_S)
+                    if is_charger_zero is None:
+                        num_true_charging_cs = 0
+                        # can't dampen if the charger is not enabled
+                        reason = f"{c.name} is_charger_zero None"
+                        break
+                    elif is_charger_zero is False:
+                        num_true_charging_cs += 1
+                        charging.append(c.name)
 
 
-
-                    # check the current state of the chargers to see if we can try to map the delta power properly
-                    if current_real_cars_power is not None and self.know_reduced_state is not None and len(self.know_reduced_state) == len(current_reduced_states):
-                        num_changes = 0
-                        last_changed_charger = None
-                        for c in self.know_reduced_state:
-                            if c not in current_reduced_states:
-                                last_changed_charger = None
-                                break
-                            else:
-                                if self.know_reduced_state[c] != current_reduced_states[c]:
-                                    num_changes += 1
-                                    last_changed_charger = c
-
-                        if last_changed_charger and num_changes == 1:
-                            # great we do have a single change in the chargers, and we do have the previous cars power
-                            # we can save the transition from self.know_reduced_state[c] to current_reduced_states[c]
-                            delta_power = current_real_cars_power - self.know_reduced_state_real_power
-
-                            do_dampen_transition = True
-                            if last_changed_charger.dampening_power_value_for_car_consumption(current_real_cars_power) == 0 and current_reduced_states[last_changed_charger][0] >= last_changed_charger.min_charge:
-                                # this is a transition to a 0 dampening
-                                do_dampen_transition = False
-                            elif last_changed_charger.dampening_power_value_for_car_consumption(self.know_reduced_state_real_power) == 0 and self.know_reduced_state[last_changed_charger][0] >= last_changed_charger.min_charge:
-                                # this is a transition from a 0 dampening
-                                do_dampen_transition = False
-
-                            if do_dampen_transition:
-                                _LOGGER.info(
-                                    f"dyn_handle: dampening transition case {last_changed_charger.name} from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} delta {delta_power}W ({current_real_cars_power} - {self.know_reduced_state_real_power})")
-                                last_changed_charger.update_car_dampening_value(time=time,
-                                                                                amperage=None,
-                                                                                amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
-                                                                                power_value_or_delta=delta_power,
-                                                                                can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
-                            else:
-                                _LOGGER.info(
-                                    f"dyn_handle: can't dampening {last_changed_charger.name} current_real_cars_power {current_real_cars_power}W, know_reduced_state_real_power {self.know_reduced_state_real_power}W, from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} so no transition")
-
-
-                    allow_budget_reset = False
-                    if self._last_time_reset_budget_done is None or (time - self._last_time_reset_budget_done).total_seconds() > TIME_OK_BETWEEN_BUDGET_RESET_S:
-                        allow_budget_reset = True
-
-                    if self._last_time_should_reset_budget_received is not None and (time - self._last_time_should_reset_budget_received).total_seconds() > TIME_OK_SHOULD_BUDGET_RESET_S:
-                        allow_budget_reset = True
-
-                    success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, grid_available_home_power, allow_budget_reset, time)
-                    if done_reset_budget:
-                        self._last_time_reset_budget_done = time
-                        self._last_time_should_reset_budget_received = None
-                    elif should_do_reset_allocation:
-                        if self._last_time_should_reset_budget_received is None:
-                            self._last_time_should_reset_budget_received = time
-                    else:
-                        self._last_time_should_reset_budget_received = None
-
-                    if success:
-                        await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
-
+                if num_true_charging_cs <= 1 and num_charging_cs == 1 and current_real_cars_power is not None and a_charging_cs.charger not in dampened_chargers:
+                    charger = a_charging_cs.charger
+                    # num_true_charging_cs <= because the power could be 0 for the charger, so we can dampen it to change the min_charge of the car ...
+                    car_name = "NO_CAR"
+                    if charger.car is not None:
+                        car_name = charger.car.name
+                    _LOGGER.info(
+                        f"dyn_handle: dampening simple case {charger.name}/{car_name} {current_real_cars_power}W for {a_charging_cs.current_real_max_charging_amp}A #phases{ a_charging_cs.current_active_phase_number}")
+                    a_charging_cs.charger.update_car_dampening_value(time=time,
+                                                                     amperage=(a_charging_cs.current_real_max_charging_amp, a_charging_cs.current_active_phase_number),
+                                                                     amperage_transition=None,
+                                                                     power_value_or_delta=current_real_cars_power,
+                                                                     can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
+                    dampened_chargers[charger] = a_charging_cs
                 else:
                     _LOGGER.info(
-                        f"dyn_handle: NO VALID AVAILABLE POWER, can't compute budgets")
+                        f"dyn_handle: can't dampen simple case {num_true_charging_cs} {charging} {reason}")
+
+                # check the current state of the chargers to see if we can try to map the delta power properly
+                if current_real_cars_power is not None and self.know_reduced_state is not None and len(self.know_reduced_state) == len(current_reduced_states):
+                    num_changes = 0
+                    last_changed_charger = None
+                    for c in self.know_reduced_state:
+                        if c not in current_reduced_states:
+                            last_changed_charger = None
+                            break
+                        else:
+                            if self.know_reduced_state[c] != current_reduced_states[c]:
+                                num_changes += 1
+                                last_changed_charger = c
+
+                    if last_changed_charger and num_changes == 1:
+                        # great we do have a single change in the chargers, and we do have the previous cars power
+                        # we can save the transition from self.know_reduced_state[c] to current_reduced_states[c]
+                        delta_power = current_real_cars_power - self.know_reduced_state_real_power
+
+                        do_dampen_transition = True
+                        if last_changed_charger.dampening_power_value_for_car_consumption(current_real_cars_power) == 0 and current_reduced_states[last_changed_charger][0] >= last_changed_charger.min_charge:
+                            # this is a transition to a 0 dampening
+                            do_dampen_transition = False
+                        elif last_changed_charger.dampening_power_value_for_car_consumption(self.know_reduced_state_real_power) == 0 and self.know_reduced_state[last_changed_charger][0] >= last_changed_charger.min_charge:
+                            # this is a transition from a 0 dampening
+                            do_dampen_transition = False
+
+                        if do_dampen_transition:
+                            _LOGGER.info(
+                                f"dyn_handle: dampening transition case {last_changed_charger.name} from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} delta {delta_power}W ({current_real_cars_power} - {self.know_reduced_state_real_power})")
+                            last_changed_charger.update_car_dampening_value(time=time,
+                                                                            amperage=None,
+                                                                            amperage_transition=(self.know_reduced_state[last_changed_charger], current_reduced_states[last_changed_charger]),
+                                                                            power_value_or_delta=delta_power,
+                                                                            can_be_saved=((time - verified_correct_state_time).total_seconds() > 2 * CHARGER_ADAPTATION_WINDOW_S))
+                        else:
+                            _LOGGER.info(
+                                f"dyn_handle: can't dampening {last_changed_charger.name} current_real_cars_power {current_real_cars_power}W, know_reduced_state_real_power {self.know_reduced_state_real_power}W, from {self.know_reduced_state[last_changed_charger]} to {current_reduced_states[last_changed_charger]} so no transition")
+
+
+                allow_budget_reset = False
+                if self._last_time_reset_budget_done is None or (time - self._last_time_reset_budget_done).total_seconds() > TIME_OK_BETWEEN_BUDGET_RESET_S:
+                    allow_budget_reset = True
+
+                if self._last_time_should_reset_budget_received is not None and (time - self._last_time_should_reset_budget_received).total_seconds() > TIME_OK_SHOULD_BUDGET_RESET_S:
+                    allow_budget_reset = True
+
+                success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(actionable_chargers, full_available_home_power, grid_available_home_power, allow_budget_reset, time)
+                if done_reset_budget:
+                    self._last_time_reset_budget_done = time
+                    self._last_time_should_reset_budget_received = None
+                elif should_do_reset_allocation:
+                    if self._last_time_should_reset_budget_received is None:
+                        self._last_time_should_reset_budget_received = time
+                else:
+                    self._last_time_should_reset_budget_received = None
+
+                if success:
+                    await self.apply_budget_strategy(actionable_chargers, current_real_cars_power, time)
+
+
 
 
     def _update_and_prob_for_amps_reduction(self, old_amps, new_amps, estimated_current_amps, time) -> tuple[bool, bool]:
