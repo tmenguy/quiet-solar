@@ -536,7 +536,7 @@ class QSChargerGroup(object):
         else:
             return value
 
-    async def ensure_correct_state(self, time: datetime, probe_only=False) -> (list[QSChargerStatus], datetime|None):
+    async def ensure_correct_state(self, time: datetime, probe_only=False) -> tuple[list[QSChargerStatus], datetime|None]:
 
         verified_correct_state_time = None
         actionable_chargers = []
@@ -3963,6 +3963,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def _probe_and_enforce_stopped_charge_command_state(self, time, command: LoadCommand, probe_only: bool = False) -> bool:
 
         if self.car is None:
+            _LOGGER.info(
+                f"_probe_and_enforce_stopped_charge_command_state: {self.name} NONE car, do nothing")
             return True
 
         handled = False

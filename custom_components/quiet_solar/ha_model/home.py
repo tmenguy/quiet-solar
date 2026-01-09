@@ -2574,16 +2574,16 @@ class QSSolarHistoryVals:
 
         current_values, current_days = self._get_values(start_idx, end_idx)
 
+        if current_values is None or current_days is None:
+            _LOGGER.debug("_get_possible_past_consumption_for_forecast no current_values !!!")
+            return []
+
         if use_val_as_current is not None:
             #override the last one with the current value
             current_values = np.copy(current_values)
             current_values[-1] = use_val_as_current
             current_days = np.copy(current_days)
             current_days[-1] = now_days
-
-        if current_values is None or current_days is None:
-            _LOGGER.debug("_get_possible_past_consumption_for_forecast no current_values !!!")
-            return []
 
         current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
 
@@ -2636,6 +2636,13 @@ class QSSolarHistoryVals:
         past_end_idx = _sanitize_idx(past_start_idx + current_values.shape[0] - 1)
 
         past_values, past_days = self._get_values(past_start_idx, past_end_idx)
+
+        if past_values is None or past_days is None:
+            # bad history
+            _LOGGER.debug(
+                f"_get_range_score trash a past match for None past values")
+            return []
+
         past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
 
         check_vals = past_ok_values * current_ok_vales
@@ -2643,8 +2650,8 @@ class QSSolarHistoryVals:
 
         if num_ok_vals < 0.6 * current_values.shape[0]:
             # bad history
-            # _LOGGER.debug(
-            #    f"_get_range_score trash a past match for bad values {num_ok_vals} - {past_days.shape[0]}")
+            #_LOGGER.debug(
+            #    f"_get_range_score trash a past match for bad values {num_ok_vals} - {current_values.shape[0]}")
             return []
 
         # compute various scores
@@ -2748,13 +2755,19 @@ class QSSolarHistoryVals:
 
             c_forecast_values, c_past_days = self._get_values(past_start_idx, past_end_idx)
 
+            if c_forecast_values is None or c_past_days is None:
+                # bad forecast
+                _LOGGER.debug(
+                    f"_get_predicted_data: trash a forecast for None values")
+                continue
+
             c_past_ok_values = np.asarray(c_past_days != 0, dtype=np.int32)
             num_ok_vals = np.sum(c_past_ok_values)
 
             if num_ok_vals < 0.6 * c_past_days.shape[0]:
                 # bad forecast
                 _LOGGER.debug(
-                    f"_get_predicted_data: trash a forecast for bad values {num_ok_vals} - {past_days.shape[0]}")
+                    f"_get_predicted_data: trash a forecast for bad values {num_ok_vals} - {c_past_days.shape[0]}")
                 continue
 
             # ok we will keep it
@@ -2804,12 +2817,27 @@ class QSSolarHistoryVals:
             end_idx = _sanitize_idx(now_idx - dpast)
             start_idx = _sanitize_idx(end_idx - forecast_window - 1)
             current_values, current_days = self._get_values(start_idx, end_idx)
+
+            if current_values is None or current_days is None:
+                # bad forecast
+                _LOGGER.debug(
+                    f"compute_prediction_score: trash a current forecast for None values")
+                continue
+
+
             current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
 
 
             check_end_idx = _sanitize_idx(start_idx - 1)
             check_start_idx = _sanitize_idx(check_end_idx - past_check_window - 1)
             check_current_values, check_current_days = self._get_values(check_start_idx, check_end_idx)
+
+            if check_current_values is None or check_current_days is None:
+                # bad forecast
+                _LOGGER.debug(
+                    f"compute_prediction_score: trash a forecast check values for None values")
+                continue
+
             check_current_ok_vales = np.asarray(check_current_days != 0, dtype=np.int32)
 
 
