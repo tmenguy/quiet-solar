@@ -177,7 +177,7 @@ class LoadConstraint(object):
 
     def __eq__(self, other):
         if other is None:
-            return None
+            return False
         if other.to_dict() == self.to_dict():
             return other.name == self.name
         return False
@@ -312,9 +312,10 @@ class LoadConstraint(object):
 
 
     def _get_readable_target_value_string(self) -> str:
-        target_string = f"{int(self._get_target_value_for_readable())} Wh"
-        if self.target_value >= 2000:
-            target_string = f"{int(self.target_value / 1000)} kWh"
+        target_value = self._get_target_value_for_readable()
+        target_string = f"{int(target_value)} Wh"
+        if target_value >= 2000:
+            target_string = f"{int(target_value / 1000)} kWh"
         return target_string
 
     def get_readable_name_for_load(self) -> str:

@@ -144,8 +144,8 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
         self._attr_native_value = value
         try:
             setattr(self.device, self.entity_description.key, value)
-        except:
-            _LOGGER.info(f"can't set time {value} on {self.device.name} for {self.entity_description.key}")
+        except Exception as e:
+            _LOGGER.info(f"can't set time {value} on {self.device.name} for {self.entity_description.key}: {e}")
         self._set_availabiltiy()
         self.async_write_ha_state()
 

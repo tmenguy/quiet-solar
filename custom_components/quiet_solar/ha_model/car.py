@@ -339,8 +339,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         cars_to_update = []
         new_value = option
 
-        if new_value != self.user_selected_person_name_for_car:
-            do_need_update = True
 
         if option is None:
             # user_selected_person_name_for_car will trigger an update if needed
@@ -781,8 +779,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
 
     def attach_charger(self, charger):
-        _LOGGER.info(f"Car {self.name} attached charger {self.charger.name}")
-        charger.attach_car(self)
+        _LOGGER.info(f"Car {self.name} attaching charger {charger.name}")
+        charger.attach_car(self, datetime.now(tz=pytz.UTC))
 
     def detach_charger(self):
         if self.charger is not None:

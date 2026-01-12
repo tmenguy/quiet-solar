@@ -55,8 +55,8 @@ class PeriodSolver(object):
         self._step_s = step_s.total_seconds()
         self._tariffs: list[tuple[datetime, float]] | None = None
         self._loads: list[AbstractLoad] = actionable_loads
-        self._pv_forecast: list[datetime, float] | None = pv_forecast
-        self._ua_forecast: list[datetime, float] | None = unavoidable_consumption_forecast
+        self._pv_forecast: list[tuple[datetime, float]] | None = pv_forecast
+        self._ua_forecast: list[tuple[datetime, float]] | None = unavoidable_consumption_forecast
         self._battery = battery
         self._battery_charge_power_by_inverter_AC_clamping = None
         self._max_inverter_dc_to_ac_power = max_inverter_dc_to_ac_power

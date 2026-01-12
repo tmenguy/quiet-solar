@@ -50,8 +50,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.preferred_car is not None and self.preferred_car not in self.authorized_cars:
             self.authorized_cars.append(self.preferred_car)
 
-        super().__init__(**kwargs)
-
         self.mobile_app = kwargs.pop(CONF_MOBILE_APP, None)
         self.mobile_app_url = kwargs.pop(CONF_MOBILE_APP_URL, None)
         if self.mobile_app_url is None or len(self.mobile_app_url) == 0:
@@ -60,6 +58,14 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             self.mobile_app_url = None
         elif self.mobile_app_url[0] != '/':
             self.mobile_app_url = f"/{self.mobile_app_url}"
+
+        mobile_app = self.mobile_app
+        mobile_app_url = self.mobile_app_url
+
+        super().__init__(**kwargs)
+
+        self.mobile_app = mobile_app
+        self.mobile_app_url = mobile_app_url
 
 
         # everything is in local time, not UTC

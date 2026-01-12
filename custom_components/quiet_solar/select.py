@@ -200,9 +200,9 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         if self.entity_description.async_set_current_option_fn is None:
             try:
                 setattr(self.device, self.entity_description.key, option)
-            except:
+            except Exception as e:
                 _LOGGER.info(
-                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}")
+                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}")
         else:
             await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option)
         if self.device.home:

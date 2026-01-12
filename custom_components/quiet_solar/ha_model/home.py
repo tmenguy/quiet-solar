@@ -641,7 +641,10 @@ class QSHome(QSDynamicGroup):
                     if persons_result[person][1] is not None and  persons_result[person][1] <= start:
                         persons_result[person][1] = None
                 else:
-                    persons_result[person][1] = max(start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0]))
+                    if persons_result[person][1] is None:
+                        persons_result[person][1] = max(start, segments_person_not_home[spnh_idx][0])
+                    else:
+                        persons_result[person][1] = max(start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0]))
             else:
                 _LOGGER.info(f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None")
                 if persons_result[person][1] is not None and persons_result[person][1] <= start:

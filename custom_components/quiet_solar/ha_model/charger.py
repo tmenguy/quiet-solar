@@ -297,6 +297,7 @@ class QSChargerStatus(object):
         d.can_be_started_and_stopped = self.can_be_started_and_stopped
         d.is_before_battery = self.is_before_battery
         d.bump_solar = self.bump_solar
+        return d
 
     @property
     def name(self) -> str:

@@ -206,14 +206,15 @@ class AbstractDevice(object):
         if enabled != self._enabled:
             self.reset()
             self._enabled = enabled
-            if enabled is False:
-                self.home.remove_device(self)
-                self.home.add_disabled_device(self)
-                _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
-            else:
-                self.home.add_device(self)
-                self.home.remove_disabled_device(self)
-                _LOGGER.info(f"qs_enable_device: {self.name} ENABLE AND ADD")
+            if self.home is not None:
+                if enabled is False:
+                    self.home.remove_device(self)
+                    self.home.add_disabled_device(self)
+                    _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
+                else:
+                    self.home.add_device(self)
+                    self.home.remove_disabled_device(self)
+                    _LOGGER.info(f"qs_enable_device: {self.name} ENABLE AND ADD")
 
             if hasattr(self, "_exposed_entities"):
                 time = datetime.now(pytz.utc)
@@ -500,7 +501,7 @@ class AbstractDevice(object):
                 await self.check_commands(time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
-        print(f"Executing command {command}")
+        _LOGGER.info(f"Executing command unimplemented {command}")
         return False
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
@@ -1229,7 +1230,7 @@ def align_time_series_and_values(
                 return [(t, operation(v, None)) for t, v in tsv1]
         else:
             if len(tsv1[0]) == 3:
-                return tsv1, [(t, None, None) for t, _ in tsv1]
+                return tsv1, [(t, None, None) for t, _, _ in tsv1]
             else:
                 return tsv1, [(t, None) for t, _ in tsv1]
 
