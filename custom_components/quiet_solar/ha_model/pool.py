@@ -92,6 +92,7 @@ class QSPool(QSOnOffDuration):
                 force_winter = self.bistate_mode == "pool_winter_mode"
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
+                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                         time=time,
                         load=self,
                         from_user=False,

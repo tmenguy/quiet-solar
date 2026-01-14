@@ -34,8 +34,6 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
 
     entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
 
-
-
     return entities
 
 
@@ -50,8 +48,6 @@ def create_ha_switch_for_QSHome(device: QSHome):
 
     entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
 
-
-
     return entities
 
 
@@ -64,8 +60,6 @@ def create_ha_switch_for_QSCar(device: QSCar):
     )
 
     entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
-
-
 
     return entities
 

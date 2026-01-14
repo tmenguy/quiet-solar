@@ -31,8 +31,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self.dyn_group_max_phase_current_conf = kwargs.pop(CONF_DYN_GROUP_MAX_PHASE_AMPS, 54)
         self._childrens : list[AbstractDevice] = []
         self.charger_group = None
-        self._dyn_group_max_phase_current: list[float|int] | None = None
         self.available_amps_for_group: list[list[float|int]| None] | None = None
+
+        if self.physical_3p:
+            self._dyn_group_max_phase_current_for_budget = [self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf]
+        else:
+            self._dyn_group_max_phase_current_for_budget = [0, 0, 0]
+            self._dyn_group_max_phase_current_for_budget[self.mono_phase_index] = self.dyn_group_max_phase_current_conf
 
     def update_available_amps_for_group(self, idx:int, amps:list[float | int], add:bool):
         """Update the available amps for the group based on the device's configuration."""
@@ -57,37 +62,33 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     @property
     def dyn_group_max_phase_current(self) -> list[float|int]:
-        if self._dyn_group_max_phase_current is None:
-            # we have not been set yet
-            if self.physical_3p:
-                self._dyn_group_max_phase_current = [self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf]
-            else:
-                self._dyn_group_max_phase_current = [0, 0, 0]
-                self._dyn_group_max_phase_current[self.mono_phase_index] = self.dyn_group_max_phase_current_conf
+        return self.dyn_group_max_phase_current_for_budget
 
-        return self._dyn_group_max_phase_current
-
-
+    @property
+    def dyn_group_max_phase_current_for_budget(self) -> list[float | int]:
+        return self._dyn_group_max_phase_current_for_budget
 
     def is_delta_current_acceptable(self, delta_amps: list[float|int], time:datetime, new_amps_consumption: list[float|int] | None = None) -> tuple[bool, list[float|int]]:
 
-        if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, self.dyn_group_max_phase_current):
-            _LOGGER.info(
-                f"is_delta_current_acceptable: group {self.name} not acceptable for new amps {new_amps_consumption} at start with dyn_max_phase_current {self.dyn_group_max_phase_current} at time {time}")
+        dynamic_group_phase_current = self.dyn_group_max_phase_current
 
-            return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+        if new_amps_consumption is not None and is_amps_greater(new_amps_consumption, dynamic_group_phase_current):
+            _LOGGER.info(
+                f"is_delta_current_acceptable: group {self.name} not acceptable for new amps {new_amps_consumption} at start with dyn_max_phase_current {dynamic_group_phase_current} at time {time}")
+
+            return False, diff_amps(new_amps_consumption, dynamic_group_phase_current)
 
         phases_amps = self.get_device_amps_consumption(tolerance_seconds=None, time=time)
 
         new_amps = add_amps(delta_amps, phases_amps)
 
-        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+        if is_amps_greater(new_amps, dynamic_group_phase_current):
             _LOGGER.info(
-                f"is_delta_current_acceptable: group {self.name} not acceptable for new amps {new_amps_consumption} at recompute with dyn_max_phase_current {self.dyn_group_max_phase_current} phases_amps {phases_amps} delta_amps {delta_amps} at time {time}")
-            return False, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+                f"is_delta_current_acceptable: group {self.name} not acceptable for new amps {new_amps_consumption} at recompute with dyn_max_phase_current {dynamic_group_phase_current} phases_amps {phases_amps} delta_amps {delta_amps} at time {time}")
+            return False, diff_amps(new_amps_consumption, dynamic_group_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True, diff_amps(new_amps_consumption, self.dyn_group_max_phase_current)
+            return True, diff_amps(new_amps_consumption, dynamic_group_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps, time=time)
 
@@ -99,10 +100,11 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     def is_current_acceptable_and_diff(self, new_amps: list[float|int], estimated_current_amps: list[float|int] | None, time:datetime) -> tuple[bool, list[float|int]]:
 
-        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+        dynamic_group_phase_current = self.dyn_group_max_phase_current
+        if is_amps_greater(new_amps, dynamic_group_phase_current):
             _LOGGER.info(
-                f"is_current_acceptable_and_diff: group {self.name} not acceptable for new amps {new_amps} at start with dyn_max_phase_current {self.dyn_group_max_phase_current} with estimated current amps {estimated_current_amps} at time {time}")
-            return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
+                f"is_current_acceptable_and_diff: group {self.name} not acceptable for new amps {new_amps} at start with dyn_max_phase_current {dynamic_group_phase_current} with estimated current amps {estimated_current_amps} at time {time}")
+            return False, diff_amps(new_amps, dynamic_group_phase_current)
 
         phases_amps = self.get_device_amps_consumption(tolerance_seconds=None, time=time)
 
@@ -126,13 +128,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         # recompute the new amps based on the delta and the "worst" current
         new_amps = add_amps(delta_amps, current_phases)
 
-        if is_amps_greater(new_amps, self.dyn_group_max_phase_current):
+        if is_amps_greater(new_amps, dynamic_group_phase_current):
             _LOGGER.info(
-                f"is_current_acceptable_and_diff: group {self.name} not acceptable for new amps {new_amps} at recompute with dyn_max_phase_current {self.dyn_group_max_phase_current} with estimated current amps {estimated_current_amps} and computed_phases {current_phases} and delta_amps {delta_amps} at time {time}")
-            return False, diff_amps(new_amps, self.dyn_group_max_phase_current)
+                f"is_current_acceptable_and_diff: group {self.name} not acceptable for new amps {new_amps} at recompute with dyn_max_phase_current {dynamic_group_phase_current} with estimated current amps {estimated_current_amps} and computed_phases {current_phases} and delta_amps {delta_amps} at time {time}")
+            return False, diff_amps(new_amps, dynamic_group_phase_current)
 
         if self.father_device is None or self == self.home:
-            return True, diff_amps(new_amps, self.dyn_group_max_phase_current)
+            return True, diff_amps(new_amps, dynamic_group_phase_current)
         else:
             return self.father_device.is_delta_current_acceptable(delta_amps=delta_amps,
                                                                   new_amps_consumption=new_amps,
@@ -177,9 +179,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
         init_from_father_budget = from_father_budget
         if from_father_budget is None:
-            from_father_budget = self.dyn_group_max_phase_current
+            from_father_budget = self.dyn_group_max_phase_current_for_budget
         else:
-            from_father_budget = min_amps(from_father_budget, self.dyn_group_max_phase_current)
+            from_father_budget = min_amps(from_father_budget, self.dyn_group_max_phase_current_for_budget)
 
         if from_father_budget is None:
             from_father_budget = [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE] # a lot of amps :)

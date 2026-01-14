@@ -27,11 +27,26 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self.solar_inverter_active_power = kwargs.pop(CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, None)
         self.solar_inverter_input_active_power = kwargs.pop(CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, None)
         self.solar_forecast_provider = kwargs.pop(CONF_SOLAR_FORECAST_PROVIDER, None)
+
+
         self.solar_max_output_power_value = kwargs.pop(CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, MAX_POWER_INFINITE)
         self.solar_max_phase_amps = kwargs.pop(CONF_SOLAR_MAX_PHASE_AMPS, MAX_AMP_INFINITE)
+
         self.solar_forecast_provider_handler: QSSolarProvider | None = None
         kwargs[CONF_ACCURATE_POWER_SENSOR] = self.solar_inverter_active_power # to allow proper measurement
         super().__init__(**kwargs)
+
+        if self.solar_max_output_power_value == MAX_POWER_INFINITE and self.solar_max_phase_amps != MAX_AMP_INFINITE and self.home is not None:
+            if self.physical_3p:
+                self.solar_max_output_power_value = self.solar_max_phase_amps * self.home.voltage * 3.0
+            else:
+                self.solar_max_output_power_value = self.solar_max_phase_amps * self.home.voltage
+        elif self.solar_max_output_power_value != MAX_POWER_INFINITE and self.solar_max_phase_amps == MAX_AMP_INFINITE and self.home is not None:
+            if self.physical_3p:
+                self.solar_max_phase_amps = self.solar_max_output_power_value / (self.home.voltage * 3.0)
+            else:
+                self.solar_max_phase_amps = self.solar_max_output_power_value / self.home.voltage
+
 
         self.attach_power_to_probe(self.solar_inverter_active_power)
         self.attach_power_to_probe(self.solar_inverter_input_active_power)

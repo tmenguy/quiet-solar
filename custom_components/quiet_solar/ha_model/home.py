@@ -852,8 +852,6 @@ class QSHome(QSDynamicGroup):
 
     async def async_set_off_grid_mode(self, off_grid:bool):
 
-
-
         do_reset = self.qs_home_is_off_grid != off_grid
 
         self.qs_home_is_off_grid = off_grid
@@ -861,13 +859,6 @@ class QSHome(QSDynamicGroup):
         if do_reset:
 
             _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
-
-            # reset all loads
-            for load in self._all_loads:
-                if load.qs_enable_device is False:
-                    continue
-                load.reset()
-
             # force solve
             self.force_next_solve()
 
@@ -882,8 +873,19 @@ class QSHome(QSDynamicGroup):
         """Return the voltage of the home."""
         return self._voltage
 
+    def get_home_max_static_phase_amps(self) -> int:
 
-    def get_home_max_phase_amp(self) -> float:
+        static_amp = self.dyn_group_max_phase_current_conf
+        if not self.is_off_grid():
+            return static_amp
+
+        if self.solar_plant:
+            static_amp = min(static_amp, self.solar_plant.solar_max_phase_amps)
+
+        return static_amp
+
+
+    def get_home_max_phase_amps(self) -> float | int:
 
         static_amp = self.dyn_group_max_phase_current_conf
         if not self.is_off_grid():
@@ -921,19 +923,44 @@ class QSHome(QSDynamicGroup):
         if not self.is_off_grid():
             return static_amps
 
-        available_production_amp = self.get_home_max_phase_amp()
+        available_production_amp = self.get_home_max_phase_amps()
 
         if self.physical_3p:
-            self._dyn_group_max_phase_current = [available_production_amp, available_production_amp, available_production_amp]
+            dyn_group_max_phase_current = [available_production_amp, available_production_amp, available_production_amp]
         else:
-            self._dyn_group_max_phase_current = [0, 0, 0]
-            self._dyn_group_max_phase_current[self.mono_phase_index] = available_production_amp
+            dyn_group_max_phase_current = [0, 0, 0]
+            dyn_group_max_phase_current[self.mono_phase_index] = available_production_amp
 
-        _LOGGER.info(f"dyn_group_max_phase_current: Home in off grid mode, setting max phase current to {available_production_amp}A instead of {self.dyn_group_max_phase_current_conf}A")
+        # _LOGGER.info(f"dyn_group_max_phase_current: Home in off grid mode, setting max phase current to {available_production_amp}A instead of {self.dyn_group_max_phase_current_conf}A")
 
-        self._dyn_group_max_phase_current = min_amps(self._dyn_group_max_phase_current, static_amps)
+        dyn_group_max_phase_current = min_amps(dyn_group_max_phase_current, static_amps)
 
-        return self._dyn_group_max_phase_current
+        return dyn_group_max_phase_current
+
+    @property
+    def dyn_group_max_phase_current_for_budget(self) -> list[float|int]:
+
+        static_amps = super().dyn_group_max_phase_current_for_budget
+
+        if not self.is_off_grid():
+            return static_amps
+
+        prod_max_amps = self.get_home_max_static_phase_amps()
+
+        if self.physical_3p:
+            dyn_group_max_phase_current_for_budget = [prod_max_amps, prod_max_amps, prod_max_amps]
+        else:
+            dyn_group_max_phase_current_for_budget = [0, 0, 0]
+            dyn_group_max_phase_current_for_budget[self.mono_phase_index] = prod_max_amps
+
+        # _LOGGER.info(f"dyn_group_max_phase_current_for_budget: Home in off grid mode, setting max phase current to {prod_max_amps}A instead of {self.dyn_group_max_phase_current_conf}A")
+
+        dyn_group_max_phase_current_for_budget = min_amps(dyn_group_max_phase_current_for_budget, static_amps)
+
+        return dyn_group_max_phase_current_for_budget
+
+
+
 
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 

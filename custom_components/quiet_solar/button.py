@@ -48,7 +48,6 @@ def create_ha_button_for_QSHome(device: QSHome):
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_serialize_debug))
 
-
     home_serialize_debug = QSButtonEntityDescription(
         key=BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA,
         translation_key=BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA,
@@ -56,8 +55,6 @@ def create_ha_button_for_QSHome(device: QSHome):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_serialize_debug))
-
-
 
 
     home_generate_yaml = QSButtonEntityDescription(

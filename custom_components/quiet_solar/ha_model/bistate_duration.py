@@ -41,13 +41,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.is_load_time_sensitive = True
 
-    def is_best_effort_only_load(self) -> bool:
-        if super().is_best_effort_only_load():
-            return True
-        if self.is_off_grid():
-            return True
-        return False
-
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:
             return None
@@ -246,6 +239,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
+                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                         time=time,
                         load=self,
                         from_user=has_user_forced_constraint,

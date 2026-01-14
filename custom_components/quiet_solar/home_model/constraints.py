@@ -18,7 +18,7 @@ import importlib
 
 from .home_utils import is_amps_greater, min_amps, add_amps
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
-    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONSTRAINT_TYPE_FILLER
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class LoadConstraint(object):
                  from_user: bool = False,
                  artificial_step_to_final_value: None|int|float = None,
                  type: int = CONSTRAINT_TYPE_FILLER_AUTO,
+                 degraded_type: int = CONSTRAINT_TYPE_FILLER_AUTO,
                  start_of_constraint: datetime | None = None,
                  end_of_constraint: datetime | None = None,
                  initial_value: float | None = 0.0,
@@ -89,7 +90,9 @@ class LoadConstraint(object):
         self.load_info = load_info
         self.from_user = from_user
         self.artificial_step_to_final_value = artificial_step_to_final_value
-        self.type = type
+        self._type = type
+        self._degraded_type = degraded_type
+
         self.support_auto = support_auto
 
         self._update_value_callback = None
@@ -126,7 +129,7 @@ class LoadConstraint(object):
             self.current_value = current_value
 
         # will correct end of constraint if needed best_duration_to_meet uses the values above
-        if self.as_fast_as_possible:
+        if self.as_fast_as_possible or self._type >= CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE:
             dt_to_finish = self.best_duration_to_meet()
             self.end_of_constraint = time + dt_to_finish
 
@@ -139,13 +142,28 @@ class LoadConstraint(object):
 
         self.real_constraint = self
 
+    @property
+    def type(self)-> int:
+        if self.is_off_grid():
+            return self._degraded_type
+        return self._type
+
+    @type.setter
+    def type(self, value: int):
+        self._type = value
+        self._degraded_type = min(CONSTRAINT_TYPE_MANDATORY_END_TIME, value)
+
+
     def shallow_copy_for_delta_energy(self, added_energy: float) -> Self:
         # no deep copy to not copy inner objects
         out = copy.copy(self)
         out.current_value = self.convert_added_energy_to_target_value(added_energy)
         return out
 
-
+    def is_off_grid(self):
+        if self.load is None:
+            return False
+        return self.load.is_off_grid()
 
 
     def reset_load_param(self, new_param):
@@ -163,7 +181,7 @@ class LoadConstraint(object):
         if self.load_info:
             extra_s += f"{self.load_info} "
 
-        return f"Constraint for {self.load.name} ({extra_s}{self.initial_value}/{target_s}/{self.type})"
+        return f"Constraint for {self.load.name} ({extra_s}{self.initial_value}/{target_s}/{self._type}/{self._degraded_type})"
 
     @property
     def stable_name(self):
@@ -173,7 +191,7 @@ class LoadConstraint(object):
             extra_s += f"{self.load_param} "
         if self.load_info:
             extra_s += f"{self.load_info} "
-        return f"Constraint for {self.load.name} ({extra_s}{target_value}/{self.type})"
+        return f"Constraint for {self.load.name} ({extra_s}{target_value}/{self._type}/{self._degraded_type})"
 
     def __eq__(self, other):
         if other is None:
@@ -203,8 +221,15 @@ class LoadConstraint(object):
     @is_before_battery.setter
     def is_before_battery(self, value: bool):
         if value:
-            if self.type < CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
-                self.type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+            if self._type < CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
+                self._type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+            if self._degraded_type < CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
+                self._degraded_type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+        else:
+            if self._type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
+                self._type = CONSTRAINT_TYPE_FILLER
+            if self._degraded_type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN:
+                self._degraded_type = CONSTRAINT_TYPE_FILLER
 
     def score(self, time:datetime):
 
@@ -212,7 +237,8 @@ class LoadConstraint(object):
         type_score_span = 10.0
 
         reserved_load_score_span = 1000000.0
-        load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
+        if self.load is not None:
+            load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
 
         energy_score = float(min(max(0, int(self.convert_target_value_to_energy(self.target_value))), int(energy_score_span) - 1))
         type_score = self.type
@@ -252,7 +278,8 @@ class LoadConstraint(object):
     def to_dict(self) -> dict:
         return {
             "qs_class_type": self.__class__.__name__,
-            "type": self.type,
+            "type": self._type,
+            "degraded_type": self._degraded_type,
             "load_param": self.load_param,
             "load_info": self.load_info,
             "from_user": self.from_user,
@@ -698,7 +725,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # start from the end as future is more uncertain, so take actions far from now, and we will see later if it was worth it
             # sorted_available_power = range(last_slot, first_slot - 1, -1)
 
-            # well not sure of the statement above as the solver will assess stuff differenty depending on what we consumed
+            # well not sure of the statement above as the solver will assess stuff differently depending on what we consumed
             sorted_available_power = range(first_slot, last_slot + 1)
         else:
             _LOGGER.info(

@@ -1380,7 +1380,8 @@ class QSChargerGroup(object):
                                 insert_front = cs.possible_amps[0] - 1
                                 delta_remove = 1
 
-                            updated_amps = cs.update_amps_with_delta(mandatory_amps, num_phases=cs.budgeted_num_phases,
+                            updated_amps = cs.update_amps_with_delta(mandatory_amps,
+                                                                     num_phases=cs.budgeted_num_phases,
                                                                      delta=-delta_remove)
 
                             res_probe, do_update = self._update_and_prob_for_amps_reduction(old_amps=mandatory_amps,
@@ -1936,11 +1937,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         cs.current_active_phase_number = self._expected_num_active_phases.value
 
-        native_power_steps = self.car.get_charge_power_per_phase_A(self.physical_3p)[0]
-
         cs.command = self.current_command
         if cs.command.is_like(CMD_ON):
-            cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=native_power_steps[self.min_charge])
+            cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=self.car.get_charge_power_per_phase_A(self.physical_3p)[0][self.min_charge])
 
         cs.bump_solar = self.qs_bump_solar_charge_priority
         if cs.bump_solar:
@@ -2050,7 +2049,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]) or self.current_command.is_like_one_of_cmds([CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_CONSIGN]):
                 _LOGGER.info(
                     f"get_stable_dynamic_charge_status: {self.name} CAP/GREEN_CONSIGN {cs.command} ({self.current_command}) {possible_amps} (can_change_state: {can_change_state} current_state: {current_state})")
-
 
         cs.possible_amps = possible_amps
         cs.possible_num_phases = possible_num_phases
@@ -2723,7 +2721,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # add a constraint ... for now just fill the car as much as possible
             force_constraint = None
             user_timed_constraint = None
-            car_charge_mandatory = None
+            car_charge_agenda = None
             car_charge_person = None
             person_to_notify = None
             is_person_covered = None
@@ -2753,6 +2751,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 force_constraint = ConstraintClass(
                     total_capacity_wh=self.car.car_battery_capacity, # ok to leave it for MultiStepsPowerLoadConstraint, will be an unused kwargs
                     type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+                    degraded_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                     time=time,
                     load=self,
                     load_param=self.car.name,
@@ -2805,6 +2804,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                         time=time,
                         load=self,
                         load_param=self.car.name,
@@ -2870,9 +2870,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     if start_time is not None:
 
-                        car_charge_mandatory = ConstraintClass(
+                        car_charge_agenda = ConstraintClass(
                             total_capacity_wh=self.car.car_battery_capacity,
                             type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                             time=time,
                             load=self,
                             load_param=self.car.name,
@@ -2884,9 +2885,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             support_auto=True
                         )
 
-                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_mandatory):
+                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_agenda):
                             _LOGGER.info(
-                                f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_mandatory.name}")
+                                f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_agenda.name}")
                             do_force_solve = True
 
                         realized_charge_target = target_charge
@@ -2925,7 +2926,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     do_remove_all_person_constraints = True
 
-                    if person is not None and person_min_target_charge is not None and (car_charge_mandatory is None or (car_charge_mandatory.end_of_constraint - next_usage_time) > timedelta(hours=25)):
+                    if person is not None and person_min_target_charge is not None and (car_charge_agenda is None or (car_charge_agenda.end_of_constraint - next_usage_time) > timedelta(hours=25)):
 
                         is_car_charged, _ = self.is_car_charged(time, current_charge=car_current_charge_value,
                                                                 target_charge=person_min_target_charge,
@@ -2965,6 +2966,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 car_charge_person = ConstraintClass(
                                     total_capacity_wh=self.car.car_battery_capacity,
                                     type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                    degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                                     time=time,
                                     load=self,
                                     load_param=self.car.name,
@@ -3043,6 +3045,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     car_charge_best_effort = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=type,
+                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                         time=time,
                         load=self,
                         load_param=self.car.name,
@@ -3090,20 +3093,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     @property
     def max_charge(self):
         if self.car:
-            static_max = int(min(self.charger_max_charge, self.car.car_charger_max_charge))
+            return int(min(self.charger_max_charge, self.car.car_charger_max_charge))
         else:
-            static_max = self.charger_max_charge
-
-        max_phase_home = int(self.home.get_home_max_phase_amp())
-
-        if max_phase_home < static_max:
-            _LOGGER.warning(f"max_charge: limiting max charge current to {max_phase_home}A because of home max phase current limit of {max_phase_home}")
-
-        res = min(static_max, max_phase_home)
-        if res <= self.min_charge + 1:
-            res = min(static_max, self.min_charge + 1)
-
-        return res
+            return int(self.charger_max_charge)
 
 
     def get_platforms(self):
@@ -3157,11 +3149,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.can_do_3_to_1_phase_switch():
                 power_steps_3p, min_charge, max_charge = self.car.get_charge_power_per_phase_A(True)
                 power_steps_1p, min_charge_1p, max_charge_1p = self.car.get_charge_power_per_phase_A(False)
-                s = set(power_steps_3p[min_charge: max_charge + 1])
-                s.update(power_steps_1p[min_charge_1p: max_charge_1p + 1])
+                s = set(power_steps_3p[max(min_charge, self.min_charge): min(self.max_charge, max_charge) + 1])
+                s.update(power_steps_1p[max(min_charge_1p, self.min_charge): min(self.max_charge, max_charge_1p) + 1])
             else:
                 power_steps, min_charge, max_charge = self.car.get_charge_power_per_phase_A(self.physical_3p)
-                s = set(power_steps[self.min_charge: self.max_charge + 1])
+                s = set(power_steps[max(min_charge, self.min_charge): min(self.max_charge, max_charge) + 1])
 
             if 0 in s:
                 s.remove(0)

@@ -1106,7 +1106,7 @@ class AbstractLoad(AbstractDevice):
                         force_solving = True
                         # ok we have pushed or made a target the next important constraint
                         do_update_c = True
-                        c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE  # force as much as we can....
+                        c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE  # force as much as we can....(will only impact off_grid off)
                         _LOGGER.info(f"{c.name} handled_constraint_force is now as fast as possible, end of constraint {c.end_of_constraint} (pushed count {c.pushed_count})")
                 else:
                     do_update_c = True
