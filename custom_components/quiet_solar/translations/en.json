@@ -217,8 +217,8 @@
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
                     "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
-                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, not needed for mono phased home)",
-                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, not needed for mono phased home)"
+                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, for 3 phased home only)",
+                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, for 3 phased home only)"
                 },
                 "title": "Edit a Home"
             },
@@ -665,7 +665,7 @@
             },
             "home": {
                 "data": {
-                    "accurate_power_sensor": "[%key:component::quiet_solar::config::step::home::data::accurate_power_sensor %]",
+                    "accurate_power_sensor": "Global Home accurate power sensor (W, kW) (optional, to improve the home power measurement)",
                     "dashboard_section_icon_0": "Icon of Dashboard section #1 (empty for default)",
                     "dashboard_section_icon_1": "Icon of Dashboard section #2 (empty for default)",
                     "dashboard_section_icon_2": "Icon of Dashboard section #3 (empty for default)",
@@ -695,8 +695,8 @@
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
                     "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
-                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, not needed for mono phased home)",
-                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, not needed for mono phased home)"
+                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, for 3 phased home only)",
+                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, for 3 phased home only)"
                 },
                 "title": "Edit a Home"
             },
