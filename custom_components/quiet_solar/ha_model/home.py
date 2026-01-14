@@ -33,7 +33,8 @@ from ..ha_model.person import QSPerson
 from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
 from ..ha_model.solar import QSSolar
 from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm
+from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm, \
+    max_amps
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
     extract_name_and_index_from_dashboard_section_option, get_value_from_time_series
 from ..home_model.solver import PeriodSolver
@@ -850,20 +851,30 @@ class QSHome(QSDynamicGroup):
 
         return merged_segments, segments_1_not_home, segments_2_not_home
 
-    async def async_set_off_grid_mode(self, off_grid:bool):
+    async def async_set_off_grid_mode(self, off_grid:bool, for_init:bool):
 
         do_reset = self.qs_home_is_off_grid != off_grid
 
         self.qs_home_is_off_grid = off_grid
 
-        if do_reset:
+        if do_reset and for_init is False:
+
+            time = datetime.now(pytz.UTC)
 
             _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
+
+            if self.is_off_grid():
+                for load in self._all_loads:
+                    if load.qs_enable_device is False:
+                        continue
+                    # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
+                    await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
+
             # force solve
             self.force_next_solve()
 
             # force an update of all load will recompute what should be computed, like new constraints, etc
-            await self.force_update_all()
+            # await self.force_update_all()
 
     def is_off_grid(self) -> bool:
         return self.qs_home_is_off_grid
@@ -897,7 +908,9 @@ class QSHome(QSDynamicGroup):
             available_production_w = self.solar_plant.solar_production
 
         if self.battery is not None and self.battery.battery_can_discharge():
-            available_production_w += self.battery.get_max_discharging_power()  # self.battery.max_discharge_number
+            max_discharge_power = self.battery.get_max_discharging_power()
+            if max_discharge_power is not None:
+                available_production_w += self.battery.get_max_discharging_power()  # self.battery.max_discharge_number
 
         if self.solar_plant and self.solar_plant.solar_max_output_power_value:
             available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
@@ -1366,34 +1379,47 @@ class QSHome(QSDynamicGroup):
 
         home_amps = [0, 0, 0]
 
+        pM = None
+        is_3p = False
+        if isinstance(self, AbstractDevice):
+            is_3p = self.current_3p
+
+        # first check if we do have an amp sensor for the phases
+        multiplier = 1
+        if self.grid_active_power_sensor_inverted is False:
+            # if not inverted it should be -1 as consumption are reversed
+            multiplier = -1
+
         if not self.is_off_grid():
-            # first check if we do have an amp sensor for the phases
-            multiplier = 1
-            if self.grid_active_power_sensor_inverted is False:
-                # if not inverted it should be -1 as consumption are reversed
-                multiplier = -1
 
-            pM = None
-            is_3p = False
-            if isinstance(self, AbstractDevice):
-                is_3p = self.current_3p
-
-            if self.grid_active_power_sensor is not None:
-                # this one has been inverted at the moment it was attached to prob
-                # so just multiply it by -1
-                p = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=tolerance_seconds, time=time)
+            if self.grid_consumption_power_sensor is not None:
+                p = self.get_sensor_latest_possible_valid_value(self.grid_consumption_power_sensor,
+                                                                tolerance_seconds=tolerance_seconds, time=time)
                 if p is not None:
-                    p = -1.0*p
+                    #p has been inverter automatically to be consumption positive
+                    p = -1.0 * p
+
                     if p > 0 and isinstance(self, AbstractDevice):
                         pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
 
             home_amps = self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
 
+            if home_amps is None:
+                home_amps = [0, 0, 0]
 
         if self.solar_plant:
             solar_amps = self.solar_plant.get_device_amps_consumption(tolerance_seconds, time)
             if solar_amps is not None and home_amps is not None:
                 home_amps = add_amps(home_amps, solar_amps)
+
+        if self.home_consumption_sensor is not None:
+            p = self.get_sensor_latest_possible_valid_value(self.home_consumption_sensor,
+                                                            tolerance_seconds=tolerance_seconds, time=time)
+            if p is not None:
+                if p > 0 and isinstance(self, AbstractDevice):
+                    pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
+                    if pM is not None:
+                        home_amps = max_amps(home_amps, pM)
 
         return home_amps
 
@@ -2155,7 +2181,7 @@ class QSHome(QSDynamicGroup):
             # use the available power virtual sensor to modify the begining of the PeriodSolver available power
             # computation based on forecasts
 
-            self._commands, self._battery_commands = solver.solve()
+            self._commands, self._battery_commands = solver.solve(is_off_grid=self.is_off_grid())
 
         if self.battery and self._battery_commands is not None:
 

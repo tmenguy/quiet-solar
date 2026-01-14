@@ -685,8 +685,14 @@ class PeriodSolver(object):
             if c.is_before_battery:
                 constraints.append((c, c.score(self._start_time)))
 
+        always_use_available_only_power = False
+        if is_off_grid:
+            # the current battery is already in teh available power : the most important load will use it first
+            # but as we are in off grid : now way we can use grid power
+            always_use_available_only_power = True
+
         self._allocate_constraints(constraints=constraints,
-                                   always_use_available_only_power=False,
+                                   always_use_available_only_power=always_use_available_only_power,
                                    constraints_evolution=constraints_evolution,
                                    constraints_bounds=constraints_bounds,
                                    actions=actions)

@@ -900,7 +900,7 @@ class QSChargerGroup(object):
                             f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
                         do_reset_allocation = True
 
-        current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
+        _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
                                                                                  do_reset_allocation, time)
 
         if current_ok is False and do_reset_allocation is False:
@@ -911,7 +911,7 @@ class QSChargerGroup(object):
             do_reset_allocation = True
             should_do_reset_allocation = True
 
-            current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
+            _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
                                                                                      do_reset_allocation, time)
         if current_ok is False:
             _LOGGER.error(
@@ -1218,7 +1218,7 @@ class QSChargerGroup(object):
         return True, should_do_reset_allocation, do_reset_allocation
 
     async def _do_prepare_and_shave_budgets(self, actionable_chargers: list[Any], do_reset_allocation: bool,
-                                            time: datetime) -> tuple[tuple[list[Any] | Any, bool], bool]:
+                                            time: datetime) -> tuple[list[Any] | Any, bool, bool]:
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(actionable_chargers,
                                                                                                   do_reset_allocation)
 
@@ -1231,8 +1231,8 @@ class QSChargerGroup(object):
             current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(
                 actionable_chargers, do_reset_allocation)
 
-        current_ok = await self._shave_current_budgets(actionable_chargers, time)
-        return current_ok, has_phase_changes
+        as_list, current_ok = await self._shave_current_budgets(actionable_chargers, time)
+        return as_list, current_ok, has_phase_changes
 
     async def _do_prepare_budgets_for_algo(self, actionable_chargers, do_reset_allocation):
         current_amps = [0.0, 0.0, 0.0]

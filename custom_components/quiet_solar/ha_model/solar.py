@@ -12,7 +12,7 @@ import pytz
 from ..const import CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR, CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR, \
     SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_FORECAST_PROVIDER, OPEN_METEO_SOLAR_DOMAIN, DOMAIN, FLOATING_PERIOD_S, \
     CONF_TYPE_NAME_QSSolar, CONF_SOLAR_MAX_OUTPUT_POWER_VALUE, CONF_SOLAR_MAX_PHASE_AMPS, CONF_ACCURATE_POWER_SENSOR, \
-    MAX_POWER_INFINITE, MAX_AMP_INFINITE
+    MAX_POWER_INFINITE, MAX_AMP_INFINITE, CONF_IS_3P
 from ..ha_model.device import HADeviceMixin
 from ..home_model.load import AbstractDevice, align_time_series_and_values, get_slots_from_time_series, \
     get_value_from_time_series
@@ -34,6 +34,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
 
         self.solar_forecast_provider_handler: QSSolarProvider | None = None
         kwargs[CONF_ACCURATE_POWER_SENSOR] = self.solar_inverter_active_power # to allow proper measurement
+
+        home = kwargs.get("home", None)
+        if home:
+            kwargs[CONF_IS_3P] = home.physical_3p
+
         super().__init__(**kwargs)
 
         if self.solar_max_output_power_value == MAX_POWER_INFINITE and self.solar_max_phase_amps != MAX_AMP_INFINITE and self.home is not None:

@@ -43,7 +43,7 @@ def create_ha_switch_for_QSHome(device: QSHome):
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_HOME_IS_OFF_GRID,
         translation_key=SWITCH_HOME_IS_OFF_GRID,
-        async_switch=lambda s, val: s.async_set_off_grid_mode(val)
+        async_switch=lambda s, val, for_init: s.async_set_off_grid_mode(val, for_init),
     )
 
     entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
@@ -148,7 +148,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 @dataclass(frozen=True, kw_only=True)
 class QSSwitchEntityDescription(SwitchEntityDescription):
     """Class describing qs switch button entities."""
-    async_switch: Callable[[AbstractDevice, bool], Coroutine] | None = None
+    async_switch: Callable[[AbstractDevice, bool, bool], Coroutine] | None = None
 
 
 
@@ -209,30 +209,34 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         _LOGGER.info(f"QSSwitchEntity:async_turn_on : {self.entity_description.key} on {self.device.name}")
 
+        for_init = kwargs.pop('for_init', False)
+
         if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, True)
+            await self.entity_description.async_switch(self.device, True, for_init)
         else:
             setattr(self.device, self.entity_description.key, True)
 
         self._attr_is_on = True
         self._set_availabiltiy()
         self.async_write_ha_state()
-        if self.device.home:
+        if self.device.home and not for_init:
             await self.device.home.force_update_all()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
 
         _LOGGER.info(f"QSSwitchEntity:async_turn_off : {self.entity_description.key} on {self.device.name}")
 
+        for_init = kwargs.pop('for_init', False)
+
         if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, False)
+            await self.entity_description.async_switch(self.device, False, for_init)
         else:
             setattr(self.device, self.entity_description.key, False)
 
         self._attr_is_on = False
         self._set_availabiltiy()
         self.async_write_ha_state()
-        if self.device.home:
+        if self.device.home  and not for_init:
             await self.device.home.force_update_all()
 
 
@@ -272,9 +276,9 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
 
 
         if self._attr_is_on:
-            await self.async_turn_on()
+            await self.async_turn_on(for_init=True)
         else:
-            await self.async_turn_off()
+            await self.async_turn_off(for_init=True)
 
 
 class QSSwitchEntityChargerOrCar(QSSwitchEntityWithRestore):

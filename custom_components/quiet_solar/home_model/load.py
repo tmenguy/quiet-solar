@@ -321,6 +321,7 @@ class AbstractDevice(object):
         if power == 0:
             return [0.0, 0.0, 0.0]
 
+        # shouldn't we use sqrt(3) instead of 3 ? according to chatGPT probably .. should check
         if is_3p:
             power = power / 3.0
         p = power / self.voltage
