@@ -187,6 +187,7 @@
             },
             "home": {
                 "data": {
+                    "accurate_power_sensor": "Global Home accurate power sensor (W, kW) (optional, to improve the home power measurement)",
                     "dashboard_section_icon_0": "Icon of Dashboard section #1 (empty for default)",
                     "dashboard_section_icon_1": "Icon of Dashboard section #2 (empty for default)",
                     "dashboard_section_icon_2": "Icon of Dashboard section #3 (empty for default)",
@@ -206,7 +207,7 @@
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
-                    "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+                    "grid_active_power_sensor_inverted": "Is your grid power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
                     "home_end_off_peak_range_1": "End of the first off-peak range (set same as start to disable range)",
                     "home_end_off_peak_range_2": "End of the second off-peak range (set same as start to disable range)",
                     "home_off_peak_price": "Off-peak price (\u20ac/kWh, 0.0 to not support off-peak)",
@@ -215,9 +216,9 @@
                     "home_start_off_peak_range_2": "Start of the second off-peak range",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
-                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A) (will be inverted by the same switch below)",
-                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phased home)",
-                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phased home)"
+                    "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
+                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, not needed for mono phased home)",
+                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, not needed for mono phased home)"
                 },
                 "title": "Edit a Home"
             },
@@ -362,8 +363,8 @@
                 "name": "Home Quiet Solar Running Mode",
                 "state": {
                     "home_mode_charger_only": "EV Charger only",
-                    "home_mode_no_solar_no_battery": "No Solar No Battery",
                     "home_mode_no_solar": "No Solar but Battery On",
+                    "home_mode_no_solar_no_battery": "No Solar No Battery",
                     "home_mode_off": "Nothing runs",
                     "home_mode_on": "Full Quiet Solar",
                     "home_mode_reset_sensors": "WARN: reset sensors from HA history",
@@ -664,6 +665,7 @@
             },
             "home": {
                 "data": {
+                    "accurate_power_sensor": "[%key:component::quiet_solar::config::step::home::data::accurate_power_sensor %]",
                     "dashboard_section_icon_0": "Icon of Dashboard section #1 (empty for default)",
                     "dashboard_section_icon_1": "Icon of Dashboard section #2 (empty for default)",
                     "dashboard_section_icon_2": "Icon of Dashboard section #3 (empty for default)",
@@ -683,7 +685,7 @@
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
-                    "grid_active_power_sensor_inverted": "Is your power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+                    "grid_active_power_sensor_inverted": "Is your grid power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
                     "home_end_off_peak_range_1": "End of the first off-peak range (set same as start to disable range)",
                     "home_end_off_peak_range_2": "End of the second off-peak range (set same as start to disable range)",
                     "home_off_peak_price": "Off-peak price (\u20ac/kWh, 0.0 to not support off-peak)",
@@ -692,9 +694,9 @@
                     "home_start_off_peak_range_2": "Start of the second off-peak range",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
-                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A) (will be inverted by the same switch below)",
-                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phased home)",
-                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phased home)"
+                    "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
+                    "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, not needed for mono phased home)",
+                    "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, not needed for mono phased home)"
                 },
                 "title": "Edit a Home"
             },

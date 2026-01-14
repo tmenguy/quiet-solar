@@ -605,7 +605,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=54, add_amps_sensors=True)
+        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=54, add_amps_sensors=True, add_load_power_sensor=True)
 
         sc_dict.update(  {
 

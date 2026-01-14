@@ -293,6 +293,8 @@ class QSHome(QSDynamicGroup):
         self.home_consumption_sensor = HOME_CONSUMPTION_SENSOR
         self.grid_consumption_power_sensor = GRID_CONSUMPTION_SENSOR
 
+
+
         self.home_non_controlled_power_forecast_sensor_values = {}
         self.home_solar_forecast_sensor_values = {}
 
@@ -310,6 +312,9 @@ class QSHome(QSDynamicGroup):
         self.home = self
         super().__init__(**kwargs)
         self.home = self
+
+        # will be used to get the home consumption power in case we don't have an accurate sensor for example
+        self.secondary_power_sensor = self.home_consumption_sensor
 
         # self._all_devices.append(self)
 
@@ -653,9 +658,7 @@ class QSHome(QSDynamicGroup):
 
         return persons_result
 
-    def map_location_path(self, states_1: list[LazyState], states_2: list[LazyState], start: datetime, end: datetime,
-                          small_distance_threshold_m: float = 350) -> tuple[
-        list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+    def map_location_path(self, states_1: list[LazyState], states_2: list[LazyState], start: datetime, end: datetime,small_distance_threshold_m: float = 350) -> tuple[list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
         """
         Map two GPS paths based on timestamps.
         Returns a list of tuples: (time, lat1, lon1, lat2, lon2)
@@ -972,9 +975,6 @@ class QSHome(QSDynamicGroup):
 
         return dyn_group_max_phase_current_for_budget
 
-
-
-
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 
         found = set()
@@ -1192,24 +1192,21 @@ class QSHome(QSDynamicGroup):
                 return person
         return None
 
-    def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+    def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
         if self.home_consumption is None:
             return None
 
         return (time, self.home_consumption, {})
 
-    def home_available_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+    def home_available_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
         if self.home_available_power is None:
             return None
 
         return (time, self.home_available_power, {})
 
-    def grid_consumption_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+    def grid_consumption_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
         if self.grid_consumption_power is None:
             return None
@@ -1219,8 +1216,7 @@ class QSHome(QSDynamicGroup):
 
     def home_non_controlled_consumption_sensor_state_getter(self,
                                                             entity_id: str,
-                                                            time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+                                                            time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
         # Home real consumption : Solar Production - grid_active_power_sensor - battery_charge_discharge_sensor
         # Available Power : grid_active_power_sensor + battery_charge_discharge_sensor
@@ -1246,6 +1242,9 @@ class QSHome(QSDynamicGroup):
             if solar_production_minus_battery is None and self.solar_plant.solar_inverter_input_active_power:
                 solar_production = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
+            if solar_production_minus_battery is not None and solar_production is not None and battery_charge is None:
+                battery_charge = solar_production - solar_production_minus_battery
+
             if solar_production_minus_battery is None:
                 if solar_production is not None and battery_charge is not None:
                     solar_production_minus_battery = solar_production - battery_charge
@@ -1263,7 +1262,6 @@ class QSHome(QSDynamicGroup):
         elif battery_charge is not None:
             solar_production_minus_battery = 0 - battery_charge
 
-
         if solar_production_minus_battery is None:
             solar_production_minus_battery = 0
 
@@ -1273,22 +1271,42 @@ class QSHome(QSDynamicGroup):
         # get grid consumption
         grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
-        if grid_consumption is None:
-            self.home_non_controlled_consumption = None
-            self.home_consumption = None
-            self.home_available_power = None
-            self.grid_consumption_power = None
-        else:
+        home_consumption = None
+        if self.accurate_power_sensor is not None:
+            home_consumption = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor,
+                                                                           tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                                                                           time=time)
+            if home_consumption is not None and grid_consumption is None:
+                if solar_production_minus_battery is not None:
+                    grid_consumption = solar_production_minus_battery - home_consumption
+                else:
+                    grid_consumption = 0 - home_consumption
+
+        if home_consumption is None and grid_consumption is not None:
             if solar_production_minus_battery is not None:
                 home_consumption = solar_production_minus_battery - grid_consumption
             else:
                 home_consumption = 0 - grid_consumption
 
-            controlled_consumption = self.get_device_power_latest_possible_valid_value(tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True)
+        if grid_consumption is None or home_consumption is None:
+            self.home_non_controlled_consumption = None
+            self.home_consumption = None
+            self.home_available_power = None
+            self.grid_consumption_power = None
+        else:
+            controlled_consumption = 0.0
+            for device in self._childrens:
+                if isinstance(device, HADeviceMixin):
+                    if device.qs_enable_device is False:
+                        continue
+                    p = device.get_device_power_latest_possible_valid_value(
+                        tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                        time=time, ignore_auto_load=True)
+                    if p is not None:
+                        controlled_consumption += p
 
-            val = home_consumption - controlled_consumption
-
-            self.home_non_controlled_consumption = val
+            self.grid_consumption_power = grid_consumption
+            self.home_non_controlled_consumption = home_consumption - controlled_consumption
             self.home_consumption = home_consumption
             if battery_charge is not None:
                 self.home_available_power = grid_consumption + battery_charge
@@ -1313,9 +1331,6 @@ class QSHome(QSDynamicGroup):
 
                     _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
                     self.home_available_power = max(0.0, 1.05*(maximum_production_output - solar_production_minus_battery))
-
-
-            self.grid_consumption_power = grid_consumption
 
         val = self.home_non_controlled_consumption
 
@@ -1375,53 +1390,9 @@ class QSHome(QSDynamicGroup):
     def get_grid_consumption_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.grid_consumption_power_sensor, duration_before_s, time)
 
-    def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+    # no need to overcharge anymore now that a home can have an accurate power sensor ... and has always a secondary sensor for hone consumptionconsumption
+    # def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
 
-        home_amps = [0, 0, 0]
-
-        pM = None
-        is_3p = False
-        if isinstance(self, AbstractDevice):
-            is_3p = self.current_3p
-
-        # first check if we do have an amp sensor for the phases
-        multiplier = 1
-        if self.grid_active_power_sensor_inverted is False:
-            # if not inverted it should be -1 as consumption are reversed
-            multiplier = -1
-
-        if not self.is_off_grid():
-
-            if self.grid_consumption_power_sensor is not None:
-                p = self.get_sensor_latest_possible_valid_value(self.grid_consumption_power_sensor,
-                                                                tolerance_seconds=tolerance_seconds, time=time)
-                if p is not None:
-                    #p has been inverter automatically to be consumption positive
-                    p = -1.0 * p
-
-                    if p > 0 and isinstance(self, AbstractDevice):
-                        pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
-
-            home_amps = self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=multiplier, is_3p=is_3p)
-
-            if home_amps is None:
-                home_amps = [0, 0, 0]
-
-        if self.solar_plant:
-            solar_amps = self.solar_plant.get_device_amps_consumption(tolerance_seconds, time)
-            if solar_amps is not None and home_amps is not None:
-                home_amps = add_amps(home_amps, solar_amps)
-
-        if self.home_consumption_sensor is not None:
-            p = self.get_sensor_latest_possible_valid_value(self.home_consumption_sensor,
-                                                            tolerance_seconds=tolerance_seconds, time=time)
-            if p is not None:
-                if p > 0 and isinstance(self, AbstractDevice):
-                    pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
-                    if pM is not None:
-                        home_amps = max_amps(home_amps, pM)
-
-        return home_amps
 
     def battery_can_discharge(self):
 
