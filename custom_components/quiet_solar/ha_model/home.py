@@ -369,7 +369,7 @@ class QSHome(QSDynamicGroup):
             self.radius = float(home_zone.attributes.get("radius", 100.0))
 
         except Exception as err:
-            _LOGGER.error(f"Error getting home coordinates: {err}", exc_info=True, stack_info=True)
+            _LOGGER.error(f"Home: Error getting home coordinates: {err}")
             self.latitude = None
             self.longitude = None
             self.radius = None
@@ -536,7 +536,7 @@ class QSHome(QSDynamicGroup):
 
                             scores[pi, seg_idx] = score
 
-                # now get the max of teh matric iteratively unitl we find the proper person for the segment 0
+                # now get the max of the matrix iteratively until we find the proper person for the segment 0
                 # (the one we are working on) and we remove also the found candidate from all other segments
 
                 found_person_idx = None
@@ -647,7 +647,7 @@ class QSHome(QSDynamicGroup):
                     if persons_result[person][1] is not None and  persons_result[person][1] <= start:
                         persons_result[person][1] = None
                 else:
-                    if persons_result[person][1] is None:
+                    if persons_result[person][1] is None or persons_result[person][1] <= start:
                         persons_result[person][1] = max(start, segments_person_not_home[spnh_idx][0])
                     else:
                         persons_result[person][1] = max(start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0]))

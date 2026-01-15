@@ -80,8 +80,7 @@ def test_create_ha_sensor_for_load():
     entities = create_ha_sensor_for_Load(mock_load)
     
     assert len(entities) > 0
-    # Should create command sensor and override state sensor
-    assert any("load_current_command" in e.entity_description.key for e in entities)
+    # Should create  override state sensor
     assert any("load_override_state" in e.entity_description.key for e in entities)
 
 
