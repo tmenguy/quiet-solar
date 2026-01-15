@@ -357,6 +357,18 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+            {% elif device.device_type == "battery" -%}
+              {%- set ha_entity = device.ha_entities.get("load_current_command") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+            {% elif device.device_type == "person" -%}
+              {%- set ha_entity = device.ha_entities.get("person_mileage_prediction") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
             {% endif -%}
             title: {{ device.name }}
             show_header_toggle: false

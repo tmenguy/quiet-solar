@@ -639,6 +639,9 @@
       },
       "qs_constraint_sensor_completion": {
         "name": "Constraint % completion"
+      },
+      "qs_person_mileage_prediction_km": {
+        "name": "Predicted Next Day Mileage (km)"
       }
     },
     "button": {

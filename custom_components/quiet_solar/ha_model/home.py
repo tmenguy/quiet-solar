@@ -1533,14 +1533,15 @@ class QSHome(QSDynamicGroup):
                 _LOGGER.warning(f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups {e}", exc_info=True, stack_info=True)
 
         if isinstance(device, HADeviceMixin):
+            for attached_device in device.get_attached_virtual_devices():
+                self.remove_device(attached_device)
+
             try:
                 self._all_devices.remove(device)
             except Exception as e:
                 _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
 
-        if isinstance(device, HADeviceMixin):
-            for attached_device in device.get_attached_virtual_devices():
-                self.remove_device(attached_device)
+
 
         #will redo the whole topology each time
         self._set_topology()

@@ -460,6 +460,9 @@
             },
             "qs_load_override_state_sensor": {
                 "name": "Load External Override"
+            },
+            "qs_person_mileage_prediction_km": {
+                "name": "Predicted Next Day Mileage (km)"
             }
         },
         "switch": {

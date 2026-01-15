@@ -148,14 +148,6 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
 def create_ha_sensor_for_Load(device: AbstractLoad):
     entities = []
 
-    load_current_command = QSSensorEntityDescription(
-        key="load_current_command",
-        translation_key=SENSOR_LOAD_CURRENT_COMMAND,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda device, key: "NO CMD" if device.current_command is None else device.current_command.command,
-    )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
-
 
     if device.support_user_override():
         # add hare a sensor to know if the load has been ovreriden externally
@@ -221,6 +213,14 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
 
 def create_ha_sensor_for_Device(device: AbstractDevice):
     entities = []
+
+    load_current_command = QSSensorEntityDescription(
+        key="load_current_command",
+        translation_key=SENSOR_LOAD_CURRENT_COMMAND,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device, key: "NO CMD" if device.current_command is None else device.current_command.command,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
     info_sensor = QSSensorEntityDescription(
         key="device_information_storage",
