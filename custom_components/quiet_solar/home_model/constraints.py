@@ -69,6 +69,7 @@ class LoadConstraint(object):
                  current_value: float | None = None,
                  target_value: float = 0.0,
                  support_auto: bool = False,
+                 always_end_at_end_of_constraint = False,
                  **kwargs
                  ):
 
@@ -92,6 +93,7 @@ class LoadConstraint(object):
         self.artificial_step_to_final_value = artificial_step_to_final_value
         self._type = type
         self._degraded_type = degraded_type
+        self.always_end_at_end_of_constraint = always_end_at_end_of_constraint
 
         self.support_auto = support_auto
 
@@ -197,8 +199,20 @@ class LoadConstraint(object):
         if other is None:
             return False
         if other.to_dict() == self.to_dict():
-            return other.name == self.name
+            return other.stable_name == self.stable_name
         return False
+
+    def eq_no_current(self, other):
+        if other is None:
+            return False
+        od = other.to_dict()
+        od["current_value"] = 0
+        d = self.to_dict()
+        d["current_value"] = 0
+        if od == d:
+            return other.stable_name == self.stable_name
+        return False
+
 
     def __hash__(self):
         # Create a hash based on the same attributes used in __eq__
@@ -289,7 +303,8 @@ class LoadConstraint(object):
             "target_value": self.target_value,
             "start_of_constraint": f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}",
-            "support_auto": self.support_auto
+            "support_auto": self.support_auto,
+            "always_end_at_end_of_constraint": self.always_end_at_end_of_constraint
         }
 
     @classmethod
@@ -403,6 +418,10 @@ class LoadConstraint(object):
 
     def is_constraint_met(self, time:datetime, current_value=None) -> bool:
         """ is the constraint met in its current form? """
+
+        if self.always_end_at_end_of_constraint and self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC and time >= self.end_of_constraint:
+            return True
+
         if current_value is None:
             current_value = self.current_value
 
@@ -547,6 +566,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if "phase_current" in c:
                 # this is a legacy constraint command, remove the phase_current
                 del c["phase_current"]
+            if "load_param" in c:
+                # this is a legacy constraint command, remove the load_param
+                del c["load_param"]
             res["power_steps"].append(LoadCommand(**c))
         return res
 
@@ -671,12 +693,19 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return nrj_to_be_added
 
-    def adapt_power_steps_budgeting(self, slot_idx: int | None=None, existing_amps: list[float|int]| None=None ):
+    def adapt_power_steps_budgeting(self, slot_idx: int | None=None, existing_amps: list[float|int]| None=None , for_addition=True):
 
         out_sorted_commands = []
 
+        power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx, add=for_addition)
+
+        power_cmds = self._power_sorted_cmds
+        if power_piloted_delta > 0.0:
+            power_cmds = [copy_command(self._power_sorted_cmds[i], power_consign=self._power_sorted_cmds[i].power_consign+power_piloted_delta) for i in range(len(self._power_sorted_cmds))]
+
+
         if self.load is None or self.load.father_device is None or self.load.father_device.available_amps_for_group is None or slot_idx is None:
-            return self._power_sorted_cmds
+            return power_cmds
 
         # first compute the minium available amps on the slots
         smaller_budget = self.load.father_device.available_amps_for_group[slot_idx]
@@ -685,9 +714,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             smaller_budget = add_amps(smaller_budget, existing_amps)
 
 
-        last_cmd_idx_ok = len(self._power_sorted_cmds)  - 1
-        for i in range(len(self._power_sorted_cmds)-1, -1, -1):
-            cmd = self._power_sorted_cmds[i]
+
+        last_cmd_idx_ok = len(power_cmds)  - 1
+        for i in range(len(power_cmds)-1, -1, -1):
+            cmd = power_cmds[i]
             cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
             if is_amps_greater(cmd_amps, smaller_budget):
                 # not ok ... continue to remove commands
@@ -695,12 +725,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             else:
                 break
 
-        if last_cmd_idx_ok == len(self._power_sorted_cmds)  - 1:
+
+        if last_cmd_idx_ok == len(power_cmds)  - 1:
             # all commands are ok, no need to adapt
-            return self._power_sorted_cmds
+            return power_cmds
         elif last_cmd_idx_ok >= 0:
             # we have some commands that are ok, so we can use them
-            out_sorted_commands = self._power_sorted_cmds[:last_cmd_idx_ok + 1]
+            out_sorted_commands = power_cmds[:last_cmd_idx_ok + 1]
 
         return out_sorted_commands
 
@@ -778,13 +809,34 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         continue
 
                     current_command_power = existing_commands[i].power_consign
+
+                    if len(self.load.devices_to_pilot) > 0 and current_command_power > 0 and init_energy_delta < 0.0:
+
+                        found_untouched = False
+                        for cmd in self._power_sorted_cmds:
+                            if cmd.power_consign == current_command_power:
+                                found_untouched = True
+                                break
+
+                        power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=i,
+                                                                                                                 add=(init_energy_delta>=0.0))
+                        if power_piloted_delta > 0:
+                            # see if this particular command for slot was a normal not adjusted one
+                            if found_untouched:
+                                current_command_power += power_piloted_delta
+                            else:
+                                #power delta already accounted for
+                                pass
+                        elif found_untouched is False and current_command_power > power_piloted_delta:
+                            current_command_power = current_command_power - power_piloted_delta
+
                     existing_cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(current_command_power)
 
                 if current_command_power > 0.0:
                     num_non_zero_exisitng_commands += 1
 
                 j = None
-                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i, existing_amps=existing_cmd_amps)
+                power_sorted_cmds = self.adapt_power_steps_budgeting(slot_idx=i, existing_amps=existing_cmd_amps, for_addition=(init_energy_delta>=0.0))
                 if init_energy_delta >= 0.0:
 
                     if current_command_power == 0 and allow_change_state is False:
@@ -1096,8 +1148,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 # we are in a time sensitive constraint, we will try to limit the number of slots to the last ones
                 # a 6 hours windows, of course if the constraint is timed we get bigger
 
-                best_s = max(3600*6, (self.best_duration_to_meet().total_seconds()/self.load.efficiency_factor)*1.5)
-                start_reduction = self.end_of_constraint - timedelta(seconds=best_s)
+                best_s = max(3600.0*6, self.best_duration_to_meet().total_seconds()*1.5)
+                start_reduction = self.end_of_constraint - timedelta(seconds=int(best_s) + 1)
 
                 _LOGGER.info(
                     f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} {self.end_of_constraint} to {start_reduction}")
@@ -1411,31 +1463,8 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def __init__(self, **kwargs):
 
+        kwargs["always_end_at_end_of_constraint"] = True
         super().__init__(**kwargs)
-
-        end_ct = self.end_of_constraint
-        if end_ct < DATETIME_MAX_UTC:
-
-            start_time = self.start_of_constraint
-            if start_time == DATETIME_MIN_UTC:
-                time = kwargs.get("time")
-                if time is None:
-                    time = datetime.now(pytz.UTC)
-                start_time = time
-
-            start_value = self.current_value
-            end_value = self.requested_target_value
-
-            if end_value is not None:
-                # here everything is pure timing : no efficiency factor to be used
-                duration_s = (end_value - start_value)
-
-                # check if we need to clamp the target value to what is possible
-                if duration_s > 0 and duration_s > (end_ct - start_time).total_seconds():
-                    # we cannot fill that much in the time available, so clamp it, minimum is 1s here...
-                    self.target_value = start_value + max(1.0, ((end_ct - start_time).total_seconds()))
-
-
 
     def _get_readable_target_value_string(self) -> str:
         target_value = self._get_target_value_for_readable()
@@ -1459,6 +1488,9 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def is_constraint_met(self, time:datetime, current_value=None) -> bool:
 
+        if self.always_end_at_end_of_constraint and self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC and time >= self.end_of_constraint:
+            return True
+
         if current_value is None:
             current_value = self.current_value
 
@@ -1475,7 +1507,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def best_duration_to_meet(self) -> timedelta:
         """ Return the best duration to meet the constraint."""
-        return timedelta(seconds=self.load.efficiency_factor*(self.target_value - self.current_value))
+        return timedelta(seconds=self.target_value - self.current_value)
 
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not,

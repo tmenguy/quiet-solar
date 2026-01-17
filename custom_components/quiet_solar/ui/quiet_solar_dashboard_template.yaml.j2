@@ -101,6 +101,21 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("climate_state_on") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("climate_state_off") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("override_duration") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_mark_current_constraint_done") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
@@ -217,6 +232,11 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("override_duration") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("current_constraint_current_energy") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
@@ -292,6 +312,17 @@ views:
               {%- endif %}
             {% elif device.device_type == "person" -%}
               {%- set ha_entity = device.ha_entities.get("person_mileage_prediction") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+            {% elif device.device_type == "heat_pump" -%}
+              {%- set ha_entity = device.ha_entities.get("is_piloted_device_activated") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("best_power_value") %}
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}

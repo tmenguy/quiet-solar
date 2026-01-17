@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
 from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     CONF_DEVICE_EFFICIENCY, DEVICE_STATUS_CHANGE_CONSTRAINT, \
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
-    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
+    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, \
+    CONF_DEVICE_TO_PILOT_NAME
 
 import slugify
 
@@ -78,9 +79,11 @@ class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
         self._enabled = True
+        self.power_use = kwargs.pop(CONF_POWER, None)
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
+        self.piloted_device_name = kwargs.pop(CONF_DEVICE_TO_PILOT_NAME, None)
         self._mono_phase_conf : str | None = kwargs.pop(CONF_MONO_PHASE, None)
         if self._mono_phase_conf is None:
             # at random allocate phase on 0, 1, or 2
@@ -103,6 +106,8 @@ class AbstractDevice(object):
 
         self.name = name
 
+        self.devices_to_pilot : list[PilotedDevice] = []
+
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
@@ -120,6 +125,29 @@ class AbstractDevice(object):
         self.father_device : QSDynamicGroup = self.home
 
         self._computed_dashboard_section = None
+
+
+
+    def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int, add: bool = True) -> float:
+        if len(self.devices_to_pilot) == 0:
+            return 0.0
+
+        power_delta = 0.0
+        for pd in self.devices_to_pilot:
+            power_delta += pd.possible_delta_power_for_slot(slot_idx, add)
+
+        return power_delta
+
+    def update_demanding_clients_for_piloted_devices_for_budget(self, slot_idx: int, add: bool) -> int|float:
+        if len(self.devices_to_pilot) == 0:
+            return 0.0
+
+        power_delta = 0.0
+        for pd in self.devices_to_pilot:
+            power_delta += pd.update_num_demanding_clients_for_slot(slot_idx, add)
+
+        return power_delta
+
 
     def is_off_grid(self) -> bool:
         if self.home:
@@ -509,16 +537,84 @@ class AbstractDevice(object):
         return True
 
 
+class PilotedDevice(AbstractDevice):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.num_demanding_clients: list[int] | None = None
+        self.clients : list[AbstractDevice] = []
+
+    @property
+    def is_piloted_device_activated(self) -> bool:
+        for client in self.clients:
+            if client.qs_enable_device:
+                if client.current_command is not None and not client.current_command.is_off_or_idle():
+                    return True
+        return False
+
+    def prepare_slots_for_piloted_device_budget(self, time: datetime, num_slots: int):
+        self.num_demanding_clients = [0]*num_slots
+        _LOGGER.debug(
+            f"prepare_slots_for_piloted_device_budget for a piloted device: {self.name}")
+
+    def possible_delta_power_for_slot(self, slot_idx: int, add: bool = True) -> float:
+        if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
+            return 0
+
+        if len(self.clients) == 0:
+            return 0
+
+        if add:
+            if self.num_demanding_clients[slot_idx] == 0:
+                # first add!
+                return self.power_use
+            else:
+                return 0
+
+        else:
+            if self.num_demanding_clients[slot_idx] == 1:
+                # last remove!
+                return self.power_use
+
+            return 0
+
+
+    def update_num_demanding_clients_for_slot(self, slot_idx: int, add: bool) -> int|float:
+        if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
+            return 0
+
+        if len(self.clients) == 0:
+            return 0
+
+        power_delta = self.possible_delta_power_for_slot(slot_idx, add)
+
+        if add:
+            if self.num_demanding_clients[slot_idx] >= len(self.clients):
+                _LOGGER.warning(
+                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} too many clients on: {len(self.clients)}")
+                self.num_demanding_clients[slot_idx] = len(self.clients) - 1
+
+            self.num_demanding_clients[slot_idx] += 1
+        else:
+            self.num_demanding_clients[slot_idx] -= 1
+
+            if self.num_demanding_clients[slot_idx] < 0:
+                _LOGGER.warning(
+                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} negative num demanding clients fix it")
+                self.num_demanding_clients[slot_idx] = 0
+
+        return power_delta
+
+
 
 class AbstractLoad(AbstractDevice):
 
     def __init__(self, **kwargs):
         self.switch_entity = kwargs.pop(CONF_SWITCH, None)
-        self.power_use = kwargs.pop(CONF_POWER, None)
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
         self.external_user_initiated_state: str | None = None
         self.external_user_initiated_state_time : datetime | None = None
         self.asked_for_reset_user_initiated_state_time : datetime | None = None
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done : datetime | None = None
 
 
         super().__init__(**kwargs)
@@ -977,7 +1073,7 @@ class AbstractLoad(AbstractDevice):
 
 
             for i, c in enumerate(self._constraints):
-                if c == constraint:
+                if c.eq_no_current(constraint):
                     return False
                 if  c.end_of_constraint == constraint.end_of_constraint or (c.as_fast_as_possible and constraint.as_fast_as_possible):
                     if c.score(time) == constraint.score(time):
@@ -1048,8 +1144,7 @@ class AbstractLoad(AbstractDevice):
                     force_solving = True
                 elif c.is_mandatory and c.end_of_constraint <  time + end_constraint_min_tolerancy:
                     # a not met mandatory one! we should expand it or force it
-                    duration_s = c.best_duration_to_meet() + end_constraint_min_tolerancy
-                    duration_s = max(timedelta(seconds=1200), duration_s*(1.0 + c.pushed_count*0.2)) # extend if we continue to push it
+                    duration_s = c.best_duration_extension_to_push_constraint(time, end_constraint_min_tolerancy)# extend if we continue to push it
                     new_constraint_end = time + duration_s
                     handled_constraint_force = False
                     c.skip = True
@@ -1178,14 +1273,18 @@ class AbstractLoad(AbstractDevice):
     #    self.command_and_constraint_reset()
 
     async def async_reset_override_state(self):
+        time = datetime.now(tz=pytz.UTC)
+        self.reset_override_state_and_set_reset_ask_time(time=time)
+        if await self.do_run_check_load_activity_and_constraints(time):
+            self.home.force_next_solve()
 
+
+    def reset_override_state_and_set_reset_ask_time(self, time: datetime | None = None):
         self.external_user_initiated_state = None
         self.external_user_initiated_state_time = None
-
         if self.asked_for_reset_user_initiated_state_time is None:
-            # set the ask to now
-            self.asked_for_reset_user_initiated_state_time = datetime.now(tz=pytz.UTC)
-            await self.launch_qs_command_back(time=self.asked_for_reset_user_initiated_state_time, ctxt="async_reset_override_state get back to current command")
+            self.asked_for_reset_user_initiated_state_time = time
+            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = time
 
 
 class TestLoad(AbstractLoad):

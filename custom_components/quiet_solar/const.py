@@ -20,6 +20,7 @@ CONF_TYPE_NAME_QSPool = "pool"
 CONF_TYPE_NAME_QSOnOffDuration = "on_off_duration"
 CONF_TYPE_NAME_QSClimateDuration = "climate"
 CONF_TYPE_NAME_QSDynamicGroup = "dynamic_group"
+CONF_TYPE_NAME_QSHeatPump = "heat_pump"
 CONF_TYPE_NAME_HADeviceMixin = "ha_device_mixin"
 
 
@@ -49,7 +50,8 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSPool:"pools",
     CONF_TYPE_NAME_QSOnOffDuration:"others",
     CONF_TYPE_NAME_QSClimateDuration:"climates",
-    CONF_TYPE_NAME_QSDynamicGroup:None
+    CONF_TYPE_NAME_QSDynamicGroup:None,
+    CONF_TYPE_NAME_QSHeatPump:"climates"
 }
 
 
@@ -73,6 +75,7 @@ CONF_DEVICE_EFFICIENCY = "device_efficiency"
 CONF_DEVICE_DYNAMIC_GROUP_NAME = "dynamic_group_name"
 CONF_NUM_MAX_ON_OFF = "num_max_on_off"
 CONF_DEVICE_DASHBOARD_SECTION = "device_dashboard_section"
+CONF_DEVICE_TO_PILOT_NAME = "device_to_pilot_name"
 
 CONF_HOME_VOLTAGE = "home_voltage"
 
@@ -100,6 +103,7 @@ CONF_BATTERY_IS_DC_COUPLED = "battery_is_dc_coupled"
 CONF_CLIMATE = "climate"
 CONF_CLIMATE_HVAC_MODE_ON = "climate_hvac_on"
 CONF_CLIMATE_HVAC_MODE_OFF = "climate_hvac_off"
+
 
 CONF_DYN_GROUP_MAX_PHASE_AMPS = "dyn_group_max_phase_amps"
 
@@ -196,6 +200,8 @@ SENSOR_CAR_ESTIMATED_RANGE_KM = "qs_car_estimated_range_km"
 SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
 
 SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
+
+BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,

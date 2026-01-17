@@ -32,7 +32,19 @@ def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
         translation_key="default_on_duration",
         native_max_value=24,
         native_min_value=0,
-        native_step=0.5,
+        native_step=0.25,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        mode=NumberMode.BOX,
+    )
+    entities.append(QSBaseNumber(data_handler=device.data_handler, device=device, description=selected_car_description))
+
+
+    selected_car_description = QSNumberEntityDescription(
+        key="override_duration",
+        translation_key="override_duration",
+        native_max_value=24,
+        native_min_value=0,
+        native_step=0.25,
         native_unit_of_measurement=UnitOfTime.HOURS,
         mode=NumberMode.BOX,
     )

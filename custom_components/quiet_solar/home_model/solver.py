@@ -273,6 +273,9 @@ class PeriodSolver(object):
                 # put back the amps in the available amps
                 load.update_available_amps_for_group(s, prev_cmd_amps, add=True)
 
+                if not prev_cmd.is_off_or_idle() or prev_cmd.power_consign != 0:
+                    load.update_demanding_clients_for_piloted_devices_for_budget(s, add=False)
+
             if prev_cmd is None:
                 prev_cmd = copy_command(default_cmd)
 
@@ -289,6 +292,9 @@ class PeriodSolver(object):
             cmd_amps = load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
             # consume the amps in the available amps
             load.update_available_amps_for_group(s, cmd_amps, add=False)
+
+            if not cmd.is_off_or_idle() or cmd.power_consign != 0:
+                load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
 
             existing_cmds[s] = copy_command(cmd)
 
@@ -672,6 +678,7 @@ class PeriodSolver(object):
             # prepare available amps in teh group graph
             if home:
                 home.prepare_slots_for_amps_budget(self._start_time, num_slots=len(self._available_power))
+                home.prepare_slots_for_piloted_device_budget(self._start_time, num_slots=len(self._available_power))
         else:
             _LOGGER.info(f"solve: NO LOADS!")
 

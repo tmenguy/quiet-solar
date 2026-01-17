@@ -24,7 +24,8 @@
           "pool": "Add a pool",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
-          "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)"
+          "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
+          "heat_pump": "Add a centralized Heat Pump, to be used in conjunction with climate splits"
         }
       },
       "home": {
@@ -280,6 +281,7 @@
           "climate": "Climate entity",
           "climate_hvac_on": "HVAC mode to be used when the climate is on",
           "climate_hvac_off": "HVAC mode to be used when the climate is off",
+          "device_to_pilot_name": "Optionally attach a heat pump to this climate",
           "power": "Power of the climate (W)",
           "accurate_power_sensor": "Power sensor of the climate (W, kW)",
           "num_max_on_off" : "Maximum Number of allowed turn on or turn off of the climate per day",
@@ -299,6 +301,22 @@
           "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
           "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase group)",
           "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase group)"
+        }
+      },
+      "heat_pump": {
+        "title": "Add a centralized Heat Pump",
+        "description": "Configure a centralized heat pump used by several climates splits",
+        "data": {
+          "name": "Name",
+          "dynamic_group_name": "Add heat pump to a load group to limit the amps",
+          "power": "Power consumption of the heat pump (W)",
+          "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
+          "device_is_3p": "Is the heat pump 3 phases?",
+          "device_mono_phase": "if mono phase, this is the phase index",
+          "num_max_on_off": "Maximum Number of allowed turn on or turn off of the heat pump per day",
+          "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+          "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
+          "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)"
         }
       }
     }
@@ -559,6 +577,7 @@
           "climate": "[%key:component::quiet_solar::config::step::climate::data::climate%]",
           "climate_hvac_on": "[%key:component::quiet_solar::config::step::climate::data::climate_hvac_on%]",
           "climate_hvac_off": "[%key:component::quiet_solar::config::step::climate::data::climate_hvac_off%]",
+          "device_to_pilot_name": "[%key:component::quiet_solar::config::step::climate::data::device_to_pilot_name%]",
           "power": "[%key:component::quiet_solar::config::step::climate::data::power%]",
           "num_max_on_off": "[%key:component::quiet_solar::config::step::climate::data::num_max_on_off%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::climate::data::accurate_power_sensor%]",
@@ -578,10 +597,31 @@
           "phase_2_amps_sensor": "[%key:component::quiet_solar::config::step::dynamic_group::data::phase_2_amps_sensor%]",
           "phase_3_amps_sensor": "[%key:component::quiet_solar::config::step::dynamic_group::data::phase_3_amps_sensor%]"
         }
+      },
+      "heat_pump": {
+        "title": "[%key:component::quiet_solar::config::step::heat_pump::title%]",
+        "description": "[%key:component::quiet_solar::config::step::heat_pump::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::heat_pump::data::name%]",
+          "dynamic_group_name": "[%key:component::quiet_solar::config::step::heat_pump::data::dynamic_group_name%]",
+          "power": "[%key:component::quiet_solar::config::step::heat_pump::data::power%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::accurate_power_sensor%]",
+          "device_is_3p": "[%key:component::quiet_solar::config::step::heat_pump::data::device_is_3p%]",
+          "device_mono_phase": "[%key:component::quiet_solar::config::step::heat_pump::data::device_mono_phase%]",
+          "num_max_on_off": "[%key:component::quiet_solar::config::step::heat_pump::data::num_max_on_off%]",
+          "phase_1_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_1_amps_sensor%]",
+          "phase_2_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_2_amps_sensor%]",
+          "phase_3_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_3_amps_sensor%]"
+        }
       }
     }
   },
   "entity": {
+    "binary_sensor": {
+      "qs_piloted_device_activated": {
+        "name": "Piloted Device Activated"
+      }
+    },
     "sensor": {
       "qs_load_current_command_sensor": {
         "name": "Load Current Command"
@@ -713,7 +753,8 @@
         "name": "ON/OFF Load Mode",
         "state": {
           "on_off_mode_off": "Force OFF",
-          "bistate_mode_auto": "Use Calendar",
+          "bistate_mode_auto": "Use Calendar For End/Duration",
+          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
           "bistate_mode_default": "Use Default",
           "on_off_mode_on": "Force ON"
         }
@@ -723,15 +764,17 @@
         "state": {
           "on_off_mode_off": "Force OFF",
           "bistate_mode_auto": "Auto from T°",
+          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
           "bistate_mode_default": "Use Default",
           "on_off_mode_on": "Force ON",
           "pool_winter_mode": "Winter Mode"
         }
       },
       "climate_mode": {
-        "name": "Climate Mode",
+        "name": "Climate Control Mode",
         "state": {
-          "bistate_mode_auto": "Use Calendar",
+          "bistate_mode_auto": "Use Calendar For End/Duration",
+          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
           "bistate_mode_default": "Use Default",
           "off": "Force HVAC Mode OFF",
           "heat": "Force HVAC Mode HEAT",
@@ -740,6 +783,30 @@
           "auto": "Force HVAC Mode AUTO",
           "dry": "Force HVAC Mode DRY",
           "fan_only": "Force HVAC Mode FAN ONLY"
+        }
+      },
+      "climate_state_on": {
+        "name": "Climate Control Mode ON",
+        "state": {
+          "off": "OFF",
+          "heat": "HEAT",
+          "cool": "COOL",
+          "heat_cool": "COOL/HEAT",
+          "auto": "AUTO",
+          "dry": "DRY",
+          "fan_only": "FAN ONLY"
+        }
+      },
+      "climate_state_off": {
+        "name": "Climate Control Mode OFF",
+        "state": {
+          "off": "OFF",
+          "heat": "HEAT",
+          "cool": "COOL",
+          "heat_cool": "COOL/HEAT",
+          "auto": "AUTO",
+          "dry": "DRY",
+          "fan_only": "FAN ONLY"
         }
       },
       "home_mode": {
@@ -758,6 +825,9 @@
     "number" : {
       "default_on_duration": {
         "name": "default duration ON (hours)"
+      },
+      "override_duration": {
+        "name": "Reset user override duration (hours)"
       }
     },
     "time": {

@@ -14,6 +14,7 @@ from .entity import QSDeviceEntity
 from .ha_model.bistate_duration import QSBiStateDuration
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
+from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.home import QSHome, QSHomeMode
 
 from .home_model.load import AbstractDevice
@@ -100,6 +101,26 @@ def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
 
     return entities
 
+def create_ha_select_for_QSClimateDuration(device: QSClimateDuration):
+    entities = []
+
+    bistate_mode_description = QSSelectEntityDescription(
+        key="climate_state_on",
+        translation_key="climate_state_on",
+        options= device.get_possibles_modes(),
+        qs_default_option="heat"
+    )
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+
+    bistate_mode_description = QSSelectEntityDescription(
+        key="climate_state_off",
+        translation_key="climate_state_off",
+        options= device.get_possibles_modes(),
+        qs_default_option="off"
+    )
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+
+    return entities
 
 def create_ha_select_for_QSHome(device: QSHome):
     entities = []
@@ -125,6 +146,9 @@ def create_ha_select(device: AbstractDevice):
 
     if isinstance(device, QSBiStateDuration):
         ret.extend(create_ha_select_for_QSBiStateDuration(device))
+
+    if isinstance(device, QSClimateDuration):
+        ret.extend(create_ha_select_for_QSClimateDuration(device))
 
     if isinstance(device, QSHome):
         ret.extend(create_ha_select_for_QSHome(device))

@@ -161,6 +161,7 @@
                     "climate": "Climate entity",
                     "climate_hvac_off": "HVAC mode to be used when the climate is off",
                     "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "device_to_pilot_name": "Optionally attach a heat pump to this climate",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
@@ -184,6 +185,22 @@
                 },
                 "description": "Power group to limit the amps of multiple chargers for ex",
                 "title": "A power group"
+            },
+            "heat_pump": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
+                    "device_is_3p": "Is the heat pump 3 phases?",
+                    "device_mono_phase": "if mono phase, this is the phase index",
+                    "dynamic_group_name": "Add heat pump to a load group to limit the amps",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum Number of allowed turn on or turn off of the heat pump per day",
+                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
+                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)",
+                    "power": "Power consumption of the heat pump (W)"
+                },
+                "description": "Configure a centralized heat pump used by several climates splits",
+                "title": "Add a centralized Heat Pump"
             },
             "home": {
                 "data": {
@@ -293,6 +310,7 @@
                     "charger": "Add an electrical vehicle charger",
                     "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
                     "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
+                    "heat_pump": "Add a centralized Heat Pump, to be used in conjunction with climate splits",
                     "home": "Create a Home",
                     "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
                     "person": "Add a Person",
@@ -304,6 +322,11 @@
         }
     },
     "entity": {
+        "binary_sensor": {
+          "qs_piloted_device_activated": {
+            "name": "Piloted Device Activated"
+          }
+        },
         "button": {
             "qs_device_clean_and_reset": {
                 "name": "BEWARE: Force Reset"
@@ -342,21 +365,49 @@
         "number": {
             "default_on_duration": {
                 "name": "default duration ON (hours)"
+            },
+            "override_duration": {
+                "name": "Reset user override duration (hours)"
             }
         },
         "select": {
             "climate_mode": {
-                "name": "Climate Mode",
+                "name": "Climate Control Mode",
                 "state": {
                     "auto": "Force HVAC Mode AUTO",
-                    "bistate_mode_auto": "Use Calendar",
+                    "bistate_mode_auto": "Use Calendar For End/Duration",
                     "bistate_mode_default": "Use Default",
+                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
                     "cool": "Force HVAC Mode COOL",
                     "dry": "Force HVAC Mode DRY",
                     "fan_only": "Force HVAC Mode FAN ONLY",
                     "heat": "Force HVAC Mode HEAT",
                     "heat_cool": "Force HVAC Mode COOL/HEAT",
                     "off": "Force HVAC Mode OFF"
+                }
+            },
+            "climate_state_off": {
+                "name": "Climate Control Mode OFF",
+                "state": {
+                    "auto": "AUTO",
+                    "cool": "COOL",
+                    "dry": "DRY",
+                    "fan_only": "FAN ONLY",
+                    "heat": "HEAT",
+                    "heat_cool": "COOL/HEAT",
+                    "off": "OFF"
+                }
+            },
+            "climate_state_on": {
+                "name": "Climate Control Mode ON",
+                "state": {
+                    "auto": "AUTO",
+                    "cool": "COOL",
+                    "dry": "DRY",
+                    "fan_only": "FAN ONLY",
+                    "heat": "HEAT",
+                    "heat_cool": "COOL/HEAT",
+                    "off": "OFF"
                 }
             },
             "home_mode": {
@@ -374,8 +425,9 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "bistate_mode_auto": "Use Calendar",
+                    "bistate_mode_auto": "Use Calendar For End/Duration",
                     "bistate_mode_default": "Use Default",
+                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
                 }
@@ -385,6 +437,7 @@
                 "state": {
                     "bistate_mode_auto": "Auto from T\u00b0",
                     "bistate_mode_default": "Use Default",
+                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON",
                     "pool_winter_mode": "Winter Mode"
@@ -643,6 +696,7 @@
                     "climate": "Climate entity",
                     "climate_hvac_off": "HVAC mode to be used when the climate is off",
                     "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "device_to_pilot_name": "Optionally attach a heat pump to this climate",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
@@ -665,6 +719,22 @@
                 },
                 "description": "Power group to limit the amps of multiple chargers for ex",
                 "title": "A power group"
+            },
+            "heat_pump": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
+                    "device_is_3p": "Is the heat pump 3 phases?",
+                    "device_mono_phase": "if mono phase, this is the phase index",
+                    "dynamic_group_name": "Add heat pump to a load group to limit the amps",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum Number of allowed turn on or turn off of the heat pump per day",
+                    "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
+                    "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
+                    "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)",
+                    "power": "Power consumption of the heat pump (W)"
+                },
+                "description": "Configure a centralized heat pump used by several climates splits",
+                "title": "Add a centralized Heat Pump"
             },
             "home": {
                 "data": {

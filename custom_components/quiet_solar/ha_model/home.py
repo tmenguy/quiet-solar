@@ -29,6 +29,7 @@ from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
 from ..ha_model.person import QSPerson
+from ..ha_model.heat_pump import QSHeatPump
 
 from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
 from ..ha_model.solar import QSSolar
@@ -36,7 +37,7 @@ from ..home_model.commands import LoadCommand, CMD_IDLE
 from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm, \
     max_amps
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
-    extract_name_and_index_from_dashboard_section_option, get_value_from_time_series
+    extract_name_and_index_from_dashboard_section_option, get_value_from_time_series, PilotedDevice
 from ..home_model.solver import PeriodSolver
 
 import numpy as np
@@ -231,6 +232,9 @@ class QSHome(QSDynamicGroup):
         self._chargers: list[QSChargerGeneric] = []
         self._cars: list[QSCar] = []
         self._persons: list = []
+        self._heat_pumps: list[QSHeatPump] = []
+        self._all_piloted_devices : list[PilotedDevice] = []
+
 
         self._all_devices: list[HADeviceMixin] = []
         self._disabled_devices: list[HADeviceMixin] = []
@@ -238,6 +242,7 @@ class QSHome(QSDynamicGroup):
         self._all_loads: list[AbstractLoad] = []
         self._all_dynamic_groups: list[QSDynamicGroup] = []
         self._name_to_groups: dict[str, QSDynamicGroup] = {}
+        self._name_to_piloted_devices: dict[str,PilotedDevice] = {}
 
         self._period: timedelta = timedelta(seconds=FLOATING_PERIOD_S)
         self._commands: list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
@@ -1304,6 +1309,20 @@ class QSHome(QSDynamicGroup):
                         time=time, ignore_auto_load=True)
                     if p is not None:
                         controlled_consumption += p
+            piloted_sets = set()
+            for load in self._all_loads:
+                if load.qs_enable_device is False:
+                    continue
+                if len(load.devices_to_pilot) != 0:
+                    piloted_sets.update(load.devices_to_pilot)
+
+            for piloted_device in piloted_sets:
+                p = piloted_device.get_device_power_latest_possible_valid_value(
+                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                    time=time, ignore_auto_load=True)
+                if p is not None:
+                    controlled_consumption += p
+
 
             self.grid_consumption_power = grid_consumption
             self.home_non_controlled_consumption = home_consumption - controlled_consumption
@@ -1450,6 +1469,19 @@ class QSHome(QSDynamicGroup):
             father._childrens.append(load)
             load.father_device = father
 
+        self._name_to_piloted_devices = {}
+        for piloted_device in self._all_piloted_devices:
+            self._name_to_piloted_devices[piloted_device.name] = piloted_device
+            piloted_device.clients = []
+
+        for load in self._all_loads:
+            load.devices_to_pilot = []
+            if load.piloted_device_name is not None:
+                piloted_device = self._name_to_piloted_devices.get(load.piloted_device_name, None)
+                if piloted_device is not None:
+                    load.devices_to_pilot.append(piloted_device)
+                    piloted_device.clients.append(load)
+
     def add_device(self, device):
 
         device.home = self
@@ -1467,6 +1499,13 @@ class QSHome(QSDynamicGroup):
         elif isinstance(device, QSPerson):
             if device not in self._persons:
                 self._persons.append(device)
+        elif isinstance(device, QSHeatPump):
+            if device not in self._heat_pumps:
+                self._heat_pumps.append(device)
+
+        if isinstance(device, PilotedDevice):
+            if device not in self._all_piloted_devices:
+                self._all_piloted_devices.append(device)
 
 
         if isinstance(device, AbstractLoad):
@@ -1519,6 +1558,19 @@ class QSHome(QSDynamicGroup):
                 self._persons.remove(device)
             except Exception as e:
                 _LOGGER.warning(f"Attempted to remove person {device.name} that was not in the list of persons {e}", exc_info=True, stack_info=True)
+
+        if isinstance(device, QSHeatPump):
+            try:
+                self._heat_pumps.remove(device)
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove heat pump {device.name} that was not in the list of heat pumps {e}", exc_info=True, stack_info=True)
+
+        if isinstance(device, PilotedDevice):
+            try:
+                self._all_piloted_devices.remove(device)
+            except Exception as e:
+                _LOGGER.warning(f"Attempted to remove pilted device {device.name} that was not in the list of piloted devices {e}", exc_info=True, stack_info=True)
+
 
         if isinstance(device, AbstractLoad):
             try:
@@ -2250,6 +2302,11 @@ class QSHome(QSDynamicGroup):
     async def generate_yaml_for_dashboard(self):
         await generate_dashboard_yaml(self)
 
+    def prepare_slots_for_piloted_device_budget(self, time: datetime, num_slots: int):
+
+        for piloted_device in self._all_piloted_devices:
+            piloted_device.prepare_slots_for_piloted_device_budget(time, num_slots)
+
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
 BUFFER_SIZE_DAYS = 80*7
 # interval in minutes between 2 measures
@@ -2423,8 +2480,25 @@ class QSHomeConsumptionHistoryAndForecast:
                 bfs_queue = []
                 bfs_queue.extend(self.home._childrens)
 
+                piloted_sets = set()
+                ha_entity_to_read = {}
+
+                for load in self._all_loads:
+                    if load.qs_enable_device is False:
+                        continue
+                    if len(load.devices_to_pilot) != 0:
+                        piloted_sets.update(load.devices_to_pilot)
+
+                for piloted_device in piloted_sets:
+                    ha_best_entity_id = piloted_device.get_best_power_HA_entity()
+                    ha_entity_to_read[ha_best_entity_id] = None
+
                 while len(bfs_queue) > 0:
                     device = bfs_queue.pop(0)
+
+                    if device.qs_enable_device is False:
+                        continue
+
                     ha_best_entity_id = None
                     if isinstance(device, QSDynamicGroup):
                         if device.accurate_power_sensor is None:
@@ -2452,6 +2526,10 @@ class QSHomeConsumptionHistoryAndForecast:
                             ha_best_entity_id = device.switch_entity
                             switch_device = device
 
+                    if ha_best_entity_id is None:
+                        ha_entity_to_read[ha_best_entity_id] = switch_device
+
+                for ha_best_entity_id, switch_device in ha_entity_to_read.items():
                     if ha_best_entity_id is not None:
                         load_sensor = QSSolarHistoryVals(entity_id=ha_best_entity_id, forecast=self)
                         s, e = await load_sensor.init(time, for_reset=True, reset_for_switch_device=switch_device)

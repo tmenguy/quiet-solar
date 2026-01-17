@@ -1216,7 +1216,7 @@ class HADeviceMixin:
     def get_platforms(self) -> list[str]:
         """ returns associated platforms for this device """
         platforms = set()
-        platforms.update([Platform.BUTTON, Platform.SENSOR])
+        platforms.update([Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR])
 
         for attached_device in self.get_attached_virtual_devices():
             platforms.update(attached_device.get_platforms())

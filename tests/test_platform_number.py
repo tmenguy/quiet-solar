@@ -33,11 +33,11 @@ def test_create_ha_number_for_bistate_duration():
     
     entities = create_ha_number_for_QSBiStateDuration(mock_device)
     
-    # Should create one number entity for default_on_duration
-    assert len(entities) == 1
-    assert isinstance(entities[0], QSBaseNumber)
-    assert entities[0].entity_description.key == "default_on_duration"
-
+    # Should create 2 number entity for default_on_duration and override_duration
+    assert len(entities) == 2
+    for i in range(2):
+        assert isinstance(entities[i], QSBaseNumber)
+        assert entities[i].entity_description.key in ["default_on_duration", "override_duration"]
 
 def test_create_ha_number_general():
     """Test general number creation function."""
@@ -50,7 +50,7 @@ def test_create_ha_number_general():
     mock_bistate.default_on_duration = 1.5
     
     entities = create_ha_number(mock_bistate)
-    assert len(entities) == 1
+    assert len(entities) == 2
     
     # Non-BiState device should get no number entities
     mock_home = create_mock_device("home")
@@ -286,8 +286,9 @@ async def test_async_setup_entry():
     # Should add entities
     mock_add_entities.assert_called_once()
     added_entities = mock_add_entities.call_args[0][0]
-    assert len(added_entities) == 1
+    assert len(added_entities) == 2
     assert isinstance(added_entities[0], QSBaseNumber)
+    assert isinstance(added_entities[1], QSBaseNumber)
 
 
 @pytest.mark.asyncio

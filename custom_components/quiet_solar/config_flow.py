@@ -58,7 +58,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     CONF_MOBILE_APP_URL, CONF_DEVICE_EFFICIENCY, CONF_CHARGER_LATITUDE, CONF_CHARGER_LONGITUDE, \
     CONF_BATTERY_MIN_CHARGE_PERCENT, CONF_BATTERY_MAX_CHARGE_PERCENT, CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, \
     CONF_DYN_GROUP_MAX_PHASE_AMPS, CONF_DEVICE_DYNAMIC_GROUP_NAME, CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_OFF, \
-    CONF_CLIMATE_HVAC_MODE_ON, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, \
+    CONF_CLIMATE_HVAC_MODE_ON, CONF_DEVICE_TO_PILOT_NAME, CONF_PHASE_1_AMPS_SENSOR, CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, \
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_MONO_PHASE, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, \
     CONF_MINIMUM_OK_CAR_CHARGE, DASHBOARD_NUM_SECTION_MAX, CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, \
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
@@ -77,6 +77,7 @@ from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
 from .ha_model.person import QSPerson
+from .ha_model.heat_pump import QSHeatPump
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,7 +91,8 @@ LOAD_TYPES_MENU = {
     QSPool.conf_type_name:None,
     QSOnOffDuration.conf_type_name:None,
     QSClimateDuration.conf_type_name:None,
-    QSDynamicGroup.conf_type_name:None
+    QSDynamicGroup.conf_type_name:None,
+    QSHeatPump.conf_type_name:None
 }
 
 
@@ -1194,6 +1196,33 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             data_schema=schema
         )
 
+    async def async_step_heat_pump(self, user_input=None):
+        """Configure a QSHeatPump instance."""
+        TYPE = QSHeatPump.conf_type_name
+
+        if user_input is not None:
+            # Process user input
+            user_input[DEVICE_TYPE] = TYPE
+            r = await self.async_entry_next(user_input, TYPE)
+            return r
+
+        sc_dict = self.get_common_schema(type=TYPE,
+                                         add_power_value_selector=2000,
+                                         add_load_power_sensor=True,
+                                         add_is_3p=True,
+                                         add_power_group_selector=True,
+                                         add_max_on_off=True,
+                                         add_amps_sensors=True,
+                                         add_phase_number=True
+                                         )
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(
+            step_id=TYPE,
+            data_schema=schema
+        )
+
     async def async_step_pool(self, user_input=None):
 
         TYPE = QSPool.conf_type_name
@@ -1326,6 +1355,35 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     )
             })
 
+        # Get list of available heat pumps from the data handler
+        data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+        heat_pump_options = []
+        if data_handler and data_handler.home:
+            heat_pumps = getattr(data_handler.home, '_heat_pumps', [])
+            heat_pump_options = [hp.name for hp in heat_pumps]
+
+        if heat_pump_options:
+            default_heat_pump = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
+            if default_heat_pump:
+                sc_dict.update({
+                    vol.Optional(CONF_DEVICE_TO_PILOT_NAME, description={"suggested_value": default_heat_pump}):
+                        selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=heat_pump_options,
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        )
+                })
+            else:
+                sc_dict.update({
+                    vol.Optional(CONF_DEVICE_TO_PILOT_NAME):
+                        selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=heat_pump_options,
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        )
+                })
 
 
         schema = vol.Schema(sc_dict)
