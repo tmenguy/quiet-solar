@@ -70,6 +70,10 @@ class FakeStates:
         """Set a state."""
         self._states[entity_id] = FakeState(entity_id, state, attributes)
 
+    def async_available(self, entity_id: str) -> bool:
+        """Check if an entity_id is available (not already used)."""
+        return entity_id not in self._states
+
 
 class FakeServices:
     """Fake services manager."""
