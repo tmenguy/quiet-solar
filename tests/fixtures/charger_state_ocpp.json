@@ -1,0 +1,15 @@
+{
+  "charger_id": "ocpp_test_456",
+  "charger_type": "ocpp",
+  "state": "available",
+  "current_power": 0,
+  "max_power": 11000,
+  "current_amps": 0,
+  "voltage": 230,
+  "is_3p": true,
+  "connected_car": null,
+  "charging_time": 0,
+  "added_energy": 0
+}
+
+

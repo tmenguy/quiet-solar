@@ -1,0 +1,13 @@
+{
+  "car_id": "car_test_low_soc",
+  "name": "Test Car",
+  "battery_capacity_wh": 50000,
+  "current_soc_percent": 25,
+  "current_soc_wh": 12500,
+  "target_soc_percent": 80,
+  "is_connected": true,
+  "is_charging": true,
+  "estimated_range_km": 100
+}
+
+

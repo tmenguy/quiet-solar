@@ -1,0 +1,15 @@
+{
+  "charger_id": "wallbox_test_123",
+  "charger_type": "wallbox",
+  "state": "charging",
+  "current_power": 3500,
+  "max_power": 7400,
+  "current_amps": 16,
+  "voltage": 230,
+  "is_3p": false,
+  "connected_car": "test_car_123",
+  "charging_time": 120,
+  "added_energy": 5.2
+}
+
+
