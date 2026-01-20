@@ -181,7 +181,7 @@ class TestSolver(TestCase):
             pv_forecast = pv_forecast,
             unavoidable_consumption_forecast = unavoidable_consumption_forecast
         )
-        s.solve()
+        s.solve(with_self_test=True)
 
 
     def test_auto_cmds(self):
@@ -190,7 +190,7 @@ class TestSolver(TestCase):
 
             time = datetime.now(pytz.UTC)
             car_capacity = 22000
-            target_best_effort = 22000
+            target_best_effort = 100.0
             charger = TestLoad(name="charger")
             steps = []
             for a in range(7, 32 + 1):
@@ -217,7 +217,7 @@ class TestSolver(TestCase):
                 pv_forecast=None,
                 unavoidable_consumption_forecast=None
             )
-            cmds, battery_commands = s.solve()
+            cmds, battery_commands = s.solve(with_self_test=True)
 
             assert cmds is not None
 
@@ -304,7 +304,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Basic checks
         assert load_commands is not None
@@ -410,7 +410,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Verify solver worked
         assert load_commands is not None
@@ -518,7 +518,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Verify solver worked
         assert load_commands is not None
@@ -634,7 +634,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Verify solver worked
         assert load_commands is not None
@@ -733,7 +733,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         assert load_commands is not None
         assert battery_commands is not None
@@ -839,7 +839,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Verify basic functionality
         assert load_commands is not None
@@ -957,7 +957,7 @@ class TestSolver(TestCase):
             unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
         
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
         
         # Verify solver worked
         assert load_commands is not None

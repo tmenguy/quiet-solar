@@ -2302,10 +2302,10 @@ class QSHome(QSDynamicGroup):
     async def generate_yaml_for_dashboard(self):
         await generate_dashboard_yaml(self)
 
-    def prepare_slots_for_piloted_device_budget(self, time: datetime, num_slots: int):
+    def prepare_slots_for_piloted_device_budget(self, num_slots: int):
 
         for piloted_device in self._all_piloted_devices:
-            piloted_device.prepare_slots_for_piloted_device_budget(time, num_slots)
+            piloted_device.prepare_slots_for_piloted_device_budget(num_slots)
 
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
 BUFFER_SIZE_DAYS = 80*7

@@ -81,7 +81,6 @@ def common_setup(self):
     self.dynamic_group = self.wallboxes_group = QSDynamicGroup(**wallboxes_config)
 
 
-# @unittest.skip("Skipping due to recursion error in device initialization - use TestBudgetingAlgorithm instead")
 class TestChargersSetup(unittest.TestCase):
     def setUp(self):
 
@@ -435,7 +434,7 @@ class TestChargersBasics(unittest.TestCase):
             # unavoidable_consumption_forecast=unavoidable_consumption_forecast
         )
 
-        load_commands, battery_commands = s.solve()
+        load_commands, battery_commands = s.solve(with_self_test=True)
 
         cmds = {self.chargers[0]: [], self.chargers[1]: []}
         for load, commands in load_commands:
@@ -486,7 +485,7 @@ class TestChargersBasics(unittest.TestCase):
                 # unavoidable_consumption_forecast=unavoidable_consumption_forecast
             )
 
-            load_commands, battery_commands = s.solve()
+            load_commands, battery_commands = s.solve(with_self_test=True)
 
             cmds = {loads[0]:[], loads[1]:[] }
             for load, commands in load_commands:

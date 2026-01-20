@@ -3750,15 +3750,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                 clip_to_zero_under_power=self.charger_consumption_W)
         added_percent = None
 
-        added_nrj = added_nrj / self.efficiency_factor
+        real_car_added_nrj = added_nrj / self.efficiency_factor
 
-        if self.car.car_battery_capacity is not None and added_nrj is not None and self.car.car_battery_capacity > 0:
-            added_percent = (100.0 * added_nrj) / self.car.car_battery_capacity
+        if self.car.car_battery_capacity is not None and real_car_added_nrj is not None and self.car.car_battery_capacity > 0:
+            added_percent = (100.0 * real_car_added_nrj) / self.car.car_battery_capacity
 
         if is_target_percent:
             return added_percent
         else:
-            return added_nrj
+            return real_car_added_nrj
 
     async def constraint_update_value_callback_percent_soc(self, ct: LoadConstraint, time: datetime) -> tuple[
         float | None, bool]:

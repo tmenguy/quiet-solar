@@ -291,7 +291,7 @@ class TestForecast(TestCase):
                     pv_forecast=solar_forecast,
                     unavoidable_consumption_forecast=conso_forecast
                 )
-                cmds, battery_comands = s.solve()
+                cmds, battery_comands = s.solve(with_self_test=True)
 
                 assert cmds is not None
 

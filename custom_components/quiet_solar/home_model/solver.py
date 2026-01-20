@@ -7,7 +7,7 @@ import pytz
 
 from .battery import Battery
 from .constraints import LoadConstraint, DATETIME_MAX_UTC
-from .home_utils import get_average_time_series
+from .home_utils import get_average_time_series, add_amps
 from .load import AbstractLoad
 from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
     CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type, \
@@ -107,6 +107,9 @@ class PeriodSolver(object):
             _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER 0 SUM")
         elif np.min(self._available_power) >= 0:
             _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER ... MINIMUM IS POSITIVE, NO POWER TO CONSUME")
+
+        self._load_power_usage_for_test = None
+        self._battery_power_external_consumption_for_test = None
 
 
     def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
@@ -270,11 +273,15 @@ class PeriodSolver(object):
 
             if prev_cmd is not None:
                 prev_cmd_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
-                # put back the amps in the available amps
-                load.update_available_amps_for_group(s, prev_cmd_amps, add=True)
 
                 if not prev_cmd.is_off_or_idle() or prev_cmd.power_consign != 0:
-                    load.update_demanding_clients_for_piloted_devices_for_budget(s, add=False)
+                    piloted_delta_power = load.update_demanding_clients_for_piloted_devices_for_budget(s, add=False)
+                    if piloted_delta_power > 0:
+                        piloted_amps = load.get_phase_amps_from_power_for_piloted_budgeting(piloted_delta_power)
+                        prev_cmd_amps = add_amps(prev_cmd_amps, piloted_amps)
+
+                # put back the amps in the available amps
+                load.update_available_amps_for_group(s, prev_cmd_amps, add=True)
 
             if prev_cmd is None:
                 prev_cmd = copy_command(default_cmd)
@@ -290,11 +297,15 @@ class PeriodSolver(object):
                 cmd = merge_commands(prev_cmd, new_cmd)
 
             cmd_amps = load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
-            # consume the amps in the available amps
-            load.update_available_amps_for_group(s, cmd_amps, add=False)
 
             if not cmd.is_off_or_idle() or cmd.power_consign != 0:
-                load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
+                piloted_delta_power = load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
+                if piloted_delta_power > 0:
+                    piloted_amps = load.get_phase_amps_from_power_for_piloted_budgeting(piloted_delta_power)
+                    cmd_amps = add_amps(cmd_amps, piloted_amps)
+
+            # consume the amps in the available amps
+            load.update_available_amps_for_group(s, cmd_amps, add=False)
 
             existing_cmds[s] = copy_command(cmd)
 
@@ -645,9 +656,40 @@ class PeriodSolver(object):
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
 
+    def _get_power_from_commands(self, loads: dict[AbstractLoad, list[LoadCommand]]) -> npt.NDArray[np.float64]:
+
+        out_power = np.zeros(len(self._available_power), dtype=np.float64)
+
+        if len(loads) > 0:
+
+            piloted_device_set = set()
+            for load in self._loads:
+                piloted_device_set.update(load.devices_to_pilot)
+
+            for pd in piloted_device_set:
+                pd.prepare_slots_for_piloted_device_budget(len(self._available_power))
+
+            for s in range(len(self._available_power)):
+
+                power = 0.0
+
+                for load, commands in loads.items():
+                    if commands is None:
+                        continue
+
+                    cmd = commands[s]
+
+                    if cmd is not None and (not cmd.is_off_or_idle() or cmd.power_consign != 0):
+                        power += load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
+                        power += cmd.power_consign
+
+                out_power[s] = power
+
+        return out_power
 
 
-    def solve(self, is_off_grid=False) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
+
+    def solve(self, is_off_grid=False, with_self_test=False) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
         """
         Solve the day for the given loads and constraints.
 
@@ -665,12 +707,16 @@ class PeriodSolver(object):
 
         # first get ordered constraints, and they will fill one by one the slots with minimizing the cost for the constraint
         # special treatment for "dynamically adaptable load ex : a car with variable power charge, or the battery itself
-        # the battery should have a "soft" constraint to cover the computed left unavidable consmuption (ie sum on the
+        # the battery should have a "soft" constraint to cover the computed left unavoidable consumption (ie sum on the
         # positive numbers in available power)
 
         constraints_evolution = {}
         constraints_bounds = {}
         actions = {}
+
+        available_power_init = None
+        if with_self_test:
+            available_power_init = self._available_power.copy()
 
 
         if self._loads and len(self._loads) > 0:
@@ -678,7 +724,15 @@ class PeriodSolver(object):
             # prepare available amps in teh group graph
             if home:
                 home.prepare_slots_for_amps_budget(self._start_time, num_slots=len(self._available_power))
-                home.prepare_slots_for_piloted_device_budget(self._start_time, num_slots=len(self._available_power))
+                home.prepare_slots_for_piloted_device_budget(num_slots=len(self._available_power))
+            else:
+                piloted_device_set = set()
+                for load in self._loads:
+                    piloted_device_set.update(load.devices_to_pilot)
+
+                for pd in piloted_device_set:
+                    pd.prepare_slots_for_piloted_device_budget(len(self._available_power))
+
         else:
             _LOGGER.info(f"solve: NO LOADS!")
 
@@ -947,6 +1001,27 @@ class PeriodSolver(object):
         # now will be time to layout the commands for the constraints and their respective loads
         # commands are to be sent as change of state for the load attached to the constraints
         output_cmds = []
+
+
+        if with_self_test:
+
+            self._load_power_usage_for_test = self._get_power_from_commands(actions)
+
+            res = available_power_init + self._load_power_usage_for_test
+
+            if battery_commands is not None:
+                self._battery_power_external_consumption_for_test = battery_ext_consumption_power
+                ref = self._available_power - battery_ext_consumption_power
+            else:
+                ref = self._available_power
+
+
+
+
+            max_diff = np.max(np.abs(res - ref))
+            if max_diff > 1e-3:
+                _LOGGER.error(f"solve: SELF TEST FAILED max diff in available power after solving constraints: {max_diff} W")
+                raise Exception(f"SELF TEST FAILED max diff in available power after solving constraints: {max_diff} W")
 
         for load, command_list in actions.items():
             lcmd = []

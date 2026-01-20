@@ -128,7 +128,7 @@ class AbstractDevice(object):
 
 
 
-    def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int, add: bool = True) -> float:
+    def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int | None, add: bool = True) -> float:
         if len(self.devices_to_pilot) == 0:
             return 0.0
 
@@ -147,6 +147,19 @@ class AbstractDevice(object):
             power_delta += pd.update_num_demanding_clients_for_slot(slot_idx, add)
 
         return power_delta
+
+    def get_phase_amps_from_power_for_piloted_budgeting(self, power:float) -> list[float | int]:
+        if len(self.devices_to_pilot) == 0:
+            return [0.0, 0.0, 0.0]
+
+        ret = [0.0, 0.0, 0.0]
+        for pd in self.devices_to_pilot:
+            pd_amps = pd.get_phase_amps_from_power_for_budgeting(power/len(self.devices_to_pilot))
+            ret[0] += pd_amps[0]
+            ret[1] += pd_amps[1]
+            ret[2] += pd_amps[2]
+
+        return ret
 
 
     def is_off_grid(self) -> bool:
@@ -346,7 +359,7 @@ class AbstractDevice(object):
 
     def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
 
-        if power == 0:
+        if power == 0.0:
             return [0.0, 0.0, 0.0]
 
         # shouldn't we use sqrt(3) instead of 3 ? according to chatGPT probably .. should check
@@ -551,12 +564,12 @@ class PilotedDevice(AbstractDevice):
                     return True
         return False
 
-    def prepare_slots_for_piloted_device_budget(self, time: datetime, num_slots: int):
+    def prepare_slots_for_piloted_device_budget(self, num_slots: int):
         self.num_demanding_clients = [0]*num_slots
         _LOGGER.debug(
             f"prepare_slots_for_piloted_device_budget for a piloted device: {self.name}")
 
-    def possible_delta_power_for_slot(self, slot_idx: int, add: bool = True) -> float:
+    def possible_delta_power_for_slot(self, slot_idx: int | None, add: bool = True) -> float:
         if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
             return 0
 
@@ -564,14 +577,14 @@ class PilotedDevice(AbstractDevice):
             return 0
 
         if add:
-            if self.num_demanding_clients[slot_idx] == 0:
+            if slot_idx is None or self.num_demanding_clients[slot_idx] == 0:
                 # first add!
                 return self.power_use
             else:
                 return 0
 
         else:
-            if self.num_demanding_clients[slot_idx] == 1:
+            if slot_idx is None or self.num_demanding_clients[slot_idx] == 1:
                 # last remove!
                 return self.power_use
 

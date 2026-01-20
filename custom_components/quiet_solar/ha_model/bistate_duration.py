@@ -300,7 +300,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         target_value = (end_schedule - start_schedule).total_seconds()
                         if bistate_mode == "bistate_mode_exact_calendar":
                             always_end_at_end_of_constraint = True
-                            target_value += 600 # 10 mn of leg room to be sure the planner will fill all of this
+                            target_value += 600 # 10 mn of leg room to be sure the planner will fill all of it
+                        else:
+                            # bistate mode auto
+                            start_schedule = None
 
 
                 if do_add_constraint:
@@ -315,6 +318,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             time=time,
                             load=self,
                             from_user=has_user_forced_constraint,
+                            start_of_constraint=start_schedule,
                             end_of_constraint=end_schedule,
                             power=self.power_use,
                             initial_value=0,
