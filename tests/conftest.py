@@ -87,10 +87,15 @@ class FakeServices:
         service: str,
         data: Dict[str, Any] | None = None,
         blocking: bool = False,
-        return_response: bool = False
+        return_response: bool = False,
+        target: Dict[str, Any] | None = None
     ):
         """Record service call."""
-        self.calls.append((domain, service, data or {}, blocking))
+        # Merge target into data if provided (Home Assistant style)
+        call_data = data.copy() if data else {}
+        if target:
+            call_data.update(target)
+        self.calls.append((domain, service, call_data, blocking))
         if return_response:
             return {}
     

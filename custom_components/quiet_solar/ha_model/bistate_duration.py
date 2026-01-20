@@ -1,6 +1,6 @@
 import logging
 from abc import abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 
@@ -153,7 +153,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # - we detect that the current command is not one that has been set by the system
             # - we store this command and state change time
             # if not done we create a constraint,marked as user, with the proper command detected parameter (ex for an HVAC it could be multiple)
-            if self.external_user_initiated_state_time is not None and (time - self.external_user_initiated_state_time).total_seconds() > (3600.0*self.self.override_duration):
+            if self.external_user_initiated_state_time is not None and (time - self.external_user_initiated_state_time).total_seconds() > (3600.0*self.override_duration):
                 _LOGGER.info(
                     f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
                 # we need to reset the external user initiated state
@@ -207,7 +207,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
-                                USER_OVERRIDE_STATE_BACK_DURATION_S, (3600.0 * self.self.override_duration) / 2.0):
+                                USER_OVERRIDE_STATE_BACK_DURATION_S, (3600.0 * self.override_duration) / 2.0):
                             # small time window after asking for reset, do not consider the command overridden
                             if is_command_overridden is False:
                                 # great no more override already after the last ask to stop override, reset the timer
@@ -248,7 +248,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             self.reset()
                             do_force_next_solve = True
                         else:
-                            end_schedule = time + datetime.timedelta(seconds=(3600.0*self.self.override_duration))
+                            end_schedule = time + timedelta(seconds=(3600.0*self.override_duration))
                             override_constraint = TimeBasedSimplePowerLoadConstraint(
                                 type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                                 degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -259,7 +259,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,
                                 initial_value=0,
-                                target_value=3600.0*self.self.override_duration,
+                                target_value=3600.0*self.override_duration,
                                 always_end_at_end_of_constraint=True
                             )
 
