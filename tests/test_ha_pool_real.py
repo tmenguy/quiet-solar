@@ -29,7 +29,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestQSPoolInit:

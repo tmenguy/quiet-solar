@@ -11,7 +11,7 @@ from custom_components.quiet_solar.const import MAX_PERSON_MILEAGE_HISTORICAL_DA
 from custom_components.quiet_solar.ha_model.home import QSHome, get_time_from_state
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.car import QSCar
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestPersonsCarForecast:

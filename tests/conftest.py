@@ -601,3 +601,159 @@ async def home_charger_and_car(hass, setup_home_first):
     await hass.async_block_till_done()
     
     return home_entry, charger_entry, car_entry
+
+
+# ============================================================================
+# Additional Test Fixtures for Comprehensive Testing
+# ============================================================================
+
+
+class MockLazyState:
+    """Mock LazyState for testing history-based functions."""
+    def __init__(self, entity_id: str, state: str, attributes: dict | None = None,
+                 last_updated: "datetime" | None = None):
+        import pytz
+        from datetime import datetime
+        self.entity_id = entity_id
+        self.state = state
+        self.attributes = attributes or {}
+        self.last_updated = last_updated or datetime.now(pytz.UTC)
+
+
+@pytest.fixture
+def mock_lazy_state_factory():
+    """Factory fixture for creating MockLazyState objects."""
+    def factory(entity_id: str, state: str, attributes: dict | None = None,
+                last_updated: "datetime" | None = None):
+        return MockLazyState(entity_id, state, attributes, last_updated)
+    return factory
+
+
+@pytest.fixture
+def mock_recorder_history():
+    """Mock recorder history for testing history-based methods.
+
+    Returns a function that can be used to configure load_from_history return values.
+    """
+    histories = {}
+
+    def set_history(entity_id: str, states: list):
+        """Set the history for an entity."""
+        histories[entity_id] = states
+
+    async def mock_load_from_history(hass, entity_id, start, end, **kwargs):
+        """Mock implementation of load_from_history."""
+        return histories.get(entity_id, [])
+
+    return {
+        "set_history": set_history,
+        "mock_fn": mock_load_from_history,
+    }
+
+
+@pytest.fixture
+def mock_gps_states(mock_lazy_state_factory):
+    """Fixture for creating GPS location state sequences."""
+    import pytz
+    from datetime import datetime, timedelta
+
+    def create_gps_path(entity_id: str, locations: list, start_time: datetime | None = None):
+        """Create a list of states representing a GPS path.
+
+        Args:
+            entity_id: The entity ID for the tracker
+            locations: List of tuples (state_name, lat, lon, minutes_offset)
+            start_time: Base time for the path
+
+        Returns:
+            List of MockLazyState objects
+        """
+        if start_time is None:
+            start_time = datetime.now(pytz.UTC) - timedelta(hours=1)
+
+        states = []
+        for state_name, lat, lon, minutes in locations:
+            time = start_time + timedelta(minutes=minutes)
+            state = mock_lazy_state_factory(
+                entity_id,
+                state_name,
+                {"latitude": lat, "longitude": lon},
+                time
+            )
+            states.append(state)
+        return states
+
+    return create_gps_path
+
+
+@pytest.fixture
+def mock_charger_group_factory(fake_hass):
+    """Factory fixture for creating mock charger groups."""
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGroup
+    from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
+
+    def factory(chargers: list | None = None, name: str = "Test Group"):
+        """Create a mock charger group.
+
+        Args:
+            chargers: List of charger mocks to include
+            name: Name for the group
+        """
+        mock_dyn_group = MagicMock(spec=QSDynamicGroup)
+        mock_dyn_group.name = name
+        mock_dyn_group._childrens = chargers or []
+        mock_dyn_group.home = MagicMock()
+
+        return QSChargerGroup(mock_dyn_group)
+
+    return factory
+
+
+@pytest.fixture
+def mock_person_with_history(fake_hass):
+    """Factory fixture for creating persons with pre-populated mileage history."""
+    from custom_components.quiet_solar.ha_model.person import QSPerson
+    import pytz
+    from datetime import datetime, timedelta
+
+    def factory(name: str = "Test Person", days_of_history: int = 7):
+        """Create a person with history.
+
+        Args:
+            name: Person name
+            days_of_history: Number of days of mileage history to generate
+        """
+        config_entry = FakeConfigEntry(
+            entry_id=f"person_{name.lower().replace(' ', '_')}",
+            data={CONF_NAME: name},
+        )
+
+        home = MagicMock()
+        home._cars = []
+        home.get_car_by_name = MagicMock(return_value=None)
+
+        data_handler = MagicMock()
+        data_handler.home = home
+        fake_hass.data[DOMAIN][DATA_HANDLER] = data_handler
+
+        person = QSPerson(
+            hass=fake_hass,
+            config_entry=config_entry,
+            home=home,
+            name=name,
+            person_entity_id=f"person.{name.lower().replace(' ', '_')}"
+        )
+
+        # Add historical data
+        base_date = datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        for i in range(days_of_history):
+            day = base_date - timedelta(days=days_of_history - i)
+            leave_time = day.replace(hour=8, minute=30)
+            mileage = 40.0 + (i * 5)  # Varying mileage
+            person.add_to_mileage_history(day, mileage, leave_time)
+
+        person.has_been_initialized = True
+
+        return person
+
+    return factory

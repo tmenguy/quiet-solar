@@ -78,7 +78,8 @@ from custom_components.quiet_solar.home_model.constraints import (
     DATETIME_MAX_UTC,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+# Import from local conftest - use relative import to avoid conflict with HA core
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 # =============================================================================
@@ -103,6 +104,12 @@ class IntegratedTestEnvironment:
 def create_fake_hass_with_states() -> FakeHass:
     """Create FakeHass with commonly needed states."""
     hass = FakeHass()
+    # Set up zone.home which is required by QSHome
+    hass.states.set("zone.home", "zoning", {
+        "latitude": 48.8566,
+        "longitude": 2.3522,
+        "radius": 100.0
+    })
     # Set up common states
     hass.states.set("sensor.test_soc", "50", {"unit_of_measurement": "%"})
     hass.states.set("device_tracker.test_car", "home", {"latitude": 48.8566, "longitude": 2.3522})
@@ -133,7 +140,7 @@ def create_integrated_environment(
     data_handler = MagicMock()
     env.hass.data[DOMAIN][DATA_HANDLER] = data_handler
 
-    # Create Home
+    # Create Home with necessary patches
     home_config = {
         CONF_NAME: "TestHome",
         CONF_DYN_GROUP_MAX_PHASE_AMPS: 63,
@@ -142,7 +149,8 @@ def create_integrated_environment(
         "hass": env.hass,
         "config_entry": env.config_entry,
     }
-    env.home = QSHome(**home_config)
+    with patch('custom_components.quiet_solar.ha_model.home.QSHomeConsumptionHistoryAndForecast'):
+        env.home = QSHome(**home_config)
     data_handler.home = env.home
 
     # Create Dynamic Group for chargers

@@ -20,7 +20,7 @@ from custom_components.quiet_solar.time import (
     async_unload_entry,
 )
 from custom_components.quiet_solar.const import DOMAIN
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 def test_create_ha_time_for_charger():

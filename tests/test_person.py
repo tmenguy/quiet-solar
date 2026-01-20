@@ -8,7 +8,7 @@ import pytz
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.car import QSCar
-from tests.conftest import FakeHass, FakeState
+from tests.test_helpers import FakeHass, FakeState
 
 
 class TestQSPerson(unittest.TestCase):

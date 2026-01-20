@@ -41,7 +41,7 @@ from custom_components.quiet_solar.const import (
     DATA_HANDLER,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestQSBatteryInit:

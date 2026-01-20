@@ -32,7 +32,7 @@ from custom_components.quiet_solar.const import (
     CONF_SWITCH,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class ConcreteBiStateDevice(QSBiStateDuration):

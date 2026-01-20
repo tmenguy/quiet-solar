@@ -13,7 +13,7 @@ from custom_components.quiet_solar.const import (
     DEVICE_TYPE,
     CONF_TYPE_NAME_QSPerson,
 )
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestQSPersonConfigFlow(unittest.TestCase):

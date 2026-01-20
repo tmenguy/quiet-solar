@@ -13,7 +13,7 @@ from custom_components.quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_HOME_V
 from custom_components.quiet_solar.data_handler import QSDataHandler
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 @pytest.fixture

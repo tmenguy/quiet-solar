@@ -20,7 +20,7 @@ from custom_components.quiet_solar import (
 from custom_components.quiet_solar.const import DOMAIN, DATA_HANDLER, DEVICE_TYPE
 from custom_components.quiet_solar.data_handler import QSDataHandler
 from custom_components.quiet_solar.ha_model.home import QSHome
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 @pytest.mark.asyncio

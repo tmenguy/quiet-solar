@@ -30,7 +30,7 @@ from custom_components.quiet_solar.const import (
     PERSON_NOTIFY_REASON_CHANGED_CAR,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestQSPersonInit:

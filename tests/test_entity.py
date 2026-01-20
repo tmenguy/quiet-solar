@@ -21,7 +21,7 @@ from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
 from custom_components.quiet_solar.ha_model.battery import QSBattery
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 def test_create_device_from_type_home(fake_hass, mock_home_config_entry):

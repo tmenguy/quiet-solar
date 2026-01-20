@@ -18,7 +18,7 @@ from custom_components.quiet_solar.switch import (
     async_setup_entry, QSSwitchEntityDescription,
 )
 from custom_components.quiet_solar.const import DOMAIN, SWITCH_ENABLE_DEVICE
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 def test_create_ha_switch_for_charger():

@@ -18,7 +18,7 @@ from custom_components.quiet_solar.button import (
     async_unload_entry, QSButtonEntityDescription,
 )
 from custom_components.quiet_solar.const import DOMAIN
-from tests.conftest import create_mock_device
+from tests.test_helpers import create_mock_device
 
 
 def test_create_ha_button_for_home():

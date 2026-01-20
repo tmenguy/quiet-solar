@@ -36,7 +36,7 @@ from custom_components.quiet_solar.const import (
     MAX_AMP_INFINITE,
 )
 
-from tests.conftest import FakeHass, FakeConfigEntry
+from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestQSSolarInit:
