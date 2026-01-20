@@ -256,6 +256,18 @@ class FakeHass:
         """Run job in executor (just run it directly in tests)."""
         return func(*args)
 
+    def create_task(self, coro, name: str | None = None):
+        """Create a task (just schedules but doesn't run in tests)."""
+        # In tests, we just discard the coroutine to avoid warnings
+        # The actual task execution isn't needed for most tests
+        import asyncio
+        try:
+            # Close the coroutine to avoid "coroutine was never awaited" warning
+            coro.close()
+        except:
+            pass
+        return None
+
 
 @pytest.fixture
 def fake_hass():
