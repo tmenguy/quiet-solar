@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytz
+from homeassistant.components import number
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
@@ -16,11 +18,14 @@ from custom_components.quiet_solar.const import (
     DOMAIN,
     DATA_HANDLER,
     CONF_CAR_BATTERY_CAPACITY,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_PERSON_AUTHORIZED_CARS,
     CONF_PERSON_PREFERRED_CAR,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
+    FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
 from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
@@ -1482,4 +1487,325 @@ async def test_car_user_add_default_charge_time_validation(
 
     result = await car_device.user_add_default_charge_at_dt_time(None)
     assert result is False
+
+
+async def test_car_plugged_duration_and_state(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test car plugged duration and state checks."""
+    from .const import MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_plugged_duration_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_plugged_duration_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    assert car_device is not None
+
+    time_now = datetime(2026, 1, 20, 12, 0, tzinfo=pytz.UTC)
+    entity_id = car_device.car_plugged
+    hass.states.async_set(entity_id, "on")
+
+    car_device._entity_probed_state[entity_id] = [
+        (time_now - timedelta(hours=2), "off", {}),
+        (time_now - timedelta(minutes=40), "on", {}),
+    ]
+    car_device._entity_probed_last_valid_state[entity_id] = (
+        time_now - timedelta(minutes=40),
+        "on",
+        {},
+    )
+
+    duration = car_device.get_continuous_plug_duration(time_now)
+    assert duration == pytest.approx(40 * 60, rel=0.1)
+
+    assert car_device.is_car_plugged(time_now, for_duration=30 * 60) is True
+    assert car_device.is_car_plugged(time_now, for_duration=60 * 60) is False
+    assert car_device.is_car_plugged(time_now) is True
+
+
+async def test_car_location_and_home_state(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test car coordinates and home presence checks."""
+    from .const import MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_location_state_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_location_state_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    assert car_device is not None
+
+    time_now = datetime(2026, 1, 20, 13, 0, tzinfo=pytz.UTC)
+    tracker_entity = car_device.car_tracker
+
+    car_device._entity_probed_last_valid_state[tracker_entity] = (
+        time_now - timedelta(minutes=5),
+        "home",
+        {"latitude": "48.8566", "longitude": "2.3522"},
+    )
+    coords = car_device.get_car_coordinates(time_now)
+    assert coords == (48.8566, 2.3522)
+
+    car_device._entity_probed_last_valid_state[tracker_entity] = (
+        time_now - timedelta(minutes=5),
+        STATE_UNKNOWN,
+        {"latitude": "48.8566", "longitude": "2.3522"},
+    )
+    assert car_device.get_car_coordinates(time_now) == (None, None)
+
+    hass.states.async_set(tracker_entity, "home", {"latitude": 48.8566, "longitude": 2.3522})
+    car_device._entity_probed_state[tracker_entity] = [
+        (time_now - timedelta(hours=1), "not_home", {}),
+        (time_now - timedelta(minutes=45), "home", {}),
+    ]
+    car_device._entity_probed_last_valid_state[tracker_entity] = (
+        time_now - timedelta(minutes=45),
+        "home",
+        {"latitude": 48.8566, "longitude": 2.3522},
+    )
+
+    assert car_device.is_car_home(time_now, for_duration=30 * 60) is True
+    assert car_device.is_car_home(time_now, for_duration=60 * 60) is False
+    assert car_device.is_car_home(time_now) is True
+
+
+async def test_car_charge_energy_and_charge_limit(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test charge energy computation and max charge limit handling."""
+    from .const import MOCK_CAR_CONFIG
+
+    set_value_handler = AsyncMock()
+    hass.services.async_register(number.DOMAIN, number.SERVICE_SET_VALUE, set_value_handler)
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    max_number_entity = "number.test_car_charge_limit"
+    hass.states.async_set(max_number_entity, "90")
+
+    car_config = {
+        **MOCK_CAR_CONFIG,
+        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: max_number_entity,
+        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "85,100",
+    }
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=car_config,
+        entry_id="car_charge_energy_limit_test",
+        title=f"car: {car_config['name']}",
+        unique_id="quiet_solar_car_charge_energy_limit_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    assert car_device is not None
+
+    time_now = datetime(2026, 1, 20, 14, 0, tzinfo=pytz.UTC)
+    soc_entity = car_device.car_charge_percent_sensor
+    car_device._entity_probed_last_valid_state[soc_entity] = (
+        time_now - timedelta(minutes=5),
+        50.0,
+        {},
+    )
+    assert car_device.get_car_charge_energy(time_now) == 30000.0
+
+    assert car_device.get_max_charge_limit() == 90
+
+    set_value_handler.reset_mock()
+    await car_device.adapt_max_charge_limit(asked_percent=50)
+    set_value_handler.assert_awaited_once()
+    service_call = set_value_handler.call_args.args[0]
+    assert service_call.data[ATTR_ENTITY_ID] == max_number_entity
+    assert service_call.data[number.ATTR_VALUE] == 85
+
+
+async def test_car_user_selected_charger_by_name(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test car selection of a charger by name."""
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_for_car_select_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_for_car_select_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_charger_select_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_charger_select_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
+    assert car_device is not None
+    assert charger_device is not None
+
+    charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
+
+    with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()) as mock_update:
+        await car_device.set_user_selected_charger_by_name(charger_device.name)
+        assert charger_device.user_attached_car_name == car_device.name
+        assert car_device.user_attached_charger_name is None
+        mock_update.assert_awaited()
+
+        await car_device.set_user_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
+        assert car_device.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED
+        assert car_device.charger is None
+        assert charger_device.car is None
+
+
+async def test_car_user_clean_and_reset(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test user clean and reset clears car and charger state."""
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_for_car_reset_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_for_car_reset_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_reset_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_reset_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
+    assert car_device is not None
+    assert charger_device is not None
+
+    charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
+    car_device._constraints = [MagicMock()]
+    car_device.user_attached_charger_name = charger_device.name
+    car_device._user_selected_person_name_for_car = "Person A"
+    car_device._next_charge_target = 90
+    car_device._next_charge_target_energy = 30000.0
+    car_device.do_force_next_charge = True
+    car_device.do_next_charge_time = datetime.now(tz=pytz.UTC)
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    data_handler.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+
+    with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
+        await car_device.user_clean_and_reset()
+
+    assert car_device.user_attached_charger_name is None
+    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.charger is None
+    assert car_device._constraints == []
+    assert car_device._next_charge_target == car_device.car_default_charge
+    assert car_device._next_charge_target_energy is None
+    assert charger_device.user_attached_car_name is None
+
+
+async def test_car_user_clean_constraints(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test user clean constraints keeps attachment but clears constraints."""
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_for_car_constraints_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_for_car_constraints_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_constraints_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_constraints_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
+    assert car_device is not None
+    assert charger_device is not None
+
+    charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
+    car_device._constraints = [MagicMock()]
+    car_device._next_charge_target = 95
+    car_device.user_attached_charger_name = charger_device.name
+
+    with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
+        await car_device.user_clean_constraints()
+
+    assert car_device._constraints == []
+    assert car_device._next_charge_target == car_device.car_default_charge
+    assert car_device.charger is charger_device
 

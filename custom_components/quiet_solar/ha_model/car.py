@@ -554,9 +554,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return False
 
-
-
-
     def get_car_charge_time_readable_name(self):
 
         if self.charger is None:

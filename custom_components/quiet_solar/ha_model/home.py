@@ -3474,39 +3474,3 @@ class QSSolarHistoryVals:
                 await self.save_values()
 
         return history_start, history_end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -12,14 +12,8 @@ _LOGGER = logging.getLogger(__name__)
 class QSHeatPump(HADeviceMixin, PilotedDevice):
     """
     Class to manage a heat pump device.
-    This is a placeholder for future implementation.
     """
-
     conf_type_name = CONF_TYPE_NAME_QSHeatPump
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # TODO: Add heat pump specific initialization here
 
     def get_platforms(self):
         parent = super().get_platforms()
