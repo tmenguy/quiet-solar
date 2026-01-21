@@ -336,24 +336,188 @@ class TestIsCarCharged(unittest.TestCase):
         self.hass = create_mock_hass()
         self.home = create_mock_home(self.hass)
         self.charger = create_charger_generic(self.hass, self.home)
+        self.time = datetime.now(pytz.UTC)
 
-    def test_is_car_charged_percent_true(self):
-        """Test is_car_charged returns True when target met (percent)."""
-        time = datetime.now(pytz.UTC)
+    def test_is_car_charged_when_car_stopped_asking_current(self):
+        """Test is_car_charged returns True when car stopped asking for current."""
+        # When car stops asking for current, it's considered charged regardless of SOC
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=True)
 
-        # Assuming the method exists and uses tolerance
-        current_charge = 82.0
+        current_charge = 50.0  # Only at 50%
+        target_charge = 80.0   # Target is 80%
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # Car stopped asking = charged, result should be target value
+        self.assertTrue(result)
+        self.assertEqual(final_value, target_charge)
+
+    def test_is_car_charged_current_meets_target(self):
+        """Test is_car_charged when current charge meets target."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 80.0
         target_charge = 80.0
-        is_target_percent = True
 
-        with patch.object(self.charger, 'is_car_charged', return_value=(True, "target met")):
-            result, reason = self.charger.is_car_charged(
-                time, current_charge=current_charge,
-                target_charge=target_charge,
-                is_target_percent=is_target_percent
-            )
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
 
         self.assertTrue(result)
+        self.assertEqual(final_value, target_charge)
+
+    def test_is_car_charged_current_exceeds_target(self):
+        """Test is_car_charged when current charge exceeds target."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 85.0
+        target_charge = 80.0
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # Current > target means constraint is met
+        self.assertTrue(result)
+
+    def test_is_car_charged_current_below_target(self):
+        """Test is_car_charged when current charge is below target."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 60.0
+        target_charge = 80.0
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # Current < target, not charged yet
+        self.assertFalse(result)
+        self.assertEqual(final_value, current_charge)
+
+    def test_is_car_charged_100_percent_requires_stopped_asking(self):
+        """Test that 100% target requires car to stop asking for current."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 100.0  # Sensor says 100%
+        target_charge = 100.0   # Target is 100%
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # For 100% target, car must stop asking current to be considered charged
+        # So result should be capped at 99% if car hasn't stopped asking
+        self.assertFalse(result)
+        self.assertEqual(final_value, 99)
+
+    def test_is_car_charged_100_percent_with_stopped_asking(self):
+        """Test that 100% target is met when car stops asking."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=True)
+
+        current_charge = 98.0   # Sensor says 98%
+        target_charge = 100.0   # Target is 100%
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # Car stopped asking = fully charged
+        self.assertTrue(result)
+        self.assertEqual(final_value, target_charge)
+
+    def test_is_car_charged_with_none_current_charge(self):
+        """Test is_car_charged when current charge is None."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = None
+        target_charge = 80.0
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True
+        )
+
+        # With None current, can't determine if charged
+        self.assertFalse(result)
+        self.assertIsNone(final_value)
+
+    def test_is_car_charged_with_tolerance_within_range(self):
+        """Test is_car_charged with accept_bigger_tolerance when within tolerance."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        # Tolerance is typically small (e.g., 2%)
+        current_charge = 79.0   # Just 1% below target
+        target_charge = 80.0
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True,
+            accept_bigger_tolerance=True
+        )
+
+        # Within tolerance, should be considered charged
+        self.assertTrue(result)
+        self.assertEqual(final_value, target_charge)
+
+    def test_is_car_charged_with_tolerance_outside_range(self):
+        """Test is_car_charged with accept_bigger_tolerance when outside tolerance."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 70.0   # 10% below target
+        target_charge = 80.0
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=True,
+            accept_bigger_tolerance=True
+        )
+
+        # Outside tolerance, not charged
+        self.assertFalse(result)
+
+    def test_is_car_charged_wh_mode(self):
+        """Test is_car_charged in Wh mode (not percent)."""
+        self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
+
+        current_charge = 50000.0   # 50 kWh
+        target_charge = 50000.0    # Target 50 kWh
+
+        result, final_value = self.charger.is_car_charged(
+            self.time,
+            current_charge=current_charge,
+            target_charge=target_charge,
+            is_target_percent=False
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(final_value, target_charge)
 
 
 class TestGetCarScore(unittest.TestCase):

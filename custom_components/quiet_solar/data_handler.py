@@ -18,10 +18,10 @@ from .ha_model.home import QSHome
 
 
 
-async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update listener.   Reload the data handler when the entry is updated.
-     https://community.home-assistant.io/t/config-flow-how-to-update-an-existing-entity/522442/8 """
-    await hass.config_entries.async_reload(entry.entry_id)
+#async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+#    """Update listener.   Reload the data handler when the entry is updated.
+#     https://community.home-assistant.io/t/config-flow-how-to-update-an-existing-entity/522442/8 """
+#    await hass.config_entries.async_reload(entry.entry_id)
 
 
 

@@ -517,12 +517,6 @@ class HADeviceMixin:
             return None
         return (time, str(command_value), {})
 
-
-    def get_virtual_load_HA_power_entity_name(self) -> str | None:
-        if not isinstance(self, AbstractLoad):
-            return None
-        return f"{self.device_id}_power"
-
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR
 
@@ -805,12 +799,12 @@ class HADeviceMixin:
             return None
         return compute_energy_Wh_rieman_sum(val, clip_to_zero_under_power=clip_to_zero_under_power)[0]
 
-    def get_device_command_energy(self, start_time: datetime, end_time:datetime) -> float | None:
-        duration_before_s = (end_time - start_time).total_seconds()
-        val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, end_time)
-        if not val:
-            return None
-        return compute_energy_Wh_rieman_sum(val)[0]
+    # def get_device_command_energy(self, start_time: datetime, end_time:datetime) -> float | None:
+    #     duration_before_s = (end_time - start_time).total_seconds()
+    #     val = self.get_state_history_data(self.command_based_power_sensor, duration_before_s, end_time)
+    #     if not val:
+    #         return None
+    #     return compute_energy_Wh_rieman_sum(val)[0]
 
     def get_last_state_value_duration(self,
                                       entity_id: str,

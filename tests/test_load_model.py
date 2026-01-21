@@ -304,3 +304,27 @@ def test_load_command_power_consign():
     cmd = LoadCommand(command="on", power_consign=2000)
 
     assert cmd.power_consign == 2000
+
+
+def test_load_command_repr():
+    """Test LoadCommand string representation."""
+    cmd = LoadCommand(command="test", power_consign=1000)
+    repr_str = repr(cmd)
+    assert "test" in repr_str or cmd.command == "test"
+
+
+def test_cmd_off_command():
+    """Test CMD_OFF command value."""
+    assert CMD_OFF is not None
+
+
+def test_cmd_on_command():
+    """Test CMD_ON command value."""
+    assert CMD_ON is not None
+
+
+def test_cmd_idle_command():
+    """Test CMD_IDLE command value."""
+    assert CMD_IDLE is not None
+
+

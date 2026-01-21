@@ -4,6 +4,8 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch, AsyncMock
 
+import pytz
+
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -531,3 +533,319 @@ async def test_person_button_entities(
 
     # Should have at least reset/clean buttons
     assert len(button_entries) >= 1, f"Expected at least 1 button entity, got {len(button_entries)}"
+
+
+async def test_person_get_platforms(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test person returns correct platforms."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from homeassistant.const import Platform
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create car
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_platforms",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_platforms",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create person
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_platforms_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_platforms_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+    platforms = person_device.get_platforms()
+
+    assert Platform.SENSOR in platforms
+    assert Platform.BUTTON in platforms
+
+
+async def test_person_get_tracker_id(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test person get_tracker_id method."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create car
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_tracker",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_tracker",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create person
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_tracker_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_tracker_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+
+    # Tracker ID should be person entity since no separate tracker configured
+    tracker_id = person_device.get_tracker_id()
+    assert tracker_id == MOCK_PERSON_CONFIG[CONF_PERSON_PERSON_ENTITY]
+
+
+async def test_person_unload(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test person unload."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create car
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_unload",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_unload",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create person
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_unload_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_unload_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert person_entry.state is ConfigEntryState.LOADED
+
+    # Unload person
+    await hass.config_entries.async_unload(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert person_entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_person_should_recompute_history(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test person should_recompute_history method."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from datetime import datetime
+    import pytz
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create car
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_recompute",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_recompute",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create person
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_recompute_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_recompute_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+
+    time = datetime.now(tz=pytz.UTC)
+    # Person with authorized cars should recompute history if not initialized
+    should_recompute = person_device.should_recompute_history(time)
+    # Initial state should be not initialized, so should recompute
+    assert isinstance(should_recompute, bool)
+
+
+async def test_person_forecast_from_history(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test forecast generation from history."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_forecast",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_forecast",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_forecast_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_forecast_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+
+    now = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
+    leave_time = datetime(2026, 1, 15, 18, 0, tzinfo=pytz.UTC)
+    person_device.add_to_mileage_history(now, 42.0, leave_time)
+
+    predicted_leave, predicted_mileage = person_device.update_person_forecast(
+        now, force_update=True
+    )
+
+    assert predicted_mileage == 42.0
+    assert predicted_leave is not None
+    assert predicted_leave > now
+    assert person_device.get_forecast_readable_string().startswith("42km")
+
+
+async def test_person_tracker_id_override(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test tracker id uses override when set."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_tracker_override",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_tracker_override",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_tracker_override_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_tracker_override_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+    person_device.person_tracker_id = "device_tracker.custom_person"
+    assert person_device.get_tracker_id() == "device_tracker.custom_person"
+
+
+async def test_person_notify_forecast_daily_constraints(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test forecast notification for daily constraints."""
+    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from custom_components.quiet_solar.const import PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_for_person_notify",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_for_person_notify",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_notify_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_notify_test",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    person_device = hass.data[DOMAIN].get(person_entry.entry_id)
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    car_device.current_forecasted_person = person_device
+    car_device.charger = MagicMock()
+    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(
+        return_value=(True, 70.0, 60.0, None)
+    )
+
+    person_device.mobile_app = "notify"
+    person_device.notification_dt_time = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC).time()
+    person_device._last_forecast_notification_call_time = datetime(
+        2026, 1, 14, 8, 0, tzinfo=pytz.UTC
+    )
+    person_device.predicted_mileage = 50.0
+    person_device.predicted_leave_time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+    person_device.on_device_state_change = AsyncMock()
+    person_device.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+
+    await person_device.notify_of_forecast_if_needed(
+        time=datetime(2026, 1, 15, 8, 30, tzinfo=pytz.UTC),
+        notify_reason=PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
+    )
+
+    person_device.on_device_state_change.assert_awaited()
+

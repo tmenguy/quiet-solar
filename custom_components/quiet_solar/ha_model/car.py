@@ -1159,13 +1159,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return power
 
-    def _theoretical_max_power(self, amperage:tuple[float,int] | tuple[int,int], delta_amp:float) -> float:
-        if amperage[0] == 0:
-            return 0.0
-        theoretical_power = float(self.voltage * max(0.0, amperage[0] + delta_amp))
-        if amperage[1] == 3:
-            theoretical_power = theoretical_power * 3
-        return theoretical_power
+    # def _theoretical_max_power(self, amperage:tuple[float,int] | tuple[int,int], delta_amp:float) -> float:
+    #     if amperage[0] == 0:
+    #         return 0.0
+    #     theoretical_power = float(self.voltage * max(0.0, amperage[0] + delta_amp))
+    #     if amperage[1] == 3:
+    #         theoretical_power = theoretical_power * 3
+    #     return theoretical_power
 
     def _add_to_amps_power_graph(self, from_a: tuple[float,int], to_a:tuple[float,int], power_delta: int | float) -> bool:
         from_amp = int(from_a[0] * from_a[1])

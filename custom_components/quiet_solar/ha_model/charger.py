@@ -17,34 +17,33 @@ from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, SERV
 from homeassistant.components import number, homeassistant
 from homeassistant.util import slugify
 from haversine import haversine, Unit
-from homeassistant.util.package import async_get_user_site
 
 from .dynamic_group import QSDynamicGroup
 
-try:
-    from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
-except:
-    class WallboxChargerStatus(StrEnum):
-        """Charger Status Description."""
-
-        CHARGING = "Charging"
-        DISCHARGING = "Discharging"
-        PAUSED = "Paused"
-        SCHEDULED = "Scheduled"
-        WAITING_FOR_CAR = "Waiting for car demand"
-        WAITING = "Waiting"
-        DISCONNECTED = "Disconnected"
-        ERROR = "Error"
-        READY = "Ready"
-        LOCKED = "Locked"
-        LOCKED_CAR_CONNECTED = "Locked, car connected"
-        UPDATING = "Updating"
-        WAITING_IN_QUEUE_POWER_SHARING = "Waiting in queue by Power Sharing"
-        WAITING_IN_QUEUE_POWER_BOOST = "Waiting in queue by Power Boost"
-        WAITING_MID_FAILED = "Waiting MID failed"
-        WAITING_MID_SAFETY = "Waiting MID safety margin exceeded"
-        WAITING_IN_QUEUE_ECO_SMART = "Waiting in queue by Eco-Smart"
-        UNKNOWN = "Unknown"
+#try:
+from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+# except:
+#     class WallboxChargerStatus(StrEnum):
+#         """Charger Status Description."""
+#
+#         CHARGING = "Charging"
+#         DISCHARGING = "Discharging"
+#         PAUSED = "Paused"
+#         SCHEDULED = "Scheduled"
+#         WAITING_FOR_CAR = "Waiting for car demand"
+#         WAITING = "Waiting"
+#         DISCONNECTED = "Disconnected"
+#         ERROR = "Error"
+#         READY = "Ready"
+#         LOCKED = "Locked"
+#         LOCKED_CAR_CONNECTED = "Locked, car connected"
+#         UPDATING = "Updating"
+#         WAITING_IN_QUEUE_POWER_SHARING = "Waiting in queue by Power Sharing"
+#         WAITING_IN_QUEUE_POWER_BOOST = "Waiting in queue by Power Boost"
+#         WAITING_MID_FAILED = "Waiting MID failed"
+#         WAITING_MID_SAFETY = "Waiting MID safety margin exceeded"
+#         WAITING_IN_QUEUE_ECO_SMART = "Waiting in queue by Eco-Smart"
+#         UNKNOWN = "Unknown"
 
 
 class QSOCPPv16v201ChargePointStatus(StrEnum):
