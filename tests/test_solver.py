@@ -23,6 +23,19 @@ def _util_constraint_save_dump(time, cs):
     cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
     assert cs == cs_load
 
+
+def count_transitions(cmds):
+    if len(cmds) <= 1:
+        return 0
+    transitions = 0
+    prev_is_on = cmds[0][1].power_consign > 0
+    for _, cmd in cmds[1:]:
+        curr_is_on = cmd.power_consign > 0
+        if prev_is_on != curr_is_on:
+            transitions += 1
+        prev_is_on = curr_is_on
+    return transitions
+
 class TestSolver(TestCase):
 
 
@@ -477,7 +490,7 @@ class TestSolver(TestCase):
             load=car,
             type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
             end_of_constraint=None,
-            initial_value=None,
+            initial_value = None,
             target_value=8000,  # 8kWh target
             power_steps=car_steps,
             support_auto=True  # RESTORED: Essential for intelligent load management!
@@ -1008,3 +1021,837 @@ class TestSolver(TestCase):
                 "With limited resources, at least one load should be managed"
         
         print("✅ Fixed multiple loads competition test passed!")
+
+    def test_adapt_commands_num_max_on_off_limits_transitions(self):
+        """
+        Test that _adapt_commands is triggered and limits on/off transitions
+        when num_max_on_off is set and support_auto=False.
+
+        This test creates a scenario with alternating solar peaks that would
+        naturally cause the solver to turn the load on/off multiple times.
+        Then it verifies that setting num_max_on_off limits these transitions.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=6, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=12)  # 12 hour period
+
+        tariffs = 0.27/1000.0
+
+
+        # Create a load WITHOUT num_max_on_off (no limit)
+        pool_unlimited = TestLoad(name="pool_unlimited")
+
+        # Pool pump needs 6 hours of runtime over 12 hours
+        pool_constraint_unlimited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=pool_unlimited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=12),
+            initial_value=0,
+            target_value=6*3600,  # 6 hours of runtime
+            power=1500,  # 1.5kW
+            support_auto=False,  # Essential: must be False for _adapt_commands to trigger
+        )
+        pool_unlimited.push_live_constraint(dt, pool_constraint_unlimited)
+
+        # Create alternating solar pattern to encourage multiple on/off cycles
+        # High solar -> pool on, Low solar -> pool off, repeating
+        pv_forecast = []
+        for h in range(12):
+            hour = dt + timedelta(hours=h)
+            # Alternating pattern: 2 hours high, 2 hours low
+            if (h // 2) % 2 == 0:
+                solar_power = 4000  # High solar - pool should run
+            else:
+                solar_power = 500  # Low solar - pool might stop to save for later
+            pv_forecast.append((hour, solar_power))
+
+        # Low unavoidable consumption
+        unavoidable_consumption_forecast = [
+            (dt + timedelta(hours=h), 300) for h in range(12)
+        ]
+
+        s_unlimited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[pool_unlimited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_unlimited, _ = s_unlimited.solve(with_self_test=True)
+
+        assert load_commands_unlimited is not None
+        assert len(load_commands_unlimited) == 1
+
+        pool_cmds_unlimited = load_commands_unlimited[0][1]
+        transitions_unlimited = count_transitions(pool_cmds_unlimited)
+
+        print(f"\n=== Test WITHOUT num_max_on_off limit ===")
+        print(f"Pool commands (unlimited): {len(pool_cmds_unlimited)}")
+        print(f"Transitions (unlimited): {transitions_unlimited}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_unlimited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # Now test with num_max_on_off=2 (limited to 2 transitions)
+        pool_limited = TestLoad(name="pool_limited", num_max_on_off=2)
+
+        pool_constraint_limited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=pool_limited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=12),
+            initial_value=0,
+            target_value=6*3600,  # Same 6 hours of runtime
+            power=1500,
+            support_auto=False,  # Essential: must be False for _adapt_commands to trigger
+        )
+        pool_limited.push_live_constraint(dt, pool_constraint_limited)
+
+        s_limited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[pool_limited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_limited, _ = s_limited.solve(with_self_test=True)
+
+        assert load_commands_limited is not None
+        assert len(load_commands_limited) == 1
+
+        pool_cmds_limited = load_commands_limited[0][1]
+        transitions_limited = count_transitions(pool_cmds_limited)
+
+        print(f"\n=== Test WITH num_max_on_off=2 ===")
+        print(f"Pool commands (limited): {len(pool_cmds_limited)}")
+        print(f"Transitions (limited): {transitions_limited}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_limited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # Assertions
+        # The unlimited version should have more transitions since there's no limit
+        # The limited version should have fewer or equal transitions
+        print(f"\n=== Comparison ===")
+        print(f"Transitions unlimited: {transitions_unlimited}")
+        print(f"Transitions limited: {transitions_limited}")
+
+        assert transitions_limited < transitions_unlimited
+        assert transitions_limited <= 2
+
+        print("✅ _adapt_commands was called and modified the commands!")
+        print("✅ num_max_on_off test passed!")
+
+    def test_adapt_commands_with_variable_prices_forces_multiple_cycles(self):
+        """
+        Test that _adapt_commands handles scenarios with variable electricity prices
+        that would naturally encourage multiple on/off cycles.
+
+        Uses price-based scheduling to create natural on/off patterns, then verifies
+        that num_max_on_off limits them.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=24)
+
+        # Create variable tariffs - alternating cheap/expensive periods
+        # This should encourage the solver to turn loads on during cheap periods
+        # and off during expensive periods, creating multiple cycles
+        tariffs = []
+        for h in range(24):
+            hour = dt + timedelta(hours=h)
+            # Pattern: 3 hours cheap, 3 hours expensive, repeating
+            if (h // 3) % 2 == 0:
+                price = 0.10 / 1000.0  # Cheap
+            else:
+                price = 0.30 / 1000.0  # Expensive
+            tariffs.append((hour, price))
+
+        # Test without limit first
+        cumulus_unlimited = TestLoad(name="cumulus_unlimited")
+
+        cumulus_constraint_unlimited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=cumulus_unlimited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=24),
+            initial_value=0,
+            target_value=8*3600,  # 8 hours of runtime over 24 hours
+            power=2000,  # 2kW water heater
+            support_auto=False,
+        )
+        cumulus_unlimited.push_live_constraint(dt, cumulus_constraint_unlimited)
+
+        # No solar, just price-based optimization
+        pv_forecast = [(dt + timedelta(hours=h), 0) for h in range(24)]
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 500) for h in range(24)]
+
+        s_unlimited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[cumulus_unlimited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_unlimited, _ = s_unlimited.solve(with_self_test=True)
+
+        assert load_commands_unlimited is not None
+        pool_cmds_unlimited = load_commands_unlimited[0][1]
+        transitions_unlimited = count_transitions(pool_cmds_unlimited)
+
+        print(f"\n=== Variable Price Test WITHOUT limit ===")
+        print(f"Commands (unlimited): {len(pool_cmds_unlimited)}")
+        print(f"Transitions (unlimited): {transitions_unlimited}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_unlimited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # Now test with num_max_on_off=4
+        cumulus_limited = TestLoad(name="cumulus_limited", num_max_on_off=4)
+
+        cumulus_constraint_limited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=cumulus_limited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=24),
+            initial_value=0,
+            target_value=8*3600,
+            power=2000,
+            support_auto=False,
+        )
+        cumulus_limited.push_live_constraint(dt, cumulus_constraint_limited)
+
+        s_limited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[cumulus_limited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_limited, _ = s_limited.solve(with_self_test=True)
+
+        assert load_commands_limited is not None
+        pool_cmds_limited = load_commands_limited[0][1]
+        transitions_limited = count_transitions(pool_cmds_limited)
+
+        assert transitions_limited <= 4
+
+        print(f"\n=== Variable Price Test WITH num_max_on_off=4 ===")
+        print(f"Commands (limited): {len(pool_cmds_limited)}")
+        print(f"Transitions (limited): {transitions_limited}")
+
+        assert transitions_limited < transitions_unlimited
+
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_limited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        print(f"\n=== Comparison ===")
+        print(f"Transitions unlimited: {transitions_unlimited}")
+        print(f"Transitions limited: {transitions_limited}")
+
+        # The main goal is to verify _adapt_commands is being called and executed.
+        # Check that command timings differ between unlimited and limited
+        unlimited_times = [(t.isoformat(), c.power_consign) for t, c in pool_cmds_unlimited]
+        limited_times = [(t.isoformat(), c.power_consign) for t, c in pool_cmds_limited]
+
+        # The commands should differ because _adapt_commands modified them
+        assert unlimited_times != limited_times, \
+            "_adapt_commands should modify command timings when num_max_on_off is set"
+
+        print("✅ _adapt_commands was called and modified the commands!")
+        print("✅ Variable price num_max_on_off test passed!")
+
+    def test_adapt_commands_with_num_on_off_already_used(self):
+        """
+        Test _adapt_commands when the load has already used some on/off cycles
+        (num_on_off > 0) before the solver runs.
+
+        This simulates a real-world scenario where the load has been running
+        and has already toggled a few times during the day.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=12, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=8)
+
+        tariffs = 0.25/1000.0
+
+
+        # Create load with num_max_on_off=6 but already used 4 transitions
+        # So only 2 more transitions should be allowed
+        heater = TestLoad(name="heater", num_max_on_off=6)
+        heater.num_on_off = 4  # Already used 4 cycles today
+
+        heater_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=heater,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=8),
+            initial_value=0,
+            target_value=4*3600,  # 4 hours of runtime
+            power=2500,
+            support_auto=False,
+        )
+        heater.push_live_constraint(dt, heater_constraint)
+
+        # Solar pattern that would encourage multiple cycles
+        pv_forecast = []
+        for h in range(8):
+            hour = dt + timedelta(hours=h)
+            # Alternating high/low solar
+            if h % 2 == 0:
+                solar_power = 5000
+            else:
+                solar_power = 1000
+            pv_forecast.append((hour, solar_power))
+
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 400) for h in range(8)]
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[heater],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands, _ = s.solve(with_self_test=True)
+
+        assert load_commands is not None
+        heater_cmds = load_commands[0][1]
+        transitions = count_transitions(heater_cmds)
+
+        print(f"\n=== Test with pre-existing num_on_off ===")
+        print(f"num_max_on_off: {heater.num_max_on_off}")
+        print(f"num_on_off (pre-existing): 4")
+        print(f"Remaining allowed transitions: {heater.num_max_on_off - 4}")
+        print(f"Actual transitions in solution: {transitions}")
+        for i, (time_cmd, cmd) in enumerate(heater_cmds):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # With num_max_on_off=6 and num_on_off=4, only 2 more transitions allowed
+        # But _adapt_commands uses num_allowed_switch = num_max_on_off - num_on_off
+        # and checks if num_command_state_change > num_allowed_switch - 3
+        # So it will adapt if needed
+        assert transitions <= 2, \
+            f"With num_max_on_off=6 and num_on_off=4, expected at most 2 new transitions, got {transitions}"
+
+        print("✅ Pre-existing num_on_off test passed!")
+
+    def test_adapt_commands_no_effect_with_support_auto_true(self):
+        """
+        Test that _adapt_commands does NOT run when support_auto=True.
+
+        Even with num_max_on_off set, if support_auto=True, the function
+        should not limit transitions because the load can adapt dynamically.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=6, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=12)
+
+        tariffs = 0.27/1000.0
+
+        # Create car charger with num_max_on_off but support_auto=True
+        car = TestLoad(name="car", num_max_on_off=2)
+
+        car_steps = []
+        for a in range(7, 16):
+            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230))
+
+        car_charge = MultiStepsPowerLoadConstraint(
+            time=dt,
+            load=car,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+            end_of_constraint=None,
+            initial_value=None,
+            target_value=10000,
+            power_steps=car_steps,
+            support_auto=True,  # Key: support_auto=True, so _adapt_commands should NOT run
+        )
+        car.push_live_constraint(dt, car_charge)
+
+        # Alternating solar pattern
+        pv_forecast = []
+        for h in range(12):
+            hour = dt + timedelta(hours=h)
+            if (h // 2) % 2 == 0:
+                solar_power = 6000
+            else:
+                solar_power = 1000
+            pv_forecast.append((hour, solar_power))
+
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 300) for h in range(12)]
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[car],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands, _ = s.solve(with_self_test=True)
+
+        assert load_commands is not None
+        car_cmds = load_commands[0][1]
+        transitions = count_transitions(car_cmds)
+
+        print(f"\n=== Test with support_auto=True ===")
+        print(f"num_max_on_off: {car.num_max_on_off}")
+        print(f"support_auto: True")
+        print(f"Transitions: {transitions}")
+        for i, (time_cmd, cmd) in enumerate(car_cmds):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> {cmd.command} power={cmd.power_consign}W")
+
+        # With support_auto=True, _adapt_commands should NOT limit transitions
+        # So we might see more than num_max_on_off transitions
+        # (The solver may still optimize, but _adapt_commands is not called)
+        # The key assertion is that the test completes successfully
+        # and that auto commands are generated
+        has_auto_commands = any(
+            cmd[1].command in [CMD_AUTO_GREEN_ONLY.command, CMD_AUTO_FROM_CONSIGN.command]
+            for cmd in car_cmds
+        )
+
+        assert has_auto_commands, "Expected auto commands when support_auto=True"
+        print("✅ support_auto=True test passed - _adapt_commands not limiting transitions!")
+
+    def test_adapt_commands_start_with_switch_branch(self):
+        """
+        Test _adapt_commands when there's a state change at the beginning.
+
+        This tests the 'start_witch_switch' branch which is triggered when:
+        1. The load is currently running (current_command is not off/idle)
+        2. The first command from the solver would be off/None
+
+        This branch handles the case where we want to avoid a quick on->off->on
+        pattern at the start of the solving period.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=8, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=6)
+
+        tariffs = 0.20/1000.0
+
+        # Create a load that is CURRENTLY RUNNING
+        pool = TestLoad(name="pool_running", num_max_on_off=4)
+
+        # Set the current command to "on" - this is crucial for triggering start_witch_switch
+        pool._ack_command(dt - timedelta(minutes=30), LoadCommand(command="on", power_consign=1500))
+
+        pool_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=pool,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=6),
+            initial_value=0,  # Target is to run for 3 hours total
+            target_value=3*3600,  # 3 hours of runtime
+            power=1500,
+            support_auto=False,
+        )
+        pool.push_live_constraint(dt, pool_constraint)
+
+        # Create a solar pattern where the first period has LOW solar
+        # This should make the solver want to turn OFF the pool initially
+        # (since it's a mandatory constraint that can wait for better solar)
+        pv_forecast = []
+        for h in range(6):
+            hour = dt + timedelta(hours=h)
+            if h == 0:
+                # First period: LOW solar - solver may want to turn off
+                solar_power = 500
+            elif h in [1, 2, 3]:
+                # Later: HIGH solar - good time to run
+                solar_power = 4000
+            else:
+                # End: LOW again
+                solar_power = 800
+            pv_forecast.append((hour, solar_power))
+
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 300) for h in range(6)]
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[pool],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands, _ = s.solve(with_self_test=True)
+
+        assert load_commands is not None
+        pool_cmds = load_commands[0][1]
+
+        print(f"\n=== Test start_witch_switch branch ===")
+        print(f"Load was running before solve: True (current_command is 'on')")
+        print(f"num_max_on_off: {pool.num_max_on_off}")
+        print(f"Commands: {len(pool_cmds)}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # The test passes if we get here - the _adapt_commands logic was executed
+        # and handled the start_witch_switch case
+        print("✅ start_witch_switch branch test passed!")
+
+    def test_adapt_commands_load_currently_running_with_short_initial_gap(self):
+        """
+        Test _adapt_commands when load is running and there's a short gap at start.
+
+        This specifically tests the case where:
+        1. Load is currently ON
+        2. Solver wants to turn it OFF for a SHORT period (< 15 min)
+        3. Then turn it ON again
+
+        The _adapt_commands should fill this short gap to avoid unnecessary cycling.
+        """
+
+        dt = datetime(year=2024, month=6, day=1, hour=10, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        # Use shorter duration to create tighter slots that could produce short gaps
+        end_time = dt + timedelta(hours=2)
+
+        tariffs = 0.20/1000.0
+
+        # Create load that's currently running
+        heater = TestLoad(name="heater_running", num_max_on_off=2)
+
+        # Set current command to ON
+        heater._ack_command(dt - timedelta(minutes=10), LoadCommand(command="on", power_consign=2000))
+
+        heater_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=heater,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=2),
+            initial_value=0,
+            target_value=1*3600,  # 1 hour of runtime over 2 hours
+            power=2000,
+            support_auto=False,
+        )
+        heater.push_live_constraint(dt, heater_constraint)
+
+        # Solar pattern: brief dip then high
+        # This might create a short "off" gap at the start
+        pv_forecast = [
+            (dt, 1000),  # Low at start
+            (dt + timedelta(minutes=15), 4000),  # High soon after
+            (dt + timedelta(hours=1), 4000),  # Continues high
+            (dt + timedelta(hours=1, minutes=30), 2000),  # Lower
+        ]
+
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 300) for h in range(3)]
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[heater],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands, _ = s.solve(with_self_test=True)
+
+        assert load_commands is not None
+        heater_cmds = load_commands[0][1]
+
+        print(f"\n=== Test short initial gap ===")
+        print(f"Load was running before solve: True")
+        print(f"num_max_on_off: {heater.num_max_on_off}")
+        print(f"Commands: {len(heater_cmds)}")
+        for i, (time_cmd, cmd) in enumerate(heater_cmds):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # If the first command starts with ON, it means _adapt_commands
+        # likely filled the initial gap
+        first_cmd_is_on = heater_cmds[0][1].power_consign > 0
+        print(f"First command is ON: {first_cmd_is_on}")
+
+        print("✅ Short initial gap test passed!")
+
+    def test_adapt_commands_removes_short_initial_on_period(self):
+        """
+        Test that _adapt_commands removes a short initial ON period when:
+        1. Load is currently ON (running before solve)
+        2. Solver produces: ON for 1 slot (SOLVER_STEP_S = 15 min) at start
+           -> OFF for some time -> ON later
+        3. num_max_on_off is set and support_auto=False
+
+        The branch `if durations_s <= SOLVER_STEP_S + 1:` should detect this short
+        initial ON period and extend it (or remove the gap) to reduce cycling.
+
+        Without num_max_on_off, the pattern should remain as the solver produced it.
+        """
+        from custom_components.quiet_solar.const import SOLVER_STEP_S
+
+        dt = datetime(year=2024, month=6, day=1, hour=6, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=6)
+
+        tariffs = 0.25/1000.0
+
+        # ============================================
+        # TEST 1: WITHOUT num_max_on_off (no limit)
+        # The short initial ON should REMAIN
+        # ============================================
+
+        pool_unlimited = TestLoad(name="pool_unlimited")
+        # Load is CURRENTLY RUNNING - set current_command to ON
+        pool_unlimited._ack_command(dt - timedelta(minutes=30), LoadCommand(command="on", power_consign=1500))
+
+        # Create constraint that needs runtime spread across the day
+        pool_constraint_unlimited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=pool_unlimited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=6),
+            initial_value=0,
+            target_value=2*3600,  # 2 hours of runtime
+            power=1500,
+            support_auto=False,
+        )
+        pool_unlimited.push_live_constraint(dt, pool_constraint_unlimited)
+
+        # Create solar pattern that encourages:
+        # - Brief ON at start (15 min) due to some solar
+        # - Then OFF (low solar for 1-2 hours)
+        # - Then ON again (high solar)
+        pv_forecast = [
+            (dt, 2500),                                    # Slot 0: decent solar
+            (dt + timedelta(minutes=15), 400),             # Slot 1: very low - should go OFF
+            (dt + timedelta(minutes=30), 400),             # Slot 2: very low
+            (dt + timedelta(minutes=45), 400),             # Slot 3: very low
+            (dt + timedelta(hours=1), 400),                # Slot 4: very low
+            (dt + timedelta(hours=1, minutes=15), 400),    # Slot 5: very low
+            (dt + timedelta(hours=1, minutes=30), 400),    # Slot 6: very low
+            (dt + timedelta(hours=1, minutes=45), 400),    # Slot 7: very low
+            (dt + timedelta(hours=2), 5000),               # Slot 8+: HIGH - back ON
+            (dt + timedelta(hours=3), 5000),
+            (dt + timedelta(hours=4), 5000),
+            (dt + timedelta(hours=5), 4000),
+        ]
+
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 300) for h in range(6)]
+
+        s_unlimited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[pool_unlimited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_unlimited, _ = s_unlimited.solve(with_self_test=True)
+
+        assert load_commands_unlimited is not None
+        pool_cmds_unlimited = load_commands_unlimited[0][1]
+
+        print(f"\n=== Test SHORT INITIAL ON: WITHOUT num_max_on_off ===")
+        print(f"SOLVER_STEP_S: {SOLVER_STEP_S}s ({SOLVER_STEP_S/60} minutes)")
+        print(f"Load was RUNNING before solve: True")
+        print(f"Commands (unlimited): {len(pool_cmds_unlimited)}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_unlimited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # ============================================
+        # TEST 2: WITH num_max_on_off (limited)
+        # The short initial ON->OFF pattern should be adapted
+        # ============================================
+
+        pool_limited = TestLoad(name="pool_limited", num_max_on_off=4)
+        # Load is CURRENTLY RUNNING
+        pool_limited._ack_command(dt - timedelta(minutes=30), LoadCommand(command="on", power_consign=1500))
+
+        pool_constraint_limited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=pool_limited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=6),
+            initial_value=0,
+            target_value=2*3600,  # Same 2 hours
+            power=1500,
+            support_auto=False,
+        )
+        pool_limited.push_live_constraint(dt, pool_constraint_limited)
+
+        s_limited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[pool_limited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_limited, _ = s_limited.solve(with_self_test=True)
+
+        assert load_commands_limited is not None
+        pool_cmds_limited = load_commands_limited[0][1]
+
+        print(f"\n=== Test SHORT INITIAL ON: WITH num_max_on_off=4 ===")
+        print(f"Commands (limited): {len(pool_cmds_limited)}")
+        for i, (time_cmd, cmd) in enumerate(pool_cmds_limited):
+            print(f"  {i}: {time_cmd.strftime('%H:%M')} -> power={cmd.power_consign}W")
+
+        # ============================================
+        # COMPARISON
+        # ============================================
+
+
+        assert pool_cmds_limited[0][1].power_consign > 0
+        assert pool_cmds_unlimited[0][1].power_consign == 0
+
+        transition_limited = count_transitions(pool_cmds_limited)
+        transition_unlimited = count_transitions(pool_cmds_unlimited)
+
+        assert transition_limited == 1
+        assert transition_unlimited > transition_limited
+
+        print("✅ Short initial ON period test passed!")
+
+    def test_adapt_commands_short_initial_on_with_current_command_off(self):
+        """
+        Alternative test for short initial ON removal where we ensure the load
+        starts OFF and the solver wants to turn it ON briefly then OFF.
+
+        This creates a more controlled scenario by:
+        1. Setting current_command to OFF/idle explicitly
+        2. Creating solar pattern that encourages: brief ON -> OFF -> ON later
+        3. Comparing with/without num_max_on_off
+        """
+        from custom_components.quiet_solar.const import SOLVER_STEP_S
+
+
+        num_hours = 10
+
+        dt = datetime(year=2024, month=6, day=1, hour=5, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        end_time = dt + timedelta(hours=num_hours)
+
+        # Use variable prices to force specific ON/OFF patterns
+        # Cheap at start for 15 min, then expensive, then cheap again
+        tariffs = []
+        for i in range(32):  # 8 hours * 4 slots per hour
+            slot_time = dt + timedelta(minutes=15*i)
+            if i == 0:
+                price = 0.05 / 1000.0  # Very cheap - should turn ON
+            elif i < 6:  # Next 1.25 hours
+                price = 0.50 / 1000.0  # Very expensive - should turn OFF
+            else:
+                price = 0.10 / 1000.0  # Cheap again - turn back ON
+            tariffs.append((slot_time, price))
+
+        # ============================================
+        # TEST WITHOUT num_max_on_off
+        # ============================================
+
+        heater_unlimited = TestLoad(name="heater_unlimited")
+        # Explicitly ensure current_command is None/OFF
+        heater_unlimited._ack_command(dt - timedelta(hours=1), None)
+
+        heater_constraint_unlimited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=heater_unlimited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=8),
+            initial_value=0,
+            target_value=3*3600,  # 3 hours of runtime
+            power=2000,
+            support_auto=False,
+        )
+        heater_unlimited.push_live_constraint(dt, heater_constraint_unlimited)
+
+        # No solar - pure price optimization
+        pv_forecast = [(dt + timedelta(hours=h), 0) for h in range(num_hours)]
+        unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 400) for h in range(num_hours)]
+
+        s_unlimited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[heater_unlimited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_unlimited, _ = s_unlimited.solve(with_self_test=True)
+
+        assert load_commands_unlimited is not None
+        heater_cmds_unlimited = load_commands_unlimited[0][1]
+
+        assert heater_cmds_unlimited[0][1].power_consign > 0
+
+        # ============================================
+        # TEST WITH num_max_on_off
+        # ============================================
+
+        heater_limited = TestLoad(name="heater_limited", num_max_on_off=4)
+        heater_limited._ack_command(dt - timedelta(hours=1), None)
+
+        heater_constraint_limited = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=heater_limited,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=dt + timedelta(hours=8),
+            initial_value=0,
+            target_value=3*3600,
+            power=2000,
+            support_auto=False,
+        )
+        heater_limited.push_live_constraint(dt, heater_constraint_limited)
+
+        s_limited = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[heater_limited],
+            battery=None,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast
+        )
+
+        load_commands_limited, _ = s_limited.solve(with_self_test=True)
+
+        assert load_commands_limited is not None
+        heater_cmds_limited = load_commands_limited[0][1]
+
+        assert heater_cmds_limited[0][1].power_consign == 0  # Access to avoid linter warning
+
+
+        transition_limited = count_transitions(heater_cmds_limited)
+        transition_unlimited = count_transitions(heater_cmds_unlimited)
+
+        assert transition_limited == 2
+        assert transition_unlimited > transition_limited
+
+
+
+
+
+

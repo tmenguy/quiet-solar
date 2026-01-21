@@ -42,6 +42,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSBattery,
     CONF_TYPE_NAME_QSSolar,
     CONF_TYPE_NAME_QSDynamicGroup,
+    CONF_TYPE_NAME_QSHeatPump,
 )
 
 # Mock Home configuration
@@ -118,6 +119,12 @@ MOCK_DYNAMIC_GROUP_CONFIG = {
     CONF_IS_3P: True,
 }
 
+# Mock Heat Pump configuration (PilotedDevice)
+MOCK_HEAT_PUMP_CONFIG = {
+    CONF_NAME: "Test Heat Pump",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSHeatPump,
+}
+
 # Entry IDs for testing
 MOCK_HOME_ENTRY_ID = "home_entry_123"
 MOCK_CAR_ENTRY_ID = "car_entry_123"
@@ -126,6 +133,7 @@ MOCK_PERSON_ENTRY_ID = "person_entry_123"
 MOCK_BATTERY_ENTRY_ID = "battery_entry_123"
 MOCK_SOLAR_ENTRY_ID = "solar_entry_123"
 MOCK_DYNAMIC_GROUP_ENTRY_ID = "dynamic_group_entry_123"
+MOCK_HEAT_PUMP_ENTRY_ID = "heat_pump_entry_123"
 
 # Mock sensor states for testing
 MOCK_SENSOR_STATES = {

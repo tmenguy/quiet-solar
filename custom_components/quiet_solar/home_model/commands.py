@@ -70,7 +70,9 @@ def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand) -> LoadCommand:
 
 
 
-def copy_command(cmd:LoadCommand, power_consign=None) -> LoadCommand:
+def copy_command(cmd:LoadCommand|None, power_consign=None) -> LoadCommand |None:
+    if cmd is None:
+        return None
     if power_consign is None:
         power_consign=cmd.power_consign
     return LoadCommand(command=cmd.command, power_consign=power_consign)

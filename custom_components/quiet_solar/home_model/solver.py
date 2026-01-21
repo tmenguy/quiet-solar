@@ -12,6 +12,7 @@ from .load import AbstractLoad
 from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
     CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type, \
     CMD_FORCE_CHARGE
+from ..const import SOLVER_STEP_S
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class PeriodSolver(object):
                  battery: Battery | None = None,
                  pv_forecast: list[tuple[datetime, float]] = None,
                  unavoidable_consumption_forecast: list[tuple[datetime, float]] = None,
-                 step_s: timedelta = timedelta(seconds=900),
+                 step_s: timedelta = timedelta(seconds=SOLVER_STEP_S),
                  max_inverter_dc_to_ac_power = None,
                  ) -> None:
 

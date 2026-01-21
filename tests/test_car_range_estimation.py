@@ -447,9 +447,8 @@ class TestCarRangeEstimation(unittest.TestCase):
         # The second segment has 50% SOC for 120km, so 50% should give exactly 120km
         self.assertAlmostEqual(estimated_range, 120.0, places=1)
 
-    @pytest.mark.skip(reason="delat graphs no more used")
     def test_efficiency_deltas_graph_creation(self):
-        """Test that efficiency deltas and graph structures are created."""
+        """Test that efficiency deltas and graph structures are not created."""
         time = datetime.now(pytz.UTC)
 
         # Create an efficiency segment
@@ -457,17 +456,9 @@ class TestCarRangeEstimation(unittest.TestCase):
         self.car._add_soc_odo_value_to_segments(70.0, 10100.0, time + timedelta(hours=1))
         self.car._add_soc_odo_value_to_segments(90.0, 10100.0, time + timedelta(hours=2))
 
-        # Check that deltas were created
-        self.assertIn((80.0, 70.0), self.car._efficiency_deltas)
-        self.assertIn((70.0, 80.0), self.car._efficiency_deltas)
-        self.assertEqual(self.car._efficiency_deltas[(80.0, 70.0)], 100.0)
-        self.assertEqual(self.car._efficiency_deltas[(70.0, 80.0)], -100.0)
-
-        # Check that graph was created
-        self.assertIn(80.0, self.car._efficiency_deltas_graph)
-        self.assertIn(70.0, self.car._efficiency_deltas_graph)
-        self.assertIn(70.0, self.car._efficiency_deltas_graph[80.0])
-        self.assertIn(80.0, self.car._efficiency_deltas_graph[70.0])
+        # Efficiency deltas graphs are deprecated and should not exist
+        self.assertFalse(hasattr(self.car, "_efficiency_deltas"))
+        self.assertFalse(hasattr(self.car, "_efficiency_deltas_graph"))
 
     def test_continuous_decreasing_segment_extension(self):
         """Test that continuously decreasing SOC properly extends a segment."""

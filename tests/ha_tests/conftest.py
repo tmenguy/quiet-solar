@@ -26,6 +26,7 @@ from .const import (
     MOCK_BATTERY_CONFIG,
     MOCK_SOLAR_CONFIG,
     MOCK_DYNAMIC_GROUP_CONFIG,
+    MOCK_HEAT_PUMP_CONFIG,
     MOCK_HOME_ENTRY_ID,
     MOCK_CAR_ENTRY_ID,
     MOCK_CHARGER_ENTRY_ID,
@@ -33,6 +34,7 @@ from .const import (
     MOCK_BATTERY_ENTRY_ID,
     MOCK_SOLAR_ENTRY_ID,
     MOCK_DYNAMIC_GROUP_ENTRY_ID,
+    MOCK_HEAT_PUMP_ENTRY_ID,
     MOCK_SENSOR_STATES,
 )
 
@@ -164,6 +166,21 @@ def dynamic_group_config_entry(hass: HomeAssistant) -> ConfigEntry:
         entry_id=MOCK_DYNAMIC_GROUP_ENTRY_ID,
         title=f"dynamic_group: {MOCK_DYNAMIC_GROUP_CONFIG['name']}",
         unique_id=f"quiet_solar_dynamic_group_{MOCK_DYNAMIC_GROUP_ENTRY_ID}",
+    )
+    config_entry.add_to_hass(hass)
+    return config_entry
+
+
+@pytest.fixture
+def heat_pump_config_entry(hass: HomeAssistant) -> ConfigEntry:
+    """Create and register mock config entry for heat pump device (PilotedDevice)."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        source=SOURCE_USER,
+        data=MOCK_HEAT_PUMP_CONFIG,
+        entry_id=MOCK_HEAT_PUMP_ENTRY_ID,
+        title=f"heat_pump: {MOCK_HEAT_PUMP_CONFIG['name']}",
+        unique_id=f"quiet_solar_heat_pump_{MOCK_HEAT_PUMP_ENTRY_ID}",
     )
     config_entry.add_to_hass(hass)
     return config_entry

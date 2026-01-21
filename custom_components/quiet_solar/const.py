@@ -1,3 +1,5 @@
+SOLVER_STEP_S = 900 # 15 minutes
+
 MAX_POSSIBLE_AMPERAGE = 64
 
 DOMAIN = "quiet_solar"

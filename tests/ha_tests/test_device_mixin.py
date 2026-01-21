@@ -738,7 +738,6 @@ class TestGetDeviceAmpsConsumption:
         assert result[1] == 20.0  # Phase 2 at index 1
         assert result[2] == 30.0  # Phase 3 at index 2
 
-    @pytest.mark.xfail(reason="Test isolation issue with shared home state")
     async def test_mono_phase_with_pm_fallback(
         self,
         hass: HomeAssistant,
@@ -752,6 +751,10 @@ class TestGetDeviceAmpsConsumption:
 
         data_handler = hass.data[DOMAIN][DATA_HANDLER]
         home = data_handler.home
+
+        # Make the mono phase deterministic for the test.
+        home._mono_phase_conf = "1"
+        home._mono_phase_default = 0
 
         time_now = datetime.now(tz=pytz.UTC)
 
