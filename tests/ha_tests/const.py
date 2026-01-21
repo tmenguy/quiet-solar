@@ -10,6 +10,10 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_MIN_CHARGE,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_DEVICE_WALLBOX,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
+    CONF_CHARGER_PAUSE_RESUME_SWITCH,
+    CONF_CHARGER_STATUS_SENSOR,
+    CONF_CHARGER_PLUGGED,
     CONF_MONO_PHASE,
     CONF_CAR_TRACKER,
     CONF_CAR_PLUGGED,
@@ -33,6 +37,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSHome,
     CONF_TYPE_NAME_QSCar,
     CONF_TYPE_NAME_QSChargerWallbox,
+    CONF_TYPE_NAME_QSChargerGeneric,
     CONF_TYPE_NAME_QSPerson,
     CONF_TYPE_NAME_QSBattery,
     CONF_TYPE_NAME_QSSolar,
@@ -64,15 +69,18 @@ MOCK_CAR_CONFIG = {
     CONF_MINIMUM_OK_CAR_CHARGE: 20.0,
 }
 
-# Mock Charger configuration (Wallbox type)
+# Mock Charger configuration (Generic type - doesn't require device lookup)
 MOCK_CHARGER_CONFIG = {
     CONF_NAME: "Test Charger",
-    DEVICE_TYPE: CONF_TYPE_NAME_QSChargerWallbox,
-    CONF_CHARGER_DEVICE_WALLBOX: "device_wallbox_test",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSChargerGeneric,
     CONF_CHARGER_MIN_CHARGE: 6,
     CONF_CHARGER_MAX_CHARGE: 32,
     CONF_IS_3P: False,
     CONF_MONO_PHASE: 1,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER: "number.test_charger_max_current",
+    CONF_CHARGER_PAUSE_RESUME_SWITCH: "switch.test_charger_pause_resume",
+    CONF_CHARGER_STATUS_SENSOR: "sensor.test_charger_status",
+    CONF_CHARGER_PLUGGED: "binary_sensor.test_charger_plugged",
 }
 
 # Mock Person configuration
@@ -130,4 +138,9 @@ MOCK_SENSOR_STATES = {
     "binary_sensor.test_car_plugged": {"state": "on", "attributes": {}},
     "person.test_person": {"state": "home", "attributes": {}},
     "zone.home": {"state": "zoning", "attributes": {"latitude": 48.8566, "longitude": 2.3522, "radius": 100}},
+    # Charger entities
+    "number.test_charger_max_current": {"state": "32", "attributes": {"min": 6, "max": 32, "step": 1, "unit_of_measurement": "A"}},
+    "switch.test_charger_pause_resume": {"state": "on", "attributes": {}},
+    "sensor.test_charger_status": {"state": "Charging", "attributes": {}},
+    "binary_sensor.test_charger_plugged": {"state": "on", "attributes": {}},
 }

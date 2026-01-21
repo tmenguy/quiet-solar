@@ -87,16 +87,14 @@ async def test_data_handler_created(
     assert data_handler.home is not None
 
 
-@pytest.mark.skip(reason="Charger requires more complex mocking of Wallbox entities - to be implemented")
 async def test_setup_charger_entry_with_home(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test setting up charger entry after home is set up.
 
-    Note: This test is skipped because the Wallbox charger type requires
-    specific entity IDs (number.*_maximum_charging_current, switch.*_pause_resume, etc.)
-    that need to be mocked. A future test should set up these mock entities.
+    Uses a Generic charger type which requires explicit entity IDs
+    for charger control (max current, pause/resume, status, plugged).
     """
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()

@@ -146,6 +146,49 @@ async def test_person_sensors(
             assert state == snapshot(name=f"{entity_entry.entity_id}-state")
 
 
+async def test_charger_sensors(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+    entity_registry: er.EntityRegistry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test charger sensors are created with correct states."""
+    from .const import MOCK_CHARGER_CONFIG
+
+    # Setup home first
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create and setup charger
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_entry_sensor_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_sensor_test",
+    )
+    charger_entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert charger_entry.state is ConfigEntryState.LOADED
+
+    # Check charger sensors
+    entity_entries = er.async_entries_for_config_entry(
+        entity_registry, charger_entry.entry_id
+    )
+
+    sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
+
+    assert len(sensor_entries) > 0, "No sensors were created for charger"
+
+    for entity_entry in sensor_entries:
+        state = hass.states.get(entity_entry.entity_id)
+        if state:
+            assert state == snapshot(name=f"{entity_entry.entity_id}-state")
+
+
 async def test_sensor_unavailable_when_source_unavailable(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
