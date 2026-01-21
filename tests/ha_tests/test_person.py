@@ -424,8 +424,8 @@ async def test_person_with_multiple_cars(
 ) -> None:
     """Test person with multiple authorized cars."""
     from .const import MOCK_CAR_CONFIG
+    from homeassistant.const import CONF_NAME
     from custom_components.quiet_solar.const import (
-        CONF_NAME,
         DEVICE_TYPE,
         CONF_TYPE_NAME_QSPerson,
     )
