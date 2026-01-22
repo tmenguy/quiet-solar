@@ -340,11 +340,13 @@ class TestQSCarPersonInteraction:
         """Test user_selected_person_name_for_car setter triggers allocation update."""
         car = self.create_car()
         self.home._cars = [car]
+        self.home.get_best_persons_cars_allocations = AsyncMock()
+        self.hass.create_task = MagicMock(side_effect=lambda coro, name=None: coro.close())
 
         car.user_selected_person_name_for_car = "Jane"
 
-        # Setter should trigger home.get_best_persons_cars_allocations
-        # (through hass.create_task)
+        self.home.get_best_persons_cars_allocations.assert_called_once_with(force_update=True)
+        assert self.hass.create_task.call_count == 1
 
     def test_user_selected_person_no_person_attached(self):
         """Test setting FORCE_CAR_NO_PERSON_ATTACHED."""

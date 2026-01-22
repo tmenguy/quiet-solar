@@ -194,7 +194,19 @@ class TestSolver(TestCase):
             pv_forecast = pv_forecast,
             unavoidable_consumption_forecast = unavoidable_consumption_forecast
         )
-        s.solve(with_self_test=True)
+        output_cmds, bcmd = s.solve(with_self_test=True)
+
+        assert len(output_cmds) == 4
+        for load, commands in output_cmds:
+            assert commands
+            for cmd_time, cmd in commands:
+                assert start_time <= cmd_time <= end_time
+                assert isinstance(cmd, LoadCommand)
+
+        assert bcmd
+        for cmd_time, cmd in bcmd:
+            assert start_time <= cmd_time <= end_time
+            assert isinstance(cmd, LoadCommand)
 
 
     def test_auto_cmds(self):

@@ -1031,16 +1031,25 @@ class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
         """Test apply_budgets with empty list."""
         time = datetime.now(pytz.UTC)
 
-        # Should not raise any error
+        self.charger_group.remaining_budget_to_apply = ["sentinel"]
+        self.charger_group.know_reduced_state = {"charger": "state"}
+
         await self.charger_group.apply_budgets([], [], time, check_charger_state=False)
+        self.assertEqual(self.charger_group.remaining_budget_to_apply, ["sentinel"])
+        self.assertEqual(self.charger_group.know_reduced_state, {"charger": "state"})
 
     @pytest.mark.asyncio
     async def test_apply_budget_strategy_empty_list(self):
         """Test apply_budget_strategy with empty list."""
         time = datetime.now(pytz.UTC)
 
-        # Should not raise any error
+        self.charger_group.remaining_budget_to_apply = ["sentinel"]
+        self.charger_group.know_reduced_state = {"charger": "state"}
+
         await self.charger_group.apply_budget_strategy([], None, time)
+        self.dynamic_group.is_current_acceptable.assert_not_called()
+        self.assertEqual(self.charger_group.remaining_budget_to_apply, ["sentinel"])
+        self.assertEqual(self.charger_group.know_reduced_state, {"charger": "state"})
 
     @pytest.mark.asyncio
     async def test_apply_budget_strategy_sets_know_reduced_state(self):

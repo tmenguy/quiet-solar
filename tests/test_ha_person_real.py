@@ -653,5 +653,9 @@ class TestQSPersonReset:
             }
         )
 
-        # Should not raise
+        person._constraints = [MagicMock()]
+        person.current_command = MagicMock()
+
         person.reset()
+        assert person._constraints == []
+        assert person.current_command is None

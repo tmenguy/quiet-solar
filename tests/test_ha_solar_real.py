@@ -301,9 +301,10 @@ class TestQSSolarForecast:
             }
         )
 
+        assert device.solar_forecast_provider_handler is None
         time = datetime.datetime.now(pytz.UTC)
-        # Should not raise
         await device.update_forecast(time)
+        assert device.solar_forecast_provider_handler is None
 
     def test_get_forecast_with_provider(self):
         """Test get_forecast returns provider data."""
@@ -728,5 +729,5 @@ class TestQSSolarDumpForDebug:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Should not raise
             await device.dump_for_debug(tmpdir)
+            assert not os.path.exists(os.path.join(tmpdir, "solar_forecast.pickle"))

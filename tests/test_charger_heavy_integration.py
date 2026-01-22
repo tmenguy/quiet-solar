@@ -851,6 +851,10 @@ class TestApplyBudgetStrategy:
 
         # Should have remaining budget to apply (the increasing ones)
         # The decreasing ones should be applied first
+        assert mock_cs in charger_group.remaining_budget_to_apply
+        assert len(charger_group.remaining_budget_to_apply) >= 1
+        assert charger_group.know_reduced_state_real_power == 5000.0
+        mock_apply.assert_not_called()
 
 
 # ============================================================================

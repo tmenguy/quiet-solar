@@ -436,10 +436,13 @@ class TestQSPersonNotification:
     async def test_notify_no_mobile_app(self):
         """Test notification skipped when no mobile app."""
         person = self.create_person()  # No mobile_app configured
+        person.on_device_state_change = AsyncMock()
+        person._last_forecast_notification_call_time = None
 
         await person.notify_of_forecast_if_needed()
 
-        # Should not notify
+        person.on_device_state_change.assert_not_awaited()
+        assert person._last_forecast_notification_call_time is None
 
     @pytest.mark.asyncio
     async def test_notify_with_mobile_app(self):
@@ -644,7 +647,7 @@ class TestQSPersonGetAuthorizedCars:
 
         result = person.get_authorized_cars()
 
-        # Result depends on isinstance check in actual implementation
+        assert result == []
 
 
 # ============================================================================
@@ -862,11 +865,16 @@ class TestQSPersonDevicePostHomeInit:
         """Test device_post_home_init with no sensor entity."""
         person = self.create_person()
         person.ha_entities = {}
+        person.historical_mileage_data = [(datetime.datetime(2024, 6, 1, tzinfo=pytz.UTC), 10.0, datetime.datetime(2024, 6, 1, 8, tzinfo=pytz.UTC), 0)]
+        person.predicted_mileage = 15.0
+        person.predicted_leave_time = datetime.datetime(2024, 6, 2, tzinfo=pytz.UTC)
 
         time = datetime.datetime.now(pytz.UTC)
         person.device_post_home_init(time)
 
-        # Should not crash
+        assert person.historical_mileage_data
+        assert person.predicted_mileage == 15.0
+        assert person.predicted_leave_time == datetime.datetime(2024, 6, 2, tzinfo=pytz.UTC)
 
     def test_device_post_home_init_restores_history(self):
         """Test device_post_home_init restores historical data."""
@@ -896,8 +904,9 @@ class TestQSPersonDevicePostHomeInit:
         time = datetime.datetime.now(pytz.UTC)
         person.device_post_home_init(time)
 
-        # Should have restored history
-        # Note: This depends on implementation details
+        assert len(person.historical_mileage_data) == 1
+        assert len(person.serializable_historical_data) == 1
+        assert person.has_been_initialized is True
 
 
 # ============================================================================
@@ -938,5 +947,9 @@ class TestQSPersonReset:
         """Test reset calls parent reset."""
         person = self.create_person()
 
-        # Should not crash
+        person._constraints = [MagicMock()]
+        person.current_command = MagicMock()
+
         person.reset()
+        assert person._constraints == []
+        assert person.current_command is None

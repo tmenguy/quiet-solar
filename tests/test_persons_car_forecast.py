@@ -20,7 +20,9 @@ class TestPersonsCarForecast:
     @pytest.fixture
     def test_data_path(self):
         """Get path to test data directory."""
-        return Path(__file__).parent / "data" / "2025_11_14_persons_and_cars"
+        path = Path(__file__).parent / "data" / "2025_11_14_persons_and_cars"
+        assert path.exists()
+        return path
 
     @pytest.fixture
     def person_and_car_data(self, test_data_path):

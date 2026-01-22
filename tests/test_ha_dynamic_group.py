@@ -215,8 +215,8 @@ class TestQSDynamicGroupAvailableAmps:
         """Test updating when budget is None."""
         self.device.available_amps_for_group = None
 
-        # Should not raise
         self.device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
+        assert self.device.available_amps_for_group is None
 
 
 class TestQSDynamicGroupCurrentAcceptable:

@@ -17,8 +17,16 @@ from custom_components.quiet_solar.switch import (
     QSSwitchEntityChargerOrCar,
     async_setup_entry, QSSwitchEntityDescription,
 )
-from custom_components.quiet_solar.const import DOMAIN, SWITCH_ENABLE_DEVICE
+from custom_components.quiet_solar.const import (
+    DOMAIN,
+    DATA_HANDLER,
+    SWITCH_BEST_EFFORT_GREEN_ONLY,
+    SWITCH_ENABLE_DEVICE,
+)
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+from custom_components.quiet_solar.home_model.load import TestLoad
 from tests.test_helpers import create_mock_device
+from tests.test_helpers import FakeConfigEntry, FakeHass
 
 
 def test_create_ha_switch_for_charger():
@@ -42,18 +50,50 @@ def test_create_ha_switch_for_car():
     assert len(entities) == 1  # Solar priority switch
 
 
+class _TestLoadHA(HADeviceMixin, TestLoad):
+    """Test load supporting HADeviceMixin for switch creation."""
+
+    def __init__(self, *args, support_green_only_switch: bool = False, **kwargs):
+        self._support_green_only_switch = support_green_only_switch
+        super().__init__(*args, **kwargs)
+
+    def support_green_only_switch(self) -> bool:
+        return self._support_green_only_switch
+
+
+def _create_load_with_handler(support_green_only_switch: bool) -> _TestLoadHA:
+    fake_hass = FakeHass()
+    fake_hass.states.async_available = MagicMock(return_value=True)
+    data_handler = MagicMock()
+    data_handler.hass = fake_hass
+    fake_hass.data[DOMAIN][DATA_HANDLER] = data_handler
+    config_entry = FakeConfigEntry(entry_id="load_entry", data={})
+    return _TestLoadHA(
+        hass=fake_hass,
+        config_entry=config_entry,
+        home=MagicMock(),
+        name="Test Load",
+        device_type="load",
+        support_green_only_switch=support_green_only_switch,
+    )
+
+
 def test_create_ha_switch_for_load():
-    """Test creating switches for load - uses real class for isinstance check."""
-    # Skip this test - it requires real device class instantiation
-    # The functionality is tested through integration tests
-    pass
+    """Test creating switches for load with green-only support."""
+    load = _create_load_with_handler(support_green_only_switch=True)
+    entities = create_ha_switch_for_AbstractLoad(load)
+
+    keys = {entity.entity_description.key for entity in entities}
+    assert keys == {SWITCH_BEST_EFFORT_GREEN_ONLY, SWITCH_ENABLE_DEVICE}
 
 
 def test_create_ha_switch_for_load_no_green_only():
-    """Test creating switches for load without green only - uses real class for isinstance check."""
-    # Skip this test - it requires real device class instantiation
-    # The functionality is tested through integration tests
-    pass
+    """Test creating switches for load without green-only support."""
+    load = _create_load_with_handler(support_green_only_switch=False)
+    entities = create_ha_switch_for_AbstractLoad(load)
+
+    keys = {entity.entity_description.key for entity in entities}
+    assert keys == {SWITCH_ENABLE_DEVICE}
 
 
 @pytest.mark.asyncio

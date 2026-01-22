@@ -1443,8 +1443,9 @@ class TestForceRelaunchCommand:
         load.execute_command = execute_raises
 
         time_now = datetime.now(tz=pytz.UTC)
-        # Should not raise
         await load.force_relaunch_command(time_now)
+        assert load.running_command_last_launch == time_now
+        assert load.running_command_num_relaunch == 1
 
 
 # =============================================================================
@@ -1708,14 +1709,15 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
         load._last_completed_constraint = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
             time_now,
             "car_A",
             {"charger": "charger_1"}
         )
 
-        # Should be kept because info matches
-        # (method resets and pushes back)
+        assert result is True
+        assert len(load._constraints) == 1
+        assert load._constraints[0].load_info == {"charger": "charger_1"}
 
     def test_clean_constraints_with_load_info_conflicting(self):
         """Test constraints with conflicting load_info are removed."""
@@ -1745,9 +1747,14 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
         load._last_completed_constraint = completed
 
         time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(time_now, "car_A", for_full_reset=True)
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
+            time_now,
+            "car_A",
+            for_full_reset=False,
+        )
 
-        # last_completed should be reset during full reset but may be kept
+        assert result is False
+        assert load._last_completed_constraint == completed
 
     def test_clean_constraints_removes_last_completed_if_not_matching(self):
         """Test _last_completed_constraint is removed if not matching."""
@@ -2584,5 +2591,5 @@ class TestMarkCurrentConstraintHasDone:
         load = self.create_load()
         load._constraints = []
 
-        # Should not raise
         await load.mark_current_constraint_has_done()
+        assert load._constraints == []

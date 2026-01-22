@@ -493,8 +493,9 @@ class TestHADeviceMixinPowerProbe:
 
     def test_attach_power_to_probe_none(self):
         """Test attach_power_to_probe with None is safe."""
-        # Should not raise
+        initial_keys = set(self.device._entity_probed_state)
         self.device.attach_power_to_probe(None)
+        assert set(self.device._entity_probed_state) == initial_keys
 
     def test_attach_amps_to_probe(self):
         """Test attach_amps_to_probe registers sensor."""

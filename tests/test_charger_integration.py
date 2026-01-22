@@ -787,12 +787,10 @@ class TestQSChargerGenericEfficiency(unittest.TestCase):
     def test_efficiency_factor_without_car(self):
         """Test efficiency_factor property without car."""
         self.charger.car = None
-        self.charger.efficiency = 0.95
+        self.charger.efficiency = 95.0
 
         # Should fall back to charger's own efficiency
-        with patch.object(type(self.charger), 'efficiency_factor', new_callable=PropertyMock) as mock_eff:
-            mock_eff.return_value = 0.95
-            # Can't easily test super() call, but method exists
+        assert self.charger.efficiency_factor == pytest.approx(100.0 / 95.0, rel=1e-6)
 
 
 class TestQSChargerGenericPlatforms(unittest.TestCase):

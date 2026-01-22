@@ -39,21 +39,26 @@ async def test_button_press_service(
     if not button_entities:
         pytest.skip("No button entities created for this device")
     
-    # Try to press first button - just verify it doesn't error
-    button_entity_id = button_entities[0].entity_id
-    
-    try:
+    # Try to press first button with a state
+    button_entity_id = next(
+        (entry.entity_id for entry in button_entities if hass.states.get(entry.entity_id) is not None),
+        None,
+    )
+    if button_entity_id is None:
+        pytest.skip("No button entities have a state to press")
+
+    with patch(
+        "custom_components.quiet_solar.button.QSButtonEntity.async_press",
+        new_callable=AsyncMock,
+    ) as mock_press:
         await hass.services.async_call(
             BUTTON_DOMAIN,
             SERVICE_PRESS,
             {ATTR_ENTITY_ID: button_entity_id},
             blocking=True,
         )
-        # Service call should complete (may or may not do anything depending on state)
-    except Exception as e:
-        # Some buttons may require specific state, that's ok for this test
-        # We're just testing the service call mechanism works
-        pass
+
+        mock_press.assert_awaited_once()
 
 
 async def test_reload_service(
@@ -163,18 +168,27 @@ async def test_button_press_all_buttons(
     if not button_entities:
         pytest.skip("No button entities created for this device")
     
-    # Try pressing each button (with mocked actions)
-    for button_entity in button_entities:
-        try:
+    button_entity_ids = [
+        entry.entity_id
+        for entry in button_entities
+        if hass.states.get(entry.entity_id) is not None
+    ]
+    if not button_entity_ids:
+        pytest.skip("No button entities have a state to press")
+
+    with patch(
+        "custom_components.quiet_solar.button.QSButtonEntity.async_press",
+        new_callable=AsyncMock,
+    ) as mock_press:
+        for button_entity_id in button_entity_ids:
             await hass.services.async_call(
                 BUTTON_DOMAIN,
                 SERVICE_PRESS,
-                {ATTR_ENTITY_ID: button_entity.entity_id},
+                {ATTR_ENTITY_ID: button_entity_id},
                 blocking=True,
             )
-        except Exception as e:
-            # Some buttons may require specific state, that's ok
-            pass
+
+        assert mock_press.await_count == len(button_entity_ids)
 
 
 async def test_service_call_invalid_entity(
@@ -186,16 +200,17 @@ async def test_service_call_invalid_entity(
         await hass.config_entries.async_setup(real_home_config_entry.entry_id)
         await hass.async_block_till_done()
     
-    # Try to press non-existent button
-    # HA should handle this gracefully
-    try:
+    with patch(
+        "custom_components.quiet_solar.button.QSButtonEntity.async_press",
+        new_callable=AsyncMock,
+    ) as mock_press:
         await hass.services.async_call(
             BUTTON_DOMAIN,
             SERVICE_PRESS,
             {ATTR_ENTITY_ID: "button.nonexistent_button"},
             blocking=True,
         )
-    except Exception:
-        # Expected - entity doesn't exist
-        pass
+
+        assert mock_press.await_count == 0
+    assert hass.states.get("button.nonexistent_button") is None
 

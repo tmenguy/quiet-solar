@@ -775,9 +775,12 @@ class TestPersonNotification:
         env = create_integrated_environment(num_cars=1, num_chargers=0, num_persons=1)
         person = env.persons[0]
         person.mobile_app = None  # No mobile app
+        person.on_device_state_change = AsyncMock()
+        person._last_forecast_notification_call_time = None
 
-        # Should not raise
         await person.notify_of_forecast_if_needed(env.time)
+        person.on_device_state_change.assert_not_awaited()
+        assert person._last_forecast_notification_call_time is None
 
     @pytest.mark.asyncio
     async def test_notify_updates_last_notification_time(self):

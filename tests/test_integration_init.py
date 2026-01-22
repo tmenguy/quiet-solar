@@ -177,17 +177,23 @@ async def test_async_reload_quiet_solar_handles_errors(fake_hass):
     entry2.entry_id = "entry2"
     
     with patch.object(fake_hass.config_entries, 'async_entries', return_value=[entry1, entry2]):
-        with patch.object(fake_hass.config_entries, 'async_unload', side_effect=[Exception("Test error"), None]):
-            with patch.object(fake_hass.config_entries, 'async_reload', new_callable=AsyncMock):
+        with patch.object(fake_hass.config_entries, 'async_unload', side_effect=[Exception("Test error"), None]) as mock_unload:
+            with patch.object(fake_hass.config_entries, 'async_reload', new_callable=AsyncMock) as mock_reload:
                 # Should not raise exception
                 await async_reload_quiet_solar(fake_hass)
+                
+                assert mock_unload.call_count == 2
+                assert mock_reload.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_ocpp_notification_listener_filters_non_ocpp(fake_hass):
     """Test OCPP listener ignores non-OCPP notifications."""
-    fake_hass.data[DOMAIN][DATA_HANDLER] = MagicMock()
-    fake_hass.data[DOMAIN][DATA_HANDLER].home = None
+    mock_charger = MagicMock()
+    mock_charger.handle_ocpp_notification = AsyncMock()
+    mock_home = MagicMock()
+    mock_home._chargers = [mock_charger]
+    fake_hass.data[DOMAIN][DATA_HANDLER] = MagicMock(home=mock_home)
     
     register_ocpp_notification_listener(fake_hass)
     
@@ -197,7 +203,7 @@ async def test_ocpp_notification_listener_filters_non_ocpp(fake_hass):
         "service": "create",
     })
     
-    # Should not raise any errors
+    mock_charger.handle_ocpp_notification.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -229,3 +235,7 @@ async def test_ocpp_notification_forwards_to_chargers(fake_hass):
         
         # Charger should receive notification
         await asyncio.sleep(0.1)  # Give async tasks time to complete
+        mock_charger.handle_ocpp_notification.assert_awaited_once_with(
+            "Charger status changed",
+            "OCPP Alert",
+        )

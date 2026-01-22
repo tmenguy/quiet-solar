@@ -85,8 +85,9 @@ class TestForecast(TestCase):
         home_non_controlled_consumption.values = home_non_controlled_consumption.read_value()
         home_non_controlled_consumption.compute_prediction_score()
 
-
-
+        assert home_non_controlled_consumption.values is not None
+        assert home_non_controlled_consumption.values.shape[0] == 2
+        assert home_non_controlled_consumption.values.size > 0
 
     def test_consumption_data_storage(self):
 

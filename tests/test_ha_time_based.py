@@ -181,8 +181,9 @@ async def test_unload_stops_updates(
             await hass.async_block_till_done()
             
             # Unload
-            await hass.config_entries.async_unload(config_entry.entry_id)
+            unload_ok = await hass.config_entries.async_unload(config_entry.entry_id)
             await hass.async_block_till_done()
+            assert unload_ok is True
             
             # Get call count after unload
             count_after_unload = mock_update_loads.call_count
@@ -193,8 +194,7 @@ async def test_unload_stops_updates(
             await hass.async_block_till_done()
             
             # Update should not have been called (unload should cancel timers)
-            # Note: This might still increment if cancellation isn't complete
-            # so we just verify the test completes without error
+            assert mock_update_loads.call_count == count_after_unload
 
 
 async def test_data_handler_intervals_configurable(
