@@ -419,7 +419,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         """Test that non-auto/winter modes call parent implementation."""
         self.device.bistate_mode = "on_off_mode_off"  # Not auto or winter
         self.device.is_load_command_set = MagicMock(return_value=False)
-        self.device.reset = MagicMock()
+        self.device.command_and_constraint_reset = MagicMock()
 
         time = datetime.datetime.now(pytz.UTC)
         # This should call super().check_load_activity_and_constraints
@@ -427,7 +427,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         result = await self.device.check_load_activity_and_constraints(time)
 
         # Parent's mode_off behavior should have been triggered
-        self.device.reset.assert_called()
+        self.device.command_and_constraint_reset.assert_called()
 
     @pytest.mark.asyncio
     async def test_check_load_no_end_schedule_returns_false(self):
