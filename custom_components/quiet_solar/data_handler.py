@@ -139,5 +139,3 @@ class QSDataHandler:
                 await self.home.update_forecast_probers(event_time)
             except Exception as e:
                 _LOGGER.error("Error updating forecast probers: %s", e, exc_info=True)
-
-

@@ -43,6 +43,13 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSSolar,
     CONF_TYPE_NAME_QSDynamicGroup,
     CONF_TYPE_NAME_QSHeatPump,
+    CONF_TYPE_NAME_QSOnOffDuration,
+    CONF_TYPE_NAME_QSClimateDuration,
+    CONF_SWITCH,
+    CONF_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_ON,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_POWER,
 )
 
 # Mock Home configuration
@@ -125,6 +132,24 @@ MOCK_HEAT_PUMP_CONFIG = {
     DEVICE_TYPE: CONF_TYPE_NAME_QSHeatPump,
 }
 
+# Mock OnOffDuration configuration (QSBiStateDuration subclass)
+MOCK_ON_OFF_DURATION_CONFIG = {
+    CONF_NAME: "Test On Off Device",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSOnOffDuration,
+    CONF_SWITCH: "switch.test_on_off_device",
+    CONF_POWER: 1500,  # 1.5kW power usage
+}
+
+# Mock ClimateDuration configuration (QSClimateDuration)
+MOCK_CLIMATE_DURATION_CONFIG = {
+    CONF_NAME: "Test Climate Device",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSClimateDuration,
+    CONF_CLIMATE: "climate.test_climate_device",
+    CONF_CLIMATE_HVAC_MODE_ON: "heat",
+    CONF_CLIMATE_HVAC_MODE_OFF: "off",
+    CONF_POWER: 2000,  # 2kW power usage
+}
+
 # Entry IDs for testing
 MOCK_HOME_ENTRY_ID = "home_entry_123"
 MOCK_CAR_ENTRY_ID = "car_entry_123"
@@ -134,6 +159,8 @@ MOCK_BATTERY_ENTRY_ID = "battery_entry_123"
 MOCK_SOLAR_ENTRY_ID = "solar_entry_123"
 MOCK_DYNAMIC_GROUP_ENTRY_ID = "dynamic_group_entry_123"
 MOCK_HEAT_PUMP_ENTRY_ID = "heat_pump_entry_123"
+MOCK_ON_OFF_DURATION_ENTRY_ID = "on_off_duration_entry_123"
+MOCK_CLIMATE_DURATION_ENTRY_ID = "climate_duration_entry_123"
 
 # Mock sensor states for testing
 MOCK_SENSOR_STATES = {
@@ -151,4 +178,8 @@ MOCK_SENSOR_STATES = {
     "switch.test_charger_pause_resume": {"state": "on", "attributes": {}},
     "sensor.test_charger_status": {"state": "Charging", "attributes": {}},
     "binary_sensor.test_charger_plugged": {"state": "on", "attributes": {}},
+    # OnOffDuration entities
+    "switch.test_on_off_device": {"state": "off", "attributes": {}},
+    # ClimateDuration entities
+    "climate.test_climate_device": {"state": "off", "attributes": {"hvac_modes": ["off", "heat", "cool", "auto"]}},
 }
