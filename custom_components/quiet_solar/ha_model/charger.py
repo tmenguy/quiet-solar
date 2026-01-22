@@ -2176,7 +2176,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_time_adjusted = None
         self._boot_constraints = []
         self._boot_last_completed_constraint = None
-        self._boot_last_pushed_end_constraint_from_agenda = None
 
     def reset(self):
         _LOGGER.info(f"Charger reset {self.name}")
@@ -2576,10 +2575,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 old_connected_car_name = self._last_completed_constraint.load_param
                 _LOGGER.info(f"device_post_home_init: found a stored last completed constraint to be kept with {old_connected_car_name}  {self._last_completed_constraint.name}")
 
-            if old_connected_car_name is None and self._last_pushed_end_constraint_from_agenda is not None:
-                old_connected_car_name = self._last_pushed_end_constraint_from_agenda.load_param
-                _LOGGER.info(f"device_post_home_init: found a stored last pushed end constraint to be kept with {old_connected_car_name}  {self._last_pushed_end_constraint_from_agenda.name}")
-
             self._boot_car = None
             if old_connected_car_name is not None:
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
@@ -2588,7 +2583,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self._boot_car = None
 
         self._boot_last_completed_constraint = self._last_completed_constraint
-        self._boot_last_pushed_end_constraint_from_agenda = self._last_pushed_end_constraint_from_agenda
         self._boot_constraints = self._constraints
         self._constraints = []
 
@@ -2659,7 +2653,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self._boot_car is not None and best_car is not None and best_car.name == self._boot_car.name and self._boot_constraints and len(self._constraints) == 0:
                 # we are back to the boot car ... we need to restore the constraints that were active at boot time
                 self._last_completed_constraint = self._boot_last_completed_constraint
-                self._last_pushed_end_constraint_from_agenda = self._boot_last_pushed_end_constraint_from_agenda
                 for ct in self._boot_constraints:
                     if ct.load_param == best_car.name:
                         if self.push_live_constraint(time, ct):
@@ -2667,7 +2660,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 self._boot_constraints = []
                 self._boot_last_completed_constraint = None
-                self._boot_last_pushed_end_constraint_from_agenda = None
 
             # user forced a "deconnection"
             if best_car is None:
@@ -2683,7 +2675,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.detach_car() # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
-                    self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name, for_full_reset=False)
+                    self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name, for_full_reset=False)
 
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
@@ -2693,7 +2685,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     do_full_reset = False
                 else:
                     do_full_reset = True
-                self.clean_constraints_for_load_param_and_info(time, load_param=best_car.name, for_full_reset=do_full_reset)
+                self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=best_car.name, for_full_reset=do_full_reset)
                 self.attach_car(best_car, time)
 
             # we have to check if the car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
@@ -2839,7 +2831,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     # now see if we can have a schedule constraint from the agenda, not overridden by the time based user one above
                     # in case of a car schedule we take the start of the event as the target
-                    start_time, _ = await self.car.get_next_scheduled_event(time, after_end_time=True)
+                    start_time, _ = await self.car.get_next_scheduled_event(time, give_currently_running_event=False)
 
                     if start_time is not None and time > start_time:
                         # not need at all to push any time constraint ... we passed it
@@ -2884,7 +2876,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             support_auto=True
                         )
 
-                        if self.push_unique_and_current_end_of_constraint_from_agenda(time, car_charge_agenda):
+                        if self.push_agenda_constraints(time, [car_charge_agenda]):
                             _LOGGER.info(
                                 f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_agenda.name}")
                             do_force_solve = True
@@ -2911,9 +2903,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # we found and removed a previous person based constraint, or anything not as it should be there
                     if person is not None:
 
-                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                       load_info={"person": person.name},
-                                                                       for_full_reset=False)
+                        self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
+                                                                                              load_info={"person": person.name},
+                                                                                              for_full_reset=False)
 
                         for old_ct in self._auto_constraints_cleaned_at_user_reset:
                             if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
@@ -2987,9 +2979,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     if do_remove_all_person_constraints:
                         # we should remove ALL previous person based constraints from this car
-                        self.clean_constraints_for_load_param_and_info(time, load_param=self.car.name,
-                                                                       load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
-                                                                       for_full_reset=False)
+                        self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
+                                                                                              load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                                                                                              for_full_reset=False)
 
             if realized_charge_target is None or (is_target_percent and realized_charge_target < self.car.car_default_charge):
 

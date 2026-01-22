@@ -115,7 +115,7 @@ class LoadConstraint(object):
         self.start_of_constraint: datetime = start_of_constraint
 
         # this one can be overriden by the prev constraint of the load:
-        self._internal_start_of_constraint: datetime = self.start_of_constraint
+        self.current_start_of_constraint: datetime = self.start_of_constraint
 
         self.initial_value = initial_value
         self._internal_initial_value = self.initial_value
@@ -193,6 +193,12 @@ class LoadConstraint(object):
             extra_s += f"{self.load_info} "
         return f"Constraint for {self.load.name} ({extra_s}{target_value}/{self._type}/{self._degraded_type})"
 
+
+    def add_or_update_load_info(self, key: str, value):
+        if self.load_info is None:
+            self.load_info = {}
+        self.load_info[key] = value
+
     def __eq__(self, other):
         if other is None:
             return False
@@ -207,9 +213,8 @@ class LoadConstraint(object):
         od["current_value"] = 0
         d = self.to_dict()
         d["current_value"] = 0
-        if od == d:
-            return other.stable_name == self.stable_name
-        return False
+
+        return od == d
 
     def __hash__(self):
         # Create a hash based on the same attributes used in __eq__
@@ -405,7 +410,7 @@ class LoadConstraint(object):
         if end_time is None:
             end_time = DATETIME_MAX_UTC
 
-        if self._internal_start_of_constraint > end_time:
+        if self.current_start_of_constraint > end_time:
             return False
 
         if self.end_of_constraint == DATETIME_MAX_UTC:
@@ -1348,8 +1353,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 final_ret = quantity_to_be_added <= 0.0
         else:
 
-            if self._internal_start_of_constraint != DATETIME_MIN_UTC:
-                first_slot = bisect_left(time_slots, self._internal_start_of_constraint)
+            if self.current_start_of_constraint != DATETIME_MIN_UTC:
+                first_slot = bisect_left(time_slots, self.current_start_of_constraint)
 
             # no need to reduce in case of OFF GRID Mode
             if has_a_proper_end_time and self.load.is_time_sensitive() and not self.load.is_off_grid():

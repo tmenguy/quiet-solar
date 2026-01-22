@@ -1336,7 +1336,7 @@ async def test_charger_check_load_activity_force_constraint(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=car_device)
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.command_and_constraint_reset = MagicMock()
     car_device.can_use_charge_percent_constraints = MagicMock(return_value=True)
@@ -1561,7 +1561,7 @@ async def test_charger_check_load_activity_with_timed_constraints(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=car_device)
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.home.force_next_solve = MagicMock()
 
@@ -1992,10 +1992,10 @@ async def test_charger_check_load_activity_agenda_person_constraints(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=car_device)
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.attach_car = MagicMock(side_effect=lambda car, time: setattr(charger_device, "car", car))
     charger_device.push_live_constraint = MagicMock(return_value=True)
-    charger_device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+    charger_device.push_agenda_constraints = MagicMock(return_value=True)
     charger_device.set_live_constraints = MagicMock()
     charger_device.command_and_constraint_reset = MagicMock()
     charger_device.is_car_charged = MagicMock(return_value=(False, None))
@@ -2102,7 +2102,7 @@ async def test_charger_check_load_activity_energy_constraints(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=car_device)
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.attach_car = MagicMock(side_effect=lambda car, time: setattr(charger_device, "car", car))
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.set_live_constraints = MagicMock()
@@ -3453,12 +3453,10 @@ async def test_charger_check_load_activity_agenda_person(
     charger_device._auto_constraints_cleaned_at_user_reset = []
     charger_device._power_steps = []
     charger_device.push_live_constraint = MagicMock(return_value=True)
-    charger_device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(
-        return_value=True
-    )
+    charger_device.push_agenda_constraints = MagicMock(return_value=True)
     charger_device.set_live_constraints = MagicMock()
     charger_device.is_car_charged = MagicMock(return_value=(False, None))
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.is_off_grid = MagicMock(return_value=False)
 
     with patch(
@@ -3539,7 +3537,7 @@ async def test_charger_check_load_activity_person_constraint_creation(
     charger_device._auto_constraints_cleaned_at_user_reset = []
     charger_device._power_steps = []
     charger_device.push_live_constraint = MagicMock(return_value=True)
-    charger_device.clean_constraints_for_load_param_and_info = MagicMock()
+    charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.is_car_charged = MagicMock(return_value=(False, None))
     charger_device.is_off_grid = MagicMock(return_value=False)
 
@@ -4050,7 +4048,6 @@ async def test_charger_boot_constraints_restore(
     charger_device.user_attached_car_name = None
     charger_device._constraints = [DummyConstraint("ct1", "Car Boot")]
     charger_device._last_completed_constraint = DummyConstraint("ct_last", "Car Boot")
-    charger_device._last_pushed_end_constraint_from_agenda = DummyConstraint("ct_agenda", "Car Boot")
 
     charger_device.device_post_home_init(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
     assert charger_device._constraints == []

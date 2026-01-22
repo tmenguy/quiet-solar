@@ -751,7 +751,7 @@ async def test_person_forecast_from_history(
     assert predicted_mileage == 42.0
     assert predicted_leave is not None
     assert predicted_leave > now
-    assert person_device.get_forecast_readable_string().startswith("42km")
+    assert person_device.get_forecast_readable_string(now).startswith("42km")
 
 
 async def test_person_tracker_id_override(

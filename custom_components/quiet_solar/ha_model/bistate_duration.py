@@ -1,13 +1,14 @@
 import logging
 from abc import abstractmethod
+from collections import namedtuple
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO
+from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, SOLVER_STEP_S
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
-from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint
+from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
@@ -21,6 +22,8 @@ bistate_modes = [
 
 MAX_USER_OVERRIDE_DURATION_S = 8*3600
 USER_OVERRIDE_STATE_BACK_DURATION_S = 90
+
+ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push"], defaults=(None, None, 0.0, False, False))
 
 _LOGGER = logging.getLogger(__name__)
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
@@ -140,7 +143,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_force_next_solve = False
 
         bistate_mode = self.bistate_mode
-        has_a_running_override = False
+        override_constraint = None
 
         # we want to check that the load hasn't been changed externally from the system:
         if self.is_load_command_set(time) and self.support_user_override():
@@ -159,21 +162,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # we need to reset the external user initiated state
                 self.reset_override_state_and_set_reset_ask_time(time)
                 do_force_next_solve = True
-                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None # a proper constraint re-evaluation for th eload will be done "normally"
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None # a proper constraint re-evaluation for the load will be done "normally"
+                self.command_and_constraint_reset() #remove any constraint if any we will add it back if needed below
             else:
 
                 if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-                    # do nothing below, just ask for a proper constraint evaluation as an asked to not be overriden one:
+                    # do nothing below, just ask for a proper constraint evaluation to kill the current override::
                     has_a_running_override = False
                     do_force_next_solve = True
                     self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+                    self.command_and_constraint_reset()  # remove any constraint if any we will add it back if needed below
                 else:
-                    override_constraint = None
+
                     for i, ct in enumerate(self._constraints):
                         if ct.from_user and ct.load_param is not None:  # and ct.load_param == state.state:
                             # we do have already a constraint for this override state
                             override_constraint = ct
-                            has_a_running_override = True
                             break
 
                     state = self.hass.states.get(self.bistate_entity)
@@ -207,7 +211,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
-                                USER_OVERRIDE_STATE_BACK_DURATION_S, (3600.0 * self.override_duration) / 2.0):
+                                float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0):
                             # small time window after asking for reset, do not consider the command overridden
                             if is_command_overridden is False:
                                 # great no more override already after the last ask to stop override, reset the timer
@@ -226,27 +230,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}")
 
                         # the user did something different ... just OVERRIDE the automation for a given time
-                        has_a_running_override = True
-
                         self.external_user_initiated_state = state.state
                         self.external_user_initiated_state_time = time
 
                         # remove any overriden constraint if any
-                        for i, ct in enumerate(self._constraints):
-                            if ct.from_user and ct.load_param is not None:
-                                # we do have already a constraint for this override state, kill it!
-                                self._constraints[i] = None
-                                self.set_live_constraints(time, self._constraints)
-                                break
-
+                        self.command_and_constraint_reset()  # remove any constraint if any we will add it back if needed below
 
                         # we will create a constraint if the asked state is not idle ...
                         if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
                             # idle command
-                            has_a_running_override = True
-                            # push all constraints if feasible: ie move their start, keep their values? no override is override : user decision
-                            self.reset()
                             do_force_next_solve = True
+                            # all constraint removed above : command_and_constraint_reset
                         else:
                             end_schedule = time + timedelta(seconds=(3600.0*self.override_duration))
                             override_constraint = TimeBasedSimplePowerLoadConstraint(
@@ -259,8 +253,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,
                                 initial_value=0,
-                                target_value=3600.0*self.override_duration,
-                                always_end_at_end_of_constraint=True
+                                target_value=3600.0*self.override_duration
                             )
 
                             if self.push_live_constraint(time, override_constraint):
@@ -268,48 +261,78 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint")
                                 do_force_next_solve = True
 
-        if has_a_running_override is False:
+        do_push_constraint_after = None
+        if override_constraint is not None and override_constraint.end_of_constraint != DATETIME_MAX_UTC:
+            do_push_constraint_after = override_constraint.end_of_constraint + timedelta(seconds=1)
 
-            if bistate_mode == self._bistate_mode_off:
-                # remove all constraints if any
+        if bistate_mode == self._bistate_mode_off:
+            # remove all constraints if any ... except if we have a running override
+            if do_push_constraint_after is not None:
+                # keep ONLY the override
+                if len(self._constraints) > 1:
+                    do_force_next_solve = True
+                self.set_live_constraints(time, [override_constraint])
+            else:
                 if len(self._constraints) > 0:
                     do_force_next_solve = True
-                self.reset()
-            else:
-                do_add_constraint = False
-                target_value = 0
-                end_schedule = None
-                has_user_forced_constraint = False
-                start_schedule = None
-                always_end_at_end_of_constraint = False
-                if bistate_mode == self._bistate_mode_on:
-                    has_user_forced_constraint = True
-                    end_schedule = self.get_proper_local_adapted_tomorrow(time)
-                    target_value = 25*3600.0 # 25 hours, more than a day will force the load to be on
-                    do_add_constraint = True
-                elif bistate_mode == "bistate_mode_default":
-                    if self.default_on_duration is not None and  self.default_on_finish_time is not None:
-                        end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
-                        target_value = self.default_on_duration * 3600.0
-                        do_add_constraint = True
-                else:
-                    start_schedule, end_schedule = await self.get_next_scheduled_event(time)
+                self.command_and_constraint_reset()
+        else:
 
+            constraints = []
+
+            if bistate_mode == self._bistate_mode_on:
+                end_schedule = self.get_proper_local_adapted_tomorrow(time)
+                start_schedule = do_push_constraint_after
+                if start_schedule is None or start_schedule < end_schedule:
+                    ct = ConstraintItemType(start_schedule=start_schedule,
+                                             end_schedule=end_schedule,
+                                             target_value=25*3600.0, # 25 hours, more than a day will force the load to be on
+                                             has_user_forced_constraint=True,
+                                             agenda_push=False)
+                    constraints.append(ct)
+            elif bistate_mode == "bistate_mode_default":
+                if self.default_on_duration is not None and  self.default_on_finish_time is not None:
+                    end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
+                    start_schedule = do_push_constraint_after
+                    if start_schedule is None or start_schedule < end_schedule:
+                        ct = ConstraintItemType(start_schedule=start_schedule,
+                                                end_schedule=end_schedule,
+                                                target_value=self.default_on_duration * 3600.0,
+                                                has_user_forced_constraint=False,
+                                                agenda_push=False)
+                        constraints.append(ct)
+            else:
+                events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
+
+                for ev in events:
+                    start_schedule, end_schedule = ev
                     if start_schedule is not None and end_schedule is not None:
-                        do_add_constraint = True
+                        start_schedule = max(time, start_schedule)
+                        if do_push_constraint_after is not None:
+                            start_schedule = max(do_push_constraint_after, start_schedule)
+                        if start_schedule >= end_schedule:
+                            continue
                         target_value = (end_schedule - start_schedule).total_seconds()
                         if bistate_mode == "bistate_mode_exact_calendar":
-                            always_end_at_end_of_constraint = True
-                            target_value += 600 # 10 mn of leg room to be sure the planner will fill all of it
+                            target_value = SOLVER_STEP_S*float((int(target_value)//SOLVER_STEP_S)) + SOLVER_STEP_S + 2
                         else:
                             # bistate mode auto
                             start_schedule = None
+                        ct = ConstraintItemType(start_schedule=start_schedule,
+                                                end_schedule=end_schedule,
+                                                target_value=target_value,
+                                                has_user_forced_constraint=False,
+                                                agenda_push=True)
+                        constraints.append(ct)
 
 
-                if do_add_constraint:
+            if len(constraints) > 0:
+
+                agend_cts = []
+                for ct in constraints:
 
                     type = CONSTRAINT_TYPE_MANDATORY_END_TIME
-                    if has_user_forced_constraint is False and self.is_best_effort_only_load():
+                    if ct.has_user_forced_constraint is False and self.is_best_effort_only_load():
                         type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
 
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
@@ -317,15 +340,19 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                             time=time,
                             load=self,
-                            from_user=has_user_forced_constraint,
-                            start_of_constraint=start_schedule,
-                            end_of_constraint=end_schedule,
+                            from_user=ct.has_user_forced_constraint,
+                            start_of_constraint=ct.start_schedule,
+                            end_of_constraint=ct.end_schedule,
                             power=self.power_use,
                             initial_value=0,
-                            target_value=target_value,
-                            always_end_at_end_of_constraint=always_end_at_end_of_constraint
+                            target_value=ct.target_value
                     )
+                    if ct.agenda_push:
+                        agend_cts.append(load_mandatory)
+                    else:
+                        do_force_next_solve = self.push_live_constraint(time, load_mandatory) or do_force_next_solve
 
-                    do_force_next_solve = self.push_unique_and_current_end_of_constraint_from_agenda(time, load_mandatory) or do_force_next_solve
+                if len(agend_cts) > 0:
+                     do_force_next_solve = self.push_agenda_constraints(time, agend_cts) or do_force_next_solve
 
         return do_force_next_solve

@@ -420,61 +420,124 @@ class HADeviceMixin:
     #         _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=True, stack_info=True)
 
 
-
-    async def get_next_scheduled_event(self, time:datetime, after_end_time:bool=False) -> tuple[datetime|None,datetime|None]:
-        if self.calendar is None:
+    async def get_next_scheduled_event(self, time:datetime, give_currently_running_event:bool=True) -> tuple[datetime | None, datetime | None]:
+        ret = await self.get_next_scheduled_events(time, give_currently_running_event=give_currently_running_event, max_number_of_events=1)
+        if len (ret) == 0:
             return None, None
+        return ret[0]
 
-        state = self.hass.states.get(self.calendar)
-        state_attr = {}
-        if state is None or state.state in UNAVAILABLE_STATE_VALUES:
-            state = None
+    async def get_next_scheduled_events(
+        self,
+        time: datetime,
+        give_currently_running_event: bool = True,
+        max_number_of_events: int | None = None,
+    ) -> list[tuple[datetime, datetime]]:
+        """Get a list of scheduled events within a time range.
 
-        if state is not None:
-            state_attr = state.attributes
+        Args:
+            time: The beginning of the search period (current time or future).
+            give_currently_running_event: If False and time is during an event,
+                that event is excluded. If True, it will be included.
+            max_number_of_events: Maximum number of events to return.
+                If <= 0 or None, no limit is applied.
 
-        start_time: str | None | datetime = state_attr.get("start_time", None)
-        end_time: str | None | datetime = state_attr.get("end_time", None)
+        Returns:
+            A list of (start, end) datetime tuples, ordered by time.
+        """
+        if self.calendar is None:
+            return []
 
-        if start_time is not None:
-            start_time = datetime.fromisoformat(start_time)
-            start_time = start_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-        if end_time is not None:
-            end_time = datetime.fromisoformat(end_time)
-            end_time = end_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        # Compute end_time using FLOATING_PERIOD_S
+        end_time = time + timedelta(seconds=FLOATING_PERIOD_S)
 
+        results: list[tuple[datetime, datetime]] = []
 
-        if after_end_time and start_time is not None and end_time is not None and time >= start_time:
-            # time is "during the current event" but if we want the next "start" ask the calendar
-            data = {ATTR_ENTITY_ID: self.calendar}
-            service = calendar.SERVICE_GET_EVENTS
-            data[calendar.EVENT_START_DATETIME] = end_time - timedelta(seconds=1) # -1 to get the "current one" will filter it below in the loop if needed
-            data[calendar.EVENT_DURATION] = timedelta(seconds=FLOATING_PERIOD_S+1)
-            domain = calendar.DOMAIN
+        # Optimization for max_number_of_events == 1: use calendar state directly
+        if max_number_of_events == 1:
+            state = self.hass.states.get(self.calendar)
+            state_attr = {}
+            if state is None or state.state in UNAVAILABLE_STATE_VALUES:
+                state = None
 
-            start_time = None
-            end_time = None
-            try:
-                resp = await self.hass.services.async_call(
-                    domain, service, data, blocking=True, return_response=True
-                )
-                for cals in resp:
-                    events = resp[cals].get("events", [])
-                    for event in events:
-                        # events are sorted by time ... pick the first ok one
-                        st_time = datetime.fromisoformat(event["start"])
-                        st_time = st_time.astimezone(tz=pytz.UTC)
-                        if st_time <= time:
+            if state is not None:
+                state_attr = state.attributes
+
+            event_start: str | None | datetime = state_attr.get("start_time", None)
+            event_end: str | None | datetime = state_attr.get("end_time", None)
+
+            if event_start is not None:
+                event_start = datetime.fromisoformat(event_start)
+                event_start = event_start.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            if event_end is not None:
+                event_end = datetime.fromisoformat(event_end)
+                event_end = event_end.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+            if event_start is not None and event_end is not None:
+                # Check if the event is within our search period
+                if event_end > time and event_start < end_time:
+                    # Check if we should include a currently running event
+                    if give_currently_running_event or event_start > time:
+                        return [(event_start, event_end)]
+
+                # If the current state event doesn't match, we need to query the calendar
+                # Fall through to the calendar query below
+
+        # Query calendar for events in the range
+        data = {ATTR_ENTITY_ID: self.calendar}
+        service = calendar.SERVICE_GET_EVENTS
+        data[calendar.EVENT_START_DATETIME] = time
+        data[calendar.EVENT_DURATION] = end_time - time
+        domain = calendar.DOMAIN
+
+        try:
+            resp = await self.hass.services.async_call(
+                domain, service, data, blocking=True, return_response=True
+            )
+            for cals in resp:
+                events = resp[cals].get("events", [])
+                for event in events:
+                    event_start = datetime.fromisoformat(event["start"])
+                    event_start = event_start.astimezone(tz=pytz.UTC)
+                    event_end = datetime.fromisoformat(event["end"])
+                    event_end = event_end.astimezone(tz=pytz.UTC)
+
+                    # Skip past events
+                    if event_end <= time:
+                        continue
+
+                    # Skip events that start after our search period
+                    if event_start >= end_time:
+                        continue
+
+                    # Handle currently running event filtering
+                    if not give_currently_running_event:
+                        # If time is between event_start and event_end (event is running)
+                        if event_start <= time < event_end:
                             continue
-                        start_time = st_time
-                        end_time = datetime.fromisoformat(event["end"])
-                        end_time = end_time.astimezone(tz=pytz.UTC)
+
+                    results.append((event_start, event_end))
+
+                    # Check max number limit
+                    if max_number_of_events is not None and max_number_of_events > 0:
+                        if len(results) >= max_number_of_events:
+                            break
+
+                # Break outer loop too if we hit the limit
+                if max_number_of_events is not None and max_number_of_events > 0:
+                    if len(results) >= max_number_of_events:
                         break
-            except Exception as err:
-                _LOGGER.error(f"Error reading calendar in get_next_scheduled_event {self.calendar} {err}", exc_info=True, stack_info=True)
 
+        except Exception as err:
+            _LOGGER.error(
+                f"Error reading calendar in get_next_scheduled_events {self.calendar} {err}",
+                exc_info=True,
+                stack_info=True,
+            )
 
-        return start_time, end_time
+        # Sort by start time (should already be sorted from calendar, but ensure it)
+        results.sort(key=lambda x: x[0])
+
+        return results
 
 
     def attach_exposed_has_entity(self, ha_object):
@@ -837,7 +900,7 @@ class HADeviceMixin:
                         from_idx = bisect_right(values, time, key=itemgetter(0))
 
         else:
-            values = self.get_state_history_data(entity_id, num_seconds_before=num_seconds_before, to_ts=time, keep_invalid_states=True)
+            values = self.get_state_history_data(entity_id, num_seconds_before, to_ts=time, keep_invalid_states=True)
             if values:
                 from_idx = len(values) - 1
 

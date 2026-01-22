@@ -344,15 +344,15 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         self.device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.push_agenda_constraints = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
         result = await self.device.check_load_activity_and_constraints(time)
 
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
+        self.device.push_agenda_constraints.assert_called_once()
         # Check the constraint was created with correct type
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[1]["new_ct"]
+        call_args = self.device.push_agenda_constraints.call_args
+        constraint = call_args[0][1][0]
         assert constraint is not None
 
     @pytest.mark.asyncio
@@ -364,15 +364,15 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         self.device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.push_agenda_constraints = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
         result = await self.device.check_load_activity_and_constraints(time)
 
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
+        self.device.push_agenda_constraints.assert_called_once()
         # Verify the constraint uses winter filter time
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[1]["new_ct"]
+        call_args = self.device.push_agenda_constraints.call_args
+        constraint = call_args[0][1][0]
         expected_target = self.device.pool_steps[CONF_POOL_WINTER_IDX][2] * 3600.0
         assert constraint.target_value == expected_target
 
@@ -385,7 +385,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         self.device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.push_agenda_constraints = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
         await self.device.check_load_activity_and_constraints(time)
@@ -403,14 +403,14 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         self.device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.push_agenda_constraints = MagicMock(return_value=True)
         self.home.is_off_grid = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
         await self.device.check_load_activity_and_constraints(time)
 
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[1]["new_ct"]
+        call_args = self.device.push_agenda_constraints.call_args
+        constraint = call_args[0][1][0]
         # Best effort loads use FILLER_AUTO type
         assert constraint._type == CONSTRAINT_TYPE_FILLER_AUTO
 

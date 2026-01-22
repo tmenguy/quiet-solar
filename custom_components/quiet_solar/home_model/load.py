@@ -642,7 +642,6 @@ class AbstractLoad(AbstractDevice):
         self.qs_best_effort_green_only = False
 
         self._last_constraint_update: datetime|None = None
-        self._last_pushed_end_constraint_from_agenda = None
         self._last_hash_state = None
 
         self.is_load_time_sensitive = False
@@ -691,31 +690,59 @@ class AbstractLoad(AbstractDevice):
     def support_user_override(self) -> bool:
         return False
 
-    def push_unique_and_current_end_of_constraint_from_agenda(self, time: datetime, new_ct: LoadConstraint):
+    # def push_unique_and_current_end_of_constraint_from_agenda(self, time: datetime, new_ct: LoadConstraint):
+    #
+    #     new_end_time = new_ct.end_of_constraint
+    #
+    #     if new_end_time == DATETIME_MAX_UTC or new_end_time == DATETIME_MIN_UTC:
+    #         return False
+    #
+    #     if self._last_pushed_end_constraint_from_agenda is None:
+    #         self._last_pushed_end_constraint_from_agenda = new_ct
+    #     else:
+    #         # if the agenda has changed ... we should remove an existing uneeded constraint
+    #         if self._last_pushed_end_constraint_from_agenda.end_of_constraint != new_end_time:
+    #             for i, ct in enumerate(self._constraints):
+    #                 if type(ct) == type(new_ct) \
+    #                         and ct.type == new_ct.type \
+    #                         and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda.end_of_constraint:
+    #                     self._constraints[i] = None
+    #                     break
+    #
+    #             self._constraints = [c for c in self._constraints if c is not None]
+    #
+    #     res = self.push_live_constraint(time, new_ct)
+    #     self._last_pushed_end_constraint_from_agenda = new_ct
+    #
+    #     return res
 
-        new_end_time = new_ct.end_of_constraint
+    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint]) -> bool:
 
-        if new_end_time == DATETIME_MAX_UTC or new_end_time == DATETIME_MIN_UTC:
+        all_ok = True
+
+        for new_ct in new_constraints:
+            new_ct.add_or_update_load_info("originator", "agenda")
+            found = False
+            for i, ct in enumerate(self._constraints):
+                if ct.eq_no_current(new_ct):
+                    found = True
+                    break
+            if not found:
+                all_ok = False
+                break
+
+        if all_ok:
             return False
-
-        if self._last_pushed_end_constraint_from_agenda is None:
-            self._last_pushed_end_constraint_from_agenda = new_ct
-        else:
-            # if the agenda has changed ... we should remove an existing uneeded constraint
-            if self._last_pushed_end_constraint_from_agenda.end_of_constraint != new_end_time:
-                for i, ct in enumerate(self._constraints):
-                    if type(ct) == type(new_ct) \
-                            and ct.type == new_ct.type \
-                            and ct.end_of_constraint == self._last_pushed_end_constraint_from_agenda.end_of_constraint:
-                        self._constraints[i] = None
-                        break
-
-                self._constraints = [c for c in self._constraints if c is not None]
-
-        res = self.push_live_constraint(time, new_ct)
-        self._last_pushed_end_constraint_from_agenda = new_ct
+        
+        #ok there is an issue : we may remove all previous agenda constraints and add the new ones
+        # first remove all previous agenda constraints
+        self._constraints = [c for c in self._constraints if c.load_info is None or  c.load_info.get("originator", None) != "agenda"]
+        res = False
+        for new_ct in new_constraints:
+            res = self.push_live_constraint(time, new_ct) or res
 
         return res
+
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:
@@ -736,7 +763,7 @@ class AbstractLoad(AbstractDevice):
         return False
 
 
-    async def async_load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None, stored_from_agenda: dict | None):
+    async def async_load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
 
         self.command_and_constraint_reset()
 
@@ -751,11 +778,6 @@ class AbstractLoad(AbstractDevice):
             self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
         else:
             self._last_completed_constraint = None
-
-        if stored_from_agenda is not None:
-            self._last_pushed_end_constraint_from_agenda = LoadConstraint.new_from_saved_dict(time, self, stored_from_agenda)
-        else:
-            self._last_pushed_end_constraint_from_agenda = None
 
         self.externally_initialized_constraints = True
 
@@ -793,7 +815,6 @@ class AbstractLoad(AbstractDevice):
     def command_and_constraint_reset(self):
         super().command_and_constraint_reset()
         self._last_completed_constraint = None
-        self._last_pushed_end_constraint_from_agenda = None
 
     def _match_ct(self, ct:LoadConstraint, load_param:str|None, load_info:dict | None = None) -> bool:
         if ct.load_param != load_param:
@@ -807,7 +828,7 @@ class AbstractLoad(AbstractDevice):
                 return False
         return True
 
-    def clean_constraints_for_load_param_and_info(self, time:datetime, load_param: str | None, load_info:dict | None = None, for_full_reset=True) -> bool:
+    def clean_constraints_for_load_param_and_if_same_key_same_value_info(self, time:datetime, load_param: str | None, load_info: dict | None = None, for_full_reset=True) -> bool:
 
         """ Clean constraints that do not match the load_param and load_info the load info matching is loose : ie : it is only NOT matching if their is a common key with a different value """
 
@@ -816,18 +837,6 @@ class AbstractLoad(AbstractDevice):
         last_pushed_end_constraint_from_agenda = None
 
         found_one_bad = False
-
-        if self._last_pushed_end_constraint_from_agenda is not None:
-
-            if self._match_ct(self._last_pushed_end_constraint_from_agenda, load_param, load_info):
-                # we have a last pushed end constraint that is still valid
-                if for_full_reset:
-                    _LOGGER.info(
-                        f"clean_constraints_for_load_param: Found a stored last pushed end constraint to be kept with {self._last_pushed_end_constraint_from_agenda.load_param}  {self._last_pushed_end_constraint_from_agenda.name}")
-                last_pushed_end_constraint_from_agenda = self._last_pushed_end_constraint_from_agenda
-            else:
-                found_one_bad = True
-
 
         if self._last_completed_constraint is not None:
             if self._match_ct(self._last_completed_constraint, load_param, load_info):
@@ -865,8 +874,6 @@ class AbstractLoad(AbstractDevice):
         # if not full reset : do not remember the last completed constraint .... (ex: a plugged car, when plugging in, forget any previously stored constraint)
         if for_full_reset is False:
             self._last_completed_constraint = last_completed_constraint
-
-        self._last_pushed_end_constraint_from_agenda = last_pushed_end_constraint_from_agenda
 
         for ct in existing_constraints:
             if ct is not None:
@@ -1052,7 +1059,12 @@ class AbstractLoad(AbstractDevice):
         kept = []
         current_start = DATETIME_MIN_UTC
         for c in self._constraints:
-            c._internal_start_of_constraint = max(current_start, c.start_of_constraint)
+            c.current_start_of_constraint = max(current_start, c.start_of_constraint)
+
+            if c.current_start_of_constraint >= c.end_of_constraint:
+                # we remove the comstraint it is inside another constraint
+                continue
+
             current_start = c.end_of_constraint
             kept.append(c)
             if current_start >= DATETIME_MAX_UTC:
@@ -1102,6 +1114,8 @@ class AbstractLoad(AbstractDevice):
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)
             return True
+
+        return False
 
     async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
 
@@ -1261,8 +1275,9 @@ class AbstractLoad(AbstractDevice):
 
 
 
-    async def mark_current_constraint_has_done(self):
-        time = datetime.now(tz=pytz.UTC)
+    async def mark_current_constraint_has_done(self, time:datetime|None=None):
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
         c = self.get_current_active_constraint(time)
         if c:
             # for it has met, will be properly handled in the update constraint for the load

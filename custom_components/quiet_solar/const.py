@@ -254,7 +254,6 @@ SWITCH_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"
-HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT = "qs_from_agenda_constraint"
 HA_CONSTRAINT_SENSOR_LOAD_INFO = "qs_stored_load_info"
 FLOATING_PERIOD_S = 30 * 3600
 

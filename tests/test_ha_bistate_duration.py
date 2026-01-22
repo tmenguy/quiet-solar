@@ -29,7 +29,7 @@ from custom_components.quiet_solar.const import (
     DATA_HANDLER,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     CONSTRAINT_TYPE_FILLER_AUTO,
-    CONF_SWITCH,
+    CONF_SWITCH, SOLVER_STEP_S,
 )
 
 from tests.test_helpers import FakeHass, FakeConfigEntry
@@ -594,18 +594,17 @@ class TestQSBiStateDurationCheckLoadActivityModeOn:
         self.device.get_proper_local_adapted_tomorrow = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=24)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
-
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
-        # Should have called push_unique_and_current_end_of_constraint_from_agenda
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
+        assert result is True
+
+        constraint = self.device.get_current_active_constraint(time)
+
+        assert constraint is not None
 
         # Check the constraint that was created
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]  # Second positional argument
 
         assert constraint.target_value == 25 * 3600.0  # 25 hours
         assert constraint.from_user is True
@@ -647,18 +646,16 @@ class TestQSBiStateDurationCheckLoadActivityModeDefault:
         self.device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=8)
         )
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
+        constraint = self.device.get_current_active_constraint(time)
+        assert constraint is not None
+        assert result
+
         # Check constraint was created
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
-
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]
-
         assert constraint.target_value == 2.0 * 3600.0  # 2 hours in seconds
 
     @pytest.mark.asyncio
@@ -667,14 +664,14 @@ class TestQSBiStateDurationCheckLoadActivityModeDefault:
         self.device.bistate_mode = "bistate_mode_default"
         self.device.default_on_duration = None
         self.device.is_load_command_set = MagicMock(return_value=False)
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=False)
+        self.device.push_agenda_constraints = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
         # Should not create constraint
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_not_called()
+        self.device.push_agenda_constraints.assert_not_called()
 
 
 class TestQSBiStateDurationCheckLoadActivityModeAuto:
@@ -711,17 +708,15 @@ class TestQSBiStateDurationCheckLoadActivityModeAuto:
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        self.device.get_next_scheduled_event = AsyncMock(return_value=(start, end))
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
-
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]
+        constraint = self.device._constraints[0] if self.device._constraints else None
+        assert constraint is not None
+        assert result
 
         # Target value should be duration in seconds
         expected_duration = (end - start).total_seconds()
@@ -737,14 +732,14 @@ class TestQSBiStateDurationCheckLoadActivityModeAuto:
         self.device.bistate_mode = "bistate_mode_auto"
         self.device.is_load_command_set = MagicMock(return_value=False)
         self.device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=False)
+        self.device.push_agenda_constraints = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
         # Should not create constraint
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_not_called()
+        self.device.push_agenda_constraints.assert_not_called()
 
 
 class TestQSBiStateDurationCheckLoadActivityModeExactCalendar:
@@ -781,21 +776,22 @@ class TestQSBiStateDurationCheckLoadActivityModeExactCalendar:
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        self.device.get_next_scheduled_event = AsyncMock(return_value=(start, end))
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
+
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await self.device.check_load_activity_and_constraints(time)
 
-        self.device.push_unique_and_current_end_of_constraint_from_agenda.assert_called_once()
-
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]
+        constraint = self.device._constraints[0] if self.device._constraints else None
+        assert constraint is not None
+        assert result
 
         # Target value should include 10 min leg room
-        expected_duration = (end - start).total_seconds() + 600
-        assert constraint.target_value == expected_duration
+        expected_duration = (end - start).total_seconds()
+        assert constraint.target_value >= expected_duration
+        assert constraint.target_value <= expected_duration + 2*SOLVER_STEP_S + 2
+
         # always_end_at_end_of_constraint should be True
         assert constraint.always_end_at_end_of_constraint is True
 
@@ -960,15 +956,15 @@ class TestQSBiStateDurationBestEffortLoad:
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        self.device.get_next_scheduled_event = AsyncMock(return_value=(start, end))
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        await self.device.check_load_activity_and_constraints(time)
+        result = await self.device.check_load_activity_and_constraints(time)
 
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]
+        constraint = self.device._constraints[0] if self.device._constraints else None
+        assert constraint is not None
+        assert result
 
         # Best effort loads should use FILLER_AUTO type
         assert constraint.type == CONSTRAINT_TYPE_FILLER_AUTO
@@ -988,15 +984,15 @@ class TestQSBiStateDurationBestEffortLoad:
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        self.device.get_next_scheduled_event = AsyncMock(return_value=(start, end))
-        self.device.push_unique_and_current_end_of_constraint_from_agenda = MagicMock(return_value=True)
+        self.device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        await self.device.check_load_activity_and_constraints(time)
+        result = await self.device.check_load_activity_and_constraints(time)
 
-        call_args = self.device.push_unique_and_current_end_of_constraint_from_agenda.call_args
-        constraint = call_args[0][1]
+        constraint = self.device._constraints[0] if self.device._constraints else None
+        assert constraint is not None
+        assert result
 
         # Non-best effort loads should use MANDATORY type
         assert constraint.type == CONSTRAINT_TYPE_MANDATORY_END_TIME

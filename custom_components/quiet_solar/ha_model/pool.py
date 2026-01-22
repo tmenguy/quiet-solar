@@ -101,7 +101,7 @@ class QSPool(QSOnOffDuration):
                         initial_value=0,
                         target_value=self.get_pool_filter_time_s(force_winter, time),
                 )
-                return self.push_unique_and_current_end_of_constraint_from_agenda(time=time, new_ct=load_mandatory)
+                return self.push_agenda_constraints(time, [load_mandatory])
 
             return False
 

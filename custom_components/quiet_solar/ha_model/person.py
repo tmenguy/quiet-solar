@@ -304,9 +304,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         return self.predicted_leave_time, self.predicted_mileage
 
-    def get_forecast_readable_string(self) -> str:
+    def get_forecast_readable_string(self, time:datetime| None = None) -> str:
         """Get a human-readable string of the person's forecast."""
-        self.update_person_forecast()
+        self.update_person_forecast(time)
 
         if self.predicted_mileage is None or self.predicted_leave_time is None:
             return "No forecast"

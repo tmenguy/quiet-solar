@@ -26,7 +26,7 @@ from .const import (
     QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
     HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
-    SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT, HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT,
+    SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT,
     SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
     SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
     SENSOR_CAR_PERSON_FORECAST
@@ -510,11 +510,6 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
             serialized_constraint = self.device._last_completed_constraint.to_dict()
             self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
 
-        if self.device._last_pushed_end_constraint_from_agenda is None:
-            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT] = None
-        else:
-            serialized_constraint = self.device._last_pushed_end_constraint_from_agenda.to_dict()
-            self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT] = serialized_constraint
 
         self.async_write_ha_state()
 
@@ -523,6 +518,5 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         await super().async_added_to_hass()
         stored_cs = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
         stored_executed = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
-        stored_from_agenda = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_FROM_AGENDA_CONSTRAINT, None)
-        await self.device.async_load_constraints_from_storage(datetime.now(pytz.UTC), stored_cs, stored_executed, stored_from_agenda)
+        await self.device.async_load_constraints_from_storage(datetime.now(pytz.UTC), stored_cs, stored_executed)
 

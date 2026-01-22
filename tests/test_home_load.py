@@ -378,8 +378,8 @@ class TestAbstractLoadCommands:
 class TestAbstractLoadPushConstraint:
     """Test AbstractLoad push constraint methods."""
 
-    def test_push_unique_and_current_end_of_constraint_from_agenda(self):
-        """Test pushing a constraint to the agenda."""
+    def test_push_agenda_constraints(self):
+        """Test pushing agenda constraints."""
         home = MagicMock()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
@@ -397,13 +397,11 @@ class TestAbstractLoadPushConstraint:
             target_value=3600.0,  # 1 hour in seconds
         )
 
-        result = load.push_unique_and_current_end_of_constraint_from_agenda(
-            time=time,
-            new_ct=constraint
-        )
+        result = load.push_agenda_constraints(time, [constraint])
 
         assert result is True
         assert len(load._constraints) == 1
+        assert constraint.load_info["originator"] == "agenda"
 
 
 # =============================================================================

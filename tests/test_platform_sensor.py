@@ -291,7 +291,6 @@ def test_qs_load_sensor_current_constraints_update():
     mock_device.get_active_readable_name = MagicMock(return_value="Active Constraint")
     mock_device.get_active_constraints = MagicMock(return_value=[])
     mock_device._last_completed_constraint = None
-    mock_device._last_pushed_end_constraint_from_agenda = None
     mock_device.update_to_be_saved_info = MagicMock(return_value={})
     
     mock_description = MagicMock()

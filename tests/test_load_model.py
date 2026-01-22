@@ -37,6 +37,7 @@ from custom_components.quiet_solar.const import (
 
 def create_real_constraint(
     load,
+    time_now=None,
     end_time=None,
     start_time=None,
     load_param=None,
@@ -49,10 +50,10 @@ def create_real_constraint(
     from_user=False,
 ):
     """Create a real MultiStepsPowerLoadConstraint for testing."""
-    time_now = datetime.now(tz=pytz.UTC)
-
     if end_time is None:
         end_time = datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC)
+    if time_now is None:
+        time_now = end_time - timedelta(hours=1)
     if start_time is None:
         start_time = DATETIME_MIN_UTC
 
@@ -1637,10 +1638,10 @@ class TestMatchCt:
 
 
 # =============================================================================
-# Test clean_constraints_for_load_param_and_info
+# Test clean_constraints_for_load_param_and_if_same_key_same_value_info
 # =============================================================================
 
-class TestCleanConstraintsForLoadParamAndInfo:
+class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
     """Test clean_constraints_for_load_param_and_info method."""
 
     def create_load(self, **kwargs):
@@ -1675,10 +1676,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         ct1 = self.create_constraint(load, load_param="car_A")
         load._constraints = [ct1]
         load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_info(time_now, "car_A")
+        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(time_now, "car_A")
 
         # Constraint should be kept (pushed back)
         assert len(load._constraints) >= 0  # May be re-processed
@@ -1690,10 +1690,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         ct2 = self.create_constraint(load, load_param="car_B")
         load._constraints = [ct1, ct2]
         load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.clean_constraints_for_load_param_and_info(time_now, "car_A")
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(time_now, "car_A")
 
         assert result is True  # Found bad constraint
 
@@ -1707,10 +1706,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         )
         load._constraints = [ct1]
         load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_info(
+        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
             time_now,
             "car_A",
             {"charger": "charger_1"}
@@ -1729,10 +1727,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         )
         load._constraints = [ct1]
         load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.clean_constraints_for_load_param_and_info(
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
             time_now,
             "car_A",
             {"charger": "charger_2"}  # Different charger
@@ -1746,10 +1743,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         completed = self.create_constraint(load, load_param="car_A")
         load._constraints = []
         load._last_completed_constraint = completed
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_info(time_now, "car_A", for_full_reset=True)
+        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(time_now, "car_A", for_full_reset=True)
 
         # last_completed should be reset during full reset but may be kept
 
@@ -1759,10 +1755,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         completed = self.create_constraint(load, load_param="car_B")
         load._constraints = []
         load._last_completed_constraint = completed
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.clean_constraints_for_load_param_and_info(time_now, "car_A")
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(time_now, "car_A")
 
         assert result is True  # Found bad constraint
 
@@ -1772,10 +1767,9 @@ class TestCleanConstraintsForLoadParamAndInfo:
         ct1 = self.create_constraint(load, load_param="car_A")
         load._constraints = [ct1]
         load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.clean_constraints_for_load_param_and_info(
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
             time_now,
             "car_A",
             for_full_reset=False
@@ -1783,18 +1777,6 @@ class TestCleanConstraintsForLoadParamAndInfo:
 
         assert result is False  # No bad constraints found
 
-    def test_clean_constraints_keeps_agenda_constraint_if_matching(self):
-        """Test _last_pushed_end_constraint_from_agenda is kept if matching."""
-        load = self.create_load()
-        agenda_ct = self.create_constraint(load, load_param="car_A")
-        load._constraints = []
-        load._last_completed_constraint = None
-        load._last_pushed_end_constraint_from_agenda = agenda_ct
-
-        time_now = datetime.now(tz=pytz.UTC)
-        load.clean_constraints_for_load_param_and_info(time_now, "car_A")
-
-        # Should be kept (but reset clears it, then re-assigns)
 
 
 # =============================================================================
@@ -1866,6 +1848,8 @@ class TestAckCompletedConstraint:
 class TestGetActiveStateHash:
     """Test get_active_state_hash method."""
 
+    BASE_TIME = datetime(2026, 1, 22, 11, 0, tzinfo=pytz.UTC)
+
     def create_load(self, **kwargs):
         """Create a test load with default values."""
         defaults = {
@@ -1884,12 +1868,15 @@ class TestGetActiveStateHash:
 
         return AbstractLoad(**defaults)
 
-    def create_constraint(self, load, load_param=None, end_time=None):
+    def create_constraint(self, load, load_param=None, end_time=None, time_now=None):
         """Create a real constraint."""
         if end_time is None:
-            end_time = datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC)
+            if time_now is None:
+                time_now = self.BASE_TIME
+            end_time = time_now + timedelta(hours=1)
         return create_real_constraint(
             load=load,
+            time_now=time_now,
             load_param=load_param,
             end_time=end_time,
         )
@@ -1900,7 +1887,7 @@ class TestGetActiveStateHash:
         load._constraints = []
         load._last_completed_constraint = None
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         hash_val = load.get_active_state_hash(time_now)
 
         assert hash_val == "NOTHING PLANNED"
@@ -1913,11 +1900,12 @@ class TestGetActiveStateHash:
         completed = self.create_constraint(
             load,
             load_param="car_A",
-            end_time=datetime(2026, 1, 21, 10, 0, tzinfo=pytz.UTC)
+            end_time=self.BASE_TIME - timedelta(hours=1),
+            time_now=self.BASE_TIME,
         )
         load._last_completed_constraint = completed
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         hash_val = load.get_active_state_hash(time_now)
 
         assert "COMPLETED:" in hash_val
@@ -1931,11 +1919,13 @@ class TestGetActiveStateHash:
 
         completed = self.create_constraint(
             load,
-            load_param=None
+            load_param=None,
+            end_time=self.BASE_TIME - timedelta(hours=1),
+            time_now=self.BASE_TIME,
         )
         load._last_completed_constraint = completed
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         hash_val = load.get_active_state_hash(time_now)
 
         assert "COMPLETED:" in hash_val
@@ -1948,11 +1938,12 @@ class TestGetActiveStateHash:
         active = self.create_constraint(
             load,
             load_param="car_A",
-            end_time=datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC)
+            end_time=self.BASE_TIME + timedelta(hours=1),
+            time_now=self.BASE_TIME,
         )
         load._constraints = [active]
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         hash_val = load.get_active_state_hash(time_now)
 
         assert "RUNNING:" in hash_val
@@ -1964,11 +1955,13 @@ class TestGetActiveStateHash:
 
         active = self.create_constraint(
             load,
-            load_param=None
+            load_param=None,
+            end_time=self.BASE_TIME + timedelta(hours=1),
+            time_now=self.BASE_TIME,
         )
         load._constraints = [active]
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         hash_val = load.get_active_state_hash(time_now)
 
         assert "RUNNING:" in hash_val
@@ -2167,7 +2160,7 @@ class TestSetLiveConstraints:
         assert count_end2 <= 1
 
     def test_set_live_constraints_updates_internal_start(self):
-        """Test _internal_start_of_constraint is updated."""
+        """Test current_start_of_constraint is updated."""
         load = self.create_load()
 
         ct1 = self.create_constraint(
@@ -2183,6 +2176,9 @@ class TestSetLiveConstraints:
 
         time_now = datetime.now(tz=pytz.UTC)
         load.set_live_constraints(time_now, [ct1, ct2])
+
+        assert ct2.current_start_of_constraint > ct1.start_of_constraint
+        assert ct2.current_start_of_constraint >= ct1.end_of_constraint
 
         # After first constraint, second should have updated start
 
@@ -2393,6 +2389,8 @@ class TestPushLiveConstraint:
 class TestUpdateLiveConstraints:
     """Test update_live_constraints method."""
 
+    BASE_TIME = datetime(2026, 1, 22, 11, 0, tzinfo=pytz.UTC)
+
     def create_load(self, **kwargs):
         """Create a test load with default values."""
         defaults = {
@@ -2412,12 +2410,20 @@ class TestUpdateLiveConstraints:
 
         return AbstractLoad(**defaults)
 
-    def create_constraint(self, load, end_time, target_value=100.0,
-                          current_value=0.0, constraint_type=CONSTRAINT_TYPE_FILLER_AUTO):
+    def create_constraint(
+        self,
+        load,
+        end_time,
+        time_now=None,
+        target_value=100.0,
+        current_value=0.0,
+        constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+    ):
         """Create a real constraint."""
         return create_real_constraint(
             load=load,
             end_time=end_time,
+            time_now=time_now,
             target_value=target_value,
             current_value=current_value,
             constraint_type=constraint_type,
@@ -2428,10 +2434,14 @@ class TestUpdateLiveConstraints:
         """Test update_live_constraints clears when disabled."""
         load = self.create_load()
         load._enabled = False
-        ct_dummy = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC))
+        ct_dummy = self.create_constraint(
+            load,
+            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
+            time_now=self.BASE_TIME,
+        )
         load._constraints = [ct_dummy]
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         result = await load.update_live_constraints(time_now, timedelta(minutes=5))
 
         assert result is True
@@ -2444,7 +2454,7 @@ class TestUpdateLiveConstraints:
         load._constraints = []
         load._last_constraint_update = None
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         result = await load.update_live_constraints(time_now, timedelta(minutes=5))
 
         assert result is False
@@ -2459,13 +2469,14 @@ class TestUpdateLiveConstraints:
         ct = self.create_constraint(
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
+            time_now=self.BASE_TIME,
             target_value=100.0,
             current_value=100.0  # Met
         )
         load._constraints = [ct]
         load._last_completed_constraint = None
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         result = await load.update_live_constraints(time_now, timedelta(minutes=5))
 
         assert result is True  # Force solving because constraint met
@@ -2479,13 +2490,14 @@ class TestUpdateLiveConstraints:
         ct = self.create_constraint(
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
+            time_now=self.BASE_TIME,
             target_value=100.0,
             current_value=50.0
         )
         load._constraints = [ct]
         load._last_completed_constraint = None
 
-        time_now = datetime.now(tz=pytz.UTC)
+        time_now = self.BASE_TIME
         await load.update_live_constraints(time_now, timedelta(minutes=5))
 
         # Should update current constraint values
@@ -2561,7 +2573,7 @@ class TestMarkCurrentConstraintHasDone:
         load._constraints = [ct]
         load._last_completed_constraint = None
 
-        await load.mark_current_constraint_has_done()
+        await load.mark_current_constraint_has_done(time=ct.end_of_constraint - timedelta(minutes=5))
 
         # current_value should be set to target_value
         assert ct.current_value == ct.target_value
