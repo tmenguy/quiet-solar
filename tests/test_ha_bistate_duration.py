@@ -529,7 +529,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         )
         self.device.load_is_auto_to_be_boosted = False
         self.device._constraints = []
-        self.device.reset = MagicMock()
+        self.device.command_and_constraint_reset = MagicMock()
 
     @pytest.mark.asyncio
     async def test_mode_off_removes_constraints(self):
@@ -543,7 +543,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         result = await self.device.check_load_activity_and_constraints(time)
 
         assert result is True  # Should force next solve
-        self.device.reset.assert_called_once()
+        self.device.command_and_constraint_reset.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mode_off_no_constraints(self):
@@ -557,7 +557,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         result = await self.device.check_load_activity_and_constraints(time)
 
         # No force solve needed if no constraints
-        self.device.reset.assert_called_once()
+        self.device.command_and_constraint_reset.assert_called_once()
 
 
 class TestQSBiStateDurationCheckLoadActivityModeOn:
@@ -845,7 +845,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
 
         self.device.set_live_constraints = MagicMock()
         self.device.push_live_constraint = MagicMock(return_value=True)
-        self.device.reset = MagicMock()
+        self.device.command_and_constraint_reset = MagicMock()
         self.device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
 
@@ -874,7 +874,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
 
         self.device.set_live_constraints = MagicMock()
         self.device.push_live_constraint = MagicMock(return_value=True)
-        self.device.reset = MagicMock()
+        self.device.command_and_constraint_reset = MagicMock()
         self.device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
 
@@ -883,7 +883,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         result = await self.device.check_load_activity_and_constraints(time)
 
         # Should reset because user set to idle state
-        self.device.reset.assert_called_once()
+        self.device.command_and_constraint_reset.assert_called_once()
 
 
 class TestQSBiStateDurationAbstractMethods:
