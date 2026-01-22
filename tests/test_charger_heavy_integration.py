@@ -529,7 +529,7 @@ class TestEnsureCorrectStateInternal:
         charger._asked_for_reboot_at_time = time - timedelta(seconds=120)
 
         with patch.object(charger, 'is_in_state_reset', return_value=False), \
-             patch.object(charger, 'check_if_reboot_happened', return_value=True), \
+             patch.object(charger, 'check_if_reboot_happened', new_callable=Mock, return_value=True), \
              patch.object(type(charger), 'current_num_phases', new_callable=PropertyMock, return_value=3), \
              patch.object(charger, 'is_charge_enabled', return_value=True), \
              patch.object(charger, 'is_charge_disabled', return_value=False), \

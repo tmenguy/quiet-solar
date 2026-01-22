@@ -483,7 +483,7 @@ class TestQSChargerGroupBasics(unittest.TestCase):
         self.assertEqual(current_amps, [10, 10, 0])
 
 
-class TestQSChargerGroupAsync(unittest.TestCase):
+class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
     """Test QSChargerGroup async methods."""
 
     def setUp(self):
@@ -801,7 +801,7 @@ class TestQSChargerGenericExtended(unittest.TestCase):
         self.assertGreater(result, 0.0)
 
 
-class TestQSStateCmdExtended(unittest.TestCase):
+class TestQSStateCmdExtended(unittest.IsolatedAsyncioTestCase):
     """Extended tests for QSStateCmd."""
 
     def test_is_ok_to_launch_first_time(self):
@@ -1010,7 +1010,7 @@ class TestQSChargerGenericConstraints(unittest.TestCase):
         self.assertTrue(result)
 
 
-class TestQSChargerGroupApplyBudgets(unittest.TestCase):
+class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
     """Test apply_budgets and apply_budget_strategy methods."""
 
     def setUp(self):

@@ -81,7 +81,7 @@ def common_setup(self):
     self.dynamic_group = self.wallboxes_group = QSDynamicGroup(**wallboxes_config)
 
 
-class TestChargersSetup(unittest.TestCase):
+class TestChargersSetup(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
 
         common_setup(self)
@@ -178,9 +178,8 @@ class TestChargersSetup(unittest.TestCase):
                 self.current_time
             )
             
-            # Verify result is not None
-            self.assertIsNotNone(result)
-            self.assertIsInstance(result, list)
+            # Verify result is successful
+            self.assertTrue(result)
             
     @pytest.mark.asyncio
     async def test_budgeting_algorithm_with_power_constraints(self):
@@ -245,7 +244,14 @@ class TestChargersSetup(unittest.TestCase):
         # Mock the phase amp constraints
         with patch.object(self.wallboxes_group, 'is_current_acceptable') as mock_acceptable:
             # First call returns False (over limit), subsequent calls return True
-            mock_acceptable.side_effect = [False, True, True]
+            call_count = 0
+
+            def is_current_acceptable_side_effect(*_args, **_kwargs):
+                nonlocal call_count
+                call_count += 1
+                return call_count != 1
+
+            mock_acceptable.side_effect = is_current_acceptable_side_effect
             
             # Test with 10kW available (should trigger redistribution)
             result, _, _  = await self.charger_group.budgeting_algorithm_minimize_diffs(

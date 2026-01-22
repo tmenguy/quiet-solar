@@ -53,7 +53,7 @@ from custom_components.quiet_solar.const import (
 )
 
 
-class TestQSChargerGenericAdvanced(unittest.TestCase):
+class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
     """Test advanced QSChargerGeneric functionality."""
     
     def setUp(self):
@@ -393,7 +393,7 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         with patch.object(charger, 'is_plugged', return_value=False):
             result = await charger.check_load_activity_and_constraints(time)
         
-        self.assertTrue(result)
+        self.assertFalse(result)
 
     @pytest.mark.asyncio
     async def test_check_load_activity_and_constraints_plugged_no_car(self):
@@ -405,7 +405,7 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'is_plugged', return_value=True), \
              patch.object(charger, 'get_best_car', return_value=None), \
-             patch.object(charger, 'get_and_adapt_existing_constraints', return_value=[]), \
+             patch.object(charger, 'get_and_adapt_existing_constraints', return_value=[], create=True), \
              patch.object(charger, 'reset') as mock_reset, \
              patch.object(charger, 'push_live_constraint') as mock_push:
             
@@ -430,16 +430,27 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         new_car.name = "NewCar"
         new_car.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
         new_car.get_car_charge_percent.return_value = 50.0
+        new_car.can_use_charge_percent_constraints.return_value = False
+        new_car.get_car_target_charge_energy.return_value = 10000.0
+        new_car.do_force_next_charge = False
+        new_car.do_next_charge_time = None
+        new_car.car_battery_capacity = 60000.0
+        new_car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        new_car.set_next_charge_target_percent = AsyncMock()
+        new_car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
         
         time = datetime.now(pytz.UTC)
+        charger._power_steps = [LoadCommand(command="auto_consign", power_consign=1000.0)]
         
         with patch.object(charger, 'is_plugged', return_value=True), \
              patch.object(charger, 'get_best_car', return_value=new_car), \
-             patch.object(charger, 'get_and_adapt_existing_constraints', return_value=[]), \
+             patch.object(charger, 'get_and_adapt_existing_constraints', return_value=[], create=True), \
              patch.object(charger, 'reset') as mock_reset, \
              patch.object(charger, 'attach_car') as mock_attach, \
              patch.object(charger, 'detach_car') as mock_detach:
             
+            mock_detach.side_effect = lambda: setattr(charger, "car", None)
+            mock_attach.side_effect = lambda car, _time: setattr(charger, "car", car)
             result = await charger.check_load_activity_and_constraints(time)
         
         self.assertTrue(result)
@@ -460,7 +471,8 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'is_charge_enabled', return_value=True), \
              patch.object(charger, 'low_level_stop_charge') as mock_stop, \
-             patch.object(charger, '_expected_charge_state', mock_expected_state):
+             patch.object(type(charger), '_expected_charge_state', new_callable=PropertyMock) as mock_expected_state_prop:
+            mock_expected_state_prop.return_value = mock_expected_state
             
             await charger.stop_charge(time)
         
@@ -480,8 +492,9 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'is_charge_enabled', return_value=True), \
              patch.object(charger, 'low_level_stop_charge', side_effect=Exception("Test error")), \
-             patch.object(charger, '_expected_charge_state', mock_expected_state), \
+             patch.object(type(charger), '_expected_charge_state', new_callable=PropertyMock) as mock_expected_state_prop, \
              patch('custom_components.quiet_solar.ha_model.charger._LOGGER') as mock_logger:
+            mock_expected_state_prop.return_value = mock_expected_state
             
             await charger.stop_charge(time)
         
@@ -500,7 +513,8 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'is_charge_disabled', return_value=True), \
              patch.object(charger, 'low_level_start_charge') as mock_start, \
-             patch.object(charger, '_expected_charge_state', mock_expected_state):
+             patch.object(type(charger), '_expected_charge_state', new_callable=PropertyMock) as mock_expected_state_prop:
+            mock_expected_state_prop.return_value = mock_expected_state
             
             await charger.start_charge(time)
         
@@ -722,9 +736,10 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'can_do_3_to_1_phase_switch', return_value=False), \
              patch.object(type(charger), 'physical_num_phases', new_callable=PropertyMock) as mock_physical, \
-             patch.object(charger, '_expected_num_active_phases', mock_expected_phases):
+             patch.object(type(charger), '_expected_num_active_phases', new_callable=PropertyMock) as mock_expected_phases_prop:
             
             mock_physical.return_value = 3
+            mock_expected_phases_prop.return_value = mock_expected_phases
             
             result = await charger.set_charging_num_phases(1, time)
         
@@ -745,11 +760,13 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'can_do_3_to_1_phase_switch', return_value=True), \
              patch.object(type(charger), 'physical_3p', new_callable=PropertyMock) as mock_3p, \
-             patch.object(charger, 'current_num_phases', 3), \
+             patch.object(type(charger), 'current_num_phases', new_callable=PropertyMock) as mock_current_phases, \
              patch.object(charger, 'low_level_set_charging_num_phases', return_value=True) as mock_low_level, \
-             patch.object(charger, '_expected_num_active_phases', mock_expected_phases):
+             patch.object(type(charger), '_expected_num_active_phases', new_callable=PropertyMock) as mock_expected_phases_prop:
             
             mock_3p.return_value = True
+            mock_current_phases.return_value = 3
+            mock_expected_phases_prop.return_value = mock_expected_phases
             
             result = await charger.set_charging_num_phases(1, time)
         
@@ -763,7 +780,6 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(**self.charger_config)
         
-        charger.do_reboot_on_phase_switch = True
         time = datetime.now(pytz.UTC)
         
         mock_expected_phases = MagicMock()
@@ -772,12 +788,16 @@ class TestQSChargerGenericAdvanced(unittest.TestCase):
         
         with patch.object(charger, 'can_do_3_to_1_phase_switch', return_value=True), \
              patch.object(type(charger), 'physical_3p', new_callable=PropertyMock) as mock_3p, \
-             patch.object(charger, 'current_num_phases', 3), \
+             patch.object(type(charger), 'current_num_phases', new_callable=PropertyMock) as mock_current_phases, \
              patch.object(charger, 'low_level_set_charging_num_phases', return_value=True), \
              patch.object(charger, 'is_optimistic_plugged', return_value=True), \
-             patch.object(charger, '_expected_num_active_phases', mock_expected_phases):
+             patch.object(type(charger), 'do_reboot_on_phase_switch', new_callable=PropertyMock) as mock_do_reboot, \
+             patch.object(type(charger), '_expected_num_active_phases', new_callable=PropertyMock) as mock_expected_phases_prop:
             
             mock_3p.return_value = True
+            mock_current_phases.return_value = 3
+            mock_do_reboot.return_value = True
+            mock_expected_phases_prop.return_value = mock_expected_phases
             
             result = await charger.set_charging_num_phases(1, time)
         

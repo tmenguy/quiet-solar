@@ -53,7 +53,7 @@ from custom_components.quiet_solar.const import (
 )
 
 
-class TestQSStateCmd(unittest.TestCase):
+class TestQSStateCmd(unittest.IsolatedAsyncioTestCase):
     """Test the QSStateCmd class functionality."""
     
     def setUp(self):
@@ -531,7 +531,7 @@ class TestQSChargerGroup(unittest.TestCase):
         self.assertEqual(result, -200.0)  # abs(-200) = 200 > 150
 
 
-class TestQSChargerGenericBasics(unittest.TestCase):
+class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
     """Test basic QSChargerGeneric functionality."""
     
     def setUp(self):
@@ -663,15 +663,13 @@ class TestQSChargerGenericBasics(unittest.TestCase):
         charger.car = mock_current_car
         
         with patch.object(charger, 'detach_car') as mock_detach, \
-             patch.object(charger, 'check_load_activity_and_constraints', return_value=True) as mock_check, \
-             patch.object(charger.home, 'force_next_solve') as mock_force_solve:
+             patch.object(charger, 'update_charger_for_user_change', new_callable=AsyncMock) as mock_update:
             
             await charger.set_user_selected_car_by_name("NewCar")
         
         self.assertEqual(charger.user_attached_car_name, "NewCar")
         mock_detach.assert_called_once()
-        mock_check.assert_called_once()
-        mock_force_solve.assert_called_once()
+        mock_update.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_set_user_selected_car_by_name_same_car(self):
@@ -684,7 +682,8 @@ class TestQSChargerGenericBasics(unittest.TestCase):
         mock_current_car.name = "SameCar"
         charger.car = mock_current_car
         
-        with patch.object(charger, 'detach_car') as mock_detach:
+        with patch.object(charger, 'detach_car') as mock_detach, \
+             patch.object(charger, 'update_charger_for_user_change', new_callable=AsyncMock):
             await charger.set_user_selected_car_by_name("SameCar")
         
         self.assertEqual(charger.user_attached_car_name, "SameCar")

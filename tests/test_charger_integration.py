@@ -128,7 +128,7 @@ def create_charger_generic(hass, home, name="TestCharger", **extra_config):
     return charger
 
 
-class TestCheckLoadActivityAndConstraints(unittest.TestCase):
+class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
     """Tests for check_load_activity_and_constraints method."""
 
     def setUp(self):
@@ -602,7 +602,7 @@ class TestConstraintUpdate(unittest.TestCase):
         self.assertIsNone(callback)
 
 
-class TestChargerGroupDynHandle(unittest.TestCase):
+class TestChargerGroupDynHandle(unittest.IsolatedAsyncioTestCase):
     """Tests for QSChargerGroup dyn_handle method."""
 
     def setUp(self):
@@ -654,7 +654,7 @@ class TestChargerGroupDynHandle(unittest.TestCase):
         mock_apply.assert_called()
 
 
-class TestQSStateCmdFull(unittest.TestCase):
+class TestQSStateCmdFull(unittest.IsolatedAsyncioTestCase):
     """Full coverage tests for QSStateCmd class."""
 
     def test_set_with_value_change_increments_num_set(self):

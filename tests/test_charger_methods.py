@@ -524,7 +524,7 @@ class TestQSChargerGenericChargeType(unittest.TestCase):
         self.assertEqual(charge_type, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY)
 
 
-class TestQSChargerGenericAsync(unittest.TestCase):
+class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
     """Test async methods in QSChargerGeneric."""
 
     def setUp(self):
@@ -615,7 +615,7 @@ class TestQSChargerGenericAsync(unittest.TestCase):
         mock_reboot.assert_not_called()
 
 
-class TestQSChargerGenericPhaseSwitch(unittest.TestCase):
+class TestQSChargerGenericPhaseSwitch(unittest.IsolatedAsyncioTestCase):
     """Test phase switch methods in QSChargerGeneric."""
 
     def setUp(self):
@@ -681,7 +681,7 @@ class TestQSChargerGenericPhaseSwitch(unittest.TestCase):
         self.assertTrue(result)
 
 
-class TestQSChargerReboot(unittest.TestCase):
+class TestQSChargerReboot(unittest.IsolatedAsyncioTestCase):
     """Test reboot-related methods in QSChargerGeneric."""
 
     def setUp(self):

@@ -1301,6 +1301,7 @@ class AbstractLoad(AbstractDevice):
 
 
 class TestLoad(AbstractLoad):
+    __test__ = False
 
     def __init__(self, min_p=1500, max_p=1500, min_a=7, max_a=7, **kwargs):
         super().__init__(**kwargs)
