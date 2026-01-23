@@ -2693,18 +2693,18 @@ class QSSolarHistoryVals:
 
         current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
 
-        best_past_probes_in_days = [
-            1,
-            3,
-            6,
-            7,
-            7*4,
-            7*8,
-            7*12,
-            7*51,
-            7*52,
-            7*53,
-        ]
+        # best_past_probes_in_days = [
+        #     1,
+        #     3,
+        #     6,
+        #     7,
+        #     7*4,
+        #     7*8,
+        #     7*12,
+        #     7*51,
+        #     7*52,
+        #     7*53,
+        # ]
         # after a lot for trials with the compute_prediction_score : RMS is best .. and only 7 days is enough
         best_past_probes_in_days = range(1, 7 + 1)
 
@@ -2894,149 +2894,149 @@ class QSSolarHistoryVals:
 
         return forecast_values, past_days
 
-    def compute_prediction_score(self, score_number = 1, num_exploration_days = 3):
-
-        #find the "biggest index" of the stored values
-        if self.values is None:
-            return
-
-        first_max_day = np.argmax(self.values[1]) # will give the first occurence of the max
-        now_idx = first_max_day
-        now_days = self.values[1][now_idx]
-        while now_days == self.values[1][_sanitize_idx(now_idx + 1)]:
-            now_idx = _sanitize_idx(now_idx + 1)
-
-        # ok we have the end of the stored values
-        forecast_window = 24*NUM_INTERVAL_PER_HOUR
-        past_check_window = 24*NUM_INTERVAL_PER_HOUR
-
-        all_res = []
-
-        num_exploration = num_exploration_days*NUM_INTERVALS_PER_DAY
-
-        all_res_numpy = np.zeros((num_exploration, score_number, 2*score_number + 1),
-                                 dtype=np.float64)  # +1 for the day offset
-
-
-        for dpast in range(num_exploration):
-
-            end_idx = _sanitize_idx(now_idx - dpast)
-            start_idx = _sanitize_idx(end_idx - forecast_window - 1)
-            current_values, current_days = self._get_values(start_idx, end_idx)
-
-            if current_values is None or current_days is None:
-                # bad forecast
-                _LOGGER.debug(
-                    f"compute_prediction_score: trash a current forecast for None values")
-                continue
-
-
-            current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
-
-
-            check_end_idx = _sanitize_idx(start_idx - 1)
-            check_start_idx = _sanitize_idx(check_end_idx - past_check_window - 1)
-            check_current_values, check_current_days = self._get_values(check_start_idx, check_end_idx)
-
-            if check_current_values is None or check_current_days is None:
-                # bad forecast
-                _LOGGER.debug(
-                    f"compute_prediction_score: trash a forecast check values for None values")
-                continue
-
-            check_current_ok_vales = np.asarray(check_current_days != 0, dtype=np.int32)
-
-
-            scores = []
-            check_scores = []
-
-            best_past_probes_in_days = [
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-            7 * 4,]
-            a = [
-                7 * 4,
-                7 * 8,
-                7 * 12,
-                7 * 51,
-                7 * 52,
-                7 * 53,
-            ]
-
-            best_past_probes_in_days = range(1, 7+1)
-
-
-            for past_days in best_past_probes_in_days:
-
-                for i in range(-2, 3):
-                    past_delta = past_days*NUM_INTERVALS_PER_DAY + i
-                    # score of the forecast prediction vs real values
-                    score = self._get_range_score(current_values, current_ok_vales, start_idx, past_delta=past_delta, num_score=score_number)
-
-                    # score of the "check" to get the forecast
-                    check_score = self._get_range_score(check_current_values, check_current_ok_vales, check_start_idx, past_delta=past_delta, num_score=score_number)
-
-                    if check_score and score:
-                        check_score.extend(score[1:])
-                        scores.append(score)
-                        check_scores.append(check_score)
-
-
-
-            # 1 is rms sum of abs diff
-            # 2 is sum_forecast/sum_real
-            # 3 is pearson
-            # 4 is mean diff
-            # 5 is sum of abs diff
-            probe_scores = []
-            for score_idx in range(score_number):
-                probe_scores.append(sorted(check_scores, key=itemgetter(score_idx+1)))
-
-            res = []
-            for score_idx in range(score_number):
-                probe = probe_scores[score_idx][0]
-                probe[0] = probe[0] / (24*NUM_INTERVAL_PER_HOUR)
-                res.append(probe)
-
-                all_res_numpy[dpast, score_idx, :] = probe
-
-            all_res.append(res)
-
-            algo_names = {5: " SumAbsDiff ", 1: " RMS        ", 3: " Pearson    ", 4: " MeanDiff   ", 2: " sumF/sumR  "}
-
-            res_table = np.zeros((score_number, 2*score_number+1), dtype=np.float64)
-            for probe_idx in range(score_number):
-                vals = all_res_numpy[:dpast + 1, probe_idx, 0]
-                res_table[probe_idx, 0] = np.mean(vals)
-                for res_idx in range(score_number):
-                    vals_forecast = all_res_numpy[:dpast+1, probe_idx, score_number + 1 + res_idx]
-                    res_table[probe_idx, res_idx+1] = np.mean(vals_forecast)
-                    vals_check = all_res_numpy[:dpast + 1, probe_idx, res_idx + 1]
-                    res_table[probe_idx, res_idx + 1 + score_number] = np.mean(vals_check)
-
-            # log the result table
-            _LOGGER.info(f"Prediction score table (mean over {dpast} explorations):")
-            _LOGGER.info("  predictor |                forecast result                    ")
-
-            columns_description = "            | days         |"
-            separator =           "------------|--------------|"
-            for probe_idx in range(1, score_number+1):
-                columns_description += f" {algo_names[probe_idx]} |"
-                separator += "--------------|"
-
-            _LOGGER.info(columns_description)
-            _LOGGER.info(separator)
-            for probe_idx in range(1, score_number+1):
-                line = f"{algo_names[probe_idx]}|"
-                line += f" {res_table[probe_idx-1, 0]:12.1f} |"
-                for res_idx in range(1, score_number+1):
-                    line += f"{res_table[probe_idx-1, res_idx]:6.1f}({res_table[probe_idx-1, res_idx+score_number]:6.1f})|"
-                _LOGGER.info(line)
+    # def compute_prediction_score(self, score_number = 1, num_exploration_days = 3):
+    #
+    #     #find the "biggest index" of the stored values
+    #     if self.values is None:
+    #         return
+    #
+    #     first_max_day = np.argmax(self.values[1]) # will give the first occurence of the max
+    #     now_idx = first_max_day
+    #     now_days = self.values[1][now_idx]
+    #     while now_days == self.values[1][_sanitize_idx(now_idx + 1)]:
+    #         now_idx = _sanitize_idx(now_idx + 1)
+    #
+    #     # ok we have the end of the stored values
+    #     forecast_window = 24*NUM_INTERVAL_PER_HOUR
+    #     past_check_window = 24*NUM_INTERVAL_PER_HOUR
+    #
+    #     all_res = []
+    #
+    #     num_exploration = num_exploration_days*NUM_INTERVALS_PER_DAY
+    #
+    #     all_res_numpy = np.zeros((num_exploration, score_number, 2*score_number + 1),
+    #                              dtype=np.float64)  # +1 for the day offset
+    #
+    #
+    #     for dpast in range(num_exploration):
+    #
+    #         end_idx = _sanitize_idx(now_idx - dpast)
+    #         start_idx = _sanitize_idx(end_idx - forecast_window - 1)
+    #         current_values, current_days = self._get_values(start_idx, end_idx)
+    #
+    #         if current_values is None or current_days is None:
+    #             # bad forecast
+    #             _LOGGER.debug(
+    #                 f"compute_prediction_score: trash a current forecast for None values")
+    #             continue
+    #
+    #
+    #         current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
+    #
+    #
+    #         check_end_idx = _sanitize_idx(start_idx - 1)
+    #         check_start_idx = _sanitize_idx(check_end_idx - past_check_window - 1)
+    #         check_current_values, check_current_days = self._get_values(check_start_idx, check_end_idx)
+    #
+    #         if check_current_values is None or check_current_days is None:
+    #             # bad forecast
+    #             _LOGGER.debug(
+    #                 f"compute_prediction_score: trash a forecast check values for None values")
+    #             continue
+    #
+    #         check_current_ok_vales = np.asarray(check_current_days != 0, dtype=np.int32)
+    #
+    #
+    #         scores = []
+    #         check_scores = []
+    #
+    #         best_past_probes_in_days = [
+    #             1,
+    #             2,
+    #             3,
+    #             4,
+    #             5,
+    #             6,
+    #             7,
+    #         7 * 4,]
+    #         a = [
+    #             7 * 4,
+    #             7 * 8,
+    #             7 * 12,
+    #             7 * 51,
+    #             7 * 52,
+    #             7 * 53,
+    #         ]
+    #
+    #         best_past_probes_in_days = range(1, 7+1)
+    #
+    #
+    #         for past_days in best_past_probes_in_days:
+    #
+    #             for i in range(-2, 3):
+    #                 past_delta = past_days*NUM_INTERVALS_PER_DAY + i
+    #                 # score of the forecast prediction vs real values
+    #                 score = self._get_range_score(current_values, current_ok_vales, start_idx, past_delta=past_delta, num_score=score_number)
+    #
+    #                 # score of the "check" to get the forecast
+    #                 check_score = self._get_range_score(check_current_values, check_current_ok_vales, check_start_idx, past_delta=past_delta, num_score=score_number)
+    #
+    #                 if check_score and score:
+    #                     check_score.extend(score[1:])
+    #                     scores.append(score)
+    #                     check_scores.append(check_score)
+    #
+    #
+    #
+    #         # 1 is rms sum of abs diff
+    #         # 2 is sum_forecast/sum_real
+    #         # 3 is pearson
+    #         # 4 is mean diff
+    #         # 5 is sum of abs diff
+    #         probe_scores = []
+    #         for score_idx in range(score_number):
+    #             probe_scores.append(sorted(check_scores, key=itemgetter(score_idx+1)))
+    #
+    #         res = []
+    #         for score_idx in range(score_number):
+    #             probe = probe_scores[score_idx][0]
+    #             probe[0] = probe[0] / (24*NUM_INTERVAL_PER_HOUR)
+    #             res.append(probe)
+    #
+    #             all_res_numpy[dpast, score_idx, :] = probe
+    #
+    #         all_res.append(res)
+    #
+    #         algo_names = {5: " SumAbsDiff ", 1: " RMS        ", 3: " Pearson    ", 4: " MeanDiff   ", 2: " sumF/sumR  "}
+    #
+    #         res_table = np.zeros((score_number, 2*score_number+1), dtype=np.float64)
+    #         for probe_idx in range(score_number):
+    #             vals = all_res_numpy[:dpast + 1, probe_idx, 0]
+    #             res_table[probe_idx, 0] = np.mean(vals)
+    #             for res_idx in range(score_number):
+    #                 vals_forecast = all_res_numpy[:dpast+1, probe_idx, score_number + 1 + res_idx]
+    #                 res_table[probe_idx, res_idx+1] = np.mean(vals_forecast)
+    #                 vals_check = all_res_numpy[:dpast + 1, probe_idx, res_idx + 1]
+    #                 res_table[probe_idx, res_idx + 1 + score_number] = np.mean(vals_check)
+    #
+    #         # log the result table
+    #         _LOGGER.info(f"Prediction score table (mean over {dpast} explorations):")
+    #         _LOGGER.info("  predictor |                forecast result                    ")
+    #
+    #         columns_description = "            | days         |"
+    #         separator =           "------------|--------------|"
+    #         for probe_idx in range(1, score_number+1):
+    #             columns_description += f" {algo_names[probe_idx]} |"
+    #             separator += "--------------|"
+    #
+    #         _LOGGER.info(columns_description)
+    #         _LOGGER.info(separator)
+    #         for probe_idx in range(1, score_number+1):
+    #             line = f"{algo_names[probe_idx]}|"
+    #             line += f" {res_table[probe_idx-1, 0]:12.1f} |"
+    #             for res_idx in range(1, score_number+1):
+    #                 line += f"{res_table[probe_idx-1, res_idx]:6.1f}({res_table[probe_idx-1, res_idx+score_number]:6.1f})|"
+    #             _LOGGER.info(line)
 
     def compute_now_forecast(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int, set_as_current=False) -> list[tuple[datetime, float]]:
 

@@ -136,7 +136,6 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         self.home = create_mock_home(self.hass)
         self.charger = create_charger_generic(self.hass, self.home)
 
-    @pytest.mark.asyncio
     async def test_check_load_activity_returns_false_during_reboot(self):
         """Test that method returns False during reboot."""
         time = datetime.now(pytz.UTC)
@@ -146,7 +145,6 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
 
-    @pytest.mark.asyncio
     async def test_check_load_activity_unplugged_resets_car(self):
         """Test that unplugging resets the car."""
         time = datetime.now(pytz.UTC)
@@ -168,7 +166,6 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         # Car should be detached/reset
         self.assertTrue(result)  # Force solve should be triggered
 
-    @pytest.mark.asyncio
     async def test_check_load_activity_boot_time_window(self):
         """Test behavior during boot time window."""
         time = datetime.now(pytz.UTC)
@@ -181,7 +178,6 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         # Should return False during boot window
         self.assertFalse(result)
 
-    @pytest.mark.asyncio
     async def test_check_load_activity_no_car_selected(self):
         """Test when user selected no car connected."""
         time = datetime.now(pytz.UTC)
@@ -198,7 +194,6 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
 
-    @pytest.mark.asyncio
     async def test_check_load_activity_converts_percent_constraint_to_energy(self):
         """Test constraint conversion when car percent support changes."""
         time = datetime.now(pytz.UTC)
@@ -678,7 +673,6 @@ class TestChargerGroupDynHandle(unittest.IsolatedAsyncioTestCase):
 
         self.charger_group = QSChargerGroup(self.dynamic_group)
 
-    @pytest.mark.asyncio
     async def test_dyn_handle_no_actionable_chargers(self):
         """Test dyn_handle with no actionable chargers."""
         time = datetime.now(pytz.UTC)
@@ -691,7 +685,6 @@ class TestChargerGroupDynHandle(unittest.IsolatedAsyncioTestCase):
         # Method should complete without error
         mock_ensure.assert_called_once_with(time)
 
-    @pytest.mark.asyncio
     async def test_dyn_handle_with_remaining_budget(self):
         """Test dyn_handle with remaining budget to apply."""
         time = datetime.now(pytz.UTC)
@@ -767,7 +760,6 @@ class TestQSStateCmdFull(unittest.IsolatedAsyncioTestCase):
         result = state_cmd.is_ok_to_launch(True, time)
         self.assertTrue(result)
 
-    @pytest.mark.asyncio
     async def test_success_clears_callback_after_call(self):
         """Test that success clears callback after calling it."""
         state_cmd = QSStateCmd()

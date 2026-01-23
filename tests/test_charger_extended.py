@@ -503,7 +503,6 @@ class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
         # Create charger group
         self.charger_group = QSChargerGroup(self.dynamic_group)
 
-    @pytest.mark.asyncio
     async def test_ensure_correct_state_no_chargers(self):
         """Test ensure_correct_state with no chargers."""
         self.charger_group._chargers = []
@@ -514,7 +513,6 @@ class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actionable, [])
         self.assertIsNone(verified_time)
 
-    @pytest.mark.asyncio
     async def test_ensure_correct_state_disabled_charger(self):
         """Test ensure_correct_state with disabled charger."""
         mock_charger = MagicMock()
@@ -526,7 +524,6 @@ class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(actionable, [])
 
-    @pytest.mark.asyncio
     async def test_budgeting_algorithm_minimize_diffs_empty(self):
         """Test budgeting_algorithm_minimize_diffs with empty list."""
         time = datetime.now(pytz.UTC)
@@ -537,7 +534,6 @@ class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
 
-    @pytest.mark.asyncio
     async def test_do_prepare_budgets_for_algo(self):
         """Test _do_prepare_budgets_for_algo method."""
         # Create mock charger status
@@ -563,7 +559,6 @@ class TestQSChargerGroupAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cs.budgeted_num_phases, 1)  # min of possible_num_phases
         self.assertTrue(has_phase_changes)
 
-    @pytest.mark.asyncio
     async def test_do_prepare_budgets_for_algo_no_reset(self):
         """Test _do_prepare_budgets_for_algo without reset allocation."""
         mock_charger = MagicMock()
@@ -848,7 +843,6 @@ class TestQSStateCmdExtended(unittest.IsolatedAsyncioTestCase):
         result = state_cmd.is_ok_to_launch(True, time2)
         self.assertTrue(result)
 
-    @pytest.mark.asyncio
     async def test_success_resets_counters(self):
         """Test success method resets counters."""
         state_cmd = QSStateCmd()
@@ -865,7 +859,6 @@ class TestQSStateCmdExtended(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state_cmd.first_time_success, time)
         self.assertEqual(state_cmd.last_ping_time_success, time)
 
-    @pytest.mark.asyncio
     async def test_success_with_callback(self):
         """Test success method calls callback."""
         state_cmd = QSStateCmd()
@@ -1026,7 +1019,6 @@ class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
 
         self.charger_group = QSChargerGroup(self.dynamic_group)
 
-    @pytest.mark.asyncio
     async def test_apply_budgets_empty_list(self):
         """Test apply_budgets with empty list."""
         time = datetime.now(pytz.UTC)
@@ -1038,7 +1030,6 @@ class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charger_group.remaining_budget_to_apply, ["sentinel"])
         self.assertEqual(self.charger_group.know_reduced_state, {"charger": "state"})
 
-    @pytest.mark.asyncio
     async def test_apply_budget_strategy_empty_list(self):
         """Test apply_budget_strategy with empty list."""
         time = datetime.now(pytz.UTC)
@@ -1051,7 +1042,6 @@ class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charger_group.remaining_budget_to_apply, ["sentinel"])
         self.assertEqual(self.charger_group.know_reduced_state, {"charger": "state"})
 
-    @pytest.mark.asyncio
     async def test_apply_budget_strategy_sets_know_reduced_state(self):
         """Test apply_budget_strategy sets know_reduced_state."""
         mock_charger = MagicMock()

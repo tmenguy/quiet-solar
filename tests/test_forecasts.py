@@ -73,22 +73,6 @@ class TestForecast(TestCase):
         assert   (solar_provider.solar_forecast[-1][0] - solar_provider.solar_forecast[0][0]).total_seconds() >= FLOATING_PERIOD_S
 
 
-
-    def test_optimize_forecasting(self):
-
-        test_folder = os.path.dirname(os.path.realpath(__file__))
-        conso_path = os.path.join(test_folder, "data", "29_09_2025_for_optim")
-
-        # nothing is here
-        conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
-        home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso)
-        home_non_controlled_consumption.values = home_non_controlled_consumption.read_value()
-        home_non_controlled_consumption.compute_prediction_score()
-
-        assert home_non_controlled_consumption.values is not None
-        assert home_non_controlled_consumption.values.shape[0] == 2
-        assert home_non_controlled_consumption.values.size > 0
-
     def test_consumption_data_storage(self):
 
         async def _async_test():

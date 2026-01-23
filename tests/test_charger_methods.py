@@ -532,7 +532,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
         self.home = create_mock_home(self.hass)
         self.charger = create_charger_generic(self.hass, self.home)
 
-    @pytest.mark.asyncio
     async def test_set_max_charging_current(self):
         """Test set_max_charging_current method."""
         time = datetime.now(pytz.UTC)
@@ -545,7 +544,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result)
         mock_low.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_set_max_charging_current_no_change(self):
         """Test set_max_charging_current when current is same."""
         time = datetime.now(pytz.UTC)
@@ -557,7 +555,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result)
         mock_low.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_stop_charge(self):
         """Test stop_charge method."""
         time = datetime.now(pytz.UTC)
@@ -568,7 +565,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
 
         mock_stop.assert_called_once_with(time)
 
-    @pytest.mark.asyncio
     async def test_stop_charge_already_stopped(self):
         """Test stop_charge when already stopped."""
         time = datetime.now(pytz.UTC)
@@ -579,7 +575,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
 
         mock_stop.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_start_charge(self):
         """Test start_charge method."""
         time = datetime.now(pytz.UTC)
@@ -590,7 +585,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
 
         mock_start.assert_called_once_with(time)
 
-    @pytest.mark.asyncio
     async def test_reboot(self):
         """Test reboot method."""
         time = datetime.now(pytz.UTC)
@@ -602,7 +596,6 @@ class TestQSChargerGenericAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charger._asked_for_reboot_at_time, time)
         mock_reboot.assert_called_once_with(time)
 
-    @pytest.mark.asyncio
     async def test_reboot_cannot_reboot(self):
         """Test reboot method when cannot reboot."""
         time = datetime.now(pytz.UTC)
@@ -649,7 +642,6 @@ class TestQSChargerGenericPhaseSwitch(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
 
-    @pytest.mark.asyncio
     async def test_set_charging_num_phases_with_switch(self):
         """Test set_charging_num_phases with phase switch."""
         time = datetime.now(pytz.UTC)
@@ -667,7 +659,6 @@ class TestQSChargerGenericPhaseSwitch(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result)
         mock_low.assert_called_once_with(1, time)
 
-    @pytest.mark.asyncio
     async def test_set_charging_num_phases_no_switch(self):
         """Test set_charging_num_phases without phase switch."""
         time = datetime.now(pytz.UTC)
@@ -712,7 +703,6 @@ class TestQSChargerReboot(unittest.IsolatedAsyncioTestCase):
         result = self.charger.probe_for_possible_needed_reboot(time)
         self.assertFalse(result)
 
-    @pytest.mark.asyncio
     async def test_check_if_reboot_happened_cannot_reboot(self):
         """Test check_if_reboot_happened when cannot reboot."""
         from_time = datetime.now(pytz.UTC)
@@ -723,7 +713,6 @@ class TestQSChargerReboot(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
 
-    @pytest.mark.asyncio
     async def test_check_if_reboot_happened_too_short(self):
         """Test check_if_reboot_happened with too short duration."""
         from_time = datetime.now(pytz.UTC)
