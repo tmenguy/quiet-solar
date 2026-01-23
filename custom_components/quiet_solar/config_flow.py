@@ -1300,13 +1300,14 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         TYPE = QSClimateDuration.conf_type_name
 
-        orig_climate_entity = self.config_entry.data.get(CONF_CLIMATE)
+
 
         if user_input is not None:
             #do some stuff to update
             if "force_climate" in user_input:
                 pass
             else:
+                orig_climate_entity = self.config_entry.data.get(CONF_CLIMATE)
                 if (user_input.get(CONF_CLIMATE) != orig_climate_entity or
                         user_input.get(CONF_CLIMATE_HVAC_MODE_OFF) is None or
                         user_input.get(CONF_CLIMATE_HVAC_MODE_ON) is None):
@@ -1425,7 +1426,11 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
 
     VERSION = 1
     MINOR_VERSION = 1
-    config_entry: FakeConfigEntry | None | ConfigEntry = FakeConfigEntry()
+
+    def __init__(self):
+        """Initialize Quiet Solar config flow."""
+        super().__init__()
+        self.config_entry: FakeConfigEntry | None | ConfigEntry = FakeConfigEntry()
 
     @staticmethod
     @callback
