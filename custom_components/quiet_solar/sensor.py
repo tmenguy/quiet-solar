@@ -79,7 +79,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
-    if device.can_use_charge_percent_constraints():
+    if device.can_use_charge_percent_constraints_static():
         load_current_command = QSSensorEntityDescription(
             key="car_soc_percentage",
             translation_key=SENSOR_CAR_SOC_PERCENT,

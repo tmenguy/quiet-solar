@@ -503,11 +503,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         res = "on"
 
-        if self.car_battery_capacity is None:
-            res = "off"
-        if self.car_charge_percent_sensor is None:
-            res = "off"
-        if self.car_is_invited:
+        if self.can_use_charge_percent_constraints_static() is False:
             res = "off"
 
         if res == "on":
@@ -1571,6 +1567,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def can_use_charge_percent_constraints(self):
 
+        r = self.can_use_charge_percent_constraints_static()
+
+        if r is False:
+            return False
+
+        return self._use_percent_mode
+
+    def can_use_charge_percent_constraints_static(self):
+
         if self.car_is_invited:
             return False
         if self.car_battery_capacity is None:
@@ -1578,7 +1583,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.car_charge_percent_sensor is None:
             return False
 
-        return self._use_percent_mode
+        return True
 
 
     def _reset_charge_targets(self):
