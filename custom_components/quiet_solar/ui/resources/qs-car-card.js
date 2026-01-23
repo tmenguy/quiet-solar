@@ -162,15 +162,16 @@ class QsCarCard extends HTMLElement {
 
           // Use current_inputed_energy for energy mode (value is in Wh, convert to kWh)
           const energyValue = Number(sCurrentInputedEnergy?.state || 0);
-          const socKwh = this._fmt(energyValue / 1000);
+          const socKwhNum = Math.round(energyValue / 1000);
+          const socKwh = this._fmt(socKwhNum);
 
           // Calculate percentage for circle (0 to maxCircleValue)
-          const socPct = maxCircleValue > 0 ? (Number(socKwh) / maxCircleValue) * 100 : 0;
+          const socPct = maxCircleValue > 0 ? (socKwhNum / maxCircleValue) * 100 : 0;
           targetPct = targetEnergy != null && maxCircleValue > 0 ? (targetEnergy / maxCircleValue) * 100 : socPct;
 
           displaySocValue = `${socKwh}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>`;
 
-          let toBeDisplayedvalue = this._fmt(targetEnergy ?? socKwh);
+          let toBeDisplayedvalue = this._fmt(targetEnergy ?? socKwhNum);
           displayTargetValue = `${toBeDisplayedvalue}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>`;
 
           // Override soc for display
@@ -1005,8 +1006,8 @@ class QsCarCard extends HTMLElement {
               // allow re-rendering now
               this._isInteractingTarget = false;
               handle.style.cursor = 'grab';
-              // Trigger a re-render to ensure fresh values after interaction
-              this._render();
+              // Note: Don't call _render() here - it will be triggered by the next hass update
+              // Calling _render() explicitly would destroy and recreate DOM, losing event listeners
           };
           const onDown = (ev) => {
               ev.stopPropagation();

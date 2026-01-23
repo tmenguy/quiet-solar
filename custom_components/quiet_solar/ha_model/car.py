@@ -1721,6 +1721,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if max_battery_energy is None or max_battery_energy <= 0:
             max_battery_energy = CAR_DEFAULT_CAPACITY
 
+        max_battery_energy = int(max_battery_energy)
+
         options = set()
         options.add(max_battery_energy)
 
