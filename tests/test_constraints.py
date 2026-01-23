@@ -9,9 +9,13 @@ import pytz
 
 from custom_components.quiet_solar.home_model.constraints import (
     LoadConstraint,
+    MultiStepsPowerLoadConstraint,
+    MultiStepsPowerLoadConstraintChargePercent,
+    TimeBasedSimplePowerLoadConstraint,
     get_readable_date_string,
     DATETIME_MAX_UTC,
 )
+from custom_components.quiet_solar.home_model.commands import LoadCommand
 from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -244,3 +248,128 @@ def test_constraint_type_before_battery():
 def test_constraint_type_filler():
     """Test CONSTRAINT_TYPE_FILLER."""
     assert CONSTRAINT_TYPE_FILLER is not None
+
+
+# =============================================================================
+# Test constraint copy_to_other_type conversions
+# =============================================================================
+
+def _make_test_load() -> MagicMock:
+    load = MagicMock()
+    load.name = "TestLoad"
+    load.efficiency_factor = 0.9
+    load.get_update_value_callback_for_constraint_class.return_value = None
+    load.is_off_grid.return_value = False
+    return load
+
+
+def _make_power_steps() -> list[LoadCommand]:
+    return [
+        LoadCommand(command="on", power_consign=500.0),
+        LoadCommand(command="on", power_consign=1200.0),
+    ]
+
+
+def _make_constraint(
+    constraint_cls,
+    time_now: datetime,
+    load: MagicMock,
+    total_capacity_wh: float,
+):
+    common_kwargs = {
+        "time": time_now,
+        "load": load,
+        "load_param": "power",
+        "load_info": {"phase": "A", "index": 1},
+        "from_user": True,
+        "artificial_step_to_final_value": 150.0,
+        "type": CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        "degraded_type": CONSTRAINT_TYPE_FILLER,
+        "start_of_constraint": time_now - timedelta(hours=2),
+        "end_of_constraint": time_now + timedelta(hours=4),
+        "support_auto": True,
+        "always_end_at_end_of_constraint": False,
+        "power_steps": _make_power_steps(),
+    }
+
+    if constraint_cls is MultiStepsPowerLoadConstraintChargePercent:
+        common_kwargs.update(
+            {
+                "total_capacity_wh": total_capacity_wh,
+                "initial_value": 10.0,
+                "current_value": 25.0,
+                "target_value": 80.0,
+            }
+        )
+    elif constraint_cls is TimeBasedSimplePowerLoadConstraint:
+        common_kwargs.update(
+            {
+                "initial_value": 600.0,
+                "current_value": 1200.0,
+                "target_value": 3600.0,
+            }
+        )
+    else:
+        common_kwargs.update(
+            {
+                "initial_value": 100.0,
+                "current_value": 250.0,
+                "target_value": 800.0,
+            }
+        )
+
+    return constraint_cls(**common_kwargs)
+
+
+@pytest.mark.parametrize(
+    ("source_cls", "target_cls"),
+    [
+        (MultiStepsPowerLoadConstraint, MultiStepsPowerLoadConstraintChargePercent),
+        (MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint),
+        (MultiStepsPowerLoadConstraintChargePercent, MultiStepsPowerLoadConstraint),
+        (MultiStepsPowerLoadConstraintChargePercent, TimeBasedSimplePowerLoadConstraint),
+        (TimeBasedSimplePowerLoadConstraint, MultiStepsPowerLoadConstraint),
+        (TimeBasedSimplePowerLoadConstraint, MultiStepsPowerLoadConstraintChargePercent),
+    ],
+)
+def test_copy_to_other_type_round_trip_fields(source_cls, target_cls):
+    """Test copy_to_other_type between constraint types."""
+    time_now = datetime(2026, 1, 23, 12, 0, tzinfo=pytz.UTC)
+    load = _make_test_load()
+    common_additional_kwargs = {"total_capacity_wh": 50000.0}
+
+    source = _make_constraint(source_cls, time_now, load, common_additional_kwargs["total_capacity_wh"])
+    converted = source.copy_to_other_type(time_now, target_cls, common_additional_kwargs)
+
+    assert isinstance(converted, target_cls)
+    assert converted.load is load
+
+    assert converted._type == source._type
+    assert converted._degraded_type == source._degraded_type
+    assert converted.load_param == source.load_param
+    assert converted.load_info == source.load_info
+    assert converted.from_user == source.from_user
+    assert converted.artificial_step_to_final_value == source.artificial_step_to_final_value
+    assert converted.support_auto == source.support_auto
+    assert converted.start_of_constraint == source.start_of_constraint
+    assert converted.end_of_constraint == source.end_of_constraint
+
+    expected_always_end = (
+        True if target_cls is TimeBasedSimplePowerLoadConstraint else source.always_end_at_end_of_constraint
+    )
+    assert converted.always_end_at_end_of_constraint == expected_always_end
+
+    if target_cls is MultiStepsPowerLoadConstraintChargePercent:
+        assert converted.total_capacity_wh == common_additional_kwargs["total_capacity_wh"]
+
+    assert converted.to_dict()["power_steps"] == source.to_dict()["power_steps"]
+
+    assert converted.convert_target_value_to_energy(converted.target_value) == pytest.approx(
+        source.convert_target_value_to_energy(source.target_value)
+    )
+    assert converted.convert_target_value_to_energy(converted.initial_value) == pytest.approx(
+        source.convert_target_value_to_energy(source.initial_value)
+    )
+    assert converted.convert_target_value_to_energy(converted.current_value) == pytest.approx(
+        source.convert_target_value_to_energy(source.current_value)
+    )

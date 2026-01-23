@@ -6,6 +6,7 @@ This module covers the following uncovered methods:
 - get_next_scheduled_event
 - on_device_state_change_helper
 - get_sensor_latest_possible_valid_value_and_attr
+- get_sensor_latest_possible_valid_time_value_attr
 - is_sensor_growing
 - _clean_times_arrays
 """
@@ -293,6 +294,97 @@ class TestGetSensorLatestPossibleValidValueAndAttr:
         assert value == expected_value
         assert attrs == expected_attrs
 
+
+# =============================================================================
+# Tests for get_sensor_latest_possible_valid_time_value_attr
+# =============================================================================
+
+class TestGetSensorLatestPossibleValidTimeValueAttr:
+    """Tests for the get_sensor_latest_possible_valid_time_value_attr method."""
+
+    async def test_returns_none_for_none_entity_id(
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+    ) -> None:
+        """Test returns (None, None, None) when entity_id is None."""
+        await hass.config_entries.async_setup(home_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        data_handler = hass.data[DOMAIN][DATA_HANDLER]
+        home = data_handler.home
+
+        time_val, value, attrs = home.get_sensor_latest_possible_valid_time_value_attr(None)
+
+        assert time_val is None
+        assert value is None
+        assert attrs is None
+
+    async def test_returns_last_valid_time_value_attr(
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+    ) -> None:
+        """Test returns last valid time, value, and attributes."""
+        await hass.config_entries.async_setup(home_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        data_handler = hass.data[DOMAIN][DATA_HANDLER]
+        home = data_handler.home
+
+        time_now = datetime.now(tz=pytz.UTC)
+        entity_id = "sensor.test_valid_time_value"
+        expected_value = 42.0
+        expected_attrs = {"unit_of_measurement": "W"}
+
+        home.attach_power_to_probe(entity_id)
+        home._entity_probed_last_valid_state[entity_id] = (
+            time_now - timedelta(minutes=2),
+            expected_value,
+            expected_attrs,
+        )
+
+        time_val, value, attrs = home.get_sensor_latest_possible_valid_time_value_attr(
+            entity_id, time=time_now
+        )
+
+        assert time_val == time_now - timedelta(minutes=2)
+        assert value == expected_value
+        assert attrs == expected_attrs
+
+    async def test_returns_none_when_stale_with_tolerance(
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+    ) -> None:
+        """Test stale values return None when tolerance is exceeded."""
+        await hass.config_entries.async_setup(home_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        data_handler = hass.data[DOMAIN][DATA_HANDLER]
+        home = data_handler.home
+
+        time_now = datetime.now(tz=pytz.UTC)
+        entity_id = "sensor.test_stale_time_value"
+
+        home.attach_power_to_probe(entity_id)
+        home._entity_probed_last_valid_state[entity_id] = (
+            time_now - timedelta(seconds=120),
+            10.0,
+            {},
+        )
+        home._entity_probed_state[entity_id] = [
+            (time_now - timedelta(seconds=120), 10.0, {}),
+            (time_now - timedelta(seconds=60), None, {}),
+        ]
+
+        time_val, value, attrs = home.get_sensor_latest_possible_valid_time_value_attr(
+            entity_id, tolerance_seconds=30, time=time_now
+        )
+
+        assert time_val is None
+        assert value is None
+        assert attrs is None
 
 # =============================================================================
 # Tests for root_device_post_home_init

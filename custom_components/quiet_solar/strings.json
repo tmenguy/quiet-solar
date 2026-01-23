@@ -620,8 +620,12 @@
     "binary_sensor": {
       "qs_piloted_device_activated": {
         "name": "Piloted Device Activated"
+      },
+      "qs_car_use_charge_percent_constraints": {
+        "name": "Use Charge Percent Constraints"
       }
     },
+
     "sensor": {
       "qs_load_current_command_sensor": {
         "name": "Load Current Command"

@@ -266,7 +266,7 @@ class LoadConstraint(object):
 
 
     @classmethod
-    def new_from_saved_dict(cls, time, load, data: dict) -> Self:
+    def new_from_saved_dict(cls, time, load, data: dict) -> Self | None:
         try:
             module = importlib.import_module(__name__)
         except:
@@ -290,6 +290,26 @@ class LoadConstraint(object):
         kwargs = my_class.from_dict_to_kwargs(data)
         my_instance = my_class(time=time, load=load, **kwargs)
         return my_instance
+
+    def copy_to_other_type(self, time, other_constraint_class, additional_kwargs:dict) -> Self | None:
+        data = self.to_dict()
+        # adapt if needed the class specific parameters
+
+        kwargs = other_constraint_class.from_dict_to_kwargs(data)
+        kwargs.update(additional_kwargs)
+        output = other_constraint_class(time=time, load=self.load, **kwargs)
+
+        output.target_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.target_value))
+        output.initial_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.initial_value))
+        output.current_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.current_value))
+
+        # redo a clean update so the constructor can properly do its job
+        data = output.to_dict()
+        kwargs = other_constraint_class.from_dict_to_kwargs(data)
+        output = other_constraint_class(time=time, load=self.load, **kwargs)
+
+        return output
+
 
     def to_dict(self) -> dict:
         return {
@@ -315,6 +335,12 @@ class LoadConstraint(object):
         res["start_of_constraint"] = datetime.fromisoformat(data["start_of_constraint"])
         res["end_of_constraint"] = datetime.fromisoformat(data["end_of_constraint"])
         return res
+
+
+
+
+
+
 
     def convert_target_value_to_energy(self, value: float) -> float:
         return self.load.efficiency_factor*value

@@ -2708,6 +2708,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 car_current_charge_value = 0
                 car_initial_value = 0
 
+
+            common_additional_kwargs = {"total_capacity_wh" : self.car.car_battery_capacity}
+
+            # now check if the exiting constraint has the right class, ie the self.car.can_use_charge_percent_constraints() has changed or not
+            has_changed_ct = False
+            for i, ct in enumerate(self._constraints):
+                if ct.load_param == self.car.name: # shouldn't be necessary here but ok
+                    if ct.__class__ is not ConstraintClass:
+                        # we need to convert the "old" constraint to the new class
+                        new_ct = ct.copy_to_other_type(time, ConstraintClass, common_additional_kwargs)
+                        self._constraints[i] = new_ct
+                        has_changed_ct = True
+
+            if has_changed_ct:
+                _LOGGER.warning(f"check_load_activity_and_constraints: plugged car {self.car.name} is changing constraint class to {ConstraintClass.__name__}, and we updated and existing constraint")
+                self.set_live_constraints(time, self._constraints)
+
             realized_charge_target = None
             # add a constraint ... for now just fill the car as much as possible
             force_constraint = None

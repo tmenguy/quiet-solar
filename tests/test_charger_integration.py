@@ -198,6 +198,64 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
 
+    @pytest.mark.asyncio
+    async def test_check_load_activity_converts_percent_constraint_to_energy(self):
+        """Test constraint conversion when car percent support changes."""
+        time = datetime.now(pytz.UTC)
+        car_battery_capacity = 50000.0
+
+        mock_car = MagicMock()
+        mock_car.name = "TestCar"
+        mock_car.car_battery_capacity = car_battery_capacity
+        mock_car.efficiency_factor = 1.0
+        mock_car.do_force_next_charge = False
+        mock_car.do_next_charge_time = None
+        mock_car.can_use_charge_percent_constraints.return_value = False
+        mock_car.get_car_target_charge_energy.return_value = 45000.0
+        mock_car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        mock_car.user_selected_person_name_for_car = None
+
+        self.charger.car = mock_car
+        self.charger._power_steps = [LoadCommand(command="on", power_consign=7000.0)]
+
+        percent_constraint = MultiStepsPowerLoadConstraintChargePercent(
+            total_capacity_wh=car_battery_capacity,
+            time=time,
+            load=self.charger,
+            load_param=mock_car.name,
+            initial_value=20.0,
+            current_value=40.0,
+            target_value=90.0,
+            power_steps=self.charger._power_steps,
+            support_auto=True,
+        )
+        self.charger._constraints = [percent_constraint]
+
+        with patch.object(self.charger, "is_not_plugged", return_value=False), \
+             patch.object(self.charger, "is_plugged", return_value=True), \
+             patch.object(self.charger, "is_charger_unavailable", return_value=False), \
+             patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False), \
+             patch.object(self.charger, "get_best_car", return_value=mock_car), \
+             patch.object(self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"), \
+             patch.object(self.charger, "set_live_constraints"), \
+             patch.object(self.charger, "push_live_constraint", return_value=False):
+            await self.charger.check_load_activity_and_constraints(time)
+
+        expected_initial = 0.2 * car_battery_capacity
+        expected_current = 0.4 * car_battery_capacity
+        expected_target = 0.9 * car_battery_capacity
+
+        converted = [
+            ct
+            for ct in self.charger._constraints
+            if type(ct) is MultiStepsPowerLoadConstraint and ct.load_param == mock_car.name
+        ]
+        assert converted, "Expected converted energy constraint to be present"
+        converted_constraint = converted[0]
+        assert converted_constraint.initial_value == pytest.approx(expected_initial)
+        assert converted_constraint.current_value == pytest.approx(expected_current)
+        assert converted_constraint.target_value == pytest.approx(expected_target)
+
 
 class TestDevicePostHomeInit(unittest.TestCase):
     """Tests for device_post_home_init method."""

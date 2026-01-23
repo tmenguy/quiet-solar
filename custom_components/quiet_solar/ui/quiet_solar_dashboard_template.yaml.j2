@@ -35,13 +35,13 @@ views:
             title: {{ device.name }}
             entities:
             {%- if  device.device_type == "car" %}
-              {%- set energy_mode = device.car_is_invited or not device.can_use_charge_percent_constraints() %}
               {%- set car_tracker = device.car_tracker %}
               {%- if  car_tracker != None %}
               {%-    set trackers_list.trackers = trackers_list.trackers + [(car_tracker, device.name)] %}
               {%- endif %}
-              use_energy_mode: {%-  if energy_mode %} "on" {% else %} "off"{% endif %}
               {%- set ha = device.ha_entities %}
+              {%- set e = ha.get("qs_car_use_charge_percent_constraints") %}
+              {% if e %}use_percent_mode: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("selected_charger_for_car") %}
               {% if e %}charger_select: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_bump_solar_charge_priority") %}
@@ -58,15 +58,13 @@ views:
               {% if e %}force_now: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_next_car_charge_add_default") %}
               {% if e %}schedule: {{ e.entity_id }}{% endif %}
-              {%-  if energy_mode %}
-              {% if ha.get("current_constraint_current_energy") %}soc: {{ ha.get("current_constraint_current_energy").entity_id }}{% endif %}
-              {%-  else %}
               {%- set e = ha.get("car_soc_percentage") %}
               {%- if e %}
               {%-    set badges_list.badges = badges_list.badges + [(e.entity_id, device.name)] %}
               {{ "soc: " + e.entity_id }}
               {%- endif %}
-              {%- endif %}
+              {% if ha.get("current_constraint_current_energy") %}current_inputed_energy: {{ ha.get("current_constraint_current_energy").entity_id }}{% endif %}
+              {% if device.car_battery_capacity %}car_battery_capacity_kwh: {{ (device.car_battery_capacity / 1000)|round(1) }}{% endif %}
               {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}
               {% if ha.get("qs_device_clean_and_reset") %}reset: {{ ha.get("qs_device_clean_and_reset").entity_id }}{% endif %}
               {% if ha.get("qs_device_clean_command_and_constraints") %}clean_constraints: {{ ha.get("qs_device_clean_command_and_constraints").entity_id }}{% endif %}

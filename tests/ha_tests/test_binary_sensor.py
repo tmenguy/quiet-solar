@@ -14,6 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.quiet_solar.const import (
     DOMAIN,
     DATA_HANDLER,
+    BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
 )
 
@@ -73,7 +74,7 @@ async def test_car_binary_sensor_entities(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    """Test car device may create binary sensor entities."""
+    """Test car device creates binary sensor entities."""
     from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -95,8 +96,13 @@ async def test_car_binary_sensor_entities(
     )
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
-    # Car may or may not have binary sensors depending on configuration
+    # Car should have the percent constraint binary sensor
     assert isinstance(binary_sensor_entries, list)
+    assert any(
+        entry.unique_id
+        and entry.unique_id.endswith(BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS)
+        for entry in binary_sensor_entries
+    )
 
 
 async def test_home_binary_sensor_entities(

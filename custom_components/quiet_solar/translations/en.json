@@ -323,6 +323,9 @@
     },
     "entity": {
         "binary_sensor": {
+          "qs_car_use_charge_percent_constraints": {
+            "name": "Use Charge Percent Constraints"
+          },
           "qs_piloted_device_activated": {
             "name": "Piloted Device Activated"
           }

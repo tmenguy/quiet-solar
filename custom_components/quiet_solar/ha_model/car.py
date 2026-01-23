@@ -22,7 +22,7 @@ from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
     CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
     CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED, SENSOR_CAR_PERSON_FORECAST, \
-    CAR_CHARGE_TYPE_PERSON_AUTOMATED
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED, CAR_USE_PERCENT_MODE_SENSOR
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
@@ -41,6 +41,8 @@ CAR_MAX_EFFICIENCY_HISTORY_S = 3600*24*31
 CAR_DEFAULT_CAPACITY = 100000 # 100 kWh
 
 CAR_MINIMUM_LEFT_RANGE_KM = 40.0
+
+CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S = 3600
 
 class QSCar(HADeviceMixin, AbstractDevice):
 
@@ -64,6 +66,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 30.0)
 
         self.car_efficiency_km_per_kwh_sensor : str = CAR_EFFICIENCY_KM_PER_KWH
+        self.car_use_percent_mode_sensor : str = CAR_USE_PERCENT_MODE_SENSOR
 
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
@@ -145,6 +148,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
 
+
         self.charger = None
 
         self.do_force_next_charge = False
@@ -174,6 +178,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.reset()
 
+        self._use_percent_mode = True # to have a default value, overriden by the call below if necessary
+        self._use_percent_mode = self.can_use_charge_percent_constraints()
+
         self._user_selected_person_name_for_car : str | None = None
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
@@ -200,6 +207,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.attach_ha_state_to_probe(self.car_efficiency_km_per_kwh_sensor,
                                       is_numerical=True,
                                       non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter)
+
+        self.attach_ha_state_to_probe(self.car_use_percent_mode_sensor,
+                                      is_numerical=True,
+                                      non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter)
+
+
+
+
 
     # make a property out of user_selected_person_name_for_car
     @property
@@ -480,6 +495,35 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return (None, None, None, None)
 
 
+
+    def car_use_percent_mode_sensor_state_getter(self, entity_id: str, time: datetime | None) ->  (tuple[datetime | None, float | str | None, dict | None] | None):
+
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+
+        res = "on"
+
+        if self.car_battery_capacity is None:
+            res = "off"
+        if self.car_charge_percent_sensor is None:
+            res = "off"
+        if self.car_is_invited:
+            res = "off"
+
+        if res == "on":
+            # now we have to check that the sensor is either invalid for a long time
+            last_valid_time, last_valid_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(self.car_charge_percent_sensor, tolerance_seconds = None, time=time)
+
+            if last_valid_value is None or last_valid_time is None:
+                res = "off"
+            elif last_valid_time is None or (time - last_valid_time).total_seconds() > CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S:
+                res = "off"
+            else:
+                res = "on"
+
+        self._use_percent_mode = res == "on"
+
+        return (time, res, {})
 
     def car_efficiency_km_per_kwh_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
 
@@ -1527,12 +1571,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def can_use_charge_percent_constraints(self):
 
+        if self.car_is_invited:
+            return False
         if self.car_battery_capacity is None:
             return False
         if self.car_charge_percent_sensor is None:
             return False
 
-        return True
+        return self._use_percent_mode
+
 
     def _reset_charge_targets(self):
         self._next_charge_target = None
@@ -1672,7 +1719,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         options = set()
         options.add(max_battery_energy)
 
-        for v in range(0, max_battery_energy, 5000):
+        for v in range(0, max_battery_energy, 2000):
             options.add(v)
 
         options = list(options)

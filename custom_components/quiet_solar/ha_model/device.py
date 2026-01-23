@@ -657,22 +657,7 @@ class HADeviceMixin:
         return best
 
 
-    def get_sensor_latest_possible_valid_value_and_attr(self, entity_id, time = None) -> tuple[str | float | None, Mapping[str, Any] | None | dict]:
 
-        if entity_id is None:
-            return None, None
-
-        last_valid = self._entity_probed_last_valid_state[entity_id]
-        if last_valid is None:
-            return None, None
-
-        if time is None:
-            time = datetime.now(tz=pytz.UTC)
-
-        if time >= last_valid[0]:
-            return last_valid[1], last_valid[2]
-
-        return None, None
 
     def is_sensor_growing(self,
                           entity_id,
@@ -707,33 +692,46 @@ class HADeviceMixin:
                                                entity_id,
                                                tolerance_seconds: float | None = None,
                                                time = None) -> str | float | None:
+
+        return self.get_sensor_latest_possible_valid_time_value_attr(entity_id, tolerance_seconds, time)[1]
+
+    def get_sensor_latest_possible_valid_value_and_attr(self, entity_id, time = None) -> tuple[str | float | None, Mapping[str, Any] | None | dict]:
+
+        res = self.get_sensor_latest_possible_valid_time_value_attr(entity_id, None, time)
+        return res[1], res[2]
+
+
+    def get_sensor_latest_possible_valid_time_value_attr(self,
+                                               entity_id,
+                                               tolerance_seconds: float | None = None,
+                                               time = None) -> tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]:
         if entity_id is None:
-            return None
+            return None, None, None
 
         last_valid = self._entity_probed_last_valid_state[entity_id]
         if last_valid is None:
-            return None
+            return None, None, None
 
         if time is None:
 
             if tolerance_seconds is None or tolerance_seconds == 0:
-                return last_valid[1]
+                return last_valid[0], last_valid[1], last_valid[2]
 
             time = datetime.now(tz=pytz.UTC)
 
         if time >= last_valid[0]:
 
             if tolerance_seconds is None or tolerance_seconds == 0:
-                return last_valid[1]
+                return last_valid[0], last_valid[1], last_valid[2]
 
             hist_f = self._entity_probed_state.get(entity_id, [])
 
             if not hist_f:
-                return last_valid[1]
+                return last_valid[0], last_valid[1], last_valid[2]
 
             if hist_f[-1][0] == last_valid[0] or hist_f[-1][1] is not None:
                 # HA update only changed sensor ... if it is the last valid, whatever the time, it is valid
-                return last_valid[1]
+                return last_valid[0], last_valid[1], last_valid[2]
 
             last_valid_idx = bisect_left(hist_f, last_valid[0], key=itemgetter(0))
             time_to_limit = last_valid[0]
@@ -741,14 +739,14 @@ class HADeviceMixin:
                 time_to_limit = hist_f[last_valid_idx + 1][0]
 
             if (time - time_to_limit).total_seconds() > tolerance_seconds:
-                return None
+                return None, None, None
 
-            return last_valid[1]
+            return last_valid[0], last_valid[1], last_valid[2]
         else:
             vals = self.get_state_history_data(entity_id, tolerance_seconds, time)
             if not vals:
-                return None
-            return vals[-1][1]
+                return None, None, None
+            return vals[-1][0], vals[-1][1], vals[-1][2]
 
     def get_device_power_latest_possible_valid_value(self,
                                                      tolerance_seconds: float | None,

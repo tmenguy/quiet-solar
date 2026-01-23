@@ -1062,7 +1062,7 @@ class AbstractLoad(AbstractDevice):
             c.current_start_of_constraint = max(current_start, c.start_of_constraint)
 
             if c.current_start_of_constraint >= c.end_of_constraint:
-                # we remove the comstraint it is inside another constraint
+                # we remove the constraint it is inside another constraint
                 continue
 
             current_start = c.end_of_constraint

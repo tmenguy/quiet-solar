@@ -8,15 +8,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED
+from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED, BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS
 from .entity import QSDeviceEntity
-from .ha_model.device import HADeviceMixin
+from .ha_model.car import QSCar
 from .home_model.load import AbstractDevice, PilotedDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def create_ha_binary_sensor_for_PilotedDevice(device: HADeviceMixin):
+def create_ha_binary_sensor_for_PilotedDevice(device: PilotedDevice):
     """Create binary sensors for a PilotedDevice."""
     entities = []
 
@@ -30,12 +30,29 @@ def create_ha_binary_sensor_for_PilotedDevice(device: HADeviceMixin):
     return entities
 
 
+def create_ha_binary_sensor_for_QSCar(device: QSCar):
+    """Create binary sensors for a PilotedDevice."""
+    entities = []
+
+    piloted_activated = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
+        translation_key=BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
+        value_fn=lambda d, key: d.can_use_charge_percent_constraints(),
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
+
+    return entities
+
+
 def create_ha_binary_sensor(device: AbstractDevice):
     """Create binary sensors for a device."""
     ret = []
 
     if isinstance(device, PilotedDevice):
         ret.extend(create_ha_binary_sensor_for_PilotedDevice(device))
+
+    if isinstance(device, QSCar):
+        ret.extend(create_ha_binary_sensor_for_QSCar(device))
 
     return ret
 

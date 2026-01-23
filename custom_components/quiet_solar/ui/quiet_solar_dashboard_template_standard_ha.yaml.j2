@@ -70,6 +70,11 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_car_use_charge_percent_constraints") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_next_car_charge_add_default") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}

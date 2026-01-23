@@ -205,6 +205,8 @@ SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
 
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 
+BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"
+
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
     "qs_no_control_forecast_15mn": 15*60,
@@ -285,6 +287,7 @@ CAR_CHARGE_TYPE_UNKNOWN = "Unknown"
 CAR_CHARGE_TYPE_PERSON_AUTOMATED = "Person Automated"
 CAR_CHARGE_ERROR = "No Power To Car"
 CAR_EFFICIENCY_KM_PER_KWH = "car_efficiency_km_per_kwh"
+CAR_USE_PERCENT_MODE_SENSOR = "car_used_energy_mode_sensor"
 
 CAR_HARD_WIRED_CHARGER = "Hard Wired Charger"
 

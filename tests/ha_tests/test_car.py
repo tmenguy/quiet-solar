@@ -28,6 +28,9 @@ from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
+from custom_components.quiet_solar.ha_model.car import (
+    CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S,
+)
 from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
 
 
@@ -1458,7 +1461,66 @@ async def test_car_charge_percent_constraints_flags(
     assert car_device.can_use_charge_percent_constraints() is False
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
+    car_device._use_percent_mode = True
     assert car_device.can_use_charge_percent_constraints() is True
+
+    car_device.car_is_invited = True
+    assert car_device.can_use_charge_percent_constraints() is False
+
+
+async def test_car_use_percent_mode_sensor_updates_constraint_flag(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Test percent mode sensor toggles charge percent constraints."""
+    from .const import MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_percent_mode_sensor_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_percent_mode_sensor_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    assert car_device is not None
+
+    time_now = datetime(2026, 1, 20, 15, 0, tzinfo=pytz.UTC)
+    soc_entity = car_device.car_charge_percent_sensor
+
+    car_device._entity_probed_last_valid_state[soc_entity] = (
+        time_now - timedelta(minutes=5),
+        55.0,
+        {},
+    )
+
+    result = car_device.car_use_percent_mode_sensor_state_getter(
+        "sensor.car_use_percent_mode", time_now
+    )
+
+    assert result == (time_now, "on", {})
+    assert car_device.can_use_charge_percent_constraints() is True
+
+    car_device._entity_probed_last_valid_state[soc_entity] = (
+        time_now
+        - timedelta(seconds=CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S + 1),
+        55.0,
+        {},
+    )
+
+    result = car_device.car_use_percent_mode_sensor_state_getter(
+        "sensor.car_use_percent_mode", time_now
+    )
+
+    assert result == (time_now, "off", {})
+    assert car_device.can_use_charge_percent_constraints() is False
 
 
 async def test_car_user_add_default_charge_time_validation(
