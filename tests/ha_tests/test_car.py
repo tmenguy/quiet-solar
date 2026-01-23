@@ -1286,20 +1286,7 @@ async def test_car_person_forecast_readable_variants(
         get_forecast_readable_string=lambda: "50km tomorrow",
     )
     car_device.current_forecasted_person = person
-    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(
-        return_value=(True, 70.0, 60.0, None)
-    )
-    assert "OK!" in car_device.get_car_person_readable_forecast_mileage()
-
-    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(
-        return_value=(False, 40.0, 80.0, None)
-    )
-    assert "Need charge" in car_device.get_car_person_readable_forecast_mileage()
-
-    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(
-        return_value=(None, None, None, None)
-    )
-    assert "UNKNOWN" in car_device.get_car_person_readable_forecast_mileage()
+    assert "Forecast Person" in car_device.get_car_person_readable_forecast_mileage()
 
 
 async def test_car_bootstrap_efficiency_from_history(

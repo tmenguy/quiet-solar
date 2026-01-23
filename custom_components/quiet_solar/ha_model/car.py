@@ -300,19 +300,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if person is not None:
             forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
-
-            is_covered, current_soc, needed_soc, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(
-                person.predicted_mileage, person.predicted_leave_time)
-
-            if is_covered is None:
-                name_post_fix = f"UNKNOWN!: {forecast_str}"
-            else:
-                if is_covered:
-                    name_post_fix = f"OK!: {forecast_str}"
-                else:
-                    name_post_fix = f"Need charge: {forecast_str}"
-
-            return f"{person.name}: {name_post_fix}"
+            return f"{person.name}: {forecast_str}"
 
         return None
 
