@@ -16,6 +16,11 @@ class QSHeatPump(HADeviceMixin, PilotedDevice):
     conf_type_name = CONF_TYPE_NAME_QSHeatPump
 
     def get_platforms(self):
+
         parent = super().get_platforms()
-        parent.append(Platform.BINARY_SENSOR)
-        return parent
+        if parent is None:
+            parent = set()
+        else:
+            parent = set(parent)
+        parent.update([Platform.BINARY_SENSOR])
+        return list(parent)

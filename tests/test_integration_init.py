@@ -239,3 +239,64 @@ async def test_ocpp_notification_forwards_to_chargers(fake_hass):
             "Charger status changed",
             "OCPP Alert",
         )
+
+
+@pytest.mark.asyncio
+async def test_ocpp_notification_matches_device_registry(fake_hass):
+    """Test OCPP notification matches charger via device registry."""
+    from custom_components.quiet_solar.ha_model.charger import QSChargerOCPP
+
+    mock_home = MagicMock()
+    mock_charger = MagicMock(spec=QSChargerOCPP)
+    mock_charger.name = "Garage Charger"
+    mock_charger.charger_device_ocpp = "device_id_123"
+    mock_charger.handle_ocpp_notification = AsyncMock()
+
+    other_charger = MagicMock(spec=QSChargerOCPP)
+    other_charger.name = "Driveway Charger"
+    other_charger.charger_device_ocpp = "device_id_456"
+    other_charger.handle_ocpp_notification = AsyncMock()
+
+    mock_home._chargers = [mock_charger, other_charger]
+
+    mock_handler = MagicMock()
+    mock_handler.home = mock_home
+    fake_hass.data[DOMAIN][DATA_HANDLER] = mock_handler
+
+    device = MagicMock()
+    device.name_by_user = None
+    device.name = "Garage Charger"
+    device.identifiers = {("ocpp", "charger-123")}
+
+    other_device = MagicMock()
+    other_device.name_by_user = None
+    other_device.name = "Driveway Charger"
+    other_device.identifiers = {("ocpp", "charger-456")}
+
+    def _get_device(device_id: str):
+        if device_id == "device_id_123":
+            return device
+        if device_id == "device_id_456":
+            return other_device
+        return None
+
+    device_registry = MagicMock()
+    device_registry.async_get.side_effect = _get_device
+
+    with patch("homeassistant.helpers.device_registry.async_get", return_value=device_registry):
+        register_ocpp_notification_listener(fake_hass)
+
+        await fake_hass.bus.async_fire("call_service", {
+            "domain": "persistent_notification",
+            "service": "create",
+            "service_data": {
+                "title": "OCPP Alert",
+                "message": "Alert for charger-123",
+            }
+        })
+
+    mock_charger.handle_ocpp_notification.assert_awaited_once_with(
+        "Alert for charger-123",
+        "OCPP Alert",
+    )
+    other_charger.handle_ocpp_notification.assert_not_awaited()
