@@ -684,7 +684,7 @@ class AbstractLoad(AbstractDevice):
         if overriden_state is None:
             ct = self.get_current_active_constraint()
             if ct is not None:
-                if ct.load_info.get("originator",None) == "user_override":
+                if ct.load_info is not None and ct.load_info.get("originator",None) == "user_override":
                     overriden_state = ct.load_param
 
         if self.asked_for_reset_user_initiated_state_time is not None:

@@ -277,6 +277,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 if len(self._constraints) > 0:
                     do_force_next_solve = True
                 self.command_and_constraint_reset()
+
+            _LOGGER.info(
+                f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")
+
         else:
 
             constraints = []
@@ -284,6 +288,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             if bistate_mode == self._bistate_mode_on:
                 end_schedule = self.get_proper_local_adapted_tomorrow(time)
                 start_schedule = do_push_constraint_after
+                ct = None
                 if start_schedule is None or start_schedule < end_schedule:
                     ct = ConstraintItemType(start_schedule=start_schedule,
                                              end_schedule=end_schedule,
@@ -291,17 +296,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                              has_user_forced_constraint=True,
                                              agenda_push=False)
                     constraints.append(ct)
+                _LOGGER.info(
+                    f"check_load_activity_and_constraints: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}")
             elif bistate_mode == "bistate_mode_default":
                 if self.default_on_duration is not None and  self.default_on_finish_time is not None:
                     end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
                     start_schedule = do_push_constraint_after
+                    ct = None
                     if start_schedule is None or start_schedule < end_schedule:
                         ct = ConstraintItemType(start_schedule=start_schedule,
                                                 end_schedule=end_schedule,
                                                 target_value=self.default_on_duration * 3600.0,
                                                 has_user_forced_constraint=False,
-                                                agenda_push=False)
+                                                agenda_push=True)
                         constraints.append(ct)
+                    _LOGGER.info(
+                        f"check_load_activity_and_constraints: bistate bistate_mode_default for load {self.name} {ct}")
             else:
                 events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
 
@@ -325,6 +335,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                                 has_user_forced_constraint=False,
                                                 agenda_push=True)
                         constraints.append(ct)
+                        _LOGGER.info(
+                            f"check_load_activity_and_constraints: bistate calendar {bistate_mode} for load {self.name} {ct}")
 
 
             if len(constraints) > 0:
