@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import datetime
-import pytest
+import logging
+import os
 import pickle
 import tempfile
-import os
-from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from homeassistant.const import (
     Platform,
@@ -37,6 +40,53 @@ from custom_components.quiet_solar.const import (
 )
 
 from tests.test_helpers import FakeHass, FakeConfigEntry
+
+
+class _FilterProvider(QSSolarProvider):
+    """Provider with filterable orchestrators."""
+
+    def __init__(self, solar, domain: str) -> None:
+        super().__init__(solar=solar, domain=domain)
+
+    def is_orchestrator(self, entity_id, orchestrator) -> bool:
+        return getattr(orchestrator, "enabled", False)
+
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time, end_time):
+        return []
+
+
+class _SeriesProvider(QSSolarProvider):
+    """Provider that returns stored power series from orchestrators."""
+
+    def __init__(self, solar, domain: str) -> None:
+        super().__init__(solar=solar, domain=domain)
+
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time, end_time):
+        return [
+            (time, value)
+            for time, value in orchestrator.power_series
+            if start_time <= time <= end_time
+        ]
+
+
+class _UpdateTrackingProvider(QSSolarProvider):
+    """Provider that tracks update calls."""
+
+    def __init__(self, solar, domain: str) -> None:
+        super().__init__(solar=solar, domain=domain)
+        self.fill_calls = 0
+        self.extract_calls = 0
+        self.extract_result = []
+
+    async def fill_orchestrators(self):
+        self.fill_calls += 1
+
+    async def extract_solar_forecast_from_data(self, start_time, period):
+        self.extract_calls += 1
+        return list(self.extract_result)
+
+    async def get_power_series_from_orchestrator(self, orchestrator, start_time, end_time):
+        return []
 
 
 class TestQSSolarInit:
@@ -472,6 +522,112 @@ class TestQSSolarProviderBase:
         provider.fill_orchestrators.assert_called()
 
 
+class TestQSSolarProviderBaseExtended:
+    """Test additional QSSolarProvider base behaviors."""
+
+    @pytest.mark.asyncio
+    async def test_fill_orchestrators_filters_entries(self):
+        """Test fill_orchestrators filters by is_orchestrator."""
+        hass = FakeHass()
+        solar = SimpleNamespace(hass=hass)
+        provider = _FilterProvider(solar=solar, domain="test_domain")
+
+        hass.data["test_domain"] = {
+            "valid": SimpleNamespace(enabled=True),
+            "invalid": SimpleNamespace(enabled=False),
+            "none": None,
+        }
+
+        await provider.fill_orchestrators()
+
+        assert len(provider.orchestrators) == 1
+        assert provider.orchestrators[0].enabled is True
+
+    @pytest.mark.asyncio
+    async def test_extract_solar_forecast_aggregates_orchestrators(self):
+        """Test extract_solar_forecast_from_data aggregates series."""
+        hass = FakeHass()
+        solar = SimpleNamespace(hass=hass)
+        provider = _SeriesProvider(solar=solar, domain="test_domain")
+
+        time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
+        orchestrator_1 = SimpleNamespace(
+            power_series=[
+                (time, 500.0),
+                (time + timedelta(minutes=30), 800.0),
+            ]
+        )
+        orchestrator_2 = SimpleNamespace(
+            power_series=[
+                (time, 700.0),
+                (time + timedelta(minutes=30), 600.0),
+            ]
+        )
+
+        provider.orchestrators = [orchestrator_1, orchestrator_2]
+        result = await provider.extract_solar_forecast_from_data(time, period=3600)
+
+        assert result == [
+            (time, 1200.0),
+            (time + timedelta(minutes=30), 1400.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_update_time_gating(self):
+        """Test update skips refresh within cache window."""
+        hass = FakeHass()
+        solar = SimpleNamespace(hass=hass)
+        provider = _UpdateTrackingProvider(solar=solar, domain="test_domain")
+
+        now = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
+        provider.orchestrators = [SimpleNamespace()]
+        provider._latest_update_time = now
+
+        await provider.update(now + timedelta(minutes=5))
+
+        assert provider.fill_calls == 0
+        assert provider.extract_calls == 0
+
+        provider.extract_result = [(now, 1000.0)]
+        await provider.update(now + timedelta(minutes=16))
+
+        assert provider.fill_calls == 1
+        assert provider.extract_calls == 1
+        assert provider.solar_forecast == [(now, 1000.0)]
+        assert provider._latest_update_time == now + timedelta(minutes=16)
+
+    @pytest.mark.asyncio
+    async def test_update_logs_when_no_orchestrators(self, caplog):
+        """Test update logs an error when no orchestrators exist."""
+        hass = FakeHass()
+        solar = SimpleNamespace(hass=hass)
+        provider = _UpdateTrackingProvider(solar=solar, domain="test_domain")
+        provider.orchestrators = []
+
+        time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
+        with caplog.at_level(logging.ERROR):
+            await provider.update(time)
+
+        assert "No solar orchestrator found for domain test_domain" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_dump_for_debug_writes_pickle(self, tmp_path):
+        """Test dump_for_debug writes expected pickle file."""
+        hass = FakeHass()
+        solar = SimpleNamespace(hass=hass)
+        provider = _SeriesProvider(solar=solar, domain="test_domain")
+        provider.solar_forecast = [
+            (datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC), 1000.0),
+        ]
+
+        await provider.dump_for_debug(str(tmp_path))
+
+        file_path = tmp_path / "solar_forecast.pickle"
+        assert file_path.exists()
+        with file_path.open("rb") as file:
+            assert pickle.load(file) == provider.solar_forecast
+
+
 class TestQSSolarProviderSolcast:
     """Test QSSolarProviderSolcast class."""
 
@@ -518,6 +674,21 @@ class TestQSSolarProviderSolcast:
         assert provider.orchestrators[0] == mock_coordinator
 
     @pytest.mark.asyncio
+    async def test_fill_orchestrators_skips_invalid_entry(self):
+        """Test fill_orchestrators ignores entries without coordinators."""
+        provider = QSSolarProviderSolcast(solar=self.solar)
+
+        good_coordinator = SimpleNamespace(solcast=SimpleNamespace(_data_forecasts=[]))
+        good_entry = SimpleNamespace(runtime_data=SimpleNamespace(coordinator=good_coordinator))
+        bad_entry = SimpleNamespace(runtime_data=None)
+
+        self.hass.config_entries.async_entries = MagicMock(return_value=[good_entry, bad_entry])
+
+        await provider.fill_orchestrators()
+
+        assert provider.orchestrators == [good_coordinator]
+
+    @pytest.mark.asyncio
     async def test_get_power_series_from_orchestrator(self):
         """Test extracting power series from Solcast orchestrator."""
         provider = QSSolarProviderSolcast(solar=self.solar)
@@ -537,6 +708,28 @@ class TestQSSolarProviderSolcast:
         )
 
         assert len(result) >= 0
+
+    @pytest.mark.asyncio
+    async def test_get_power_series_handles_boundaries_and_timezone(self):
+        """Test Solcast series boundaries and UTC conversion."""
+        provider = QSSolarProviderSolcast(solar=self.solar)
+        tz = pytz.timezone("Europe/Paris")
+
+        start = tz.localize(datetime.datetime(2024, 6, 15, 12, 30, 0))
+        end = tz.localize(datetime.datetime(2024, 6, 15, 16, 0, 0))
+        data = [
+            {"period_start": tz.localize(datetime.datetime(2024, 6, 15, 12, 0, 0)), "pv_estimate": 1.0},
+            {"period_start": tz.localize(datetime.datetime(2024, 6, 15, 13, 0, 0)), "pv_estimate": 1.5},
+            {"period_start": tz.localize(datetime.datetime(2024, 6, 15, 14, 0, 0)), "pv_estimate": 2.0},
+        ]
+
+        orchestrator = SimpleNamespace(solcast=SimpleNamespace(_data_forecasts=data))
+        result = await provider.get_power_series_from_orchestrator(orchestrator, start, end)
+
+        assert result[0][0].astimezone(pytz.UTC).hour == 10
+        assert result[-1][0].astimezone(pytz.UTC).hour == 12
+        assert all(ts.tzinfo == pytz.UTC for ts, _ in result)
+        assert [value for _, value in result] == [1000.0, 1500.0, 2000.0]
 
     @pytest.mark.asyncio
     async def test_get_power_series_empty_data(self):
@@ -614,6 +807,28 @@ class TestQSSolarProviderOpenWeather:
         )
 
         assert len(result) >= 0
+
+    @pytest.mark.asyncio
+    async def test_get_power_series_sorts_and_handles_boundaries(self):
+        """Test OpenWeather series sorting, boundaries, and UTC conversion."""
+        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        tz = pytz.timezone("Europe/Paris")
+
+        start = tz.localize(datetime.datetime(2024, 6, 15, 12, 30, 0))
+        end = tz.localize(datetime.datetime(2024, 6, 15, 16, 0, 0))
+        t0 = tz.localize(datetime.datetime(2024, 6, 15, 12, 0, 0))
+        t1 = tz.localize(datetime.datetime(2024, 6, 15, 13, 0, 0))
+        t2 = tz.localize(datetime.datetime(2024, 6, 15, 14, 0, 0))
+
+        orchestrator = SimpleNamespace(
+            data=SimpleNamespace(watts={t1: 1500, t2: 2000, t0: 1000})
+        )
+
+        result = await provider.get_power_series_from_orchestrator(orchestrator, start, end)
+
+        assert [value for _, value in result] == [1000.0, 1500.0, 2000.0]
+        assert all(ts.tzinfo == pytz.UTC for ts, _ in result)
+        assert result[0][0] < result[-1][0]
 
     @pytest.mark.asyncio
     async def test_get_power_series_none_data(self):

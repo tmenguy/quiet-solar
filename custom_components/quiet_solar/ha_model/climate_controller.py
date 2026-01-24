@@ -47,6 +47,7 @@ class QSClimateDuration(QSBiStateDuration):
     @climate_state_on.setter
     def climate_state_on(self, value):
         self._state_on = value
+        self._bistate_mode_on = value
 
     @property
     def climate_state_off(self):
@@ -55,6 +56,7 @@ class QSClimateDuration(QSBiStateDuration):
     @climate_state_off.setter
     def climate_state_off(self, value):
         self._state_off = value
+        self._bistate_mode_off = value
 
     def get_possibles_modes(self):
         """ return the possible modes for the climate entity """
@@ -75,9 +77,9 @@ class QSClimateDuration(QSBiStateDuration):
             hvac_mode = state
         else:
             if command.is_like(CMD_ON):
-                hvac_mode = self._bistate_mode_on
+                hvac_mode = self.climate_state_on
             elif command.is_off_or_idle():
-                hvac_mode = self._bistate_mode_off
+                hvac_mode = self.climate_state_off
             else:
                 raise ValueError("Invalid command")
 

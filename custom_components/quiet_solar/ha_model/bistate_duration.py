@@ -249,6 +249,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 time=time,
                                 load=self,
                                 load_param=self.external_user_initiated_state,
+                                load_info={"originator":"user_override"},
                                 from_user=True,
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,

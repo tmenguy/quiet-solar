@@ -2593,3 +2593,232 @@ class TestMarkCurrentConstraintHasDone:
 
         await load.mark_current_constraint_has_done()
         assert load._constraints == []
+
+
+# =============================================================================
+# Test AbstractLoad Storage Methods (update_to_be_saved_extra_device_info and use_saved_extra_device_info)
+# =============================================================================
+
+class TestAbstractLoadStorage:
+    """Test AbstractLoad storage methods for extra device info."""
+
+    def create_load(self, **kwargs):
+        """Create a test load with default values."""
+        defaults = {
+            "name": "Test Load",
+            "device_type": "test_load",
+            CONF_POWER: 1500,
+        }
+        defaults.update(kwargs)
+
+        mock_home = MagicMock()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+
+        defaults["home"] = mock_home
+
+        return AbstractLoad(**defaults)
+
+    def test_update_to_be_saved_extra_device_info_basic(self):
+        """Test update_to_be_saved_extra_device_info saves basic fields."""
+        load = self.create_load()
+        load.num_on_off = 5
+        load.external_user_initiated_state = None
+        load.external_user_initiated_state_time = None
+        load.asked_for_reset_user_initiated_state_time = None
+        load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        data = {}
+        load.update_to_be_saved_extra_device_info(data)
+
+        # From AbstractDevice
+        assert data["num_on_off"] == 5
+        # From AbstractLoad - None values
+        assert data["external_user_initiated_state"] is None
+        assert data["external_user_initiated_state_time"] is None
+        assert data["asked_for_reset_user_initiated_state_time"] is None
+        assert data["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] is None
+
+    def test_update_to_be_saved_extra_device_info_with_external_state(self):
+        """Test update_to_be_saved_extra_device_info with external_user_initiated_state."""
+        load = self.create_load()
+        load.external_user_initiated_state = "ON_STATE"
+
+        data = {}
+        load.update_to_be_saved_extra_device_info(data)
+
+        assert data["external_user_initiated_state"] == "ON_STATE"
+
+    def test_update_to_be_saved_extra_device_info_with_datetime_fields(self):
+        """Test update_to_be_saved_extra_device_info stores datetime as string."""
+        load = self.create_load()
+        test_time = datetime(2026, 1, 24, 10, 30, 0, tzinfo=pytz.UTC)
+        load.external_user_initiated_state_time = test_time
+        load.asked_for_reset_user_initiated_state_time = test_time
+        load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = test_time
+
+        data = {}
+        load.update_to_be_saved_extra_device_info(data)
+
+        # Datetime fields should be stored as strings
+        assert data["external_user_initiated_state_time"] == str(test_time)
+        assert data["asked_for_reset_user_initiated_state_time"] == str(test_time)
+        assert data["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] == str(test_time)
+
+    def test_update_to_be_saved_extra_device_info_calls_super(self):
+        """Test update_to_be_saved_extra_device_info calls parent class method."""
+        load = self.create_load()
+        load.num_on_off = 10
+
+        data = {}
+        load.update_to_be_saved_extra_device_info(data)
+
+        # num_on_off from AbstractDevice.update_to_be_saved_extra_device_info
+        assert data["num_on_off"] == 10
+
+    def test_use_saved_extra_device_info_basic(self):
+        """Test use_saved_extra_device_info restores basic fields."""
+        load = self.create_load()
+
+        stored_info = {
+            "num_on_off": 6,
+            "external_user_initiated_state": None,
+            "external_user_initiated_state_time": None,
+            "asked_for_reset_user_initiated_state_time": None,
+            "asked_for_reset_user_initiated_state_time_first_cmd_reset_done": None,
+        }
+        load.use_saved_extra_device_info(stored_info)
+
+        # From AbstractDevice
+        assert load.num_on_off == 6
+        # From AbstractLoad
+        assert load.external_user_initiated_state is None
+        assert load.external_user_initiated_state_time is None
+        assert load.asked_for_reset_user_initiated_state_time is None
+        assert load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+    def test_use_saved_extra_device_info_with_external_state(self):
+        """Test use_saved_extra_device_info restores external_user_initiated_state."""
+        load = self.create_load()
+
+        stored_info = {
+            "external_user_initiated_state": "BOOST_MODE",
+        }
+        load.use_saved_extra_device_info(stored_info)
+
+        assert load.external_user_initiated_state == "BOOST_MODE"
+
+    def test_use_saved_extra_device_info_with_datetime_strings(self):
+        """Test use_saved_extra_device_info parses datetime strings."""
+        load = self.create_load()
+        test_time = datetime(2026, 1, 24, 10, 30, 0, tzinfo=pytz.UTC)
+
+        stored_info = {
+            "external_user_initiated_state_time": str(test_time),
+            "asked_for_reset_user_initiated_state_time": str(test_time),
+            "asked_for_reset_user_initiated_state_time_first_cmd_reset_done": str(test_time),
+        }
+        load.use_saved_extra_device_info(stored_info)
+
+        # Datetime fields should be parsed from strings
+        assert load.external_user_initiated_state_time == test_time
+        assert load.asked_for_reset_user_initiated_state_time == test_time
+        assert load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done == test_time
+
+    def test_use_saved_extra_device_info_missing_keys(self):
+        """Test use_saved_extra_device_info handles missing keys gracefully."""
+        load = self.create_load()
+
+        # Empty stored info - should use defaults
+        stored_info = {}
+        load.use_saved_extra_device_info(stored_info)
+
+        assert load.external_user_initiated_state is None
+        assert load.external_user_initiated_state_time is None
+        assert load.asked_for_reset_user_initiated_state_time is None
+        assert load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+    def test_roundtrip_storage(self):
+        """Test data can be saved and restored correctly (roundtrip)."""
+        load1 = self.create_load()
+        test_time = datetime(2026, 1, 24, 12, 0, 0, tzinfo=pytz.UTC)
+
+        # Set all fields
+        load1.num_on_off = 8
+        load1.external_user_initiated_state = "FORCE_ON"
+        load1.external_user_initiated_state_time = test_time
+        load1.asked_for_reset_user_initiated_state_time = test_time + timedelta(hours=1)
+        load1.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = test_time + timedelta(hours=2)
+
+        # Save to dict
+        saved_data = {}
+        load1.update_to_be_saved_extra_device_info(saved_data)
+
+        # Create new load and restore
+        load2 = self.create_load()
+        load2.use_saved_extra_device_info(saved_data)
+
+        # Verify all fields match
+        assert load2.num_on_off == 8
+        assert load2.external_user_initiated_state == "FORCE_ON"
+        assert load2.external_user_initiated_state_time == test_time
+        assert load2.asked_for_reset_user_initiated_state_time == test_time + timedelta(hours=1)
+        assert load2.asked_for_reset_user_initiated_state_time_first_cmd_reset_done == test_time + timedelta(hours=2)
+
+    def test_roundtrip_storage_with_none_values(self):
+        """Test roundtrip with None datetime values."""
+        load1 = self.create_load()
+
+        # Set mixed None and non-None values
+        load1.external_user_initiated_state = "TEST"
+        load1.external_user_initiated_state_time = None
+        load1.asked_for_reset_user_initiated_state_time = datetime(2026, 1, 24, 15, 0, 0, tzinfo=pytz.UTC)
+        load1.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        # Save to dict
+        saved_data = {}
+        load1.update_to_be_saved_extra_device_info(saved_data)
+
+        # Create new load and restore
+        load2 = self.create_load()
+        load2.use_saved_extra_device_info(saved_data)
+
+        # Verify fields
+        assert load2.external_user_initiated_state == "TEST"
+        assert load2.external_user_initiated_state_time is None
+        assert load2.asked_for_reset_user_initiated_state_time == datetime(2026, 1, 24, 15, 0, 0, tzinfo=pytz.UTC)
+        assert load2.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+    def test_use_saved_extra_device_info_calls_super(self):
+        """Test use_saved_extra_device_info calls parent class method."""
+        load = self.create_load()
+
+        stored_info = {
+            "num_on_off": 4,  # From AbstractDevice
+        }
+        load.use_saved_extra_device_info(stored_info)
+
+        # num_on_off from AbstractDevice.use_saved_extra_device_info
+        assert load.num_on_off == 4
+
+    def test_storage_preserves_timezone_info(self):
+        """Test that timezone information is preserved in storage."""
+        load = self.create_load()
+
+        # Use a specific timezone
+        test_time = datetime(2026, 1, 24, 10, 30, 0, tzinfo=pytz.UTC)
+        load.external_user_initiated_state_time = test_time
+
+        # Save
+        saved_data = {}
+        load.update_to_be_saved_extra_device_info(saved_data)
+
+        # Restore
+        load2 = self.create_load()
+        load2.use_saved_extra_device_info(saved_data)
+
+        # Verify timezone is preserved
+        assert load2.external_user_initiated_state_time is not None
+        assert load2.external_user_initiated_state_time.tzinfo is not None
+

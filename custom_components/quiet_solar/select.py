@@ -94,7 +94,7 @@ def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
     bistate_mode_description = QSSelectEntityDescription(
         key="bistate_mode",
         translation_key=device.get_select_translation_key(),
-        options= device.get_bistate_modes(),
+        get_available_options_fn=lambda device, key: device.get_bistate_modes(),
         qs_default_option="bistate_mode_default"
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))

@@ -646,12 +646,52 @@ class AbstractLoad(AbstractDevice):
 
         self.is_load_time_sensitive = False
 
+    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
+        super().update_to_be_saved_extra_device_info(data_to_update)
+        data_to_update["external_user_initiated_state"] = self.external_user_initiated_state
+        data_to_update["external_user_initiated_state_time"] = None
+        if self.external_user_initiated_state_time is not None:
+            data_to_update["external_user_initiated_state_time"] = f"{self.external_user_initiated_state_time}"
+
+        data_to_update["asked_for_reset_user_initiated_state_time"] = None
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            data_to_update["asked_for_reset_user_initiated_state_time"] = f"{self.asked_for_reset_user_initiated_state_time}"
+
+        data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = None
+        if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
+            data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
+
+    def use_saved_extra_device_info(self, stored_load_info: dict):
+        super().use_saved_extra_device_info(stored_load_info)
+        self.external_user_initiated_state = stored_load_info.get("external_user_initiated_state", None)
+
+        self.external_user_initiated_state_time  = stored_load_info.get("external_user_initiated_state_time", None)
+        if self.external_user_initiated_state_time is not None:
+            self.external_user_initiated_state_time = datetime.fromisoformat(stored_load_info.get("external_user_initiated_state_time", None))
+
+
+        self.asked_for_reset_user_initiated_state_time = stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            self.asked_for_reset_user_initiated_state_time = datetime.fromisoformat(stored_load_info.get("asked_for_reset_user_initiated_state_time", None))
+
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
+        if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
+            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = datetime.fromisoformat(stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None))
+
     def get_override_state(self):
+
+        overriden_state = self.external_user_initiated_state
+        if overriden_state is None:
+            ct = self.get_current_active_constraint()
+            if ct is not None:
+                if ct.load_info.get("originator",None) == "user_override":
+                    overriden_state = ct.load_param
+
         if self.asked_for_reset_user_initiated_state_time is not None:
             return "ASKED FOR RESET OVERRIDE"
-        if self.external_user_initiated_state is None:
+        if overriden_state is None:
             return "NO OVERRIDE"
-        return f"Override: {self.external_user_initiated_state}"
+        return f"Override: {overriden_state}"
 
     def is_time_sensitive(self):
 
