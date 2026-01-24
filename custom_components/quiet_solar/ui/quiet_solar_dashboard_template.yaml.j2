@@ -155,6 +155,11 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
             {% elif device.device_type == "pool" -%}
               {%- set ha_entity = device.ha_entities.get("qs_enable_device") %}
               {%- if  ha_entity != None %}
@@ -204,6 +209,11 @@ views:
               {{ "  icon: mdi:gauge" }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_mark_current_constraint_done") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
@@ -272,6 +282,11 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_load_reset_override_state") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
