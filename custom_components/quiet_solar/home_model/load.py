@@ -758,26 +758,35 @@ class AbstractLoad(AbstractDevice):
 
     def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint]) -> bool:
 
-        all_ok = True
-
         for new_ct in new_constraints:
             new_ct.add_or_update_load_info("originator", "agenda")
-            found = False
-            for i, ct in enumerate(self._constraints):
-                if ct.eq_no_current(new_ct):
-                    found = True
-                    break
-            if not found:
-                all_ok = False
-                break
 
-        if all_ok:
-            return False
-        
-        #ok there is an issue : we may remove all previous agenda constraints and add the new ones
-        # first remove all previous agenda constraints
-        self._constraints = [c for c in self._constraints if c.load_info is None or  c.load_info.get("originator", None) != "agenda"]
+        one_c_removed = False
+        for i, ct in enumerate(self._constraints):
+            if ct and ct.load_info is not None and ct.load_info.get("originator", None) == "agenda":
+                # find if we have a agenda one that is matching, if no : we kill it
+                found = False
+                for j, new_ct in enumerate(new_constraints):
+                    if new_ct is None:
+                        continue
+                    if ct.eq_no_current(new_ct):
+                        found = True
+                        new_constraints[j] = None # mark as found
+                if not found:
+                    # a not found calendar one : kill it calendar may have changed
+                    self._constraints[i] = None
+                    one_c_removed = True
+
+        new_constraints = [c for c in new_constraints if c is not None]
+
         res = False
+
+        if one_c_removed:
+            self._constraints = [c for c in self._constraints if c is not None]
+            self.set_live_constraints(time, self._constraints)
+            res = True
+
+
         for new_ct in new_constraints:
             res = self.push_live_constraint(time, new_ct) or res
 

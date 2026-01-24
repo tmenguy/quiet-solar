@@ -139,7 +139,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         """ execute the command on the system """
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
-
+        """ check the load activity and set proper constraints """
         do_force_next_solve = False
 
         bistate_mode = self.bistate_mode
@@ -175,7 +175,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 else:
 
                     for i, ct in enumerate(self._constraints):
-                        if ct.from_user and ct.load_param is not None:  # and ct.load_param == state.state:
+                        if ct.load_param is not None and ct.load_info is not None and ct.load_info.get("originator","") == "user_override":
                             # we do have already a constraint for this override state
                             override_constraint = ct
                             break
@@ -270,9 +270,26 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # remove all constraints if any ... except if we have a running override
             if do_push_constraint_after is not None:
                 # keep ONLY the override
-                if len(self._constraints) > 1:
+                found_override = False
+                removed_one = False
+                for i, ct in enumerate(self._constraints):
+                    if ct.load_param is not None and ct.load_info is not None and ct.load_info.get("originator",
+                                                                                                   "") == "user_override":
+                        # we do have already a constraint for this override state
+                        found_override = True
+                    else:
+                        # remove this constraint
+                        self._constraints[i] = None
+                        removed_one = True
+
+                if found_override:
+                    if removed_one:
+                        do_force_next_solve = True
+                        self._constraints = [c for c in self._constraints if c is not None]
+                        self.set_live_constraints(time, self._constraints)
+                else:
                     do_force_next_solve = True
-                self.set_live_constraints(time, [override_constraint])
+                    self.set_live_constraints(time, [override_constraint])
             else:
                 if len(self._constraints) > 0:
                     do_force_next_solve = True
