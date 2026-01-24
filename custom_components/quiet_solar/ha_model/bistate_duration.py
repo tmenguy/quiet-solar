@@ -144,6 +144,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         bistate_mode = self.bistate_mode
         override_constraint = None
+        do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
         if self.is_load_command_set(time) and self.support_user_override():
@@ -262,9 +263,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint")
                                 do_force_next_solve = True
 
-        do_push_constraint_after = None
-        if override_constraint is not None and override_constraint.end_of_constraint != DATETIME_MAX_UTC:
-            do_push_constraint_after = override_constraint.end_of_constraint + timedelta(seconds=1)
+                    if self.external_user_initiated_state is not None and self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
+                        do_push_constraint_after = self.external_user_initiated_state_time + timedelta(seconds=(3600.0*self.override_duration))
+
+                    if override_constraint is not None and override_constraint.end_of_constraint != DATETIME_MAX_UTC:
+                        do_push_constraint_after = override_constraint.end_of_constraint + timedelta(seconds=1)
 
         if bistate_mode == self._bistate_mode_off:
             # remove all constraints if any ... except if we have a running override
@@ -278,7 +281,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         # we do have already a constraint for this override state
                         found_override = True
                     else:
-                        # remove this constraint
+                        # remove this constraint that is not an override
                         self._constraints[i] = None
                         removed_one = True
 
@@ -288,8 +291,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self._constraints = [c for c in self._constraints if c is not None]
                         self.set_live_constraints(time, self._constraints)
                 else:
-                    do_force_next_solve = True
-                    self.set_live_constraints(time, [override_constraint])
+
+                    if override_constraint is not None:
+                        do_force_next_solve = True
+                        self.set_live_constraints(time, [override_constraint])
+                    else:
+                        if len(self._constraints) > 0:
+                            do_force_next_solve = True
+                        self.command_and_constraint_reset()
             else:
                 if len(self._constraints) > 0:
                     do_force_next_solve = True
@@ -335,6 +344,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 for ev in events:
                     start_schedule, end_schedule = ev
                     if start_schedule is not None and end_schedule is not None:
+
+                        if do_push_constraint_after is not None and end_schedule < do_push_constraint_after:
+                            continue
+
                         start_schedule = max(time, start_schedule)
                         if do_push_constraint_after is not None:
                             start_schedule = max(do_push_constraint_after, start_schedule)
@@ -344,8 +357,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         if bistate_mode == "bistate_mode_exact_calendar":
                             target_value = SOLVER_STEP_S*float((int(target_value)//SOLVER_STEP_S)) + SOLVER_STEP_S + 2
                         else:
-                            # bistate mode auto
-                            start_schedule = None
+                            # bistate mode auto, start should be None or after the overridden time if any
+                            start_schedule = do_push_constraint_after
+
                         ct = ConstraintItemType(start_schedule=start_schedule,
                                                 end_schedule=end_schedule,
                                                 target_value=target_value,
