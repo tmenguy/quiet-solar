@@ -317,7 +317,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     do_force_next_solve = True
                 self.command_and_constraint_reset()
 
-            _LOGGER.info(
+            _LOGGER.debug(
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")
 
         else:
@@ -335,7 +335,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                              has_user_forced_constraint=True,
                                              agenda_push=False)
                     constraints.append(ct)
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"check_load_activity_and_constraints: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}")
             elif bistate_mode == "bistate_mode_default":
                 if self.default_on_duration is not None and  self.default_on_finish_time is not None:
@@ -349,7 +349,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                                 has_user_forced_constraint=False,
                                                 agenda_push=True)
                         constraints.append(ct)
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         f"check_load_activity_and_constraints: bistate bistate_mode_default for load {self.name} {ct}")
             else:
                 events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
@@ -380,7 +380,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                                 has_user_forced_constraint=False,
                                                 agenda_push=True)
                         constraints.append(ct)
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             f"check_load_activity_and_constraints: bistate calendar {bistate_mode} for load {self.name} {ct}")
 
 
@@ -408,9 +408,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
                     else:
-                        do_force_next_solve = self.push_live_constraint(time, load_mandatory) or do_force_next_solve
+                        push_res = self.push_live_constraint(time, load_mandatory)
+                        do_force_next_solve = push_res or do_force_next_solve
+                        if push_res:
+                            _LOGGER.info(
+                                f"check_load_activity_and_constraints: bistate load {self.name} pushed non-agenda constraint {load_mandatory}")
 
                 if len(agend_cts) > 0:
-                     do_force_next_solve = self.push_agenda_constraints(time, agend_cts) or do_force_next_solve
+                    push_res = self.push_agenda_constraints(time, agend_cts)
+                    do_force_next_solve = push_res or do_force_next_solve
+                    if push_res:
+                        _LOGGER.info(
+                            f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}")
 
         return do_force_next_solve
