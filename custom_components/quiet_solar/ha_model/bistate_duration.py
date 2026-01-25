@@ -361,15 +361,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         if do_push_constraint_after is not None and end_schedule < do_push_constraint_after:
                             continue
 
-                        start_schedule = max(time, start_schedule)
+                        if end_schedule <= time:
+                            continue
+
+                        # start_schedule = max(time, start_schedule) don't do that the constraint has to be stable! for comparison in the push constraints
                         if do_push_constraint_after is not None:
                             start_schedule = max(do_push_constraint_after, start_schedule)
                         if start_schedule >= end_schedule:
                             continue
                         target_value = (end_schedule - start_schedule).total_seconds()
-                        if bistate_mode == "bistate_mode_exact_calendar":
-                            target_value = SOLVER_STEP_S*float((int(target_value)//SOLVER_STEP_S)) + SOLVER_STEP_S + 2
-                        else:
+                        if bistate_mode != "bistate_mode_exact_calendar":
                             # bistate mode auto, start should be None or after the overridden time if any
                             start_schedule = do_push_constraint_after
 

@@ -1218,7 +1218,8 @@ class AbstractLoad(AbstractDevice):
                     _LOGGER.info(f"{c.name} skipped because not mandatory")
                     c.skip = True
                     force_solving = True
-                elif c.is_mandatory and c.end_of_constraint <  time + end_constraint_min_tolerancy:
+                elif c.is_mandatory and c.end_of_constraint <  time + end_constraint_min_tolerancy and c.always_end_at_end_of_constraint is False:
+                    # c.always_end_at_end_of_constraint : means we will never push it ever
                     # a not met mandatory one! we should expand it or force it
                     duration_s = c.best_duration_extension_to_push_constraint(time, end_constraint_min_tolerancy)# extend if we continue to push it
                     new_constraint_end = time + duration_s
