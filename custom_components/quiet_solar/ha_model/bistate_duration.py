@@ -319,7 +319,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
             _LOGGER.debug(
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")
-
         else:
 
             constraints = []
