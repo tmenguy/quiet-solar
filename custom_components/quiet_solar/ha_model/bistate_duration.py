@@ -21,7 +21,7 @@ bistate_modes = [
 ]
 
 MAX_USER_OVERRIDE_DURATION_S = 8*3600
-USER_OVERRIDE_STATE_BACK_DURATION_S = 90
+USER_OVERRIDE_STATE_BACK_DURATION_S = 60
 
 ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push"], defaults=(None, None, 0.0, False, False))
 
@@ -182,7 +182,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             break
 
                     state = self.hass.states.get(self.bistate_entity)
-                    is_command_overridden = False
+                    is_command_overridden_state_changed = False
                     expected_state = "UNKNOWN"
                     expected_state_running = "UNKNOWN"
                     current_state = None
@@ -193,12 +193,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if current_state is not None:
 
                         if self.external_user_initiated_state is not None and current_state == self.external_user_initiated_state:
-                            # we are still in override ... all is good
-                            is_command_overridden = False
+                            # we are still in the same override ... all is good
+                            is_command_overridden_state_changed = False
                         elif self.external_user_initiated_state is not None and current_state != self.external_user_initiated_state:
                             # hum : we changed the state from the override ... it is like a new override
                             # should we wait a bit to see if the user is changing back the state ?
-                            is_command_overridden = True
+                            is_command_overridden_state_changed = True
                         else:
                             # no current override ... check if the command is overridden
                             expected_state_running = expected_state = None
@@ -219,26 +219,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                             if (expected_state is not None and current_state == expected_state) or (
                                     expected_state_running is not None and current_state == expected_state_running):
-                                is_command_overridden = False
+                                is_command_overridden_state_changed = False
                             else:
-                                is_command_overridden = True
+                                is_command_overridden_state_changed = True
 
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
                                 float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0):
                             # small time window after asking for reset, do not consider the command overridden
-                            if is_command_overridden is False:
-                                # great no more override already after the last ask to stop override, reset the timer
-                                self.asked_for_reset_user_initiated_state_time = None
-
                             # too soon to launch an override again
-                            is_command_overridden = False
+                            is_command_overridden_state_changed = False
                         else:
                             # long enough ask to check the fact that the override should be finished
                             self.asked_for_reset_user_initiated_state_time = None
 
-                    if is_command_overridden:
+                    if is_command_overridden_state_changed:
 
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}")
@@ -247,7 +243,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self.external_user_initiated_state = current_state
                         self.external_user_initiated_state_time = time
 
-                        # remove any overriden constraint if any
+                        # remove any overridden constraint if any
                         self.command_and_constraint_reset()  # remove any constraint if any we will add it back if needed below
 
                         # we will create a constraint if the asked state is not idle ...
