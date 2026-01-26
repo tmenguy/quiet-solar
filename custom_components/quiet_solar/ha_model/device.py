@@ -453,31 +453,37 @@ class HADeviceMixin:
         results: list[tuple[datetime, datetime]] = []
 
         # Optimization for max_number_of_events == 1: use calendar state directly
-        if max_number_of_events == 1:
-            state = self.hass.states.get(self.calendar)
-            state_attr = {}
-            if state is None or state.state in UNAVAILABLE_STATE_VALUES:
-                state = None
 
-            if state is not None:
-                state_attr = state.attributes
+        state = self.hass.states.get(self.calendar)
+        state_attr = {}
+        if state is None or state.state in UNAVAILABLE_STATE_VALUES:
+            state = None
 
-            event_start: str | None | datetime = state_attr.get("start_time", None)
-            event_end: str | None | datetime = state_attr.get("end_time", None)
+        if state is not None:
+            state_attr = state.attributes
 
-            if event_start is not None:
-                event_start = datetime.fromisoformat(event_start)
-                event_start = event_start.replace(tzinfo=None).astimezone(tz=pytz.UTC)
-            if event_end is not None:
-                event_end = datetime.fromisoformat(event_end)
-                event_end = event_end.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        event_start: str | None | datetime = state_attr.get("start_time", None)
+        event_end: str | None | datetime = state_attr.get("end_time", None)
 
-            if event_start is not None and event_end is not None:
-                # Check if the event is within our search period
-                if event_end > time and event_start < end_time:
-                    # Check if we should include a currently running event
-                    if give_currently_running_event or event_start > time:
+        start_set = set()
+
+        if event_start is not None:
+            event_start = datetime.fromisoformat(event_start)
+            event_start = event_start.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        if event_end is not None:
+            event_end = datetime.fromisoformat(event_end)
+            event_end = event_end.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
+        if event_start is not None and event_end is not None:
+            # Check if the event is within our search period
+            if event_end > time and event_start < end_time:
+                # Check if we should include a currently running event
+                if give_currently_running_event or event_start > time:
+                    if max_number_of_events == 1:
                         return [(event_start, event_end)]
+                    else:
+                        results.append((event_start, event_end))
+                        start_set.add(event_start)
 
                 # If the current state event doesn't match, we need to query the calendar
                 # Fall through to the calendar query below
@@ -501,6 +507,9 @@ class HADeviceMixin:
                     event_end = datetime.fromisoformat(event["end"])
                     event_end = event_end.astimezone(tz=pytz.UTC)
 
+                    if event_start in start_set:
+                        continue
+
                     # Skip past events
                     if event_end <= time:
                         continue
@@ -516,6 +525,7 @@ class HADeviceMixin:
                             continue
 
                     results.append((event_start, event_end))
+                    start_set.add(event_start)
 
                     # Check max number limit
                     if max_number_of_events is not None and max_number_of_events > 0:

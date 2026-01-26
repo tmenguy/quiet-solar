@@ -762,7 +762,7 @@ class AbstractLoad(AbstractDevice):
     #
     #     return res
 
-    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint]) -> bool:
+    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint|None]) -> bool:
 
         for new_ct in new_constraints:
             new_ct.add_or_update_load_info("originator", "agenda")
@@ -772,16 +772,26 @@ class AbstractLoad(AbstractDevice):
             if ct and ct.load_info is not None and ct.load_info.get("originator", None) == "agenda":
                 # find if we have a agenda one that is matching, if no : we kill it
                 found = False
-                for j, new_ct in enumerate(new_constraints):
-                    if new_ct is None:
-                        continue
+                for new_ct in new_constraints:
                     if ct.eq_no_current(new_ct):
                         found = True
-                        new_constraints[j] = None # mark as found
+                        break
                 if not found:
                     # a not found calendar one : kill it calendar may have changed
                     self._constraints[i] = None
                     one_c_removed = True
+
+        for i, new_ct in enumerate(new_constraints):
+            found = False
+            for ct in self._constraints:
+                if ct is None:
+                    continue
+                if ct.eq_no_current(new_ct):
+                    # it is already in the constraints don't add it back
+                    found = True
+                    break
+            if found:
+                new_constraints[i] = None  # mark as found
 
         new_constraints = [c for c in new_constraints if c is not None]
 

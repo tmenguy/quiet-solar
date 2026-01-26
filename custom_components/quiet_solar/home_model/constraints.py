@@ -322,7 +322,7 @@ class LoadConstraint(object):
             "artificial_step_to_final_value": self.artificial_step_to_final_value,
             "initial_value": self.initial_value,
             "current_value": self.current_value,
-            "target_value": self.target_value,
+            "target_value": self.requested_target_value,
             "start_of_constraint": f"{self.start_of_constraint}",
             "end_of_constraint": f"{self.end_of_constraint}",
             "support_auto": self.support_auto,
