@@ -193,7 +193,7 @@ async def test_home_update_loads_forbid_command(
 
     load = MagicMock()
     load.name = "forbid_load"
-    load.check_commands = AsyncMock(return_value=timedelta(seconds=0))
+    load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
     load.running_command_num_relaunch = 0
     load.force_relaunch_command = AsyncMock()
     load.is_load_active = MagicMock(return_value=True)

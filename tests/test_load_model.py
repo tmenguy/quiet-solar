@@ -1268,7 +1268,7 @@ class TestCheckCommands:
         load._enabled = False
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = await load.check_commands(time_now)
+        result, _ = await load.check_commands(time_now)
 
         assert result == timedelta(seconds=0)
 
@@ -1279,7 +1279,7 @@ class TestCheckCommands:
         load.running_command = None
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = await load.check_commands(time_now)
+        result, _ = await load.check_commands(time_now)
 
         assert result == timedelta(seconds=0)
 
@@ -1291,7 +1291,7 @@ class TestCheckCommands:
         load.running_command_last_launch = datetime.now(tz=pytz.UTC)
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = await load.check_commands(time_now)
+        result, _ = await load.check_commands(time_now)
 
         # Command should be acknowledged
         assert load.running_command is None

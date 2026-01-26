@@ -1657,7 +1657,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         added_quantity = initial_quantity_to_be_added - quantity_to_be_added
         out_constraint = self.shallow_copy_for_budget_delta_quantity(added_quantity)
 
-        _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_quantity}Wh or c {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
+        _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_quantity}Wh or s {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
 
         if min_idx_with_energy_impact > max_idx_with_energy_impact or max_idx_with_energy_impact < 0 or min_idx_with_energy_impact >= len(power_available_power):
             min_idx_with_energy_impact = max_idx_with_energy_impact = -1

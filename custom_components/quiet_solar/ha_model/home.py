@@ -33,7 +33,7 @@ from ..ha_model.heat_pump import QSHeatPump
 
 from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
 from ..ha_model.solar import QSSolar
-from ..home_model.commands import LoadCommand, CMD_IDLE
+from ..home_model.commands import LoadCommand, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE
 from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm, \
     max_amps
 from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
@@ -357,6 +357,8 @@ class QSHome(QSDynamicGroup):
         self.add_device(self)
 
         self._init_completed = False
+
+        self._switch_to_off_grid_launched : datetime | None = None
 
         self._last_persons_car_allocation : dict[str,QSPerson] = {}
         self._last_persons_car_allocation_time : datetime | None = None
@@ -877,6 +879,12 @@ class QSHome(QSDynamicGroup):
                         continue
                     # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
                     await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
+
+                if self.battery is not None:
+                    await self.battery.launch_command(time=time, command=CMD_GREEN_CHARGE_AND_DISCHARGE, ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode")
+
+                # here we should wait for each load to be idle
+                self._switch_to_off_grid_launched = time
 
             # force solve
             self.force_next_solve()
@@ -2108,6 +2116,62 @@ class QSHome(QSDynamicGroup):
                 self._compute_non_controlled_forecast_intl(time)
 
 
+    async def finish_off_grid_switch(self, time: datetime) -> tuple[bool, bool]:
+
+        if self._switch_to_off_grid_launched is None:
+            return True, False
+
+        if (time - self._switch_to_off_grid_launched) > timedelta(minutes=3):
+            self._switch_to_off_grid_launched = None
+            return True, True
+
+        all_load_ok = await self.check_loads_commands(time)
+
+        if all_load_ok:
+            self._switch_to_off_grid_launched = None
+            return True, True
+
+        return False, False
+
+    async def check_loads_commands(self, time: datetime) -> bool:
+
+        if self.home_mode is None or self.home_mode in [
+            QSHomeMode.HOME_MODE_OFF.value,
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
+            ]:
+            return True
+
+        if await self.finish_setup(time) is False:
+            _LOGGER.info("update_loads: Home not finished setup, skipping")
+            return False
+
+        if self.battery is not None:
+            all_extended_loads: list[AbstractDevice] = [self.battery]
+            all_extended_loads.extend(self._all_loads)
+        else:
+            all_extended_loads = self._all_loads
+
+        if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
+            all_extended_loads = self._chargers
+
+        all_ok = True
+        for load in all_extended_loads:
+
+            try:
+                wait_time, command_acked_or_good = await load.check_commands(time=time)
+                if command_acked_or_good is False:
+                    all_ok = False
+                if wait_time > timedelta(seconds=45):
+                    if load.running_command_num_relaunch < 3:
+                        await load.force_relaunch_command(time)
+                    else:
+                        # we have an issue with this command ....
+                        pass
+            except Exception as err:
+                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
+
+        return all_ok
+
     async def update_loads(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
@@ -2120,58 +2184,49 @@ class QSHome(QSDynamicGroup):
             _LOGGER.info("update_loads: Home not finished setup, skipping")
             return
 
-        try:
-            await self.update_loads_constraints(time)
-        except Exception as err:
-            _LOGGER.error(f"Error updating loads constraints {err}", exc_info=True, stack_info=True)
-
-        if self.battery is not None:
-            all_loads = self._all_loads
-            all_extended_loads : list[AbstractDevice] = [self.battery]
-            all_extended_loads.extend(self._all_loads)
-        else:
-            all_loads = all_extended_loads = self._all_loads
+        finished_grid_switch, just_switched =  await self.finish_off_grid_switch(time)
+        if finished_grid_switch is False:
+            _LOGGER.info("update_loads: Off grid switch not finished, skipping")
+            return
 
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
-            all_loads = all_extended_loads = self._chargers
+            all_loads  = self._chargers
+        else:
+            all_loads = self._all_loads
 
-        for load in all_extended_loads:
-
+        if just_switched is True:
+            do_force_solve = True
+        else:
             try:
-                wait_time = await load.check_commands(time=time)
-                if wait_time > timedelta(seconds=45):
-                    if load.running_command_num_relaunch < 3:
-                        await load.force_relaunch_command(time)
-                    else:
-                        # we have an issue with this command ....
-                        pass
+                await self.update_loads_constraints(time)
             except Exception as err:
-                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
+                _LOGGER.error(f"Error updating loads constraints {err}", exc_info=True, stack_info=True)
 
+            await self.check_loads_commands(time)
 
-        do_force_solve = False
-        for load in all_loads:
+            do_force_solve = False
+            for load in all_loads:
 
-            if load.is_load_active(time) is False:
-                continue
+                if load.is_load_active(time) is False:
+                    continue
 
-            try:
-                # need to add this self._update_step_s to add a tolerancy for the mandatory not met constraint, to not
-                # send an unwanted command (see bellow while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
-                # to not accidentaly send an idle command on an unfinished command
-                if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
-                    do_force_solve = True
-            except Exception as err:
-                _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=True, stack_info=True)
+                try:
+                    # need to add this self._update_step_s to add a tolerancy for the mandatory not met constraint, to not
+                    # send an unwanted command (see bellow while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+                    # to not accidentaly send an idle command on an unfinished command
+                    if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
+                        do_force_solve = True
+                except Exception as err:
+                    _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=True, stack_info=True)
+
+            if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
+                do_force_solve = True
 
 
         active_loads = []
         for load in all_loads:
             if load.is_load_active(time):
                 active_loads.append(load)
-
-        if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
-            do_force_solve = True
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 

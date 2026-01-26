@@ -771,7 +771,9 @@ class PeriodSolver(object):
             # for non-mandatory constraints, we will try to cap the commands sent to the battery so it can charge more
 
             while True:
-                # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
+                # check battery: if we give back to grid and battery is full:
+                # we should consume more from the grid to avoid giving back to grid,
+                # so we should not discharge the battery
                 to_shave_segment, energy_delta = self._prepare_battery_segmentation()
 
                 if to_shave_segment is None:

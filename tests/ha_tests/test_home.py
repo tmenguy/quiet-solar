@@ -375,6 +375,9 @@ async def test_home_off_grid_limits_and_reset(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
+    # Set home_mode to allow solar_plant and battery properties to return the mocked values
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
     home.physical_solar_plant = MagicMock(
         solar_production=3000.0,
         solar_max_output_power_value=2500.0,
@@ -383,6 +386,7 @@ async def test_home_off_grid_limits_and_reset(
     home.physical_battery = MagicMock(
         battery_can_discharge=MagicMock(return_value=True),
         get_max_discharging_power=MagicMock(return_value=2000.0),
+        launch_command=AsyncMock(),
     )
 
     load = MagicMock()
@@ -565,7 +569,7 @@ async def test_home_update_loads_solver_path(
 
     load = MagicMock()
     load.name = "Load 1"
-    load.check_commands = AsyncMock(return_value=timedelta(seconds=0))
+    load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
     load.running_command_num_relaunch = 0
     load.force_relaunch_command = AsyncMock()
     load.is_load_active = MagicMock(return_value=True)
@@ -737,7 +741,7 @@ async def test_home_update_loads_relaunch_and_forbid(
 
     load = MagicMock()
     load.name = "Load 2"
-    load.check_commands = AsyncMock(return_value=timedelta(seconds=60))
+    load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
     load.running_command_num_relaunch = 0
     load.force_relaunch_command = AsyncMock()
     load.is_load_active = MagicMock(return_value=True)
@@ -1224,7 +1228,7 @@ async def test_home_update_loads_no_solver(
     load = MagicMock()
     load.name = "load1"
     load.running_command_num_relaunch = 0
-    load.check_commands = AsyncMock(return_value=timedelta(seconds=60))
+    load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
     load.force_relaunch_command = AsyncMock()
     load.is_load_active = MagicMock(return_value=True)
     load.update_live_constraints = AsyncMock(return_value=False)
@@ -1602,7 +1606,7 @@ async def test_home_update_loads_error_paths(
     inactive_load = MagicMock()
     inactive_load.name = "inactive"
     inactive_load.running_command_num_relaunch = 3
-    inactive_load.check_commands = AsyncMock(return_value=timedelta(seconds=60))
+    inactive_load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
     inactive_load.is_load_active = MagicMock(return_value=False)
     inactive_load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
     inactive_load.get_current_active_constraint = MagicMock(return_value=None)
@@ -1612,7 +1616,7 @@ async def test_home_update_loads_error_paths(
     active_load = MagicMock()
     active_load.name = "active"
     active_load.running_command_num_relaunch = 3
-    active_load.check_commands = AsyncMock(return_value=timedelta(seconds=60))
+    active_load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
     active_load.is_load_active = MagicMock(return_value=True)
     active_load.update_live_constraints = AsyncMock(side_effect=RuntimeError("boom"))
     active_load.is_load_has_a_command_now_or_coming = MagicMock(return_value=True)
@@ -1646,7 +1650,7 @@ async def test_home_update_loads_charger_only(
     charger = MagicMock()
     charger.name = "charger"
     charger.running_command_num_relaunch = 0
-    charger.check_commands = AsyncMock(return_value=timedelta(seconds=0))
+    charger.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
     charger.is_load_active = MagicMock(return_value=False)
     charger.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
     charger.get_current_active_constraint = MagicMock(return_value=None)

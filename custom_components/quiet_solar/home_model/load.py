@@ -491,12 +491,14 @@ class AbstractDevice(object):
 
         return self.running_command is None and self.current_command is not None
 
-    async def check_commands(self, time: datetime) -> timedelta:
+    async def check_commands(self, time: datetime) -> tuple[timedelta, bool]:
 
         res = timedelta(seconds=0)
 
         if self.qs_enable_device is False:
-            return res
+            return res, True
+
+        command_acked_or_good = True
 
         if self.running_command is not None:
             _LOGGER.info(
@@ -504,6 +506,7 @@ class AbstractDevice(object):
 
             is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set is None:
+                command_acked_or_good = False
                 # impossible to run this command for this load ...
                 self.running_command_num_relaunch_after_invalid += 1
                 _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
@@ -513,14 +516,17 @@ class AbstractDevice(object):
 
             if is_command_set is True:
                 self._ack_command(time, self.running_command)
+                command_acked_or_good = True
             elif self.running_command_last_launch is not None:
                 res = time - self.running_command_last_launch
+                command_acked_or_good = False
 
 
         if self.running_command is None and self._stacked_command is not None:
             await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
+            command_acked_or_good = False
 
-        return res
+        return res, command_acked_or_good
 
     async def force_relaunch_command(self, time: datetime):
         if self.qs_enable_device is False:
