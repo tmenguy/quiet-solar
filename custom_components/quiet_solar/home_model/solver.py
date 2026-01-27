@@ -779,7 +779,7 @@ class PeriodSolver(object):
                     max_power_to_deplete = 0.0
                     additional_energy_to_deplete = 0.0
                 else:
-                    additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
+                    additional_energy_to_deplete = 0.0 - (0.8*battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it, 80% of battery usage
                     max_power_to_deplete = self._battery.get_max_discharging_power()
 
         # we can use battery depletion only there
@@ -919,15 +919,16 @@ class PeriodSolver(object):
 
         additional_energy_to_deplete = 0.0
         max_power_to_deplete = 0.0
-        if is_off_grid:
-            if self._battery is not None:
-                battery_min = np.min(battery_charge)
-                if self._battery.is_value_empty(battery_min*0.8):
-                    max_power_to_deplete = 0.0
-                    additional_energy_to_deplete = 0.0
-                else:
-                    additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
-                    max_power_to_deplete = self._battery.get_max_discharging_power()
+        # if is_off_grid:
+        #     if self._battery is not None:
+        #         # Do we need to really consume battery for this in off grid mode?
+        #         battery_min = np.min(battery_charge)
+        #         if self._battery.is_value_empty(battery_min*0.8):
+        #             max_power_to_deplete = 0.0
+        #             additional_energy_to_deplete = 0.0
+        #         else:
+        #             additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
+        #             max_power_to_deplete = self._battery.get_max_discharging_power()
 
 
         self._allocate_constraints(constraints=constraints,
