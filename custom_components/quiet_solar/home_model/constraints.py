@@ -654,7 +654,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 self.load.current_command.power_consign / 3600.0) + self.current_value
 
 
-    def _num_command_state_change_and_empty_inner_commands(self, out_commands: list[LoadCommand | None]):
+    def _num_command_state_change_and_empty_inner_commands(self, out_commands: list[LoadCommand | None], first_slot:int, last_slot:int) -> tuple[int, list[list[int]], bool, LoadCommand | None]:
+
+        # we give back the first empty command only if just before the first slot there was a non empty command, else we don't give it back, it is by design
+
         num = 0
         prev_cmd = None
         empty_cmds = []
@@ -665,15 +668,20 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if len(out_commands) > 0:
 
-            if self.load and self.load.current_command:
-                start_cmd = self.load.current_command
+            if first_slot == 0:
+                if self.load and self.load.current_command:
+                    start_cmd = self.load.current_command
+            else:
+                start_cmd = out_commands[first_slot - 1]
 
             if start_cmd and not start_cmd.is_off_or_idle():
-                prev_cmd = True
+                prev_cmd = start_cmd
 
-            for i, cmd in enumerate(out_commands):
+            for i in range(first_slot, last_slot + 1):
+                cmd = out_commands[i]
                 if (cmd is None and prev_cmd is not None) or (cmd is not None and prev_cmd is None):
-                    if i == 0:
+                    # this is a state change, so it we started with a non switch and empty : we won't output the first empty segment
+                    if i == first_slot:
                         start_witch_switch = True
                     num += 1
                     if cmd is None:
@@ -688,7 +696,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             # do not add the last one as empty : it is only for empty commands
             # if current_empty is not None:
-            #    current_empty[1] = len(out_commands) - 1
+            #    current_empty[1] = last_slot
             #    empty_cmds.append(current_empty)
 
         return num, empty_cmds, start_witch_switch, start_cmd
@@ -737,10 +745,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         return delta_quantity, durations_s, False
 
 
-    def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, budgeting_quantity_to_be_added):
+    def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, budgeting_quantity_to_be_added, first_slot: int, last_slot: int) -> float:
 
         if self.load.num_max_on_off is not None and self.support_auto is False:
-            num_command_state_change, inner_empty_cmds, start_witch_switch, start_cmd = self._num_command_state_change_and_empty_inner_commands(out_commands)
+            num_command_state_change, inner_empty_cmds, start_witch_switch, start_cmd = self._num_command_state_change_and_empty_inner_commands(out_commands, first_slot, last_slot)
             num_allowed_switch = self.load.num_max_on_off - self.load.num_on_off
             num_removed = 0
 
@@ -754,15 +762,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 if start_witch_switch and len(inner_empty_cmds) > 0:
                     # we are starting with a switch...can we try to not do it?
-                    if inner_empty_cmds[0][0] == 0:
+                    if inner_empty_cmds[0][0] == first_slot:
                         # we start by a empty : do we need to stay on?
-                        rge = [0, inner_empty_cmds[0][1]]
+                        rge = [first_slot, inner_empty_cmds[0][1]]
                         if start_cmd is None:
                             start_cmd = self._power_sorted_cmds[0]
                         cmd_to_push = copy_command(start_cmd)
                     else:
                         # we start by a true command, do we want to continue to be stopped?
-                        rge = [0, max(0, inner_empty_cmds[0][0]-1)]
+                        rge = [first_slot, max(first_slot, inner_empty_cmds[0][0]-1)]
                         cmd_to_push = None
 
 
@@ -785,12 +793,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                                                         cmd_to_push)
                         budgeting_quantity_to_be_added += delta_quantity
 
-                        if inner_empty_cmds[0] == 0:
+                        if cmd_to_push is None:
+                            # extend the first inner empty command
+                            inner_empty_cmds[0][0] = first_slot
+                        else:
                             # ok done ... we have removed the first empty command
                             inner_empty_cmds.pop(0)
-                        else:
-                            # extend the first inner empty command
-                            inner_empty_cmds[0][0] = 0
+
 
                         # delta_quantity is positive ... we have removed a command, we have more quantity to add
                         # if negative ... the contrary we have added a command we will need to remove some quantity
@@ -811,10 +820,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     for empty_cmd in sorted_inner_empty_cmds:
                         # if we start with a non switch and the first is empty : it means the previous was empty so replacing it will actually NOT remove any switch
-                        if empty_cmd[0] == 0 and start_witch_switch is False:
+                        if empty_cmd[0] == first_slot and start_witch_switch is False:
                             continue
 
-                        if empty_cmd[0] == 0:
+                        if empty_cmd[0] == first_slot:
                             start_witch_switch = False
 
                         num_removed += 1
@@ -856,28 +865,28 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     for do_invert in [False, True]:
 
                         if do_invert:
-                            start_recovery_idx = len(out_commands) -1
+                            start_recovery_idx = last_slot
                         else:
-                            start_recovery_idx = 0
+                            start_recovery_idx = first_slot
 
                         if start_witch_switch is False and do_invert is False:
-                            # we cannot replace at start idx 0 as it would add a switch
+                            # we cannot replace at start idx first_slot as it would add a switch
                             # find a transition
-                            if is_cmd_to_be_replaced(0):
+                            if is_cmd_to_be_replaced(first_slot):
                                 # find a transition
-                                start_recovery_idx = len(out_commands)
-                                for i in range(len(out_commands)):
+                                start_recovery_idx = last_slot + 1
+                                for i in range(first_slot, last_slot + 1):
                                     if not is_cmd_to_be_replaced(i):
                                         start_recovery_idx = i
                                         break
 
-                                if start_recovery_idx >= len(out_commands) - 1:
+                                if start_recovery_idx >= last_slot:
                                     break
 
                         if do_invert is False:
-                            rg = range(start_recovery_idx, len(out_commands))
+                            rg = range(start_recovery_idx, last_slot + 1)
                         else:
-                            rg = range(start_recovery_idx, -1, -1)
+                            rg = range(start_recovery_idx, first_slot - 1, -1)
 
                         for i in rg:
 
@@ -1721,7 +1730,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         _LOGGER.error(
                             f"compute_best_period_repartition: no power sorted commands for mandatory per price repartition {self.name}")
 
-            quantity_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, quantity_to_be_added)
+            quantity_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, quantity_to_be_added, first_slot, last_slot)
             final_ret = quantity_to_be_added <= 0.0
 
 

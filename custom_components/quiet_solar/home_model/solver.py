@@ -769,9 +769,18 @@ class PeriodSolver(object):
             # the current battery is already in teh available power : the most important load will use it first
             # but as we are in off grid : now way we can use grid power
             always_use_available_only_power = True
+
+
+        if is_off_grid:
             if self._battery is not None:
-                additional_energy_to_deplete = 0.0 - self._battery.get_available_energy()  # in Wh, negative value to cosume it
-                max_power_to_deplete = self._battery.get_max_discharging_power()
+                battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+                battery_min = np.min(battery_charge)
+                if self._battery.is_value_empty(battery_min*0.8):
+                    max_power_to_deplete = 0.0
+                    additional_energy_to_deplete = 0.0
+                else:
+                    additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
+                    max_power_to_deplete = self._battery.get_max_discharging_power()
 
         # we can use battery depletion only there
         self._allocate_constraints(constraints=constraints,
