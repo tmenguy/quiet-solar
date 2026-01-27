@@ -282,7 +282,7 @@ def _make_constraint(
         "load_param": "power",
         "load_info": {"phase": "A", "index": 1},
         "from_user": True,
-        "artificial_step_to_final_value": 150.0,
+        "artificial_step_to_final_value": None,
         "type": CONSTRAINT_TYPE_MANDATORY_END_TIME,
         "degraded_type": CONSTRAINT_TYPE_FILLER,
         "start_of_constraint": time_now - timedelta(hours=2),

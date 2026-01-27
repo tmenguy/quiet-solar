@@ -1862,6 +1862,90 @@ class TestSolver(TestCase):
         assert transition_limited == 2
         assert transition_unlimited > transition_limited
 
+    def test_off_grid_battery_depletion_respects_min_soc(self):
+        dt = datetime(year=2024, month=6, day=1, hour=6, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+        start_time = dt
+        num_hours = 8
+        end_time = dt + timedelta(hours=num_hours)
+
+        tariffs = 0.20 / 1000.0
+
+        battery = Battery(name="test_battery")
+        battery.capacity = 8000  # 8kWh
+        battery.max_charging_power = 3000  # 3kW
+        battery.max_discharging_power = 3000  # 3kW
+        battery.min_charge_SOC_percent = 20.0
+        battery.max_charge_SOC_percent = 100.0
+        battery.min_soc = battery.min_charge_SOC_percent / 100.0
+        battery.max_soc = battery.max_charge_SOC_percent / 100.0
+        battery._current_charge_value = battery.get_value_full()
+
+        heater = TestLoad(name="heater")
+        washer = TestLoad(name="washer")
+
+        heater_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=heater,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+            end_of_constraint=dt + timedelta(hours=6),
+            initial_value=0,
+            target_value=4 * 3600,  # 4 hours runtime
+            power=2000,
+            support_auto=False,
+        )
+        heater.push_live_constraint(dt, heater_constraint)
+
+        washer_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=dt,
+            load=washer,
+            type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+            end_of_constraint=dt + timedelta(hours=6),
+            initial_value=0,
+            target_value=3 * 3600,  # 3 hours runtime
+            power=1500,
+            support_auto=False,
+        )
+        washer.push_live_constraint(dt, washer_constraint)
+
+        pv_forecast = [(dt + timedelta(hours=h), 100) for h in range(num_hours)]
+        unavoidable_consumption_forecast = [
+            (dt + timedelta(hours=h), 500) for h in range(num_hours)
+        ]
+
+        s = PeriodSolver(
+            start_time=start_time,
+            end_time=end_time,
+            tariffs=tariffs,
+            actionable_loads=[heater, washer],
+            battery=battery,
+            pv_forecast=pv_forecast,
+            unavoidable_consumption_forecast=unavoidable_consumption_forecast,
+        )
+
+        load_commands, battery_commands = s.solve(is_off_grid=True, with_self_test=True)
+
+        assert load_commands is not None
+        assert battery_commands is not None
+        assert s._battery_power_external_consumption_for_test is not None
+        assert any(
+            power < -1e-3 for power in s._battery_power_external_consumption_for_test
+        )
+
+        battery_charge = battery._current_charge_value
+        min_battery_charge = battery_charge
+        for power, duration_s in zip(
+            s._battery_power_external_consumption_for_test, s._durations_s
+        ):
+            battery_charge += (power * float(duration_s)) / 3600.0
+            min_battery_charge = min(min_battery_charge, battery_charge)
+
+        min_allowed = battery.get_value_empty()
+        assert min_battery_charge >= min_allowed - 1e-3
+        assert (
+            min_battery_charge
+            <= battery._current_charge_value - (0.5 * battery.capacity)
+        )
+
 
 
 

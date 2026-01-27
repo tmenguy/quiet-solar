@@ -188,7 +188,6 @@ class QSBattery(HADeviceMixin, Battery):
                     res = None
                     _LOGGER.warning(f"get_max_discharging_power: battery NONE {self.max_discharge_number}")
 
-
         return res
 
     def get_max_charging_power(self):
@@ -213,8 +212,6 @@ class QSBattery(HADeviceMixin, Battery):
 
 
         return res
-
-
 
     async def set_max_charging_power(self, power: float | None = None, blocking: bool = False):
         if self.max_charge_number is None or power is None:
@@ -262,30 +259,8 @@ class QSBattery(HADeviceMixin, Battery):
 
         return self.current_command.power_consign
 
-
     def battery_can_discharge(self):
         return self.battery_get_current_possible_max_discharge_power() > 0.0
-
-    def battery_get_current_possible_max_discharge_power(self) -> float:
-
-        current_charge = self.current_charge
-
-        # unknown ... return max discharge by default
-        if current_charge is None:
-            return self.max_discharging_power
-
-        if self.is_value_empty(current_charge):
-            return 0.0
-
-        max_discharge = self.get_max_discharging_power()
-
-        if max_discharge is None:
-            return self.max_discharging_power
-
-        if max_discharge == 0.0:
-            return 0.0
-
-        return max_discharge
 
     def get_platforms(self):
         parent = super().get_platforms()

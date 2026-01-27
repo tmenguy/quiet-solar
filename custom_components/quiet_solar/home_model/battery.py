@@ -34,7 +34,10 @@ class Battery(AbstractDevice):
         return False
 
 
-    def get_best_charge_power(self, power_in: float,
+
+
+    def get_best_charge_power(self,
+                              power_in: float,
                               solar_production: float,
                               max_inverter_dc_to_ac_power: float | None,
                               duration_s: float,
@@ -84,7 +87,8 @@ class Battery(AbstractDevice):
         return self.min_soc * self.capacity
 
 
-    def get_best_discharge_power(self, power_out: float,
+    def get_best_discharge_power(self,
+                                 power_out: float | None,
                                  solar_production: float,
                                  max_inverter_dc_to_ac_power: float | None,
                                  duration_s: float,
@@ -116,4 +120,36 @@ class Battery(AbstractDevice):
 
         return discharging_power
 
+    def get_available_energy(self):
+        current_charge = self.current_charge
 
+        if current_charge is None:
+            return 0.0
+
+        return max(0.0, (current_charge - (self.min_soc * self.capacity)) )
+
+    def battery_get_current_possible_max_discharge_power(self) -> float:
+
+        current_charge = self.current_charge
+
+        # unknown ... return max discharge by default
+        if current_charge is None:
+            return self.max_discharging_power
+
+        if self.is_value_empty(current_charge):
+            return 0.0
+
+        max_discharge = self.get_max_discharging_power()
+
+        if max_discharge is None:
+            return self.max_discharging_power
+
+        if max_discharge == 0.0:
+            return 0.0
+
+        return max_discharge
+
+    def get_max_discharging_power(self) -> float | None:
+        if self.max_discharging_power == MAX_POWER_INFINITE:
+            return None
+        return self.max_discharging_power

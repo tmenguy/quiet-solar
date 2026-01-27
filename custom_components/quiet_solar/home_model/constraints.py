@@ -300,8 +300,12 @@ class LoadConstraint(object):
         output = other_constraint_class(time=time, load=self.load, **kwargs)
 
         output.target_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.target_value))
+        output.requested_target_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.requested_target_value))
         output.initial_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.initial_value))
         output.current_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.current_value))
+
+        if self.artificial_step_to_final_value is not None:
+            output.artificial_step_to_final_value = output.convert_energy_to_target_value(self.convert_target_value_to_energy(self.artificial_step_to_final_value))
 
         # redo a clean update so the constructor can properly do its job
         data = output.to_dict()
@@ -574,9 +578,11 @@ class LoadConstraint(object):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]
+                                        time_slots: list[datetime],
+                                        additional_available_energy_to_deplete:float=0.0,
+                                        max_power_to_deplete:float=0.0
                                         ) -> tuple[
-        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int]:
+        Self, float,  bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
         """ Compute the best repartition of the constraint over the given period."""
 
     @abstractmethod
@@ -1290,13 +1296,17 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         power_slots_duration_s: npt.NDArray[np.float64],
                                         prices: npt.NDArray[np.float64],
                                         prices_ordered_values: list[float],
-                                        time_slots: list[datetime]
+                                        time_slots: list[datetime],
+                                        additional_available_energy_to_deplete: float = 0.0,
+                                        max_power_to_deplete: float = 0.0
                                         ) -> tuple[
-        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int]:
+        Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
 
         # force to only use solar power for non mandatory constraints
         if self.is_mandatory is False:
             do_use_available_power_only = True
+
+        remaining_additional_available_energy_to_deplete = additional_available_energy_to_deplete
 
         has_a_proper_end_time = False
         if self.end_of_constraint != DATETIME_MAX_UTC:
@@ -1351,8 +1361,32 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 has_a_cmd = True
 
-                as_fast_power = power_sorted_cmds[-1].power_consign
-                as_fast_cmd_idx = len(power_sorted_cmds) - 1
+                additional_available_power = 0.0
+                if remaining_additional_available_energy_to_deplete < 0:
+                    additional_available_power = min(max_power_to_deplete,
+                                                     (0.0 - remaining_additional_available_energy_to_deplete) * 3600.0 /
+                                                     power_slots_duration_s[i])
+
+                if power_available_power[i] < 0:
+                    additional_available_power -= power_available_power[i]
+
+                if do_use_available_power_only:
+                    if power_sorted_cmds[0].power_consign + power_piloted_delta > additional_available_power:
+                        # even the smallest command is too big for the available power
+                        continue
+
+                if do_use_available_power_only:
+                    # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
+                    j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - power_piloted_delta)
+                    if j is None:
+                        as_fast_cmd_idx = 0
+                    else:
+                        as_fast_cmd_idx = j
+                else:
+                    as_fast_cmd_idx = len(power_sorted_cmds) - 1
+
+                as_fast_power = power_sorted_cmds[as_fast_cmd_idx].power_consign
+                as_fast_cmd_idx = as_fast_cmd_idx
 
                 if self.support_auto:
                     as_fast_cmd = copy_command_and_change_type(cmd=power_sorted_cmds[as_fast_cmd_idx],
@@ -1368,6 +1402,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                 min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+
+                truly_consumed_power = power_available_power[i] + out_power[i]
+
+                if truly_consumed_power >= 0:
+                    remaining_additional_available_energy_to_deplete += (truly_consumed_power * power_slots_duration_s[i]) / 3600.0
 
                 if quantity_to_be_added <= 0.0:
                     break
@@ -1449,6 +1488,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             has_a_cmd = False
             for i_sorted in sorted_available_power:
 
+
                 i = i_sorted + first_slot
                 available_power = float(power_available_power[i])
 
@@ -1459,8 +1499,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     continue
 
                 has_a_cmd = True
+
+                additional_available_power = 0.0
+                if remaining_additional_available_energy_to_deplete < 0:
+                    additional_available_power = min(max_power_to_deplete,
+                                                     (0.0 - remaining_additional_available_energy_to_deplete) * 3600.0 /
+                                                     float(power_slots_duration_s[i]))
+
                 # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
-                j = self._get_lower_consign_idx_for_power(power_sorted_cmds, 0.0 - available_power - power_piloted_delta)
+                j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - available_power - power_piloted_delta)
 
                 if j is not None:
 
@@ -1477,6 +1524,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                     min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+
+                    truly_consumed_power = power_available_power[i] + out_power[i]
+
+                    if truly_consumed_power >= 0:
+                        remaining_additional_available_energy_to_deplete += (truly_consumed_power *
+                                                                             power_slots_duration_s[i]) / 3600.0
 
                     if quantity_to_be_added <= 0.0:
                         break
@@ -1541,8 +1594,23 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                         f"compute_best_period_repartition: price optimizer from {out_commands[i]} to {new_cmd}")
 
                                 out_commands[i] = new_cmd
+
+                                truly_consumed_power_before = power_available_power[i] + out_power[i]
+                                if truly_consumed_power_before >= 0:
+                                    remaining_additional_available_energy_to_deplete -= (truly_consumed_power_before *
+                                                                                         power_slots_duration_s[
+                                                                                             i]) / 3600.0
+
                                 out_power[i] = power_to_add
                                 out_power_idxs[i] = power_to_add_idx
+
+                                truly_consumed_power = power_available_power[i] + out_power[i]
+                                if truly_consumed_power >= 0:
+                                    remaining_additional_available_energy_to_deplete += (truly_consumed_power *
+                                                                                         power_slots_duration_s[
+                                                                                             i]) / 3600.0
+
+
                                 quantity_to_be_added += prev_quantity - quantity_to_add
                                 max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                                 min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
@@ -1617,6 +1685,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     # add back the previously removed energy or time
                                     quantity_to_be_added += self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
 
+                                    truly_consumed_power_before = power_available_power[i] + out_power[i]
+                                    if truly_consumed_power_before >= 0:
+                                        remaining_additional_available_energy_to_deplete -= (truly_consumed_power_before *power_slots_duration_s[i]) / 3600.0
+
                                 # reduce command according to the amps budgeted consumption
                                 power_cmd_idx = min(fill_power_idx, len(power_sorted_cmds) - 1)
 
@@ -1629,6 +1701,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 out_commands[i] = price_cmd
                                 out_power[i] = price_cmd.power_consign + power_piloted_delta
                                 quantity_to_be_added -= self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+
+                                truly_consumed_power = power_available_power[i] + out_power[i]
+                                if truly_consumed_power >= 0:
+                                    remaining_additional_available_energy_to_deplete += (truly_consumed_power *
+                                                                                         power_slots_duration_s[
+                                                                                             i]) / 3600.0
 
                                 max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                                 min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
@@ -1662,7 +1740,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         if min_idx_with_energy_impact > max_idx_with_energy_impact or max_idx_with_energy_impact < 0 or min_idx_with_energy_impact >= len(power_available_power):
             min_idx_with_energy_impact = max_idx_with_energy_impact = -1
 
-        return out_constraint, final_ret, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact
+        return out_constraint, final_ret, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact, remaining_additional_available_energy_to_deplete
 
 
 class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):

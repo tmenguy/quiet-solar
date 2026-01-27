@@ -637,20 +637,35 @@ class PeriodSolver(object):
         return solved, has_changed, energy_delta
 
 
-    def _allocate_constraints(self, constraints, always_use_available_only_power, constraints_evolution, constraints_bounds, actions):
+    def _allocate_constraints(self,
+                              constraints,
+                              always_use_available_only_power,
+                              constraints_evolution,
+                              constraints_bounds,
+                              actions,
+                              additional_energy_to_deplete=0.0,
+                              max_power_to_deplete=0.0):
 
         constraints= sorted(constraints, key=lambda x: x[1], reverse=True)
+
+        # we should consume the battery first for the mandatory constraints
+        remaining_additional_energy_to_deplete = additional_energy_to_deplete
 
         for ci , _ in constraints:
 
             c = constraints_evolution.get(ci,ci)
-            out_c, is_solved, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = c.compute_best_period_repartition(
+            if additional_energy_to_deplete >= 0.0:
+                remaining_additional_energy_to_deplete = 0.0
+
+            out_c, is_solved, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact, remaining_additional_energy_to_deplete = c.compute_best_period_repartition(
                 do_use_available_power_only=always_use_available_only_power or not c.is_mandatory,
                 prices = self._prices,
                 power_slots_duration_s = self._durations_s,
                 power_available_power = self._available_power,
                 prices_ordered_values = self._prices_ordered_values,
-                time_slots = self._time_slots
+                time_slots = self._time_slots,
+                additional_available_energy_to_deplete= remaining_additional_energy_to_deplete,
+                max_power_to_deplete = max_power_to_deplete
             )
             constraints_evolution[ci] = out_c
             constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
@@ -739,7 +754,6 @@ class PeriodSolver(object):
 
         #ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
 
-
         num_slots = len(self._durations_s)
 
         constraints = []
@@ -748,26 +762,35 @@ class PeriodSolver(object):
                 constraints.append((c, c.score(self._start_time)))
 
         always_use_available_only_power = False
+
+        additional_energy_to_deplete = 0.0
+        max_power_to_deplete = 0.0
         if is_off_grid:
             # the current battery is already in teh available power : the most important load will use it first
             # but as we are in off grid : now way we can use grid power
             always_use_available_only_power = True
+            if self._battery is not None:
+                additional_energy_to_deplete = 0.0 - self._battery.get_available_energy()  # in Wh, negative value to cosume it
+                max_power_to_deplete = self._battery.get_max_discharging_power()
 
+        # we can use battery depletion only there
         self._allocate_constraints(constraints=constraints,
                                    always_use_available_only_power=always_use_available_only_power,
                                    constraints_evolution=constraints_evolution,
                                    constraints_bounds=constraints_bounds,
-                                   actions=actions)
+                                   actions=actions,
+                                   additional_energy_to_deplete=additional_energy_to_deplete,
+                                   max_power_to_deplete=max_power_to_deplete)
 
         constraints = []
         for c in self._active_constraints:
-            if c.is_before_battery and c.is_mandatory is False:
+            if c.is_before_battery and (is_off_grid or c.is_mandatory is False):
                 constraints.append((c, c.score(self._start_time)))
 
         if len(constraints) > 0 and self._battery is not None:
 
             # we have some spots where we need grid energy...so we consume perhaps too much already with the non-mandatory constraints
-            # segment battery usage by spots where the battery will be empty, and try to cap the commands sent
+            # (even the mandatory in case of off grid) segment battery usage by spots where the battery will be empty, and try to cap the commands sent
             # for non-mandatory constraints, we will try to cap the commands sent to the battery so it can charge more
 
             while True:
@@ -885,11 +908,26 @@ class PeriodSolver(object):
             if c.is_before_battery is False:
                 constraints.append((c, c.score(self._start_time)))
 
+        additional_energy_to_deplete = 0.0
+        max_power_to_deplete = 0.0
+        if is_off_grid:
+            if self._battery is not None:
+                battery_min = np.min(battery_charge)
+                if self._battery.is_value_empty(battery_min*0.8):
+                    max_power_to_deplete = 0.0
+                    additional_energy_to_deplete = 0.0
+                else:
+                    additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
+                    max_power_to_deplete = self._battery.get_max_discharging_power()
+
+
         self._allocate_constraints(constraints=constraints,
                                    always_use_available_only_power=True,
                                    constraints_evolution=constraints_evolution,
                                    constraints_bounds=constraints_bounds,
-                                   actions=actions)
+                                   actions=actions,
+                                   additional_energy_to_deplete=additional_energy_to_deplete,
+                                   max_power_to_deplete=max_power_to_deplete)
 
 
         if self._battery is not None and battery_charge is not None:
