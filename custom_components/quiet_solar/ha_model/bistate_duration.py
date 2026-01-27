@@ -4,6 +4,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 
+import pytz
 
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, SOLVER_STEP_S
 from ..ha_model.device import HADeviceMixin
@@ -45,6 +46,42 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.bistate_entity = self.switch_entity
 
         self.is_load_time_sensitive = True
+
+        self._last_power_use_computation_time: datetime | None = None
+
+    @property
+    def power_use(self):
+        power = self._power_use_conf
+
+        if power is None:
+            return None
+
+        power = float(power)
+
+        if self.accurate_power_sensor is not None:
+            time = datetime.now(tz=pytz.UTC)
+            if self._last_power_use_computation_time is None or (time - self._last_power_use_computation_time).total_seconds() > SOLVER_STEP_S:
+
+                power = self.get_average_sensor(self.accurate_power_sensor,num_seconds=4*3600, time=time, min_val=self._power_use_conf/3.0)
+                if power is None or power == 0.0:
+                    power = self.get_average_sensor(self.accurate_power_sensor, num_seconds=8 * 3600, time=time,
+                                                    min_val=self._power_use_conf / 3.0)
+                if power is None or power == 0.0:
+                    power = self.get_average_sensor(self.accurate_power_sensor, num_seconds=24 * 3600, time=time,
+                                                    min_val=self._power_use_conf / 3.0)
+                if power is None or power == 0.0:
+                    power = self._power_use_conf
+
+                self._last_power_use_computation_time = time
+
+                _LOGGER.debug(f"power_use: recomputation for {self.name} to {power} (conf:{self._power_use_conf})")
+
+
+        return float(power)
+
+    @power_use.setter
+    def power_use(self, power: float | None):
+        self._power_use_conf = power
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:

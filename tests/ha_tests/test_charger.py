@@ -3355,6 +3355,8 @@ async def test_charger_check_load_activity_force_and_timed(
         can_use_charge_percent_constraints=MagicMock(return_value=True),
         setup_car_charge_target_if_needed=AsyncMock(return_value=80.0),
         get_best_person_next_need=AsyncMock(return_value=(None, None, None, None)),
+        qs_bump_solar_charge_priority=False
+
     )
 
     charger_device.car = car
@@ -3443,6 +3445,7 @@ async def test_charger_check_load_activity_agenda_person(
         get_best_person_next_need=AsyncMock(return_value=(False, future, 30.0, person)),
         get_next_scheduled_event=AsyncMock(return_value=(future, None)),
         set_next_charge_target_percent=AsyncMock(),
+        qs_bump_solar_charge_priority=False
     )
 
     charger_device.car = car

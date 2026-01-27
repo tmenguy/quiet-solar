@@ -161,7 +161,9 @@ def get_average_power_energy_based(
 
 
 def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                      last_timing: datetime | None = None):
+                      last_timing: datetime | None = None,
+                      min_val: float | None = None,
+                      max_val: float | None = None):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
@@ -175,8 +177,16 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
             add_last = 1
         for i in range(1, len(sensor_data) + add_last):
             value = sensor_data[i - 1][1]
+
             if value is None:
                 continue
+
+            if min_val is not None and value < min_val:
+                continue
+
+            if max_val is not None and value > max_val:
+                continue
+
             if i == len(sensor_data):
                 dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
             else:
@@ -275,7 +285,9 @@ class HADeviceMixin:
         self._exposed_entities = set()
         self.ha_entities = {}
 
-        self.attach_power_to_probe(self.accurate_power_sensor)
+        self._entities_to_fill_from_history = set()
+
+        self.attach_power_to_probe(self.accurate_power_sensor, reload_from_history=True)
 
         self.attach_amps_to_probe(self.phase_1_amps_sensor)
         self.attach_amps_to_probe(self.phase_2_amps_sensor)
@@ -288,7 +300,7 @@ class HADeviceMixin:
 
         self._computed_dashboard_section = None
 
-        self._entities_to_fill_from_history = set()
+
 
 
 
@@ -832,21 +844,31 @@ class HADeviceMixin:
             return ret
 
 
-    def get_median_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
+    def get_median_sensor(self,
+                          entity_id: str | None,
+                          num_seconds: float | None,
+                          time: datetime,
+                          min_val: float | None = None,
+                          max_val: float | None = None) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_median_sensor(entity_id_values, time)
+        return get_median_sensor(entity_id_values, time, min_val=min_val, max_val=max_val)
 
-    def get_average_sensor(self, entity_id: str | None, num_seconds: float | None, time: datetime) -> float | None:
+    def get_average_sensor(self,
+                           entity_id: str | None,
+                           num_seconds: float | None,
+                           time: datetime,
+                           min_val: float | None = None,
+                           max_val: float | None = None) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
         if not entity_id_values:
             return None
-        return get_average_time_series(entity_id_values, last_timing=time)
+        return get_average_time_series(entity_id_values, last_timing=time, min_val=min_val, max_val=max_val)
 
     def get_median_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
         return self.get_median_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)
@@ -1004,10 +1026,10 @@ class HADeviceMixin:
 
     def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                               non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
-                                                                                            float | str | None, datetime | None, dict | None] | None] = None):
+                                                                                            float | str | None, datetime | None, dict | None] | None] = None, reload_from_history:bool=False):
         self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
                                       conversion_fn=convert_power_to_w, update_on_change_only=True,
-                                      non_ha_entity_get_state=non_ha_entity_get_state)
+                                      non_ha_entity_get_state=non_ha_entity_get_state, reload_from_history=reload_from_history)
 
     def attach_amps_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                               non_ha_entity_get_state: Callable[[str, datetime | None], tuple[

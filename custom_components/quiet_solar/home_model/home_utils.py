@@ -73,7 +73,11 @@ def max_amps(left_amps: list[float | int], right_amps: list[float | int]) -> lis
     return maxs
 
 def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                       first_timing: datetime | None = None, last_timing: datetime | None = None, geometric_mean : bool = False,):
+                            first_timing: datetime | None = None,
+                            last_timing: datetime | None = None,
+                            geometric_mean : bool = False,
+                            min_val: float | None = None,
+                            max_val: float | None = None) -> float:
 
     # remove None values, will actually use None as gaps, do the mean of the data we know
     if geometric_mean:
@@ -101,6 +105,12 @@ def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float
                 value = sensor_data[i - 1][1]
 
             if value is None:
+                continue
+
+            if min_val is not None and value < min_val:
+                continue
+
+            if max_val is not None and value > max_val:
                 continue
 
             if i == len(sensor_data):

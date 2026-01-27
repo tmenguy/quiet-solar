@@ -79,7 +79,7 @@ class AbstractDevice(object):
     def __init__(self, name:str, device_type:str|None = None, **kwargs):
         super().__init__()
         self._enabled = True
-        self.power_use = kwargs.pop(CONF_POWER, None)
+        self._power_use_conf = kwargs.pop(CONF_POWER, None)
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
@@ -126,7 +126,15 @@ class AbstractDevice(object):
 
         self._computed_dashboard_section = None
 
+    @property
+    def power_use(self):
+        if self._power_use_conf is None:
+            return None
+        return float(self._power_use_conf)
 
+    @power_use.setter
+    def power_use(self, power: float | None):
+        self._power_use_conf = power
 
     def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int | None, add: bool = True) -> float:
         if len(self.devices_to_pilot) == 0:
