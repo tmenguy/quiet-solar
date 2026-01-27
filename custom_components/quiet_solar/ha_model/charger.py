@@ -2745,6 +2745,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # both are set ... we will ignore the time based one
                 self.car.do_next_charge_time = None
 
+            degraded_type = CONSTRAINT_TYPE_FILLER_AUTO
+            if self.qs_bump_solar_charge_priority:
+                degraded_type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+
             # in case a user pressed the button ....clean everything and force the charge
             if self.car.do_force_next_charge is True:
 
@@ -2812,7 +2816,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                        degraded_type=degraded_type,
                         time=time,
                         load=self,
                         load_param=self.car.name,
@@ -2881,7 +2885,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         car_charge_agenda = ConstraintClass(
                             total_capacity_wh=self.car.car_battery_capacity,
                             type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                            degraded_type=degraded_type,
                             time=time,
                             load=self,
                             load_param=self.car.name,
@@ -2974,7 +2978,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 car_charge_person = ConstraintClass(
                                     total_capacity_wh=self.car.car_battery_capacity,
                                     type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                    degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                                    degraded_type=degraded_type,
                                     time=time,
                                     load=self,
                                     load_param=self.car.name,
@@ -3012,11 +3016,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if self.qs_bump_solar_charge_priority:
                         type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                 else:
-                    if self.is_off_grid():
-                        default_type_for_low_battery = CONSTRAINT_TYPE_FILLER_AUTO
-                    else:
-                        default_type_for_low_battery = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
-
 
                     if self.qs_bump_solar_charge_priority:
                         type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
@@ -3024,6 +3023,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         intermediate_target_charge = 0
                     else:
                         type = CONSTRAINT_TYPE_FILLER
+                        default_type_for_low_battery = CONSTRAINT_TYPE_FILLER
                         intermediate_target_charge = self.car.get_car_minimum_ok_SOC()
 
                     if intermediate_target_charge <= 5:
@@ -3046,14 +3046,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         type = CONSTRAINT_TYPE_FILLER_AUTO
                         target_charge = max_target_charge
 
-                        if self.is_off_grid():
-                            type = None
-
                 if type is not None:
                     car_charge_best_effort = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
                         type=type,
-                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                        degraded_type=degraded_type,
                         time=time,
                         load=self,
                         load_param=self.car.name,
