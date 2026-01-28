@@ -1495,53 +1495,87 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
 
             has_a_cmd = False
-            for i_sorted in sorted_available_power:
 
+            allocate_available_algos = ["available_only"]
+            if remaining_additional_available_energy_to_deplete < 0:
+                allocate_available_algos .append("available_and_to_deplete")
 
-                i = i_sorted + first_slot
-                available_power = float(power_available_power[i])
+            # two passes: first only available power, second try to deplete battery if asked through the additional_available_energy_to_deplete
+            for algo in allocate_available_algos:
 
-                # we will add a command from 0 command so by construction power_piloted_delta will happen
-                power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
+                if algo == "available_only":
+                    local_remaining_additional_available_energy_to_deplete = 0.0
+                else:
+                    local_remaining_additional_available_energy_to_deplete = remaining_additional_available_energy_to_deplete
 
-                if len(power_sorted_cmds) == 0:
-                    continue
+                local_quantity_to_be_added = quantity_to_be_added
 
-                has_a_cmd = True
+                for i_sorted in sorted_available_power:
 
-                additional_available_power = 0.0
-                if remaining_additional_available_energy_to_deplete < 0:
-                    additional_available_power = min(max_power_to_deplete,
-                                                     (0.0 - remaining_additional_available_energy_to_deplete) * 3600.0 /
-                                                     float(power_slots_duration_s[i]))
+                    i = i_sorted + first_slot
+                    available_power = float(power_available_power[i])
 
-                # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
-                j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - available_power - power_piloted_delta)
+                    # we will add a command from 0 command so by construction power_piloted_delta will happen
+                    power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
 
-                if j is not None:
+                    if len(power_sorted_cmds) == 0:
+                        continue
 
-                    if self.support_auto:
-                        out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
-                                                                           new_type=default_cmd.command)
+                    has_a_cmd = True
+
+                    additional_available_power = 0.0
+                    if local_remaining_additional_available_energy_to_deplete < 0:
+                        additional_available_power = min(max_power_to_deplete,
+                                                         (0.0 - local_remaining_additional_available_energy_to_deplete) * 3600.0 /
+                                                         float(power_slots_duration_s[i]))
+
+                    # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
+                    j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - available_power - power_piloted_delta)
+                    if additional_available_power > 0.0:
+                        j_naked = self._get_lower_consign_idx_for_power(power_sorted_cmds, 0.0 - available_power - power_piloted_delta)
                     else:
-                        out_commands[i] = copy_command(power_sorted_cmds[j])
+                        j_naked = j
 
-                    out_power[i] = out_commands[i].power_consign + power_piloted_delta
-                    out_power_idxs[i] = j
 
-                    quantity_to_be_added -= self.get_delta_budget_quantity(float(out_power[i]), float(power_slots_duration_s[i]))
+                    if j is not None:
 
-                    max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
-                    min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+                        if self.support_auto:
+                            if j == j_naked:
+                                # no need to deplete the battery here
+                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                                new_type=default_cmd.command)
+                            else:
+                                # force a bit on consumption here to deplete battery
+                                out_commands[i] = copy_command_and_change_type(cmd=power_sorted_cmds[j],
+                                                                               new_type=CMD_AUTO_FROM_CONSIGN.command)
+                        else:
+                            out_commands[i] = copy_command(power_sorted_cmds[j])
 
-                    truly_consumed_power = power_available_power[i] + out_power[i]
+                        out_power[i] = out_commands[i].power_consign + power_piloted_delta
+                        out_power_idxs[i] = j
 
-                    if truly_consumed_power >= 0:
-                        remaining_additional_available_energy_to_deplete += (truly_consumed_power *
-                                                                             power_slots_duration_s[i]) / 3600.0
+                        local_quantity_to_be_added -= self.get_delta_budget_quantity(float(out_power[i]), float(power_slots_duration_s[i]))
 
-                    if quantity_to_be_added <= 0.0:
+                        max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
+                        min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
+
+                        truly_consumed_power = available_power + out_power[i]
+
+                        if truly_consumed_power >= 0:
+                            local_remaining_additional_available_energy_to_deplete += (truly_consumed_power *
+                                                                                 power_slots_duration_s[i]) / 3600.0
+
+                        if local_quantity_to_be_added <= 0.0:
+                            break
+
+                if algo == "available_only":
+                    # we filled everything correctly!
+                    if local_quantity_to_be_added <= 0.0 or has_a_cmd is False or len(allocate_available_algos) == 1:
+                        quantity_to_be_added = local_quantity_to_be_added
                         break
+                else:
+                    remaining_additional_available_energy_to_deplete = local_remaining_additional_available_energy_to_deplete
+                    quantity_to_be_added = local_quantity_to_be_added
 
             if has_a_cmd is False:
                 _LOGGER.error(f"compute_best_period_repartition: no power sorted commands for green energy {self.name}")
@@ -1550,7 +1584,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 final_ret = quantity_to_be_added <= 0.0
             else:
 
-                # pure solar was not enough, we will try to see if we can get a more solar energy directly if price is better
+                # pure solar (or pure solar plus allowed battery depletion)  was not enough, we will try to see if we can get more solar energy directly if price is better
                 # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible,
                 # this is checked in the charger budgeting algorithm, with self.home.battery_can_discharge() is False
                 for i in range(first_slot, last_slot + 1):

@@ -129,7 +129,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Car None',
+      'friendly_name': 'car Test Car Device Information Storage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_car_car_device_information_storage',
@@ -157,7 +157,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Car None',
+      'friendly_name': 'car Test Car Person Forecasted Mileage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_car_car_qs_car_person_forecast',
@@ -249,7 +249,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger None',
+      'friendly_name': 'charger Test Charger Device Information Storage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_charger_charger_generic_device_information_storage',
@@ -352,7 +352,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car None',
+      'friendly_name': 'car Test Charger generic car Device Information Storage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_charger_generic_car_car_device_information_storage',
@@ -380,7 +380,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car None',
+      'friendly_name': 'car Test Charger generic car Person Forecasted Mileage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_charger_generic_car_car_qs_car_person_forecast',
@@ -394,7 +394,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'home Test Home None',
+      'friendly_name': 'home Test Home Device Information Storage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_home_home_device_information_storage',
@@ -660,7 +660,7 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'person Test Person None',
+      'friendly_name': 'person Test Person Device Information Storage',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.qs_test_person_person_device_information_storage',

@@ -323,12 +323,12 @@
     },
     "entity": {
         "binary_sensor": {
-          "qs_car_use_charge_percent_constraints": {
-            "name": "Use Charge Percent Constraints"
-          },
-          "qs_piloted_device_activated": {
-            "name": "Piloted Device Activated"
-          }
+            "qs_car_use_charge_percent_constraints": {
+                "name": "Use Charge Percent Constraints"
+            },
+            "qs_piloted_device_activated": {
+                "name": "Piloted Device Activated"
+            }
         },
         "button": {
             "qs_device_clean_and_reset": {
@@ -460,6 +460,9 @@
             }
         },
         "sensor": {
+            "device_information_storage": {
+                "name": "Device Information Storage"
+            },
             "qs_car_autonomy_to_target_soc_km": {
                 "name": "Autonomy to Target SOC (km)"
             },
@@ -477,6 +480,9 @@
             },
             "qs_car_forecast_person_name": {
                 "name": "Forecasted Person"
+            },
+            "qs_car_person_forecast": {
+                "name": "Person Forecasted Mileage"
             },
             "qs_car_person_forecast:": {
                 "name": "Person Forecasted Mileage"

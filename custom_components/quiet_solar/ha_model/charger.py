@@ -2003,8 +2003,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 else:
                     possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
-            # below is not needed as teh auto green consign is made to consume battery, but still being really auto green, so no minimum amps here
-            # the battery discharge will added to teh power budget in that case
+            # below is not needed as the auto green consign is made to consume battery, but still being really auto green, so no minimum amps here
+            # the battery discharge will added to the power budget in that case
             # elif cs.command.is_like(CMD_AUTO_GREEN_CONSIGN):
             #
             #     possible_num_phases, min_charge = cs.get_consign_amps_values(consign_is_minimum=True)

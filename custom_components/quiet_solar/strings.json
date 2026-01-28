@@ -686,6 +686,12 @@
       },
       "qs_person_mileage_prediction_km": {
         "name": "Predicted Next Day Mileage (km)"
+      },
+      "device_information_storage": {
+        "name": "Device Information Storage"
+      },
+      "qs_car_person_forecast": {
+        "name": "Person Forecasted Mileage"
       }
     },
     "button": {
