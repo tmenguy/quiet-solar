@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import datetime
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import time as dt_time
 import pytz
 
@@ -13,6 +14,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     CONF_NAME,
 )
+from homeassistant.components.recorder.models import LazyState
 
 from custom_components.quiet_solar.ha_model.bistate_duration import (
     QSBiStateDuration,
@@ -29,7 +31,9 @@ from custom_components.quiet_solar.const import (
     DATA_HANDLER,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     CONSTRAINT_TYPE_FILLER_AUTO,
-    CONF_SWITCH, SOLVER_STEP_S,
+    CONF_SWITCH,
+    SOLVER_STEP_S,
+    CONF_ACCURATE_POWER_SENSOR,
 )
 
 from tests.test_helpers import FakeHass, FakeConfigEntry
@@ -260,6 +264,67 @@ class TestQSBiStateDurationModes:
         device.load_is_auto_to_be_boosted = True
 
         assert device.support_user_override() is False
+
+
+class TestQSBiStateDurationPowerUse:
+    """Test power_use property computations."""
+
+    async def test_power_use_uses_average_sensor_from_history(self):
+        """Test power_use uses get_average_sensor over LazyState history."""
+        hass = FakeHass()
+        config_entry = FakeConfigEntry(
+            entry_id="test_bistate_entry",
+            data={CONF_NAME: "Test BiState"},
+        )
+        home = MagicMock()
+        data_handler = MagicMock()
+        data_handler.home = home
+        hass.data[DOMAIN][DATA_HANDLER] = data_handler
+
+        entity_id = "sensor.test_power"
+        device = ConcreteBiStateDevice(
+            hass=hass,
+            config_entry=config_entry,
+            home=home,
+            **{
+                CONF_NAME: "Test Device",
+                CONF_ACCURATE_POWER_SENSOR: entity_id,
+            },
+        )
+        device.power_use = 900.0
+
+        time_now = datetime.datetime.now(tz=pytz.UTC)
+        attr_cache: dict[str, dict[str, object]] = {}
+
+        def _lazy_state(power: float, when: datetime.datetime) -> LazyState:
+            row = SimpleNamespace(
+                attributes='{"unit_of_measurement": "W"}',
+                last_changed_ts=when.timestamp(),
+                last_updated_ts=when.timestamp(),
+            )
+            return LazyState(
+                row=row,
+                attr_cache=attr_cache,
+                start_time_ts=when.timestamp(),
+                entity_id=entity_id,
+                state=str(power),
+                last_updated_ts=when.timestamp(),
+                no_attributes=False,
+            )
+
+        states = [
+            _lazy_state(1000.0, time_now - datetime.timedelta(hours=2)),
+            _lazy_state(2000.0, time_now - datetime.timedelta(hours=1)),
+        ]
+
+        with patch(
+            "custom_components.quiet_solar.ha_model.device.load_from_history",
+            new_callable=AsyncMock,
+            return_value=states,
+        ):
+            await device._async_bootstrap_from_history(entity_id, time_now)
+
+        assert device.power_use == pytest.approx(1500.0, rel=0.01)
 
 
 class TestQSBiStateDurationExpectedState:

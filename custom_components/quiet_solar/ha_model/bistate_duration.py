@@ -74,7 +74,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                 self._last_power_use_computation_time = time
 
-                _LOGGER.debug(f"power_use: recomputation for {self.name} to {power} (conf:{self._power_use_conf})")
+                _LOGGER.info(f"power_use: recomputation for {self.name} to {power} (conf:{self._power_use_conf})")
 
 
         return float(power)
