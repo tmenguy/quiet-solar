@@ -55,6 +55,30 @@ def test_create_ha_switch_for_car():
     assert len(entities) == 1  # Solar priority switch
 
 
+def test_create_ha_switch_for_pool():
+    """Test creating switches for pool."""
+    from custom_components.quiet_solar.ha_model.pool import QSPool
+
+    mock_pool = create_mock_device("pool")
+    mock_pool.__class__ = QSPool
+    entities = create_ha_switch_for_QSPool(mock_pool)
+
+    assert entities == []
+
+
+def test_create_ha_switch_includes_pool_branch():
+    """Test create_ha_switch covers pool branch."""
+    from custom_components.quiet_solar.ha_model.pool import QSPool
+
+    mock_pool = create_mock_device("pool")
+    mock_pool.__class__ = QSPool
+    with patch("custom_components.quiet_solar.switch.create_ha_switch_for_QSPool", return_value=[] ) as pool_mock, \
+        patch("custom_components.quiet_solar.switch.create_ha_switch_for_AbstractLoad", return_value=[]):
+        entities = create_ha_switch(mock_pool)
+        pool_mock.assert_called_once()
+        assert entities == []
+
+
 class _TestLoadHA(HADeviceMixin, TestLoad):
     """Test load supporting HADeviceMixin for switch creation."""
 
@@ -312,6 +336,76 @@ def test_qs_switch_entity_charger_or_car_availability_with_car():
     switch._set_availabiltiy()
     
     assert switch._attr_available is True
+
+
+def test_qs_switch_entity_charger_or_car_helpers():
+    """Test charger/car helper accessors."""
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+    from custom_components.quiet_solar.ha_model.car import QSCar
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_charger = MagicMock(spec=QSChargerGeneric)
+    mock_charger.car = MagicMock()
+    mock_charger.qs_enable_device = True
+    mock_charger.device_id = "charger_123"
+    mock_charger.device_type = "charger"
+    mock_charger.name = "Charger"
+
+    mock_description = MagicMock()
+    mock_description.key = "test_switch"
+    mock_description.name = None
+    mock_description.translation_key = "test"
+    mock_description.set_val = None
+
+    switch = QSSwitchEntityChargerOrCar(mock_handler, mock_charger, mock_description)
+    assert switch.car() is mock_charger.car
+    assert switch.charger() is mock_charger
+
+    mock_car = MagicMock(spec=QSCar)
+    mock_car.charger = mock_charger
+    mock_car.qs_enable_device = True
+    mock_car.device_id = "car_123"
+    mock_car.device_type = "car"
+    mock_car.name = "Car"
+
+    switch = QSSwitchEntityChargerOrCar(mock_handler, mock_car, mock_description)
+    assert switch.car() is mock_car
+    assert switch.charger() is mock_car.charger
+
+    unknown_device = MagicMock()
+    switch = QSSwitchEntityChargerOrCar(mock_handler, unknown_device, mock_description)
+    assert switch.car() is None
+    assert switch.charger() is None
+
+
+def test_qs_switch_entity_car_availability_charger_disabled():
+    """Test car switch unavailable when charger disabled."""
+    from custom_components.quiet_solar.ha_model.car import QSCar
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_charger = MagicMock()
+    mock_charger.qs_enable_device = False
+
+    mock_car = MagicMock(spec=QSCar)
+    mock_car.charger = mock_charger
+    mock_car.qs_enable_device = True
+    mock_car.device_id = "car_123"
+    mock_car.device_type = "car"
+    mock_car.name = "Car"
+
+    mock_description = MagicMock()
+    mock_description.key = "test_switch"
+    mock_description.name = None
+    mock_description.translation_key = "test"
+    mock_description.set_val = None
+
+    switch = QSSwitchEntityChargerOrCar(mock_handler, mock_car, mock_description)
+    switch._set_availabiltiy()
+    assert switch._attr_available is False
 
 
 @pytest.mark.asyncio

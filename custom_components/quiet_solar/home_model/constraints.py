@@ -1029,6 +1029,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         out_constraint = self
 
+        is_current_constraint_met = self.is_constraint_met(time)
+
         num_non_zero_existing_commands = 0
 
         first_modified_slot = None
@@ -1208,7 +1210,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     num_changes += 1
 
                     if init_energy_delta > 0.0:
-                        if out_constraint.is_constraint_met(time):
+                        if is_current_constraint_met:
                             # we should reclaim some power or time "from the future" to meet the constraint, we need to reclaim d_energy
                             budget_quantity_to_be_reclaimed = d_budget_quantity
                             has_reclaimed = False
@@ -1907,7 +1909,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
     def compute_value(self, time: datetime) -> float | None:
         """ Compute the value of the constraint whenever it is called changed state or not,
         hence use the old state and the last value change to add the consummed energy """
-        if self.load.current_command is not None and self.load.current_command.is_like(CMD_ON):
+        if self.load.current_command is not None and not self.load.current_command.is_off_or_idle():
             return (time - self.last_value_update).total_seconds() + self.current_value
         else:
             return None
