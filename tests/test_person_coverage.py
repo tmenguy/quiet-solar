@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, time as dt_time
+from types import SimpleNamespace
 
 import pytest
 import pytz
 
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.quiet_solar.const import (
+    DOMAIN,
     CONF_MOBILE_APP,
     CONF_MOBILE_APP_URL,
     CONF_PERSON_AUTHORIZED_CARS,
@@ -26,12 +32,17 @@ from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraintChargePercent,
 )
 from homeassistant.const import Platform
-from tests.test_helpers import FakeEntity, FakeHass
 
 
-def _make_person(**overrides) -> tuple[FakeHass, QSHome, QSPerson]:
-    hass = FakeHass()
-    home = QSHome(hass=hass, config_entry=None, name="Test Home")
+def _make_person(hass: HomeAssistant, **overrides) -> tuple[HomeAssistant, QSHome, QSPerson]:
+    """Create hass, home, and person for tests."""
+    hass.data.setdefault(DOMAIN, {})
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"name": "Test Home"},
+        title="Test Home",
+    )
+    home = QSHome(hass=hass, config_entry=config_entry, name="Test Home")
     person = QSPerson(
         hass=hass,
         home=home,
@@ -45,7 +56,7 @@ def _make_person(**overrides) -> tuple[FakeHass, QSHome, QSPerson]:
     return hass, home, person
 
 
-def _make_car(hass: FakeHass, home: QSHome, name: str = "Test Car") -> QSCar:
+def _make_car(hass: HomeAssistant, home: QSHome, name: str = "Test Car") -> QSCar:
     car = QSCar(
         hass=hass,
         home=home,
@@ -57,9 +68,9 @@ def _make_car(hass: FakeHass, home: QSHome, name: str = "Test Car") -> QSCar:
     return car
 
 
-def test_init_normalizes_mobile_app_and_notification_time() -> None:
+def test_init_normalizes_mobile_app_and_notification_time(hass: HomeAssistant) -> None:
     """Test config normalization for mobile app and notification time."""
-    hass, home, person = _make_person(
+    hass, home, person = _make_person(hass,
         **{
             CONF_MOBILE_APP: "notify",
             CONF_MOBILE_APP_URL: "qs",
@@ -74,21 +85,21 @@ def test_init_normalizes_mobile_app_and_notification_time() -> None:
     assert person.notification_dt_time == dt_time(8, 30, 0)
     assert "Car B" in person.authorized_cars
 
-    _, _, person_empty = _make_person(
+    _, _, person_empty = _make_person(hass,
         **{
             CONF_MOBILE_APP_URL: "",
         }
     )
     assert person_empty.mobile_app_url is None
 
-    _, _, person_root = _make_person(
+    _, _, person_root = _make_person(hass,
         **{
             CONF_MOBILE_APP_URL: "/",
         }
     )
     assert person_root.mobile_app_url is None
 
-    _, _, person_prefixed = _make_person(
+    _, _, person_prefixed = _make_person(hass,
         **{
             CONF_MOBILE_APP_URL: "/already",
         }
@@ -96,9 +107,9 @@ def test_init_normalizes_mobile_app_and_notification_time() -> None:
     assert person_prefixed.mobile_app_url == "/already"
 
 
-def test_add_to_mileage_history_insert_update_and_trim() -> None:
+def test_add_to_mileage_history_insert_update_and_trim(hass: HomeAssistant) -> None:
     """Test history insertion/update behavior and trimming."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
 
     base = datetime(2026, 1, 1, 8, 0, tzinfo=pytz.UTC)
     day0 = base
@@ -127,24 +138,24 @@ def test_add_to_mileage_history_insert_update_and_trim() -> None:
     assert len(person.serializable_historical_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
 
 
-def test_should_recompute_history_empty_authorized_cars() -> None:
+def test_should_recompute_history_empty_authorized_cars(hass: HomeAssistant) -> None:
     """Test recompute history when no cars are authorized."""
-    _, _, person = _make_person(**{CONF_PERSON_AUTHORIZED_CARS: []})
+    _, _, person = _make_person(hass, **{CONF_PERSON_AUTHORIZED_CARS: []})
     now = datetime.now(tz=pytz.UTC)
     assert person.should_recompute_history(now) is False
 
 
-def test_add_to_mileage_history_missing_leave_time() -> None:
+def test_add_to_mileage_history_missing_leave_time(hass: HomeAssistant) -> None:
     """Test that missing leave time is ignored."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     day = datetime(2026, 1, 1, 8, 0, tzinfo=pytz.UTC)
     person.add_to_mileage_history(day, 12.0, None)
     assert person.historical_mileage_data == []
 
 
-def test_get_best_week_day_guess_uses_last_two_entries() -> None:
+def test_get_best_week_day_guess_uses_last_two_entries(hass: HomeAssistant) -> None:
     """Test weekday best-guess selection from last two entries."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
 
     base = datetime(2026, 1, 1, 8, 0, tzinfo=pytz.UTC)
     day_old = base
@@ -163,9 +174,9 @@ def test_get_best_week_day_guess_uses_last_two_entries() -> None:
     assert leave_time == expected_leave_time
 
 
-def test_compute_person_next_need_today_vs_tomorrow() -> None:
+def test_compute_person_next_need_today_vs_tomorrow(hass: HomeAssistant) -> None:
     """Test forecast selection for today vs tomorrow."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
 
     now = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
     today_leave = now + timedelta(hours=10)
@@ -184,9 +195,9 @@ def test_compute_person_next_need_today_vs_tomorrow() -> None:
     assert predicted_mileage == 50.0
 
 
-def test_compute_person_next_need_tomorrow_only() -> None:
+def test_compute_person_next_need_tomorrow_only(hass: HomeAssistant) -> None:
     """Test forecast when only tomorrow data exists."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     now = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
     tomorrow = now + timedelta(days=1)
     person.add_to_mileage_history(tomorrow, 75.0, tomorrow + timedelta(hours=8))
@@ -196,9 +207,9 @@ def test_compute_person_next_need_tomorrow_only() -> None:
     assert predicted_mileage == 75.0
 
 
-def test_compute_person_next_need_empty_prediction() -> None:
+def test_compute_person_next_need_empty_prediction(hass: HomeAssistant) -> None:
     """Test no prediction when weekday data is missing."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
 
     now = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
     other_day = now + timedelta(days=3)
@@ -209,10 +220,11 @@ def test_compute_person_next_need_empty_prediction() -> None:
     assert predicted_mileage is None
 
 
-def test_device_post_home_init_restores_history() -> None:
+@pytest.mark.asyncio
+async def test_device_post_home_init_restores_history(hass: HomeAssistant) -> None:
     """Test state restoration from stored historical data."""
-    hass, _, person = _make_person()
-    person.ha_entities["person_mileage_prediction"] = FakeEntity(
+    hass, _, person = _make_person(hass)
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
         entity_id="sensor.person_mileage_prediction"
     )
 
@@ -224,7 +236,7 @@ def test_device_post_home_init_restores_history() -> None:
             "leave_time": (base + timedelta(hours=9)).isoformat(),
         }
     ]
-    hass.states.set(
+    hass.states.async_set(
         "sensor.person_mileage_prediction",
         "ok",
         {"historical_data": entries, "has_been_initialized": True},
@@ -236,17 +248,20 @@ def test_device_post_home_init_restores_history() -> None:
     assert person.has_been_initialized is True
 
 
-def test_device_post_home_init_missing_sensor_entity() -> None:
+def test_device_post_home_init_missing_sensor_entity(hass: HomeAssistant) -> None:
     """Test state restore when no HA entity is present."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     person.device_post_home_init(datetime(2026, 1, 2, tzinfo=pytz.UTC))
     assert person.historical_mileage_data == []
 
 
-def test_device_post_home_init_handles_malformed_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_device_post_home_init_handles_malformed_entries(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test malformed historical entries are skipped."""
-    hass, _, person = _make_person()
-    person.ha_entities["person_mileage_prediction"] = FakeEntity(
+    hass, _, person = _make_person(hass)
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
         entity_id="sensor.person_mileage_prediction"
     )
     now = datetime(2026, 1, 10, 8, 0, tzinfo=pytz.UTC)
@@ -266,7 +281,7 @@ def test_device_post_home_init_handles_malformed_entries(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(person, "add_to_mileage_history", _add_to_history)
     monkeypatch.setattr(person, "update_person_forecast", lambda *_, **__: None)
-    hass.states.set(
+    hass.states.async_set(
         "sensor.person_mileage_prediction",
         "ok",
         {"historical_data": entries, "has_been_initialized": False},
@@ -277,13 +292,14 @@ def test_device_post_home_init_handles_malformed_entries(monkeypatch: pytest.Mon
     assert person.historical_mileage_data[0][2] is None
 
 
-def test_device_post_home_init_warns_when_not_initialized() -> None:
+@pytest.mark.asyncio
+async def test_device_post_home_init_warns_when_not_initialized(hass: HomeAssistant) -> None:
     """Test no-history state keeps initialization false."""
-    hass, _, person = _make_person()
-    person.ha_entities["person_mileage_prediction"] = FakeEntity(
+    hass, _, person = _make_person(hass)
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
         entity_id="sensor.person_mileage_prediction"
     )
-    hass.states.set(
+    hass.states.async_set(
         "sensor.person_mileage_prediction",
         "ok",
         {"historical_data": [], "has_been_initialized": False},
@@ -292,17 +308,18 @@ def test_device_post_home_init_warns_when_not_initialized() -> None:
     assert person.has_been_initialized is False
 
 
-def test_device_post_home_init_handles_unknown_state() -> None:
+@pytest.mark.asyncio
+async def test_device_post_home_init_handles_unknown_state(hass: HomeAssistant) -> None:
     """Test state restore when sensor is unknown."""
-    hass, _, person = _make_person()
-    person.ha_entities["person_mileage_prediction"] = FakeEntity(
+    hass, _, person = _make_person(hass)
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
         entity_id="sensor.person_mileage_prediction"
     )
 
     person.historical_mileage_data = [
         (datetime(2026, 1, 1, tzinfo=pytz.UTC), 10.0, datetime(2026, 1, 1, 9, tzinfo=pytz.UTC), 3)
     ]
-    hass.states.set("sensor.person_mileage_prediction", "unknown", {})
+    hass.states.async_set("sensor.person_mileage_prediction", "unknown", {})
 
     person.device_post_home_init(datetime(2026, 1, 2, tzinfo=pytz.UTC))
 
@@ -311,15 +328,15 @@ def test_device_post_home_init_handles_unknown_state() -> None:
     assert person.predicted_mileage is None
 
 
-def test_get_forecast_readable_string_no_forecast() -> None:
+def test_get_forecast_readable_string_no_forecast(hass: HomeAssistant) -> None:
     """Test readable string when there is no forecast."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     assert person.get_forecast_readable_string() == "No forecast"
 
 
-def test_get_authorized_and_preferred_cars() -> None:
+def test_get_authorized_and_preferred_cars(hass: HomeAssistant) -> None:
     """Test retrieving authorized and preferred cars."""
-    hass, home, person = _make_person(
+    hass, home, person = _make_person(hass,
         **{
             CONF_PERSON_AUTHORIZED_CARS: ["Car A", "Missing"],
             CONF_PERSON_PREFERRED_CAR: "Car A",
@@ -338,9 +355,9 @@ def test_get_authorized_and_preferred_cars() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_no_allocated_car() -> None:
+async def test_notify_no_allocated_car(hass: HomeAssistant) -> None:
     """Test notification when no car is allocated."""
-    _, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    _, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     person.predicted_mileage = 40.0
     person.predicted_leave_time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     notify_time = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
@@ -365,9 +382,9 @@ async def test_notify_no_allocated_car() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_daily_reminder_no_charger_triggers_allocation() -> None:
+async def test_notify_daily_reminder_no_charger_triggers_allocation(hass: HomeAssistant) -> None:
     """Test daily reminder triggers allocation when no charger."""
-    hass, home, person = _make_person(
+    hass, home, person = _make_person(hass,
         **{
             CONF_MOBILE_APP: "notify",
             CONF_PERSON_NOTIFICATION_TIME: "08:00:00",
@@ -392,16 +409,16 @@ async def test_notify_daily_reminder_no_charger_triggers_allocation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_returns_without_mobile_app() -> None:
+async def test_notify_returns_without_mobile_app(hass: HomeAssistant) -> None:
     """Test notify returns when no mobile app is configured."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     await person.notify_of_forecast_if_needed()
 
 
 @pytest.mark.asyncio
-async def test_notify_uses_default_time() -> None:
+async def test_notify_uses_default_time(hass: HomeAssistant) -> None:
     """Test notify uses default time when not provided."""
-    _, _, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    _, _, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     notifications: list[tuple[str | None, str | None]] = []
 
     async def _capture(*_, title: str | None = None, message: str | None = None, **__):
@@ -418,9 +435,9 @@ async def test_notify_uses_default_time() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_car_ready() -> None:
+async def test_notify_car_ready(hass: HomeAssistant) -> None:
     """Test notification when car already covers the trip."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -449,9 +466,9 @@ async def test_notify_car_ready() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_constraint_target_not_enough() -> None:
+async def test_notify_constraint_target_not_enough(hass: HomeAssistant) -> None:
     """Test notification when scheduled charge will not cover trip."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -486,9 +503,9 @@ async def test_notify_constraint_target_not_enough() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_scheduled_charge_ok() -> None:
+async def test_notify_scheduled_charge_ok(hass: HomeAssistant) -> None:
     """Test notification when scheduled charge covers the trip."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -522,9 +539,9 @@ async def test_notify_scheduled_charge_ok() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_person_constraint_charging() -> None:
+async def test_notify_person_constraint_charging(hass: HomeAssistant) -> None:
     """Test notification when person constraint is adequate."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -560,9 +577,9 @@ async def test_notify_person_constraint_charging() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_person_constraint_insufficient() -> None:
+async def test_notify_person_constraint_insufficient(hass: HomeAssistant) -> None:
     """Test notification when person constraint is insufficient."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -598,9 +615,9 @@ async def test_notify_person_constraint_insufficient() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_user_constraint_unknown_soc() -> None:
+async def test_notify_user_constraint_unknown_soc(hass: HomeAssistant) -> None:
     """Test user constraint selection with unknown SOC."""
-    hass, home, person = _make_person(**{CONF_MOBILE_APP: "notify"})
+    hass, home, person = _make_person(hass, **{CONF_MOBILE_APP: "notify"})
     car = _make_car(hass, home)
     car.current_forecasted_person = person
     car.charger = object()
@@ -636,9 +653,9 @@ async def test_notify_user_constraint_unknown_soc() -> None:
     assert car._user_selected_person_name_for_car == person.name
 
 
-def test_get_person_mileage_serialized_prediction() -> None:
+def test_get_person_mileage_serialized_prediction(hass: HomeAssistant) -> None:
     """Test serialization of forecast state."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     now = datetime.now(tz=pytz.UTC)
     person.predicted_mileage = 25.0
     person.predicted_leave_time = now + timedelta(hours=2)
@@ -659,16 +676,16 @@ def test_get_person_mileage_serialized_prediction() -> None:
     assert data["predicted_leave_time"] is not None
 
 
-def test_get_platforms_parent_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_platforms_parent_none(hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test platforms when parent returns None."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
 
     monkeypatch.setattr(HADeviceMixin, "get_platforms", lambda self: None)
     platforms = person.get_platforms()
     assert Platform.SENSOR in platforms
 
 
-def test_person_reset() -> None:
+def test_person_reset(hass: HomeAssistant) -> None:
     """Test reset passes through."""
-    _, _, person = _make_person()
+    _, _, person = _make_person(hass)
     person.reset()

@@ -7,11 +7,17 @@ from pathlib import Path
 
 import pytz
 
-from custom_components.quiet_solar.const import MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.quiet_solar.const import (
+    DOMAIN,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+)
 from custom_components.quiet_solar.ha_model.home import QSHome, get_time_from_state
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.car import QSCar
-from tests.test_helpers import FakeHass, FakeConfigEntry
 
 
 class TestPersonsCarForecast:
@@ -36,22 +42,19 @@ class TestPersonsCarForecast:
         return data
 
     @pytest.fixture
-    def fake_hass(self):
-        """Create a fake Home Assistant instance."""
-        return FakeHass()
-
-    @pytest.fixture
-    def mock_home(self, fake_hass):
+    def mock_home(self, hass: HomeAssistant):
         """Create a mock QSHome instance."""
-        config_entry = FakeConfigEntry(
+        hass.data.setdefault(DOMAIN, {})
+        config_entry = MockConfigEntry(
+            domain=DOMAIN,
             entry_id="test_home",
             data={"name": "Test Home"},
-            title="Test Home"
+            title="Test Home",
         )
         home = QSHome(
-            hass=fake_hass,
+            hass=hass,
             config_entry=config_entry,
-            name="Test Home"
+            name="Test Home",
         )
         home.latitude = 43.6346599933627
         home.longitude = 6.988867074251175

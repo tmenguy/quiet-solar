@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, patch
 from datetime import time as dt_time
 
 from homeassistant.const import (
@@ -14,6 +14,9 @@ from homeassistant.const import (
     SERVICE_TURN_ON,
     SERVICE_TURN_OFF,
 )
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.ha_model.on_off_duration import QSOnOffDuration
 from custom_components.quiet_solar.home_model.commands import CMD_ON, CMD_OFF, CMD_IDLE
@@ -24,31 +27,77 @@ from custom_components.quiet_solar.const import (
     CONF_SWITCH,
 )
 
-from tests.test_helpers import FakeHass, FakeConfigEntry
 import pytz
+
+
+@pytest.fixture
+def on_off_config_entry() -> MockConfigEntry:
+    """Config entry for on/off duration tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_on_off_entry",
+        data={CONF_NAME: "Test OnOff"},
+        title="Test OnOff",
+    )
+
+
+@pytest.fixture
+def on_off_home():
+    """Mock home for on/off duration tests."""
+    return MagicMock()
+
+
+@pytest.fixture
+def on_off_data_handler(on_off_home):
+    """Data handler for on/off duration tests."""
+    handler = MagicMock()
+    handler.home = on_off_home
+    return handler
+
+
+@pytest.fixture
+def on_off_hass_data(hass: HomeAssistant, on_off_data_handler):
+    """Set hass.data[DOMAIN][DATA_HANDLER] for on/off tests."""
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][DATA_HANDLER] = on_off_data_handler
+
+
+@pytest.fixture
+def on_off_device(hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data):
+    """QSOnOffDuration instance for tests."""
+    return QSOnOffDuration(
+        hass=hass,
+        config_entry=on_off_config_entry,
+        home=on_off_home,
+        **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
+    )
+
+
+@pytest.fixture
+def recorded_service_calls(hass: HomeAssistant):
+    """Record service calls (domain, service, service_data) for assertions."""
+    from homeassistant.core import ServiceRegistry
+
+    recorded = []
+
+    async def record_only(self, domain, service, service_data=None, **kwargs):
+        recorded.append((domain, service, service_data or {}))
+
+    with patch.object(ServiceRegistry, "async_call", record_only):
+        yield recorded
 
 
 class TestQSOnOffDurationInit:
     """Test QSOnOffDuration initialization."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_on_off_entry",
-            data={CONF_NAME: "Test OnOff"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def test_init_default_values(self):
+    def test_init_default_values(
+        self, hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data
+    ):
         """Test initialization with default values."""
         device = QSOnOffDuration(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=on_off_config_entry,
+            home=on_off_home,
             **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
         )
 
@@ -57,12 +106,14 @@ class TestQSOnOffDurationInit:
         assert device._bistate_mode_on == "on_off_mode_on"
         assert device._bistate_mode_off == "on_off_mode_off"
 
-    def test_bistate_entity_equals_switch_entity(self):
+    def test_bistate_entity_equals_switch_entity(
+        self, hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data
+    ):
         """Test that bistate_entity is set to switch_entity."""
         device = QSOnOffDuration(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=on_off_config_entry,
+            home=on_off_home,
             **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.my_switch"}
         )
 
@@ -73,174 +124,125 @@ class TestQSOnOffDurationInit:
 class TestQSOnOffDurationTranslationKeys:
     """Test translation key methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_on_off_entry",
-            data={CONF_NAME: "Test OnOff"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        self.device = QSOnOffDuration(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
-        )
-
-    def test_get_virtual_current_constraint_translation_key(self):
+    def test_get_virtual_current_constraint_translation_key(self, on_off_device):
         """Test get_virtual_current_constraint_translation_key returns correct key."""
-        result = self.device.get_virtual_current_constraint_translation_key()
+        result = on_off_device.get_virtual_current_constraint_translation_key()
         assert result == SENSOR_CONSTRAINT_SENSOR_ON_OFF
 
-    def test_get_select_translation_key(self):
+    def test_get_select_translation_key(self, on_off_device):
         """Test get_select_translation_key returns correct key."""
-        result = self.device.get_select_translation_key()
+        result = on_off_device.get_select_translation_key()
         assert result == "on_off_mode"
 
 
 class TestQSOnOffDurationExecuteCommandSystem:
     """Test execute_command_system method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_on_off_entry",
-            data={CONF_NAME: "Test OnOff"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        self.device = QSOnOffDuration(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
-        )
-
     @pytest.mark.asyncio
-    async def test_execute_command_turn_on(self):
+    async def test_execute_command_turn_on(self, on_off_device, recorded_service_calls):
         """Test execute_command_system with CMD_ON turns on switch."""
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await self.device.execute_command_system(time, CMD_ON, state=None)
+        result = await on_off_device.execute_command_system(time, CMD_ON, state=None)
 
         assert result is False  # Method returns False
-        # Verify service was called
-        calls = self.hass.services.calls
-        assert len(calls) >= 1
-        # Find the switch call
-        switch_calls = [c for c in calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON]
+        switch_calls = [
+            c for c in recorded_service_calls
+            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON
+        ]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_turn_off(self):
+    async def test_execute_command_turn_off(self, on_off_device, recorded_service_calls):
         """Test execute_command_system with CMD_OFF turns off switch."""
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await self.device.execute_command_system(time, CMD_OFF, state=None)
+        result = await on_off_device.execute_command_system(time, CMD_OFF, state=None)
 
         assert result is False
-        calls = self.hass.services.calls
-        switch_calls = [c for c in calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
+        switch_calls = [
+            c for c in recorded_service_calls
+            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
+        ]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_idle(self):
+    async def test_execute_command_idle(self, on_off_device, recorded_service_calls):
         """Test execute_command_system with CMD_IDLE turns off switch."""
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await self.device.execute_command_system(time, CMD_IDLE, state=None)
+        result = await on_off_device.execute_command_system(time, CMD_IDLE, state=None)
 
         assert result is False
-        calls = self.hass.services.calls
-        switch_calls = [c for c in calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
+        switch_calls = [
+            c for c in recorded_service_calls
+            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
+        ]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_with_override_state_on(self):
+    async def test_execute_command_with_override_state_on(
+        self, on_off_device, recorded_service_calls
+    ):
         """Test execute_command_system with override state ON."""
         time = datetime.datetime.now(pytz.UTC)
 
-        # state="on" means turn on regardless of command
-        result = await self.device.execute_command_system(time, CMD_OFF, state="on")
+        result = await on_off_device.execute_command_system(time, CMD_OFF, state="on")
 
         assert result is False
-        calls = self.hass.services.calls
-        switch_calls = [c for c in calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON]
+        switch_calls = [
+            c for c in recorded_service_calls
+            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON
+        ]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_with_override_state_off(self):
+    async def test_execute_command_with_override_state_off(
+        self, on_off_device, recorded_service_calls
+    ):
         """Test execute_command_system with override state OFF (idle)."""
         time = datetime.datetime.now(pytz.UTC)
 
-        # state="off" (which equals expected_state_from_command(CMD_IDLE)) means turn off
-        result = await self.device.execute_command_system(time, CMD_ON, state="off")
+        result = await on_off_device.execute_command_system(time, CMD_ON, state="off")
 
         assert result is False
-        calls = self.hass.services.calls
-        switch_calls = [c for c in calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
+        switch_calls = [
+            c for c in recorded_service_calls
+            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
+        ]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_invalid_raises(self):
+    async def test_execute_command_invalid_raises(self, on_off_device):
         """Test execute_command_system with invalid command raises ValueError."""
         time = datetime.datetime.now(pytz.UTC)
 
-        # Create an invalid command that is not ON, OFF, or IDLE
         from custom_components.quiet_solar.home_model.commands import LoadCommand
         invalid_cmd = LoadCommand(command="invalid", power_consign=0)
 
         with pytest.raises(ValueError, match="Invalid command"):
-            await self.device.execute_command_system(time, invalid_cmd, state=None)
+            await on_off_device.execute_command_system(time, invalid_cmd, state=None)
 
 
 class TestQSOnOffDurationStateValues:
     """Test state value configurations."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_on_off_entry",
-            data={CONF_NAME: "Test OnOff"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        self.device = QSOnOffDuration(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
-        )
-
-    def test_expected_state_from_command_on(self):
+    def test_expected_state_from_command_on(self, on_off_device):
         """Test expected_state_from_command returns 'on' for CMD_ON."""
-        result = self.device.expected_state_from_command(CMD_ON)
+        result = on_off_device.expected_state_from_command(CMD_ON)
         assert result == "on"
 
-    def test_expected_state_from_command_off(self):
+    def test_expected_state_from_command_off(self, on_off_device):
         """Test expected_state_from_command returns 'off' for CMD_OFF."""
-        result = self.device.expected_state_from_command(CMD_OFF)
+        result = on_off_device.expected_state_from_command(CMD_OFF)
         assert result == "off"
 
-    def test_expected_state_from_command_idle(self):
+    def test_expected_state_from_command_idle(self, on_off_device):
         """Test expected_state_from_command returns 'off' for CMD_IDLE."""
-        result = self.device.expected_state_from_command(CMD_IDLE)
+        result = on_off_device.expected_state_from_command(CMD_IDLE)
         assert result == "off"
 
-    def test_expected_state_from_command_none(self):
+    def test_expected_state_from_command_none(self, on_off_device):
         """Test expected_state_from_command returns None for None command."""
-        result = self.device.expected_state_from_command(None)
+        result = on_off_device.expected_state_from_command(None)
         assert result is None

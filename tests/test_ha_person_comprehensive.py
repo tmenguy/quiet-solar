@@ -44,8 +44,63 @@ from custom_components.quiet_solar.const import (
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
 )
 
-# Import from local conftest - use relative import to avoid conflict with HA core
-from tests.test_helpers import FakeHass, FakeConfigEntry
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from tests.factories import create_minimal_home_model
+
+
+@pytest.fixture
+def person_config_entry() -> MockConfigEntry:
+    """Config entry for person comprehensive tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_person_entry",
+        data={CONF_NAME: "Test Person"},
+        title="Test Person",
+    )
+
+
+@pytest.fixture
+def person_home():
+    """Home for person comprehensive tests."""
+    return create_minimal_home_model()
+
+
+@pytest.fixture
+def person_data_handler(person_home):
+    """Data handler for person comprehensive tests."""
+    handler = MagicMock()
+    handler.home = person_home
+    return handler
+
+
+@pytest.fixture
+def person_hass_data(hass: HomeAssistant, person_data_handler):
+    """Set hass.data[DOMAIN][DATA_HANDLER] for person comprehensive tests."""
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][DATA_HANDLER] = person_data_handler
+
+
+@pytest.fixture
+def create_person(hass, person_config_entry, person_home, person_hass_data):
+    """Factory fixture to create QSPerson with common config. Pass extra_kwargs per test."""
+
+    def _create_person(**extra_kwargs):
+        config = {
+            CONF_NAME: "Test Person",
+            CONF_PERSON_PERSON_ENTITY: "person.test_person",
+        }
+        config.update(extra_kwargs)
+        return QSPerson(
+            hass=hass,
+            config_entry=person_config_entry,
+            home=person_home,
+            **config,
+        )
+
+    return _create_person
 
 
 # ============================================================================
@@ -55,38 +110,9 @@ from tests.test_helpers import FakeHass, FakeConfigEntry
 class TestQSPersonMileageHistory:
     """Test mileage history tracking and management."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.home.get_car_by_name = MagicMock(return_value=None)
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_add_to_mileage_history_first_entry(self):
+    def test_add_to_mileage_history_first_entry(self, create_person):
         """Test adding first mileage entry."""
-        person = self.create_person()
+        person = create_person()
 
         day = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
         leave_time = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=pytz.UTC)
@@ -96,9 +122,9 @@ class TestQSPersonMileageHistory:
         assert len(person.historical_mileage_data) == 1
         assert person.historical_mileage_data[0][1] == 50.0  # mileage
 
-    def test_add_to_mileage_history_multiple_entries(self):
+    def test_add_to_mileage_history_multiple_entries(self, create_person):
         """Test adding multiple mileage entries."""
-        person = self.create_person()
+        person = create_person()
 
         day1 = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
         leave1 = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=pytz.UTC)
@@ -112,9 +138,9 @@ class TestQSPersonMileageHistory:
         assert person.historical_mileage_data[0][1] == 50.0
         assert person.historical_mileage_data[1][1] == 75.0
 
-    def test_add_to_mileage_history_updates_existing(self):
+    def test_add_to_mileage_history_updates_existing(self, create_person):
         """Test updating existing day's mileage."""
-        person = self.create_person()
+        person = create_person()
 
         day = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
         leave_time = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=pytz.UTC)
@@ -125,9 +151,9 @@ class TestQSPersonMileageHistory:
         assert len(person.historical_mileage_data) == 1
         assert person.historical_mileage_data[0][1] == 75.0  # Updated
 
-    def test_add_to_mileage_history_maintains_order(self):
+    def test_add_to_mileage_history_maintains_order(self, create_person):
         """Test entries are kept in chronological order."""
-        person = self.create_person()
+        person = create_person()
 
         day1 = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
         day2 = datetime.datetime(2024, 6, 17, 0, 0, 0, tzinfo=pytz.UTC)
@@ -144,9 +170,9 @@ class TestQSPersonMileageHistory:
         assert person.historical_mileage_data[1][1] == 60.0
         assert person.historical_mileage_data[2][1] == 75.0
 
-    def test_add_to_mileage_history_limits_size(self):
+    def test_add_to_mileage_history_limits_size(self, create_person):
         """Test history is limited to MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS."""
-        person = self.create_person()
+        person = create_person()
 
         base = datetime.datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
         leave = datetime.datetime(2024, 1, 1, 8, 0, 0, tzinfo=pytz.UTC)
@@ -158,9 +184,9 @@ class TestQSPersonMileageHistory:
 
         assert len(person.historical_mileage_data) <= MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
 
-    def test_add_to_mileage_history_none_leave_time(self):
+    def test_add_to_mileage_history_none_leave_time(self, create_person):
         """Test handling of None leave time."""
-        person = self.create_person()
+        person = create_person()
 
         day = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
 
@@ -169,9 +195,9 @@ class TestQSPersonMileageHistory:
         # Should not add entry without leave time
         assert len(person.historical_mileage_data) == 0
 
-    def test_add_to_mileage_history_updates_serializable(self):
+    def test_add_to_mileage_history_updates_serializable(self, create_person):
         """Test serializable_historical_data is updated."""
-        person = self.create_person()
+        person = create_person()
 
         day = datetime.datetime(2024, 6, 15, 0, 0, 0, tzinfo=pytz.UTC)
         leave_time = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=pytz.UTC)
@@ -190,37 +216,9 @@ class TestQSPersonMileageHistory:
 class TestQSPersonWeekdayPrediction:
     """Test weekday-based mileage prediction."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_best_week_day_guess_no_data(self):
+    def test_get_best_week_day_guess_no_data(self, create_person):
         """Test _get_best_week_day_guess with no data."""
-        person = self.create_person()
+        person = create_person()
         person.historical_mileage_data = []
 
         mileage, leave_time = person._get_best_week_day_guess(0)  # Monday
@@ -228,9 +226,9 @@ class TestQSPersonWeekdayPrediction:
         assert mileage is None
         assert leave_time is None
 
-    def test_get_best_week_day_guess_with_matching_day(self):
+    def test_get_best_week_day_guess_with_matching_day(self, create_person):
         """Test _get_best_week_day_guess with matching weekday data."""
-        person = self.create_person()
+        person = create_person()
 
         # Add data for a Monday (weekday 0)
         monday = datetime.datetime(2024, 6, 10, 0, 0, 0, tzinfo=pytz.UTC)  # June 10, 2024 is Monday
@@ -243,9 +241,9 @@ class TestQSPersonWeekdayPrediction:
         # Should return the mileage for Monday
         assert mileage == 50.0
 
-    def test_get_best_week_day_guess_uses_max_mileage(self):
+    def test_get_best_week_day_guess_uses_max_mileage(self, create_person):
         """Test _get_best_week_day_guess uses max mileage from recent entries."""
-        person = self.create_person()
+        person = create_person()
 
         # Add two Mondays with different mileages
         monday1 = datetime.datetime(2024, 6, 3, 0, 0, 0, tzinfo=pytz.UTC)
@@ -261,9 +259,9 @@ class TestQSPersonWeekdayPrediction:
         # Should use max mileage
         assert mileage == 75.0
 
-    def test_get_best_week_day_guess_returns_leave_time(self):
+    def test_get_best_week_day_guess_returns_leave_time(self, create_person):
         """Test _get_best_week_day_guess returns leave time."""
-        person = self.create_person()
+        person = create_person()
 
         monday1 = datetime.datetime(2024, 6, 3, 0, 0, 0, tzinfo=pytz.UTC)
         monday2 = datetime.datetime(2024, 6, 10, 0, 0, 0, tzinfo=pytz.UTC)
@@ -286,37 +284,9 @@ class TestQSPersonWeekdayPrediction:
 class TestQSPersonForecast:
     """Test person forecast computation."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_compute_person_next_need_no_history(self):
+    def test_compute_person_next_need_no_history(self, create_person):
         """Test _compute_person_next_need with no history."""
-        person = self.create_person()
+        person = create_person()
         person.historical_mileage_data = []
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
@@ -325,9 +295,9 @@ class TestQSPersonForecast:
         assert leave_time is None
         assert mileage is None
 
-    def test_compute_person_next_need_with_today_data(self):
+    def test_compute_person_next_need_with_today_data(self, create_person):
         """Test _compute_person_next_need with today's weekday data."""
-        person = self.create_person()
+        person = create_person()
 
         # Current time is Saturday June 15, 2024
         current = datetime.datetime(2024, 6, 15, 6, 0, 0, tzinfo=pytz.UTC)  # Saturday, 6 AM
@@ -344,9 +314,9 @@ class TestQSPersonForecast:
         # Leave time would be 9:00 AM which is after 6:00 AM
         assert mileage == 100.0
 
-    def test_update_person_forecast_caching(self):
+    def test_update_person_forecast_caching(self, create_person):
         """Test update_person_forecast uses caching."""
-        person = self.create_person()
+        person = create_person()
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -361,9 +331,9 @@ class TestQSPersonForecast:
         # Should not have updated (within FORECAST_AUTO_REFRESH_RATE_S)
         assert first_request_time == second_request_time
 
-    def test_update_person_forecast_force_update(self):
+    def test_update_person_forecast_force_update(self, create_person):
         """Test update_person_forecast with force_update."""
-        person = self.create_person()
+        person = create_person()
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -377,9 +347,9 @@ class TestQSPersonForecast:
         # Should have updated
         assert second_time != first_time
 
-    def test_get_forecast_readable_string_no_forecast(self):
+    def test_get_forecast_readable_string_no_forecast(self, create_person):
         """Test get_forecast_readable_string with no forecast."""
-        person = self.create_person()
+        person = create_person()
         person.predicted_mileage = None
         person.predicted_leave_time = None
 
@@ -387,9 +357,9 @@ class TestQSPersonForecast:
 
         assert "No forecast" in result
 
-    def test_get_forecast_readable_string_returns_string(self):
+    def test_get_forecast_readable_string_returns_string(self, create_person):
         """Test get_forecast_readable_string returns a string."""
-        person = self.create_person()
+        person = create_person()
 
         result = person.get_forecast_readable_string()
 
@@ -403,39 +373,10 @@ class TestQSPersonForecast:
 class TestQSPersonNotification:
     """Test person notification logic."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.home.get_best_persons_cars_allocations = AsyncMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
     @pytest.mark.asyncio
-    async def test_notify_no_mobile_app(self):
+    async def test_notify_no_mobile_app(self, create_person):
         """Test notification skipped when no mobile app."""
-        person = self.create_person()  # No mobile_app configured
+        person = create_person()  # No mobile_app configured
         person.on_device_state_change = AsyncMock()
         person._last_forecast_notification_call_time = None
 
@@ -445,9 +386,9 @@ class TestQSPersonNotification:
         assert person._last_forecast_notification_call_time is None
 
     @pytest.mark.asyncio
-    async def test_notify_with_mobile_app(self):
+    async def test_notify_with_mobile_app(self, create_person):
         """Test notification with mobile app configured."""
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_MOBILE_APP: "mobile_app_test",
             CONF_PERSON_NOTIFICATION_TIME: "08:00:00",
         })
@@ -469,9 +410,9 @@ class TestQSPersonNotification:
         person.on_device_state_change.assert_called()
 
     @pytest.mark.asyncio
-    async def test_notify_reason_changed_car_always_notifies(self):
+    async def test_notify_reason_changed_car_always_notifies(self, create_person):
         """Test CHANGED_CAR reason always triggers notification."""
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_MOBILE_APP: "mobile_app_test",
         })
 
@@ -496,37 +437,9 @@ class TestQSPersonNotification:
 class TestQSPersonShouldRecomputeHistory:
     """Test should_recompute_history method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_should_recompute_no_authorized_cars(self):
+    def test_should_recompute_no_authorized_cars(self, create_person):
         """Test should_recompute_history returns False with no authorized cars."""
-        person = self.create_person()
+        person = create_person()
         person.authorized_cars = []
 
         time = datetime.datetime.now(pytz.UTC)
@@ -534,9 +447,9 @@ class TestQSPersonShouldRecomputeHistory:
 
         assert result is False
 
-    def test_should_recompute_not_initialized(self):
+    def test_should_recompute_not_initialized(self, create_person):
         """Test should_recompute_history returns True when not initialized."""
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_PERSON_AUTHORIZED_CARS: ["car1"]
         })
         person.has_been_initialized = False
@@ -546,9 +459,9 @@ class TestQSPersonShouldRecomputeHistory:
 
         assert result is True
 
-    def test_should_recompute_already_initialized(self):
+    def test_should_recompute_already_initialized(self, create_person):
         """Test should_recompute_history returns False when already initialized."""
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_PERSON_AUTHORIZED_CARS: ["car1"]
         })
         person.has_been_initialized = True
@@ -566,48 +479,20 @@ class TestQSPersonShouldRecomputeHistory:
 class TestQSPersonGetAuthorizedCars:
     """Test get_authorized_cars method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_authorized_cars_empty(self):
+    def test_get_authorized_cars_empty(self, create_person, person_home):
         """Test get_authorized_cars with no authorized cars."""
-        person = self.create_person()
-        self.home.get_car_by_name = MagicMock(return_value=None)
+        person = create_person()
+        person_home.get_car_by_name = MagicMock(return_value=None)
 
         result = person.get_authorized_cars()
 
         assert result == []
 
-    def test_get_authorized_cars_with_valid_cars(self):
+    def test_get_authorized_cars_with_valid_cars(self, create_person, person_home):
         """Test get_authorized_cars returns valid QSCar instances."""
         from custom_components.quiet_solar.ha_model.car import QSCar
 
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_PERSON_AUTHORIZED_CARS: ["car1", "car2"]
         })
 
@@ -621,7 +506,7 @@ class TestQSPersonGetAuthorizedCars:
                 return mock_car2
             return None
 
-        self.home.get_car_by_name = MagicMock(side_effect=get_car)
+        person_home.get_car_by_name = MagicMock(side_effect=get_car)
 
         result = person.get_authorized_cars()
 
@@ -629,9 +514,9 @@ class TestQSPersonGetAuthorizedCars:
         assert mock_car1 in result
         assert mock_car2 in result
 
-    def test_get_authorized_cars_filters_invalid(self):
+    def test_get_authorized_cars_filters_invalid(self, create_person, person_home):
         """Test get_authorized_cars filters out non-QSCar objects."""
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_PERSON_AUTHORIZED_CARS: ["car1", "invalid_car"]
         })
 
@@ -643,7 +528,7 @@ class TestQSPersonGetAuthorizedCars:
                 return mock_car
             return None
 
-        self.home.get_car_by_name = MagicMock(side_effect=get_car)
+        person_home.get_car_by_name = MagicMock(side_effect=get_car)
 
         result = person.get_authorized_cars()
 
@@ -657,52 +542,24 @@ class TestQSPersonGetAuthorizedCars:
 class TestQSPersonGetPreferredCar:
     """Test get_preferred_car method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_preferred_car_none(self):
+    def test_get_preferred_car_none(self, create_person):
         """Test get_preferred_car returns None when not set."""
-        person = self.create_person()
+        person = create_person()
 
         result = person.get_preferred_car()
 
         assert result is None
 
-    def test_get_preferred_car_valid(self):
+    def test_get_preferred_car_valid(self, create_person, person_home):
         """Test get_preferred_car returns car when valid."""
         from custom_components.quiet_solar.ha_model.car import QSCar
 
-        person = self.create_person(**{
+        person = create_person(**{
             CONF_PERSON_PREFERRED_CAR: "my_car"
         })
 
         mock_car = MagicMock(spec=QSCar)
-        self.home.get_car_by_name = MagicMock(return_value=mock_car)
+        person_home.get_car_by_name = MagicMock(return_value=mock_car)
 
         result = person.get_preferred_car()
 
@@ -716,44 +573,17 @@ class TestQSPersonGetPreferredCar:
 class TestQSPersonPlatforms:
     """Test person platform support."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_platforms_includes_sensor(self):
+    def test_get_platforms_includes_sensor(self, create_person):
         """Test get_platforms includes SENSOR platform."""
-        person = self.create_person()
+        person = create_person()
 
         platforms = person.get_platforms()
 
         assert Platform.SENSOR in platforms
 
-    def test_dashboard_sort_string(self):
+    def test_dashboard_sort_string(self, create_person):
         """Test dashboard_sort_string_in_type property."""
-        person = self.create_person()
+        person = create_person()
 
         result = person.dashboard_sort_string_in_type
 
@@ -767,37 +597,9 @@ class TestQSPersonPlatforms:
 class TestQSPersonSerialization:
     """Test person mileage prediction serialization."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_person_mileage_serialized_prediction_no_forecast(self):
+    def test_get_person_mileage_serialized_prediction_no_forecast(self, create_person):
         """Test get_person_mileage_serialized_prediction with no forecast."""
-        person = self.create_person()
+        person = create_person()
         person.predicted_mileage = None
         person.predicted_leave_time = None
         person.serializable_historical_data = []
@@ -810,9 +612,9 @@ class TestQSPersonSerialization:
         assert attributes["predicted_mileage"] is None
         assert attributes["predicted_leave_time"] is None
 
-    def test_get_person_mileage_serialized_prediction_with_forecast(self):
+    def test_get_person_mileage_serialized_prediction_with_forecast(self, create_person):
         """Test get_person_mileage_serialized_prediction with forecast data."""
-        person = self.create_person()
+        person = create_person()
         person.serializable_historical_data = [
             {"day": "2024-06-14", "mileage": 50.0, "leave_time": "08:00"}
         ]
@@ -834,36 +636,9 @@ class TestQSPersonSerialization:
 class TestQSPersonDevicePostHomeInit:
     """Test device_post_home_init method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_device_post_home_init_no_sensor(self):
+    def test_device_post_home_init_no_sensor(self, create_person):
         """Test device_post_home_init with no sensor entity."""
-        person = self.create_person()
+        person = create_person()
         person.ha_entities = {}
         person.historical_mileage_data = [(datetime.datetime(2024, 6, 1, tzinfo=pytz.UTC), 10.0, datetime.datetime(2024, 6, 1, 8, tzinfo=pytz.UTC), 0)]
         person.predicted_mileage = 15.0
@@ -876,9 +651,10 @@ class TestQSPersonDevicePostHomeInit:
         assert person.predicted_mileage == 15.0
         assert person.predicted_leave_time == datetime.datetime(2024, 6, 2, tzinfo=pytz.UTC)
 
-    def test_device_post_home_init_restores_history(self):
+    @pytest.mark.asyncio
+    async def test_device_post_home_init_restores_history(self, hass, create_person):
         """Test device_post_home_init restores historical data."""
-        person = self.create_person()
+        person = create_person()
 
         # Mock the sensor entity
         mock_entity = MagicMock()
@@ -886,7 +662,7 @@ class TestQSPersonDevicePostHomeInit:
         person.ha_entities = {"person_mileage_prediction": mock_entity}
 
         # Mock state with historical data
-        self.hass.states.set(
+        set_result = hass.states.async_set(
             "sensor.test_person_mileage",
             "100km",
             {
@@ -898,8 +674,10 @@ class TestQSPersonDevicePostHomeInit:
                     }
                 ],
                 "has_been_initialized": True
-            }
+            },
         )
+        if set_result is not None:
+            await set_result
 
         time = datetime.datetime.now(pytz.UTC)
         person.device_post_home_init(time)
@@ -916,36 +694,9 @@ class TestQSPersonDevicePostHomeInit:
 class TestQSPersonReset:
     """Test person reset method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_person_entry",
-            data={CONF_NAME: "Test Person"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_person(self, **extra_kwargs):
-        """Helper to create a person with common configuration."""
-        config = {
-            CONF_NAME: "Test Person",
-            CONF_PERSON_PERSON_ENTITY: "person.test_person",
-        }
-        config.update(extra_kwargs)
-
-        return QSPerson(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_reset_calls_parent(self):
+    def test_reset_calls_parent(self, create_person):
         """Test reset calls parent reset."""
-        person = self.create_person()
+        person = create_person()
 
         person._constraints = [MagicMock()]
         person.current_command = MagicMock()

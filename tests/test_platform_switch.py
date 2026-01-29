@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 import pytz
+
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.switch import (
     create_ha_switch,
@@ -31,7 +35,53 @@ from custom_components.quiet_solar.const import (
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.home_model.load import TestLoad
 from tests.test_helpers import create_mock_device
-from tests.test_helpers import FakeConfigEntry, FakeHass
+from tests.factories import create_minimal_home_model
+
+
+@pytest.fixture
+def load_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """MockConfigEntry for load device, added to hass."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        source=SOURCE_USER,
+        data={},
+        entry_id="load_entry",
+        title="Test Load",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def switch_platform_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """MockConfigEntry for switch platform setup/unload tests."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        source=SOURCE_USER,
+        data={},
+        entry_id="test_entry",
+        title="Test Device",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+def _create_load_with_handler(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    support_green_only_switch: bool,
+) -> _TestLoadHA:
+    """Create a load with data handler and minimal home (using factory)."""
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = MagicMock(hass=hass)
+    home = create_minimal_home_model()
+    return _TestLoadHA(
+        hass=hass,
+        config_entry=config_entry,
+        home=home,
+        name="Test Load",
+        device_type="load",
+        support_green_only_switch=support_green_only_switch,
+    )
 
 
 def test_create_ha_switch_for_charger():
@@ -90,35 +140,22 @@ class _TestLoadHA(HADeviceMixin, TestLoad):
         return self._support_green_only_switch
 
 
-def _create_load_with_handler(support_green_only_switch: bool) -> _TestLoadHA:
-    fake_hass = FakeHass()
-    fake_hass.states.async_available = MagicMock(return_value=True)
-    data_handler = MagicMock()
-    data_handler.hass = fake_hass
-    fake_hass.data[DOMAIN][DATA_HANDLER] = data_handler
-    config_entry = FakeConfigEntry(entry_id="load_entry", data={})
-    return _TestLoadHA(
-        hass=fake_hass,
-        config_entry=config_entry,
-        home=MagicMock(),
-        name="Test Load",
-        device_type="load",
-        support_green_only_switch=support_green_only_switch,
-    )
-
-
-def test_create_ha_switch_for_load():
+def test_create_ha_switch_for_load(
+    hass: HomeAssistant, load_config_entry: MockConfigEntry
+):
     """Test creating switches for load with green-only support."""
-    load = _create_load_with_handler(support_green_only_switch=True)
+    load = _create_load_with_handler(hass, load_config_entry, support_green_only_switch=True)
     entities = create_ha_switch_for_AbstractLoad(load)
 
     keys = {entity.entity_description.key for entity in entities}
     assert keys == {SWITCH_BEST_EFFORT_GREEN_ONLY, SWITCH_ENABLE_DEVICE}
 
 
-def test_create_ha_switch_for_load_no_green_only():
+def test_create_ha_switch_for_load_no_green_only(
+    hass: HomeAssistant, load_config_entry: MockConfigEntry
+):
     """Test creating switches for load without green-only support."""
-    load = _create_load_with_handler(support_green_only_switch=False)
+    load = _create_load_with_handler(hass, load_config_entry, support_green_only_switch=False)
     entities = create_ha_switch_for_AbstractLoad(load)
 
     keys = {entity.entity_description.key for entity in entities}
@@ -179,7 +216,7 @@ async def test_qs_switch_entity_async_switch_callback():
     mock_handler = MagicMock()
     mock_handler.hass = MagicMock()
     mock_device = create_mock_device("test")
-    mock_device.home = MagicMock()
+    mock_device.home = create_minimal_home_model()
     mock_device.home.force_update_all = AsyncMock()
 
     async_switch = AsyncMock()
@@ -226,13 +263,12 @@ async def test_qs_switch_restore_defaults_when_no_attr():
     """Test switch restore falls back to False when attribute missing."""
     mock_handler = MagicMock()
     mock_handler.hass = MagicMock()
-    mock_device = SimpleNamespace(
-        device_id="test_device",
-        device_type="test",
-        name="Test Device",
-        qs_enable_device=True,
-        home=None,
-    )
+    mock_device = MagicMock(spec=[])  # Empty spec - only has explicit attrs
+    mock_device.device_id = "test_device"
+    mock_device.device_type = "test"
+    mock_device.name = "Test Device"
+    mock_device.qs_enable_device = True
+    mock_device.home = None
 
     mock_description = QSSwitchEntityDescription(
         key="missing_attr",
@@ -409,33 +445,39 @@ def test_qs_switch_entity_car_availability_charger_disabled():
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry(fake_hass, mock_config_entry):
+async def test_async_setup_entry(
+    hass: HomeAssistant, switch_platform_config_entry: MockConfigEntry
+):
     """Test switch platform setup."""
     mock_device = create_mock_device("test")
     mock_device.data_handler = MagicMock()
-    fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
-    
+    hass.data.setdefault(DOMAIN, {})[switch_platform_config_entry.entry_id] = mock_device
+
     mock_add_entities = MagicMock()
-    
-    with patch('custom_components.quiet_solar.switch.create_ha_switch', return_value=[MagicMock()]):
-        await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-        
+
+    with patch(
+        "custom_components.quiet_solar.switch.create_ha_switch",
+        return_value=[MagicMock()],
+    ):
+        await async_setup_entry(hass, switch_platform_config_entry, mock_add_entities)
+
         mock_add_entities.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_async_unload_entry_handles_exception():
+async def test_async_unload_entry_handles_exception(
+    hass: HomeAssistant, switch_platform_config_entry: MockConfigEntry
+):
     """Test switch platform unload handles errors."""
-    fake_hass = FakeHass()
-    mock_config_entry = FakeConfigEntry(entry_id="test_entry", data={})
-
     mock_device = create_mock_device("test")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=RuntimeError("boom"))
     mock_device.home = mock_home
 
-    fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
+    hass.data.setdefault(DOMAIN, {})[
+        switch_platform_config_entry.entry_id
+    ] = mock_device
 
-    result = await async_unload_entry(fake_hass, mock_config_entry)
+    result = await async_unload_entry(hass, switch_platform_config_entry)
 
     assert result is True

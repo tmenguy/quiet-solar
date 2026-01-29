@@ -66,8 +66,56 @@ from custom_components.quiet_solar.const import (
     CHARGER_NO_CAR_CONNECTED,
 )
 
-# Import from local conftest - use relative import to avoid conflict with HA core
-from tests.test_helpers import FakeHass, FakeConfigEntry
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from tests.factories import create_minimal_home_model
+
+
+def _charger_config_entry() -> MockConfigEntry:
+    """Create MockConfigEntry for charger tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_charger_entry",
+        data={CONF_NAME: "Test Charger"},
+        title="Test Charger",
+    )
+
+
+def _charger_home():
+    """Create mock home for charger tests."""
+    home = create_minimal_home_model()
+    home.is_off_grid = MagicMock(return_value=False)
+    home.force_next_solve = MagicMock()
+    return home
+
+
+@pytest.fixture
+def charger_config_entry() -> MockConfigEntry:
+    """Config entry for charger tests."""
+    return _charger_config_entry()
+
+
+@pytest.fixture
+def charger_home():
+    """Mock home for charger tests."""
+    return _charger_home()
+
+
+@pytest.fixture
+def charger_data_handler(charger_home):
+    """Data handler for charger tests."""
+    handler = MagicMock()
+    handler.home = charger_home
+    return handler
+
+
+@pytest.fixture
+def charger_hass_data(hass: HomeAssistant, charger_data_handler):
+    """Set hass.data[DOMAIN][DATA_HANDLER] for charger tests."""
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][DATA_HANDLER] = charger_data_handler
 
 
 # ============================================================================
@@ -537,7 +585,7 @@ class TestQSChargerGroup:
         self.mock_dynamic_group = MagicMock(spec=QSDynamicGroup)
         self.mock_dynamic_group.name = "Test Group"
         self.mock_dynamic_group._childrens = []
-        self.mock_dynamic_group.home = MagicMock()
+        self.mock_dynamic_group.home = create_minimal_home_model()
 
     def test_init_with_no_chargers(self):
         """Test initialization with no chargers."""
@@ -629,27 +677,20 @@ class TestQSChargerGroup:
 class TestQSChargerGenericInit:
     """Test QSChargerGeneric initialization."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_charger_entry",
-            data={CONF_NAME: "Test Charger"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def test_init_with_minimal_params(self):
+    def test_init_with_minimal_params(
+        self,
+        hass: HomeAssistant,
+        charger_config_entry: MockConfigEntry,
+        charger_home,
+        charger_data_handler,
+        charger_hass_data,
+    ):
         """Test initialization with minimal parameters."""
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
+                hass=hass,
+                config_entry=charger_config_entry,
+                home=charger_home,
                 **{
                     CONF_NAME: "Test Charger",
                     CONF_CHARGER_MIN_CHARGE: 6,
@@ -663,13 +704,20 @@ class TestQSChargerGenericInit:
             assert charger.max_charge == 32
             assert charger.physical_3p is True
 
-    def test_init_with_consumption(self):
+    def test_init_with_consumption(
+        self,
+        hass: HomeAssistant,
+        charger_config_entry: MockConfigEntry,
+        charger_home,
+        charger_data_handler,
+        charger_hass_data,
+    ):
         """Test initialization with charger consumption."""
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
+                hass=hass,
+                config_entry=charger_config_entry,
+                home=charger_home,
                 **{
                     CONF_NAME: "Test Charger",
                     CONF_CHARGER_MIN_CHARGE: 6,
@@ -681,13 +729,20 @@ class TestQSChargerGenericInit:
 
             assert charger.charger_consumption_W == 100
 
-    def test_init_mono_phase_index(self):
+    def test_init_mono_phase_index(
+        self,
+        hass: HomeAssistant,
+        charger_config_entry: MockConfigEntry,
+        charger_home,
+        charger_data_handler,
+        charger_hass_data,
+    ):
         """Test mono phase index initialization."""
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
+                hass=hass,
+                config_entry=charger_config_entry,
+                home=charger_home,
                 **{
                     CONF_NAME: "Test Charger",
                     CONF_CHARGER_MIN_CHARGE: 6,
@@ -704,64 +759,54 @@ class TestQSChargerGenericInit:
 # Tests for charger state management
 # ============================================================================
 
+@pytest.fixture
+def charger_generic(hass, charger_config_entry, charger_home, charger_data_handler, charger_hass_data):
+    """Create QSChargerGeneric instance for tests."""
+    with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+        return QSChargerGeneric(
+            hass=hass,
+            config_entry=charger_config_entry,
+            home=charger_home,
+            **{
+                CONF_NAME: "Test Charger",
+                CONF_CHARGER_MIN_CHARGE: 6,
+                CONF_CHARGER_MAX_CHARGE: 32,
+                CONF_IS_3P: True,
+            }
+        )
+
+
 class TestQSChargerStateManagement:
     """Test charger state management methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_charger_entry",
-            data={CONF_NAME: "Test Charger"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
-            self.charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
-                **{
-                    CONF_NAME: "Test Charger",
-                    CONF_CHARGER_MIN_CHARGE: 6,
-                    CONF_CHARGER_MAX_CHARGE: 32,
-                    CONF_IS_3P: True,
-                }
-            )
-
-    def test_is_plugged_returns_none_when_no_sensor(self):
+    def test_is_plugged_returns_none_when_no_sensor(self, charger_generic):
         """Test is_plugged returns None when no sensor configured."""
-        self.charger.charger_plugged = None
+        charger_generic.charger_plugged = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.charger.is_plugged(time)
+        result = charger_generic.is_plugged(time)
 
         # Should return None when no sensor configured
         assert result is None
 
-    def test_can_do_3_to_1_phase_switch_without_switch(self):
+    def test_can_do_3_to_1_phase_switch_without_switch(self, charger_generic):
         """Test can_do_3_to_1_phase_switch returns False without switch."""
-        self.charger.charger_3_to_1_phase_switch = None
+        charger_generic.charger_3_to_1_phase_switch = None
 
-        result = self.charger.can_do_3_to_1_phase_switch()
+        result = charger_generic.can_do_3_to_1_phase_switch()
 
         assert result is False
 
-    def test_car_property_no_car(self):
+    def test_car_property_no_car(self, charger_generic):
         """Test car property when no car connected."""
         # By default, no car is set
-        assert self.charger.car is None
+        assert charger_generic.car is None
 
-    def test_user_selected_car_name(self):
+    def test_user_selected_car_name(self, charger_generic):
         """Test _user_selected_car_name property."""
-        self.charger._user_selected_car_name = "My Tesla"
+        charger_generic._user_selected_car_name = "My Tesla"
 
-        assert self.charger._user_selected_car_name == "My Tesla"
+        assert charger_generic._user_selected_car_name == "My Tesla"
 
 
 # ============================================================================
@@ -811,62 +856,35 @@ class TestOCPPChargerStatus:
 class TestChargerPowerBudget:
     """Test power budget calculation methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_charger_entry",
-            data={CONF_NAME: "Test Charger"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
-            self.charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
-                **{
-                    CONF_NAME: "Test Charger",
-                    CONF_CHARGER_MIN_CHARGE: 6,
-                    CONF_CHARGER_MAX_CHARGE: 32,
-                    CONF_IS_3P: True,
-                }
-            )
-
-    def test_theoretical_power_calculation(self):
+    def test_theoretical_power_calculation(self, charger_generic):
         """Test theoretical power calculation for given amps."""
         # For 16A at 230V three phase, theoretical: 16A * 230V * 3 = 11,040W
         # The charger should have voltage from home
-        assert self.charger.voltage == 230.0
-        assert self.charger.min_charge == 6
-        assert self.charger.max_charge == 32
+        assert charger_generic.voltage == 230.0
+        assert charger_generic.min_charge == 6
+        assert charger_generic.max_charge == 32
 
-    def test_update_amps_with_delta_increase(self):
+    def test_update_amps_with_delta_increase(self, charger_generic):
         """Test update_amps_with_delta with positive delta."""
         from_amps = [10.0, 10.0, 10.0]
 
-        result = self.charger.update_amps_with_delta(from_amps, delta=2, is_3p=True)
+        result = charger_generic.update_amps_with_delta(from_amps, delta=2, is_3p=True)
 
         assert result == [12.0, 12.0, 12.0]
 
-    def test_update_amps_with_delta_decrease(self):
+    def test_update_amps_with_delta_decrease(self, charger_generic):
         """Test update_amps_with_delta with negative delta."""
         from_amps = [10.0, 10.0, 10.0]
 
-        result = self.charger.update_amps_with_delta(from_amps, delta=-2, is_3p=True)
+        result = charger_generic.update_amps_with_delta(from_amps, delta=-2, is_3p=True)
 
         assert result == [8.0, 8.0, 8.0]
 
-    def test_update_amps_with_delta_single_phase(self):
+    def test_update_amps_with_delta_single_phase(self, charger_generic):
         """Test update_amps_with_delta for single phase."""
         from_amps = [0.0, 10.0, 0.0]
 
-        result = self.charger.update_amps_with_delta(from_amps, delta=3, is_3p=False)
+        result = charger_generic.update_amps_with_delta(from_amps, delta=3, is_3p=False)
 
         # For single phase, only one element should change
         total = sum(result)
@@ -880,54 +898,25 @@ class TestChargerPowerBudget:
 class TestChargerCheckLoadActivity:
     """Test check_load_activity_and_constraints method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_charger_entry",
-            data={CONF_NAME: "Test Charger"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home._cars = []
-        self.home.force_next_solve = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
-            self.charger = QSChargerGeneric(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                home=self.home,
-                **{
-                    CONF_NAME: "Test Charger",
-                    CONF_CHARGER_MIN_CHARGE: 6,
-                    CONF_CHARGER_MAX_CHARGE: 32,
-                    CONF_IS_3P: True,
-                }
-            )
-
     @pytest.mark.asyncio
-    async def test_check_load_returns_false_during_reboot(self):
+    async def test_check_load_returns_false_during_reboot(self, charger_generic):
         """Test returns False during reboot window."""
         time = datetime.datetime.now(pytz.UTC)
-        self.charger._asked_for_reboot_at_time = time - timedelta(seconds=30)
+        charger_generic._asked_for_reboot_at_time = time - timedelta(seconds=30)
 
-        result = await self.charger.check_load_activity_and_constraints(time)
+        result = await charger_generic.check_load_activity_and_constraints(time)
 
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_check_load_boot_time_window(self):
+    async def test_check_load_boot_time_window(self, charger_generic):
         """Test behavior during boot time window."""
         time = datetime.datetime.now(pytz.UTC)
-        self.charger._boot_time = time - timedelta(seconds=5)
+        charger_generic._boot_time = time - timedelta(seconds=5)
 
-        with patch.object(self.charger, 'is_charger_unavailable', return_value=False), \
-             patch.object(self.charger, 'probe_for_possible_needed_reboot', return_value=False):
-            result = await self.charger.check_load_activity_and_constraints(time)
+        with patch.object(charger_generic, 'is_charger_unavailable', return_value=False), \
+             patch.object(charger_generic, 'probe_for_possible_needed_reboot', return_value=False):
+            result = await charger_generic.check_load_activity_and_constraints(time)
 
         # Should return False during boot window
         assert result is False

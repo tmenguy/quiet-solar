@@ -71,6 +71,7 @@ from custom_components.quiet_solar.const import (
     CAR_CHARGE_TYPE_TARGET_MET,
 )
 from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
+from tests.factories import create_minimal_home_model
 
 
 def create_mock_hass():
@@ -89,10 +90,8 @@ def create_mock_hass():
 
 def create_mock_home(hass):
     """Create a mock QSHome instance."""
-    home = MagicMock()
+    home = create_minimal_home_model()
     home.hass = hass
-    home._chargers = []
-    home._cars = []
     home.battery = None
     home.get_available_power_values = MagicMock(return_value=None)
     home.get_grid_consumption_power_values = MagicMock(return_value=None)

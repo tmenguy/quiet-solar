@@ -25,6 +25,10 @@ from custom_components.quiet_solar.ha_model.device import (
     load_from_history,
     HADeviceMixin,
 )
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.quiet_solar.const import (
     DOMAIN,
     DATA_HANDLER,
@@ -32,7 +36,7 @@ from custom_components.quiet_solar.const import (
     CONF_CALENDAR,
 )
 
-from tests.test_helpers import FakeHass, FakeConfigEntry
+from tests.factories import create_minimal_home_model
 
 
 # =============================================================================
@@ -339,180 +343,185 @@ class ConcreteHADevice(HADeviceMixin):
         super().__init__(**kwargs)
 
 
-class TestHADeviceMixinInit:
-    """Test HADeviceMixin initialization."""
-
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_device_entry",
-            data={CONF_NAME: "Test Device"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def test_init_basic(self):
-        """Test basic initialization."""
-        device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            name="Test Device",
-        )
-
-        assert device.hass == self.hass
-        assert device.config_entry == self.config_entry
-        assert device.name == "Test Device"
-
-    def test_init_with_calendar(self):
-        """Test initialization with calendar entity."""
-        device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            name="Test Device",
-            **{CONF_CALENDAR: "calendar.test"},
-        )
-
-        assert device.calendar == "calendar.test"
-
-    def test_init_with_accurate_power_sensor(self):
-        """Test initialization with accurate power sensor."""
-        device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            name="Test Device",
-            **{CONF_ACCURATE_POWER_SENSOR: "sensor.power"},
-        )
-
-        assert device.accurate_power_sensor == "sensor.power"
-
-    def test_init_no_config_entry(self):
-        """Test initialization without config entry."""
-        device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=None,
-            home=self.home,
-            name="Test Device",
-        )
-
-        assert device.config_entry is None
-        assert device.config_entry_initialized is True
+@pytest.fixture
+def device_mixin_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Mock config entry for HADeviceMixin tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_device_entry",
+        data={CONF_NAME: "Test Device"},
+        title="Test Device",
+    )
 
 
-class TestHADeviceMixinTimeHelpers:
-    """Test HADeviceMixin time helper methods."""
-
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_device_entry",
-            data={CONF_NAME: "Test Device"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-        self.device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            name="Test Device",
-        )
-
-    def test_get_next_time_from_hours_future(self):
-        """Test get_next_time_from_hours returns future time."""
-        from datetime import time as dt_time
-
-        now = datetime.datetime.now(pytz.UTC)
-        target_time = dt_time(hour=23, minute=59, second=59)  # Late evening
-
-        result = self.device.get_next_time_from_hours(target_time, now)
-
-        assert result is not None
-        # Result should be in the future or today
-        assert result >= now - timedelta(hours=24)
-
-    def test_get_next_time_from_hours_output_utc(self):
-        """Test get_next_time_from_hours returns UTC when requested."""
-        from datetime import time as dt_time
-
-        now = datetime.datetime.now(pytz.UTC)
-        target_time = dt_time(hour=12, minute=0, second=0)
-
-        result = self.device.get_next_time_from_hours(target_time, now, output_in_utc=True)
-
-        assert result is not None
-        assert result.tzinfo == pytz.UTC
-
-    def test_get_proper_local_adapted_tomorrow(self):
-        """Test get_proper_local_adapted_tomorrow returns correct date."""
-        now = datetime.datetime.now(pytz.UTC)
-
-        result = self.device.get_proper_local_adapted_tomorrow(now)
-
-        # Should be tomorrow in UTC
-        assert result > now
-        assert result.tzinfo == pytz.UTC
+@pytest.fixture
+def device_mixin_home(hass: HomeAssistant):
+    """Home and data handler for HADeviceMixin tests."""
+    home = create_minimal_home_model()
+    data_handler = MagicMock()
+    data_handler.home = home
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = data_handler
+    return home
 
 
-class TestHADeviceMixinPowerProbe:
-    """Test HADeviceMixin power probe methods."""
+def test_init_basic(
+    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
+):
+    """Test basic initialization."""
+    device = ConcreteHADevice(
+        hass=hass,
+        config_entry=device_mixin_config_entry,
+        home=device_mixin_home,
+        name="Test Device",
+    )
+    assert device.hass is hass
+    assert device.config_entry == device_mixin_config_entry
+    assert device.name == "Test Device"
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_device_entry",
-            data={CONF_NAME: "Test Device"},
-        )
-        self.home = MagicMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
 
-        self.device = ConcreteHADevice(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            name="Test Device",
-            **{CONF_ACCURATE_POWER_SENSOR: "sensor.power"},
-        )
+def test_init_with_calendar(
+    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
+):
+    """Test initialization with calendar entity."""
+    device = ConcreteHADevice(
+        hass=hass,
+        config_entry=device_mixin_config_entry,
+        home=device_mixin_home,
+        name="Test Device",
+        **{CONF_CALENDAR: "calendar.test"},
+    )
+    assert device.calendar == "calendar.test"
 
-    def test_attach_power_to_probe(self):
-        """Test attach_power_to_probe registers sensor."""
-        self.device.attach_power_to_probe("sensor.new_power")
 
-        assert "sensor.new_power" in self.device._entity_probed_state
+def test_init_with_accurate_power_sensor(
+    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
+):
+    """Test initialization with accurate power sensor."""
+    device = ConcreteHADevice(
+        hass=hass,
+        config_entry=device_mixin_config_entry,
+        home=device_mixin_home,
+        name="Test Device",
+        **{CONF_ACCURATE_POWER_SENSOR: "sensor.power"},
+    )
+    assert device.accurate_power_sensor == "sensor.power"
 
-    def test_attach_power_to_probe_none(self):
-        """Test attach_power_to_probe with None is safe."""
-        initial_keys = set(self.device._entity_probed_state)
-        self.device.attach_power_to_probe(None)
-        assert set(self.device._entity_probed_state) == initial_keys
 
-    def test_attach_amps_to_probe(self):
-        """Test attach_amps_to_probe registers sensor."""
-        self.device.attach_amps_to_probe("sensor.amps")
+def test_init_no_config_entry(hass: HomeAssistant, device_mixin_home):
+    """Test initialization without config entry."""
+    device = ConcreteHADevice(
+        hass=hass,
+        config_entry=None,
+        home=device_mixin_home,
+        name="Test Device",
+    )
+    assert device.config_entry is None
+    assert device.config_entry_initialized is True
 
-        assert "sensor.amps" in self.device._entity_probed_state
 
-    def test_attach_ha_state_to_probe_numerical(self):
-        """Test attach_ha_state_to_probe for numerical sensor."""
-        self.device.attach_ha_state_to_probe("sensor.temp", is_numerical=True)
+@pytest.fixture
+def device_mixin_device(
+    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
+):
+    """ConcreteHADevice instance for time helper tests."""
+    return ConcreteHADevice(
+        hass=hass,
+        config_entry=device_mixin_config_entry,
+        home=device_mixin_home,
+        name="Test Device",
+    )
 
-        assert "sensor.temp" in self.device._entity_probed_state
-        assert self.device._entity_probed_state_is_numerical["sensor.temp"] is True
 
-    def test_attach_ha_state_to_probe_non_numerical(self):
-        """Test attach_ha_state_to_probe for non-numerical sensor."""
-        self.device.attach_ha_state_to_probe("sensor.status", is_numerical=False)
+def test_get_next_time_from_hours_future(device_mixin_device):
+    """Test get_next_time_from_hours returns future time."""
+    from datetime import time as dt_time
 
-        assert "sensor.status" in self.device._entity_probed_state
-        assert self.device._entity_probed_state_is_numerical["sensor.status"] is False
+    now = datetime.datetime.now(pytz.UTC)
+    target_time = dt_time(hour=23, minute=59, second=59)  # Late evening
+
+    result = device_mixin_device.get_next_time_from_hours(target_time, now)
+
+    assert result is not None
+    assert result >= now - timedelta(hours=24)
+
+
+def test_get_next_time_from_hours_output_utc(device_mixin_device):
+    """Test get_next_time_from_hours returns UTC when requested."""
+    from datetime import time as dt_time
+
+    now = datetime.datetime.now(pytz.UTC)
+    target_time = dt_time(hour=12, minute=0, second=0)
+
+    result = device_mixin_device.get_next_time_from_hours(
+        target_time, now, output_in_utc=True
+    )
+
+    assert result is not None
+    assert result.tzinfo == pytz.UTC
+
+
+def test_get_proper_local_adapted_tomorrow(device_mixin_device):
+    """Test get_proper_local_adapted_tomorrow returns correct date."""
+    now = datetime.datetime.now(pytz.UTC)
+
+    result = device_mixin_device.get_proper_local_adapted_tomorrow(now)
+
+    assert result > now
+    assert result.tzinfo == pytz.UTC
+
+
+@pytest.fixture
+def device_mixin_device_power(
+    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
+):
+    """ConcreteHADevice instance with power sensor for probe tests."""
+    return ConcreteHADevice(
+        hass=hass,
+        config_entry=device_mixin_config_entry,
+        home=device_mixin_home,
+        name="Test Device",
+        **{CONF_ACCURATE_POWER_SENSOR: "sensor.power"},
+    )
+
+
+def test_attach_power_to_probe(device_mixin_device_power):
+    """Test attach_power_to_probe registers sensor."""
+    device_mixin_device_power.attach_power_to_probe("sensor.new_power")
+    assert "sensor.new_power" in device_mixin_device_power._entity_probed_state
+
+
+def test_attach_power_to_probe_none(device_mixin_device_power):
+    """Test attach_power_to_probe with None is safe."""
+    initial_keys = set(device_mixin_device_power._entity_probed_state)
+    device_mixin_device_power.attach_power_to_probe(None)
+    assert set(device_mixin_device_power._entity_probed_state) == initial_keys
+
+
+def test_attach_amps_to_probe(device_mixin_device_power):
+    """Test attach_amps_to_probe registers sensor."""
+    device_mixin_device_power.attach_amps_to_probe("sensor.amps")
+    assert "sensor.amps" in device_mixin_device_power._entity_probed_state
+
+
+def test_attach_ha_state_to_probe_numerical(device_mixin_device_power):
+    """Test attach_ha_state_to_probe for numerical sensor."""
+    device_mixin_device_power.attach_ha_state_to_probe(
+        "sensor.temp", is_numerical=True
+    )
+    assert "sensor.temp" in device_mixin_device_power._entity_probed_state
+    assert (
+        device_mixin_device_power._entity_probed_state_is_numerical["sensor.temp"]
+        is True
+    )
+
+
+def test_attach_ha_state_to_probe_non_numerical(device_mixin_device_power):
+    """Test attach_ha_state_to_probe for non-numerical sensor."""
+    device_mixin_device_power.attach_ha_state_to_probe(
+        "sensor.status", is_numerical=False
+    )
+    assert "sensor.status" in device_mixin_device_power._entity_probed_state
+    assert (
+        device_mixin_device_power._entity_probed_state_is_numerical["sensor.status"]
+        is False
+    )

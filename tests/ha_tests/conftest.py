@@ -250,3 +250,259 @@ def override_platforms(platforms: list[Platform]) -> Generator[None]:
     # Note: quiet_solar uses dynamic platform discovery per device,
     # so we may need to patch at the device level instead
     yield
+
+
+# =============================================================================
+# Real Object Factory Fixtures
+# =============================================================================
+# These fixtures provide factory functions for creating real quiet-solar objects
+# using the real hass fixture from pytest_homeassistant_custom_component.
+
+
+@pytest.fixture
+def constraint_factory():
+    """Factory fixture for creating real constraint objects.
+
+    Constraints don't require HA, so this can be used in any test.
+
+    Example:
+        def test_constraint(constraint_factory):
+            constraint = constraint_factory(
+                constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                target_value=80.0,
+            )
+            assert constraint.target_value == 80.0
+    """
+    from tests.factories import create_constraint
+
+    def factory(**kwargs):
+        return create_constraint(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def charge_percent_constraint_factory():
+    """Factory fixture for creating charge percent constraints.
+
+    Example:
+        def test_car_charging(charge_percent_constraint_factory):
+            constraint = charge_percent_constraint_factory(
+                initial_value=50.0,
+                target_value=80.0,
+                total_capacity_wh=60000.0,
+            )
+    """
+    from tests.factories import create_charge_percent_constraint
+
+    def factory(**kwargs):
+        return create_charge_percent_constraint(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def load_command_factory():
+    """Factory fixture for creating LoadCommand objects.
+
+    Example:
+        def test_commands(load_command_factory):
+            cmd = load_command_factory(power_consign=7000.0)
+            assert cmd.power_consign == 7000.0
+    """
+    from tests.factories import create_load_command
+
+    def factory(**kwargs):
+        return create_load_command(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def state_cmd_factory():
+    """Factory fixture for creating QSStateCmd objects.
+
+    Example:
+        def test_charger_state(state_cmd_factory):
+            state = state_cmd_factory(initial_value=True)
+            assert state.value is True
+    """
+    from tests.factories import create_state_cmd
+
+    def factory(**kwargs):
+        return create_state_cmd(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def minimal_home_factory():
+    """Factory fixture for creating minimal home models for unit tests.
+
+    This creates a mock home suitable for pure logic tests that don't
+    need full HA integration.
+
+    Example:
+        def test_device_logic(minimal_home_factory):
+            home = minimal_home_factory(name="My Home", is_3p=True)
+    """
+    from tests.factories import create_minimal_home_model
+
+    def factory(**kwargs):
+        return create_minimal_home_model(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def charger_group_factory():
+    """Factory fixture for creating QSChargerGroup objects.
+
+    Example:
+        def test_charger_group(charger_group_factory, minimal_home_factory):
+            home = minimal_home_factory()
+            group = charger_group_factory(home=home, max_amps=[32.0, 32.0, 32.0])
+    """
+    from tests.factories import create_charger_group
+
+    def factory(**kwargs):
+        return create_charger_group(**kwargs)
+
+    return factory
+
+
+@pytest.fixture
+def minimal_load_factory():
+    """Factory fixture for creating MinimalTestLoad objects.
+
+    Useful for testing constraint and solver logic without full device setup.
+
+    Example:
+        def test_solver(minimal_load_factory):
+            load = minimal_load_factory(name="TestLoad", power=2000.0)
+    """
+    from tests.factories import MinimalTestLoad
+
+    def factory(**kwargs):
+        return MinimalTestLoad(**kwargs)
+
+    return factory
+
+
+# =============================================================================
+# HA Integration Factory Fixtures
+# =============================================================================
+# These fixtures create real quiet-solar device objects using the real hass
+# fixture. Use these for integration tests that need full HA behavior.
+
+
+@pytest.fixture
+def car_factory(hass: HomeAssistant):
+    """Factory fixture for creating real QSCar instances.
+
+    This factory creates real QSCar objects using the actual class with
+    the real hass fixture from pytest_homeassistant_custom_component.
+
+    Example:
+        async def test_car(hass, car_factory, setup_home_entry):
+            home = hass.data[DOMAIN].get(setup_home_entry.entry_id)
+            config_entry = MockConfigEntry(domain=DOMAIN, data={...})
+            config_entry.add_to_hass(hass)
+            car = await car_factory(config_entry=config_entry, home=home)
+    """
+    from tests.factories import create_real_car
+
+    async def factory(config_entry, home, **kwargs):
+        return await create_real_car(
+            hass=hass,
+            config_entry=config_entry,
+            home=home,
+            **kwargs,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def charger_factory(hass: HomeAssistant):
+    """Factory fixture for creating real QSChargerGeneric instances.
+
+    Example:
+        async def test_charger(hass, charger_factory, setup_home_entry):
+            home = hass.data[DOMAIN].get(setup_home_entry.entry_id)
+            config_entry = MockConfigEntry(domain=DOMAIN, data={...})
+            config_entry.add_to_hass(hass)
+            charger = await charger_factory(config_entry=config_entry, home=home)
+    """
+    from tests.factories import create_real_charger
+
+    async def factory(config_entry, home, **kwargs):
+        return await create_real_charger(
+            hass=hass,
+            config_entry=config_entry,
+            home=home,
+            **kwargs,
+        )
+
+    return factory
+
+
+# =============================================================================
+# Convenience Fixtures for Common Test Setups
+# =============================================================================
+
+
+@pytest.fixture
+async def setup_home_and_car(
+    hass: HomeAssistant,
+    setup_home_entry: ConfigEntry,
+    setup_car_entry: ConfigEntry,
+) -> tuple[ConfigEntry, ConfigEntry]:
+    """Set up home and car together.
+
+    Returns tuple of (home_entry, car_entry) with both devices initialized.
+    """
+    return setup_home_entry, setup_car_entry
+
+
+@pytest.fixture
+async def setup_home_and_charger(
+    hass: HomeAssistant,
+    setup_home_entry: ConfigEntry,
+    setup_charger_entry: ConfigEntry,
+) -> tuple[ConfigEntry, ConfigEntry]:
+    """Set up home and charger together.
+
+    Returns tuple of (home_entry, charger_entry) with both devices initialized.
+    """
+    return setup_home_entry, setup_charger_entry
+
+
+@pytest.fixture
+async def setup_full_charging(
+    hass: HomeAssistant,
+    setup_home_entry: ConfigEntry,
+    setup_car_entry: ConfigEntry,
+    setup_charger_entry: ConfigEntry,
+) -> tuple[ConfigEntry, ConfigEntry, ConfigEntry]:
+    """Set up home, car, and charger for charging tests.
+
+    Returns tuple of (home_entry, car_entry, charger_entry).
+    """
+    return setup_home_entry, setup_car_entry, setup_charger_entry
+
+
+@pytest.fixture
+def get_device_from_entry(hass: HomeAssistant):
+    """Helper fixture to get a device from its config entry.
+
+    Example:
+        def test_device(hass, setup_car_entry, get_device_from_entry):
+            car = get_device_from_entry(setup_car_entry)
+            assert car.name == "Test Car"
+    """
+
+    def getter(entry: ConfigEntry):
+        return hass.data[DOMAIN].get(entry.entry_id)
+
+    return getter

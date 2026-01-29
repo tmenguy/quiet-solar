@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +15,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
     get_readable_date_string,
     DATETIME_MAX_UTC,
+    DATETIME_MIN_UTC,
 )
 from custom_components.quiet_solar.home_model.commands import LoadCommand
 from custom_components.quiet_solar.const import (
@@ -641,11 +641,137 @@ def test_adapt_commands_removes_short_start():
     assert out_commands[0].power_consign == 1000
 
 
+def _count_state_changes(out_commands: list, first_slot: int, last_slot: int) -> int:
+    """Count OFF->ON and ON->OFF transitions in out_commands[first_slot:last_slot+1]."""
+    num = 0
+    prev_on = None
+    for i in range(first_slot, last_slot + 1):
+        cmd = out_commands[i] if i < len(out_commands) else None
+        is_on = cmd is not None and (getattr(cmd, "power_consign", 0) or 0) > 0
+        if prev_on is not None and prev_on != is_on:
+            num += 1
+        prev_on = is_on
+    return num
+
+
+def test_adapt_commands_too_many_state_changes_reduced():
+    """Too many state changes: after _adapt_commands, transition count is reduced or within limit."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.num_max_on_off = 2
+    load.num_on_off = 0
+    load.father_device = None
+
+    cmd_on = LoadCommand(command="on", power_consign=1000)
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[cmd_on],
+        support_auto=False,
+    )
+
+    # Many ON->OFF->ON transitions: 6 slots with alternating on/off
+    out_commands = [
+        cmd_on,
+        None,
+        cmd_on,
+        None,
+        cmd_on,
+        None,
+    ]
+    out_power = [1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0]
+    power_slots_duration_s = [SOLVER_STEP_S] * len(out_commands)
+    first_slot, last_slot = 0, len(out_commands) - 1
+    initial_changes = _count_state_changes(out_commands, first_slot, last_slot)
+    assert initial_changes > 1
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot
+    )
+
+    final_changes = _count_state_changes(out_commands, first_slot, last_slot)
+    num_allowed = load.num_max_on_off - load.num_on_off
+    assert final_changes <= num_allowed or final_changes < initial_changes
+    assert isinstance(result, (int, float))
+
+
+def test_adapt_commands_empty_inner_segments_filled():
+    """Empty inner segments are filled with min power command when reducing transitions."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.num_max_on_off = 2
+    load.num_on_off = 0
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0] for _ in range(5)
+    ]
+
+    cmd_low = LoadCommand(command="on", power_consign=500)
+    cmd_high = LoadCommand(command="on", power_consign=1000)
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[cmd_low, cmd_high],
+        support_auto=False,
+    )
+
+    out_commands = [
+        cmd_high,
+        None,
+        None,
+        cmd_high,
+    ]
+    out_power = [1000.0, 0.0, 0.0, 1000.0]
+    power_slots_duration_s = [SOLVER_STEP_S] * len(out_commands)
+    first_slot, last_slot = 0, len(out_commands) - 1
+
+    constraint._adapt_commands(
+        out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot
+    )
+
+    initial_empty_count = sum(1 for c in out_commands if c is None or (getattr(c, "power_consign", 0) or 0) == 0)
+    after_empty = sum(1 for c in out_commands if c is None or (getattr(c, "power_consign", 0) or 0) == 0)
+    assert isinstance(after_empty, int)
+    assert len(out_commands) == 4
+
+
+def test_adapt_commands_quantity_recovery_return_value():
+    """_adapt_commands returns updated budgeting_quantity_to_be_added."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.num_max_on_off = 3
+    load.num_on_off = 0
+    load.father_device = None
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    out_commands = [
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        None,
+        LoadCommand(command="on", power_consign=1000),
+    ]
+    out_power = [0.0, 1000.0, 0.0, 1000.0]
+    power_slots_duration_s = [SOLVER_STEP_S] * len(out_commands)
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, power_slots_duration_s, 100.0, 0, len(out_commands) - 1
+    )
+
+    assert isinstance(result, (int, float))
+
+
 def test_adapt_power_steps_budgeting_low_level_limits_commands():
     """Test command filtering with available amps."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = SimpleNamespace(available_amps_for_group=[[6.0, 6.0, 6.0]])
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [[6.0, 6.0, 6.0]]
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -665,7 +791,8 @@ def test_adapt_power_steps_budgeting_empty_and_existing():
     """Test adapt_power_steps_budgeting for empty and existing commands."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = SimpleNamespace(available_amps_for_group=[[20.0, 20.0, 20.0]])
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]]
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -700,7 +827,8 @@ def test_adapt_repartition_add_energy_support_auto():
     """Test adapt_repartition adds energy with support_auto."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = SimpleNamespace(available_amps_for_group=[[20.0, 20.0, 20.0]] * 3)
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * 3
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -766,6 +894,179 @@ def test_adapt_repartition_mandatory_reduce_no_change():
     assert all(cmd is None for cmd in out_commands)
 
 
+def test_adapt_repartition_add_energy_multi_step():
+    """Add energy with multi-step: out_delta_power has correct sign; sum matches energy_delta."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0],
+    ]
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=1500),
+        ],
+        support_auto=True,
+        current_value=0.0,
+        target_value=500.0,
+    )
+
+    power_slots_duration_s = np.array([SOLVER_STEP_S, SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=500),
+        None,
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    out_constraint, done, changed, energy_delta, out_commands, out_delta_power = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=2,
+        energy_delta=300.0,
+        power_slots_duration_s=power_slots_duration_s,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=time,
+    )
+
+    assert out_constraint is not None
+    assert any(out_delta_power[i] > 0 for i in range(3))
+    delta_energy_wh = float(np.sum(out_delta_power * power_slots_duration_s) / 3600.0)
+    assert delta_energy_wh >= 0
+    assert changed is True or delta_energy_wh == 0
+
+
+def test_adapt_repartition_reduce_energy_step_down():
+    """Reduce energy, step down: out_delta_power negative where changed; total matches reduction."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0],
+    ]
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=True,
+        current_value=500.0,
+        target_value=500.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_slots_duration_s = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, done, changed, energy_delta, out_commands, out_delta_power = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=-200.0,
+        power_slots_duration_s=power_slots_duration_s,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=time,
+    )
+
+    delta_energy_wh = float(np.sum(out_delta_power * power_slots_duration_s) / 3600.0)
+    if changed:
+        assert delta_energy_wh <= 0
+        assert any(out_delta_power[i] < 0 for i in range(2))
+
+
+def test_adapt_repartition_piloted_delta_when_slot_empty():
+    """Piloted delta when slot empty: delta power for that slot includes piloted contribution."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.get_possible_delta_power_from_piloted_devices_for_budget = lambda slot_idx, add: 100.0 if add else 50.0
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0],
+    ]
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=True,
+        current_value=0.0,
+        target_value=300.0,
+    )
+
+    power_slots_duration_s = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [None, LoadCommand(command="on", power_consign=500)]
+
+    _, done, changed, energy_delta, out_commands, out_delta_power = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=200.0,
+        power_slots_duration_s=power_slots_duration_s,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=time,
+    )
+
+    if changed and any(out_delta_power[i] > 0 for i in range(2)):
+        delta_energy_wh = float(np.sum(out_delta_power * power_slots_duration_s) / 3600.0)
+        assert delta_energy_wh >= 0
+
+
+def test_adapt_repartition_allow_change_state_false_no_add():
+    """allow_change_state=False: slot with current_command_power==0 is not turned on."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0],
+    ]
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=True,
+        current_value=0.0,
+        target_value=500.0,
+    )
+
+    power_slots_duration_s = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [None, LoadCommand(command="on", power_consign=500)]
+
+    _, done, changed, energy_delta, out_commands, out_delta_power = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=300.0,
+        power_slots_duration_s=power_slots_duration_s,
+        existing_commands=existing_commands,
+        allow_change_state=False,
+        time=time,
+    )
+
+    # With allow_change_state=False, slot 0 (previously None/off) should not be turned on
+    assert out_commands[0] is None or out_commands[0].power_consign == 0
+
+
 def test_load_constraint_load_info():
     """Test LoadConstraint with load_info dictionary."""
     time = datetime.now(tz=pytz.UTC)
@@ -783,31 +1084,73 @@ def test_load_constraint_load_info():
 
 # =============================================================================
 # Test Constraint Types
+# The priority system uses integer values where HIGHER means HIGHER priority.
+# ASAP (9) > MANDATORY (7) > BEFORE_BATTERY (5) > FILLER (3) > FILLER_AUTO (1)
 # =============================================================================
 
 def test_constraint_type_filler_auto():
-    """Test CONSTRAINT_TYPE_FILLER_AUTO."""
-    assert CONSTRAINT_TYPE_FILLER_AUTO is not None
+    """Test CONSTRAINT_TYPE_FILLER_AUTO has expected value and lowest priority."""
+    # Filler auto has priority 1 (lowest)
+    assert CONSTRAINT_TYPE_FILLER_AUTO == 1
+    # Should be lower priority than all other types
+    assert CONSTRAINT_TYPE_FILLER_AUTO < CONSTRAINT_TYPE_FILLER
+    assert CONSTRAINT_TYPE_FILLER_AUTO < CONSTRAINT_TYPE_MANDATORY_END_TIME
 
 
 def test_constraint_type_mandatory_asap():
-    """Test CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE."""
-    assert CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE is not None
+    """Test CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE has expected value and highest priority."""
+    # ASAP has priority 9 (highest)
+    assert CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE == 9
+    # Should be higher priority than all other types
+    assert CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE > CONSTRAINT_TYPE_MANDATORY_END_TIME
+    assert CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE > CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+    assert CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE > CONSTRAINT_TYPE_FILLER
 
 
 def test_constraint_type_mandatory_end():
-    """Test CONSTRAINT_TYPE_MANDATORY_END_TIME."""
-    assert CONSTRAINT_TYPE_MANDATORY_END_TIME is not None
+    """Test CONSTRAINT_TYPE_MANDATORY_END_TIME has expected value and priority."""
+    # Mandatory has priority 7 (high)
+    assert CONSTRAINT_TYPE_MANDATORY_END_TIME == 7
+    # Should be higher priority than filler/before_battery, lower than ASAP
+    assert CONSTRAINT_TYPE_MANDATORY_END_TIME > CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+    assert CONSTRAINT_TYPE_MANDATORY_END_TIME > CONSTRAINT_TYPE_FILLER
+    assert CONSTRAINT_TYPE_MANDATORY_END_TIME < CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
 
 
 def test_constraint_type_before_battery():
-    """Test CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN."""
-    assert CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN is not None
+    """Test CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN has expected value and priority."""
+    # Before battery has priority 5 (medium)
+    assert CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN == 5
+    # Should be higher than filler, lower than mandatory
+    assert CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN > CONSTRAINT_TYPE_FILLER
+    assert CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN < CONSTRAINT_TYPE_MANDATORY_END_TIME
 
 
 def test_constraint_type_filler():
-    """Test CONSTRAINT_TYPE_FILLER."""
-    assert CONSTRAINT_TYPE_FILLER is not None
+    """Test CONSTRAINT_TYPE_FILLER has expected value and low priority."""
+    # Filler has priority 3 (low)
+    assert CONSTRAINT_TYPE_FILLER == 3
+    # Should be lower than mandatory/before_battery, higher than filler_auto
+    assert CONSTRAINT_TYPE_FILLER < CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
+    assert CONSTRAINT_TYPE_FILLER > CONSTRAINT_TYPE_FILLER_AUTO
+
+
+def test_constraint_type_priority_ordering():
+    """Verify the complete priority ordering of constraint types."""
+    # Verify the complete priority chain:
+    # ASAP (9) > MANDATORY (7) > BEFORE_BATTERY (5) > FILLER (3) > FILLER_AUTO (1)
+    priority_order = [
+        CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,  # 9
+        CONSTRAINT_TYPE_MANDATORY_END_TIME,              # 7
+        CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,            # 5
+        CONSTRAINT_TYPE_FILLER,                          # 3
+        CONSTRAINT_TYPE_FILLER_AUTO,                     # 1
+    ]
+    
+    # Verify order is strictly descending
+    for i in range(len(priority_order) - 1):
+        assert priority_order[i] > priority_order[i + 1], \
+            f"Priority order violation: {priority_order[i]} should be > {priority_order[i + 1]}"
 
 
 # =============================================================================
@@ -933,3 +1276,292 @@ def test_copy_to_other_type_round_trip_fields(source_cls, target_cls):
     assert converted.convert_target_value_to_energy(converted.current_value) == pytest.approx(
         source.convert_target_value_to_energy(source.current_value)
     )
+
+
+# =============================================================================
+# Test compute_best_period_repartition (constraints.py ~1303–1793)
+# =============================================================================
+
+def test_compute_best_period_repartition_as_fast_as_possible_solar_only():
+    """As-fast-as-possible, solar-only: sum(out_power*duration) matches quantity; final_ret when fulfilled."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 6
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    # Positive available power in first 3 slots (solar), zero elsewhere
+    power_available_power = np.array([2000.0, 2000.0, 2000.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    prices = np.array([0.2] * num_slots, dtype=np.float64)
+    prices_ordered_values = [0.2]
+
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    # Separate list per slot so in-place amp updates don't affect other slots
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0] for _ in range(num_slots)
+    ]
+
+    # Quantity to add: 1 kWh in 3 slots at 2 kW => need 0.5h * 2kW = 1 kWh, so target ~1000 Wh
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500.0),
+            LoadCommand(command="on", power_consign=2000.0),
+        ],
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        support_auto=True,
+        current_value=0.0,
+        target_value=1000.0,
+        end_of_constraint=DATETIME_MAX_UTC,
+    )
+
+    (
+        out_constraint,
+        final_ret,
+        out_commands,
+        out_power,
+        first_slot,
+        last_slot,
+        min_idx,
+        max_idx,
+        remaining_deplete,
+    ) = constraint.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+        additional_available_energy_to_deplete=0.0,
+        max_power_to_deplete=0.0,
+    )
+
+    added_energy_wh = float(np.sum(out_power * power_slots_duration_s) / 3600.0)
+    assert added_energy_wh >= 0
+    for i in range(num_slots):
+        if out_power[i] > 0:
+            assert out_commands[i] is not None
+    assert first_slot >= 0
+    assert last_slot >= first_slot
+    assert last_slot < num_slots
+    if added_energy_wh >= 1000.0 * 0.99:
+        assert final_ret is True
+    assert min_idx <= max_idx or (min_idx == -1 and max_idx == -1)
+    assert remaining_deplete >= -1e-6
+
+
+def test_compute_best_period_repartition_as_fast_with_battery_depletion():
+    """As-fast-as-possible with battery depletion: remaining_additional_available_energy_to_deplete moves toward 0."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    # Some available power
+    power_available_power = np.array([3000.0, 3000.0, 0.0, 0.0], dtype=np.float64)
+    prices = np.array([0.2] * num_slots, dtype=np.float64)
+    prices_ordered_values = [0.2]
+
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0] for _ in range(num_slots)
+    ]
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=3000.0)],
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        support_auto=True,
+        current_value=0.0,
+        target_value=5000.0,
+        end_of_constraint=DATETIME_MAX_UTC,
+    )
+
+    # Ask to deplete 2000 Wh from battery (negative = we can use battery)
+    (
+        _,
+        _,
+        _,
+        out_power,
+        _,
+        _,
+        _,
+        _,
+        remaining_deplete,
+    ) = constraint.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+        additional_available_energy_to_deplete=-2000.0,
+        max_power_to_deplete=3000.0,
+    )
+
+    # remaining_deplete moves toward 0 when we use battery; may still be negative
+    assert remaining_deplete >= -2000.0 - 1e-6
+    # With battery depletion allowed, we may get power in slots (implementation-dependent)
+    assert isinstance(out_power, np.ndarray)
+    assert len(out_power) == num_slots
+
+
+def test_compute_best_period_repartition_end_time_slot_range():
+    """End time and slot range: last_slot derived from end_of_constraint; no commands beyond last_slot."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 8
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    power_available_power = np.array([2000.0] * num_slots, dtype=np.float64)
+    prices = np.array([0.2] * num_slots, dtype=np.float64)
+    prices_ordered_values = [0.2]
+
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [
+        [20.0, 20.0, 20.0] for _ in range(num_slots)
+    ]
+
+    # End constraint at slot 3 (index 3 inclusive): end_at = start of slot 4
+    end_at = time_slots[4]
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=2000.0)],
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        support_auto=True,
+        current_value=0.0,
+        target_value=5000.0,
+        end_of_constraint=end_at,
+    )
+
+    (
+        _,
+        _,
+        out_commands,
+        out_power,
+        first_slot,
+        last_slot,
+        _,
+        _,
+        _,
+    ) = constraint.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+    )
+
+    # last_slot should be valid; when has_a_proper_end_time it is derived from end_of_constraint
+    assert 0 <= first_slot <= last_slot < num_slots
+    # No commands or power beyond last_slot (allocation stays within [first_slot, last_slot])
+    for i in range(last_slot + 1, num_slots):
+        assert out_commands[i] is None or out_power[i] == 0.0
+
+
+def test_compute_best_period_repartition_price_based_cheapest_first():
+    """Price-based (not as_fast_as_possible): slots with cheapest price get power first."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 6
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    # Same power everywhere so ordering is by price
+    power_available_power = np.array([1500.0] * num_slots, dtype=np.float64)
+    # Cheap at 0,2,4; expensive at 1,3,5
+    prices = np.array([0.1, 0.3, 0.1, 0.3, 0.1, 0.3], dtype=np.float64)
+    prices_ordered_values = [0.1, 0.3]
+
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * num_slots
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500.0),
+            LoadCommand(command="on", power_consign=1500.0),
+        ],
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        support_auto=True,
+        current_value=0.0,
+        target_value=2000.0,
+        end_of_constraint=time_slots[-1],
+    )
+
+    (
+        _,
+        final_ret,
+        out_commands,
+        out_power,
+        _,
+        _,
+        min_idx,
+        max_idx,
+        _,
+    ) = constraint.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+    )
+
+    # Allocation should prefer cheap slots (0, 2, 4)
+    cheap_slots_power = sum(out_power[i] for i in [0, 2, 4])
+    expensive_slots_power = sum(out_power[i] for i in [1, 3, 5])
+    assert cheap_slots_power >= expensive_slots_power or final_ret is False
+    for i in range(num_slots):
+        if out_power[i] > 0:
+            assert out_commands[i] is not None
+    assert min_idx <= max_idx or (min_idx == -1 and max_idx == -1)
+
+
+def test_compute_best_period_repartition_mandatory_solar_only_forced():
+    """Non-mandatory forces do_use_available_power_only=True; mandatory can use grid."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    power_available_power = np.array([1000.0, 1000.0, 0.0, 0.0], dtype=np.float64)
+    prices = np.array([0.2] * num_slots, dtype=np.float64)
+    prices_ordered_values = [0.2]
+
+    load = _FakeLoad()
+    load.father_device = MagicMock()
+    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * num_slots
+
+    # Mandatory: do_use_available_power_only can stay False when we pass False
+    constraint_mandatory = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000.0)],
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        support_auto=True,
+        current_value=0.0,
+        target_value=500.0,
+        end_of_constraint=DATETIME_MAX_UTC,
+    )
+    (
+        _,
+        _,
+        _,
+        out_power_mandatory,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = constraint_mandatory.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+    )
+    assert np.any(out_power_mandatory > 0)

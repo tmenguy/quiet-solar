@@ -48,8 +48,9 @@ from custom_components.quiet_solar.const import (
     CONF_HOME_END_OFF_PEAK_RANGE_1,
 )
 
-# Import from local conftest - use relative import to avoid conflict with HA core
-from tests.test_helpers import FakeHass, FakeConfigEntry, FakeState
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 class MockLazyState:
@@ -60,6 +61,49 @@ class MockLazyState:
         self.state = state
         self.attributes = attributes or {}
         self.last_updated = last_updated or datetime.datetime.now(pytz.UTC)
+
+
+@pytest.fixture
+def home_config_entry() -> MockConfigEntry:
+    """Config entry for home tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_home_entry",
+        data={CONF_NAME: "Test Home"},
+        title="Test Home",
+    )
+
+
+@pytest.fixture
+def home_hass_data(hass: HomeAssistant) -> None:
+    """Set hass.data[DOMAIN] so QSHome/device init can access data_handler."""
+    hass.data.setdefault(DOMAIN, {})
+
+
+@pytest.fixture
+async def home_zone_state(hass: HomeAssistant, home_hass_data: None) -> None:
+    """Set zone.home state for home tests."""
+    set_result = hass.states.async_set("zone.home", "zoning", {
+        "latitude": 48.8566,
+        "longitude": 2.3522,
+        "radius": 100.0,
+    })
+    if set_result is not None:
+        await set_result
+
+
+@pytest.fixture
+async def home(hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None):
+    """QSHome instance for tests (requires home_zone_state)."""
+    with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+        return QSHome(
+            hass=hass,
+            config_entry=home_config_entry,
+            **{
+                CONF_NAME: "Test Home",
+                CONF_HOME_VOLTAGE: 230,
+            },
+        )
 
 
 # ============================================================================
@@ -292,30 +336,16 @@ class TestQSforecastValueSensor:
 class TestQSHomeInit:
     """Test QSHome initialization."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        # Mock the zone.home entity
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-    def test_init_with_minimal_params(self):
+    def test_init_with_minimal_params(self, hass, home_config_entry, home_hass_data, home_zone_state):
         """Test initialization with minimal parameters."""
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
             home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
+                hass=hass,
+                config_entry=home_config_entry,
                 **{
                     CONF_NAME: "Test Home",
                     CONF_HOME_VOLTAGE: 230,
-                }
+                },
             )
 
             assert home.name == "Test Home"
@@ -323,12 +353,12 @@ class TestQSHomeInit:
             assert home.latitude == 48.8566
             assert home.longitude == 2.3522
 
-    def test_init_with_tariff_settings(self):
+    def test_init_with_tariff_settings(self, hass, home_config_entry, home_hass_data, home_zone_state):
         """Test initialization with tariff settings."""
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
             home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
+                hass=hass,
+                config_entry=home_config_entry,
                 **{
                     CONF_NAME: "Test Home",
                     CONF_HOME_VOLTAGE: 230,
@@ -336,7 +366,7 @@ class TestQSHomeInit:
                     CONF_HOME_OFF_PEAK_PRICE: 0.15,
                     CONF_HOME_START_OFF_PEAK_RANGE_1: "22:00",
                     CONF_HOME_END_OFF_PEAK_RANGE_1: "06:00",
-                }
+                },
             )
 
             assert home.price_peak == 0.25 / 1000.0
@@ -344,33 +374,33 @@ class TestQSHomeInit:
             assert home.tariff_start_1 == "22:00"
             assert home.tariff_end_1 == "06:00"
 
-    def test_init_with_grid_sensor_inverted(self):
+    def test_init_with_grid_sensor_inverted(self, hass, home_config_entry, home_hass_data, home_zone_state):
         """Test initialization with inverted grid sensor."""
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
             home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
+                hass=hass,
+                config_entry=home_config_entry,
                 **{
                     CONF_NAME: "Test Home",
                     CONF_HOME_VOLTAGE: 230,
                     CONF_GRID_POWER_SENSOR: "sensor.grid_power",
                     CONF_GRID_POWER_SENSOR_INVERTED: True,
-                }
+                },
             )
 
             assert home.grid_active_power_sensor == "sensor.grid_power"
             assert home.grid_active_power_sensor_inverted is True
 
-    def test_init_creates_empty_device_lists(self):
+    def test_init_creates_empty_device_lists(self, hass, home_config_entry, home_hass_data, home_zone_state):
         """Test that device lists are properly initialized."""
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
             home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
+                hass=hass,
+                config_entry=home_config_entry,
                 **{
                     CONF_NAME: "Test Home",
                     CONF_HOME_VOLTAGE: 230,
-                }
+                },
             )
 
             assert home._chargers == []
@@ -386,58 +416,35 @@ class TestQSHomeInit:
 class TestQSHomeDeviceManagement:
     """Test QSHome device management methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
-    def test_battery_property_returns_none_in_charger_only_mode(self):
+    def test_battery_property_returns_none_in_charger_only_mode(self, home):
         """Test battery property returns None in charger-only mode."""
-        self.home.physical_battery = MagicMock()
-        self.home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY
+        home.physical_battery = MagicMock()
+        home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY
 
-        assert self.home.battery is None
+        assert home.battery is None
 
-    def test_battery_property_returns_battery_in_normal_mode(self):
+    def test_battery_property_returns_battery_in_normal_mode(self, home):
         """Test battery property returns battery in normal mode."""
         mock_battery = MagicMock()
-        self.home.physical_battery = mock_battery
-        self.home.home_mode = QSHomeMode.HOME_MODE_ON
+        home.physical_battery = mock_battery
+        home.home_mode = QSHomeMode.HOME_MODE_ON
 
-        assert self.home.battery == mock_battery
+        assert home.battery == mock_battery
 
-    def test_solar_plant_property_returns_none_in_no_solar_mode(self):
+    def test_solar_plant_property_returns_none_in_no_solar_mode(self, home):
         """Test solar_plant property returns None in no-solar mode."""
-        self.home.physical_solar_plant = MagicMock()
-        self.home.home_mode = QSHomeMode.HOME_MODE_NO_SOLAR
+        home.physical_solar_plant = MagicMock()
+        home.home_mode = QSHomeMode.HOME_MODE_NO_SOLAR
 
-        assert self.home.solar_plant is None
+        assert home.solar_plant is None
 
-    def test_solar_plant_property_returns_plant_in_normal_mode(self):
+    def test_solar_plant_property_returns_plant_in_normal_mode(self, home):
         """Test solar_plant property returns plant in normal mode."""
         mock_solar = MagicMock()
-        self.home.physical_solar_plant = mock_solar
-        self.home.home_mode = QSHomeMode.HOME_MODE_ON
+        home.physical_solar_plant = mock_solar
+        home.home_mode = QSHomeMode.HOME_MODE_ON
 
-        assert self.home.solar_plant == mock_solar
+        assert home.solar_plant == mock_solar
 
 
 # ============================================================================
@@ -447,36 +454,13 @@ class TestQSHomeDeviceManagement:
 class TestQSHomeMapLocationPath:
     """Test map_location_path method for GPS tracking."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
-    def test_map_location_path_empty_states(self):
+    def test_map_location_path_empty_states(self, home):
         """Test with empty state lists."""
         now = datetime.datetime.now(pytz.UTC)
         start = now - timedelta(hours=1)
         end = now
 
-        gps_segments, person_not_home, car_not_home = self.home.map_location_path(
+        gps_segments, person_not_home, car_not_home = home.map_location_path(
             [], [], start=start, end=end
         )
 
@@ -484,7 +468,7 @@ class TestQSHomeMapLocationPath:
         assert person_not_home == []
         assert car_not_home == []
 
-    def test_map_location_path_home_states_only(self):
+    def test_map_location_path_home_states_only(self, home):
         """Test with states all at home."""
         now = datetime.datetime.now(pytz.UTC)
         start = now - timedelta(hours=1)
@@ -504,7 +488,7 @@ class TestQSHomeMapLocationPath:
             }, last_updated=start + timedelta(minutes=10)),
         ]
 
-        gps_segments, person_not_home, car_not_home = self.home.map_location_path(
+        gps_segments, person_not_home, car_not_home = home.map_location_path(
             states_1, states_2, start=start, end=end
         )
 
@@ -512,7 +496,7 @@ class TestQSHomeMapLocationPath:
         assert person_not_home == []
         assert car_not_home == []
 
-    def test_map_location_path_not_home_segments(self):
+    def test_map_location_path_not_home_segments(self, home):
         """Test with states not at home."""
         now = datetime.datetime.now(pytz.UTC)
         start = now - timedelta(hours=2)
@@ -534,7 +518,7 @@ class TestQSHomeMapLocationPath:
             }, last_updated=start + timedelta(minutes=90)),
         ]
 
-        gps_segments, person_not_home, car_not_home = self.home.map_location_path(
+        gps_segments, person_not_home, car_not_home = home.map_location_path(
             states_1, [], start=start, end=end
         )
 
@@ -551,48 +535,25 @@ class TestQSHomeMapLocationPath:
 class TestQSHomeMode:
     """Test home mode handling."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
-    def test_is_off_grid_returns_false_by_default(self):
+    def test_is_off_grid_returns_false_by_default(self, home):
         """Test is_off_grid returns False by default."""
-        assert self.home.qs_home_is_off_grid is False
+        assert home.qs_home_is_off_grid is False
 
-    def test_home_mode_off_disables_all(self):
+    def test_home_mode_off_disables_all(self, home):
         """Test HOME_MODE_OFF disables battery and solar."""
-        self.home.physical_battery = MagicMock()
-        self.home.physical_solar_plant = MagicMock()
-        self.home.home_mode = QSHomeMode.HOME_MODE_OFF
+        home.physical_battery = MagicMock()
+        home.physical_solar_plant = MagicMock()
+        home.home_mode = QSHomeMode.HOME_MODE_OFF
 
         # In OFF mode, battery and solar should still be accessible
         # (only specific modes restrict them)
-        assert self.home.battery is not None
+        assert home.battery is not None
 
-    def test_home_mode_sensors_only(self):
+    def test_home_mode_sensors_only(self, home):
         """Test HOME_MODE_SENSORS_ONLY mode."""
-        self.home.home_mode = QSHomeMode.HOME_MODE_SENSORS_ONLY
+        home.home_mode = QSHomeMode.HOME_MODE_SENSORS_ONLY
         # Just verify the mode is set
-        assert self.home.home_mode == QSHomeMode.HOME_MODE_SENSORS_ONLY
+        assert home.home_mode == QSHomeMode.HOME_MODE_SENSORS_ONLY
 
 
 # ============================================================================
@@ -602,57 +563,34 @@ class TestQSHomeMode:
 class TestQSHomeMileageComputation:
     """Test mileage computation methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
     @pytest.mark.asyncio
-    async def test_compute_mileage_empty_cars(self):
+    async def test_compute_mileage_empty_cars(self, home):
         """Test mileage computation with no cars."""
-        self.home._cars = []
-        self.home._persons = []
+        home._cars = []
+        home._persons = []
 
         now = datetime.datetime.now(pytz.UTC)
         start = now - timedelta(hours=24)
         end = now
 
-        result = await self.home._compute_mileage_for_period_per_person(start, end)
+        result = await home._compute_mileage_for_period_per_person(start, end)
 
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_compute_mileage_car_is_invited_skipped(self):
+    async def test_compute_mileage_car_is_invited_skipped(self, home):
         """Test that invited cars are skipped."""
         mock_car = MagicMock()
         mock_car.car_is_invited = True
-        self.home._cars = [mock_car]
-        self.home._persons = []
+        home._cars = [mock_car]
+        home._persons = []
 
         now = datetime.datetime.now(pytz.UTC)
         start = now - timedelta(hours=24)
         end = now
 
-        with patch('custom_components.quiet_solar.ha_model.home.load_from_history', new_callable=AsyncMock) as mock_load:
-            result = await self.home._compute_mileage_for_period_per_person(start, end)
+        with patch("custom_components.quiet_solar.ha_model.home.load_from_history", new_callable=AsyncMock) as mock_load:
+            result = await home._compute_mileage_for_period_per_person(start, end)
 
         # load_from_history should not be called for invited cars
         mock_load.assert_not_called()
@@ -666,59 +604,36 @@ class TestQSHomeMileageComputation:
 class TestQSHomePersonCarAllocation:
     """Test person-car allocation algorithms."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
-    def test_get_person_by_name_not_found(self):
+    def test_get_person_by_name_not_found(self, home):
         """Test get_person_by_name returns None when not found."""
-        self.home._persons = []
+        home._persons = []
 
-        result = self.home.get_person_by_name("Unknown Person")
+        result = home.get_person_by_name("Unknown Person")
         assert result is None
 
-    def test_get_person_by_name_found(self):
+    def test_get_person_by_name_found(self, home):
         """Test get_person_by_name returns person when found."""
         mock_person = MagicMock()
         mock_person.name = "John"
-        self.home._persons = [mock_person]
+        home._persons = [mock_person]
 
-        result = self.home.get_person_by_name("John")
+        result = home.get_person_by_name("John")
         assert result == mock_person
 
-    def test_get_car_by_name_not_found(self):
+    def test_get_car_by_name_not_found(self, home):
         """Test get_car_by_name returns None when not found."""
-        self.home._cars = []
+        home._cars = []
 
-        result = self.home.get_car_by_name("Unknown Car")
+        result = home.get_car_by_name("Unknown Car")
         assert result is None
 
-    def test_get_car_by_name_found(self):
+    def test_get_car_by_name_found(self, home):
         """Test get_car_by_name returns car when found."""
         mock_car = MagicMock()
         mock_car.name = "Tesla"
-        self.home._cars = [mock_car]
+        home._cars = [mock_car]
 
-        result = self.home.get_car_by_name("Tesla")
+        result = home.get_car_by_name("Tesla")
         assert result == mock_car
 
 
@@ -729,36 +644,13 @@ class TestQSHomePersonCarAllocation:
 class TestQSHomeSensorGetters:
     """Test sensor state getter methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_home_entry",
-            data={CONF_NAME: "Test Home"},
-        )
-        self.hass.states.set("zone.home", "zoning", {
-            "latitude": 48.8566,
-            "longitude": 2.3522,
-            "radius": 100.0
-        })
-
-        with patch('custom_components.quiet_solar.ha_model.home.QSHome.add_device'):
-            self.home = QSHome(
-                hass=self.hass,
-                config_entry=self.config_entry,
-                **{
-                    CONF_NAME: "Test Home",
-                    CONF_HOME_VOLTAGE: 230,
-                }
-            )
-
-    def test_home_consumption_sensor_state_getter_returns_value(self):
+    def test_home_consumption_sensor_state_getter_returns_value(self, home):
         """Test home_consumption_sensor_state_getter returns value when set."""
-        self.home.home_consumption = 1500.0
+        home.home_consumption = 1500.0
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.home.home_consumption_sensor_state_getter(
-            self.home.home_consumption_sensor, time
+        result = home.home_consumption_sensor_state_getter(
+            home.home_consumption_sensor, time
         )
 
         # Result is (time, value, attrs) where value could be a float or tuple
@@ -772,46 +664,46 @@ class TestQSHomeSensorGetters:
             else:
                 assert value == 1500.0
 
-    def test_home_consumption_sensor_state_getter_returns_none_when_not_set(self):
+    def test_home_consumption_sensor_state_getter_returns_none_when_not_set(self, home):
         """Test home_consumption_sensor_state_getter returns None when not set."""
-        self.home.home_consumption = None
+        home.home_consumption = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.home.home_consumption_sensor_state_getter(
-            self.home.home_consumption_sensor, time
+        result = home.home_consumption_sensor_state_getter(
+            home.home_consumption_sensor, time
         )
 
         assert result is None
 
-    def test_home_available_power_sensor_state_getter_returns_none_when_not_set(self):
+    def test_home_available_power_sensor_state_getter_returns_none_when_not_set(self, home):
         """Test home_available_power_sensor_state_getter returns None when not set."""
-        self.home.home_available_power = None
+        home.home_available_power = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.home.home_available_power_sensor_state_getter(
-            self.home.home_available_power_sensor, time
+        result = home.home_available_power_sensor_state_getter(
+            home.home_available_power_sensor, time
         )
 
         assert result is None
 
-    def test_grid_consumption_power_sensor_state_getter_returns_none_when_not_set(self):
+    def test_grid_consumption_power_sensor_state_getter_returns_none_when_not_set(self, home):
         """Test grid_consumption_power_sensor_state_getter returns None when not set."""
-        self.home.grid_consumption_power = None
+        home.grid_consumption_power = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.home.grid_consumption_power_sensor_state_getter(
-            self.home.grid_consumption_power_sensor, time
+        result = home.grid_consumption_power_sensor_state_getter(
+            home.grid_consumption_power_sensor, time
         )
 
         assert result is None
 
-    def test_home_non_controlled_consumption_sensor_state_getter_returns_none_when_not_set(self):
+    def test_home_non_controlled_consumption_sensor_state_getter_returns_none_when_not_set(self, home):
         """Test home_non_controlled_consumption_sensor_state_getter returns None when not set."""
-        self.home.home_non_controlled_consumption = None
+        home.home_non_controlled_consumption = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = self.home.home_non_controlled_consumption_sensor_state_getter(
-            self.home.home_non_controlled_consumption_sensor, time
+        result = home.home_non_controlled_consumption_sensor_state_getter(
+            home.home_non_controlled_consumption_sensor, time
         )
 
         assert result is None

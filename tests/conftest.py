@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Any, Callable, Dict, List
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -21,6 +20,7 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_MAX_CHARGE,
     CONF_CAR_BATTERY_CAPACITY,
 )
+from tests.factories import create_minimal_home_model
 from tests.ha_tests.const import (
     MOCK_CAR_CONFIG,
     MOCK_CHARGER_CONFIG,
@@ -135,7 +135,9 @@ class FakeBus:
         """Fire an event."""
         if event_type in self.listeners:
             for listener in self.listeners[event_type]:
-                await listener(SimpleNamespace(data=event_data or {}))
+                event_obj = MagicMock()
+                event_obj.data = event_data or {}
+                await listener(event_obj)
 
 
 class FakeConfigEntries:
@@ -252,7 +254,7 @@ class FakeHass:
         self.bus = FakeBus()
         self.config_entries = FakeConfigEntries(self)
         self.states = FakeStates()
-        self.helpers = SimpleNamespace()
+        self.helpers = MagicMock()
         self.config = FakeConfig()
 
     def add_domain_entry(self, entry_id: str, value: Any) -> None:
@@ -681,7 +683,7 @@ def mock_charger_group_factory(fake_hass):
         mock_dyn_group = MagicMock(spec=QSDynamicGroup)
         mock_dyn_group.name = name
         mock_dyn_group._childrens = chargers or []
-        mock_dyn_group.home = MagicMock()
+        mock_dyn_group.home = create_minimal_home_model()
 
         return QSChargerGroup(mock_dyn_group)
 
@@ -707,9 +709,7 @@ def mock_person_with_history(fake_hass):
             data={CONF_NAME: name},
         )
 
-        home = MagicMock()
-        home._cars = []
-        home.get_car_by_name = MagicMock(return_value=None)
+        home = create_minimal_home_model()
 
         data_handler = MagicMock()
         data_handler.home = home

@@ -43,6 +43,7 @@ from custom_components.quiet_solar.home_model.commands import (
     copy_command,
 )
 from custom_components.quiet_solar.home_model.constraints import LoadConstraint
+from tests.factories import create_minimal_home_model
 
 
 def create_mock_hass() -> MagicMock:
@@ -58,10 +59,8 @@ def create_mock_hass() -> MagicMock:
 
 def create_mock_home(hass: MagicMock) -> MagicMock:
     """Create a mock QSHome instance."""
-    home = MagicMock()
+    home = create_minimal_home_model()
     home.hass = hass
-    home._chargers = []
-    home._cars = []
     home.battery = None
     home.get_available_power_values = MagicMock(return_value=None)
     home.get_grid_consumption_power_values = MagicMock(return_value=None)

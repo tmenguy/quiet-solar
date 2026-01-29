@@ -53,8 +53,85 @@ from custom_components.quiet_solar.const import (
     MAX_POSSIBLE_AMPERAGE,
 )
 
-# Import from local conftest - use relative import to avoid conflict with HA core
-from tests.test_helpers import FakeHass, FakeConfigEntry
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from tests.factories import create_minimal_home_model
+
+
+@pytest.fixture
+def car_config_entry() -> MockConfigEntry:
+    """Config entry for car tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_entry",
+        data={CONF_NAME: "Test Car"},
+        title="Test Car",
+    )
+
+
+@pytest.fixture
+def car_home():
+    """Home for car tests."""
+    home = create_minimal_home_model()
+    home.is_off_grid = MagicMock(return_value=False)
+    home.latitude = 48.8566
+    home.longitude = 2.3522
+    return home
+
+
+@pytest.fixture
+def car_data_handler(car_home):
+    """Data handler for car tests."""
+    handler = MagicMock()
+    handler.home = car_home
+    return handler
+
+
+@pytest.fixture
+def car_hass_data(hass: HomeAssistant, car_data_handler):
+    """Set hass.data[DOMAIN][DATA_HANDLER] for car tests."""
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][DATA_HANDLER] = car_data_handler
+
+
+# Map keyword names (as used in create_car(...)) to QSCar config keys (const values).
+# When tests call create_car(CONF_CAR_BATTERY_CAPACITY=75000), extra_kwargs gets
+# key "CONF_CAR_BATTERY_CAPACITY"; QSCar expects key CONF_CAR_BATTERY_CAPACITY ("car_battery_capacity").
+_CAR_KWARG_TO_KEY = {
+    "CONF_CAR_BATTERY_CAPACITY": CONF_CAR_BATTERY_CAPACITY,
+    "CONF_DEFAULT_CAR_CHARGE": CONF_DEFAULT_CAR_CHARGE,
+    "CONF_MINIMUM_OK_CAR_CHARGE": CONF_MINIMUM_OK_CAR_CHARGE,
+    "CONF_CAR_ODOMETER_SENSOR": CONF_CAR_ODOMETER_SENSOR,
+    "CONF_CAR_ESTIMATED_RANGE_SENSOR": CONF_CAR_ESTIMATED_RANGE_SENSOR,
+    "CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS": CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
+    "CAR_HARD_WIRED_CHARGER": CAR_HARD_WIRED_CHARGER,
+}
+
+
+@pytest.fixture
+def create_car(hass, car_config_entry, car_home, car_data_handler, car_hass_data):
+    """Factory fixture to create QSCar with common config. Pass extra_kwargs per test."""
+
+    def _create_car(**extra_kwargs):
+        config = {
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_BATTERY_CAPACITY: CAR_DEFAULT_CAPACITY,
+            CONF_DEFAULT_CAR_CHARGE: 100.0,
+            CONF_MINIMUM_OK_CAR_CHARGE: 30.0,
+        }
+        for k, v in extra_kwargs.items():
+            config[_CAR_KWARG_TO_KEY.get(k, k)] = v
+        return QSCar(
+            hass=hass,
+            config_entry=car_config_entry,
+            home=car_home,
+            **config
+        )
+
+    return _create_car
 
 
 # ============================================================================
@@ -64,83 +141,48 @@ from tests.test_helpers import FakeHass, FakeConfigEntry
 class TestQSCarEfficiency:
     """Test car efficiency calculation and learning."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-            CONF_CAR_BATTERY_CAPACITY: 75000,  # 75 kWh
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_efficiency_segments_list_exists(self):
+    def test_efficiency_segments_list_exists(self, create_car):
         """Test efficiency segments list is initialized."""
-        car = self.create_car()
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
         assert hasattr(car, '_efficiency_segments')
         assert isinstance(car._efficiency_segments, list)
 
-    def test_decreasing_segments_list_exists(self):
+    def test_decreasing_segments_list_exists(self, create_car):
         """Test decreasing segments list is initialized."""
-        car = self.create_car()
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
         assert hasattr(car, '_decreasing_segments')
         assert isinstance(car._decreasing_segments, list)
 
-    def test_add_soc_odo_value_tracking(self):
+    def test_add_soc_odo_value_tracking(self, create_car):
         """Test SOC/odometer value tracking for efficiency."""
-        car = self.create_car(
+        car = create_car(
+            CONF_CAR_BATTERY_CAPACITY=75000,
             CONF_CAR_ODOMETER_SENSOR="sensor.car_odometer",
             CONF_CAR_ESTIMATED_RANGE_SENSOR="sensor.car_range"
         )
 
-        # Simulate decreasing SOC segments
         time = datetime.datetime.now(pytz.UTC)
 
-        # This tests internal tracking - we check the segments list
         assert car._decreasing_segments is not None
         assert car._dec_seg_count == 0
 
-    def test_efficiency_segments_storage(self):
+    def test_efficiency_segments_storage(self, create_car):
         """Test efficiency segments are stored correctly."""
-        car = self.create_car()
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
-        # Add mock efficiency segment
         time = datetime.datetime.now(pytz.UTC)
-        segment = (50.0, 10.0, 80.0, 70.0, time)  # delta_km, delta_soc, soc_from, soc_to, time
+        segment = (50.0, 10.0, 80.0, 70.0, time)
         car._efficiency_segments.append(segment)
 
         assert len(car._efficiency_segments) == 1
-        assert car._efficiency_segments[0][0] == 50.0  # delta_km
-        assert car._efficiency_segments[0][1] == 10.0  # delta_soc
+        assert car._efficiency_segments[0][0] == 50.0
+        assert car._efficiency_segments[0][1] == 10.0
 
-    def test_km_per_kwh_default_none(self):
+    def test_km_per_kwh_default_none(self, create_car):
         """Test _km_per_kwh is None by default."""
-        car = self.create_car()
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
         assert car._km_per_kwh is None
 
@@ -152,59 +194,23 @@ class TestQSCarEfficiency:
 class TestQSCarDampening:
     """Test car charging dampening value management."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_theoretical_amp_to_power_1p(self):
+    def test_theoretical_amp_to_power_1p(self, create_car):
         """Test theoretical amp to power conversion for 1 phase."""
-        car = self.create_car()
+        car = create_car()
 
-        # Check theoretical 1-phase power table exists
         assert hasattr(car, 'theoretical_amp_to_power_1p')
-        # At 10A, 230V = 2300W for 1 phase
         assert car.theoretical_amp_to_power_1p[10] == pytest.approx(2300.0, abs=10)
 
-    def test_theoretical_amp_to_power_3p(self):
+    def test_theoretical_amp_to_power_3p(self, create_car):
         """Test theoretical amp to power conversion for 3 phase."""
-        car = self.create_car()
+        car = create_car()
 
-        # Check theoretical 3-phase power table exists
         assert hasattr(car, 'theoretical_amp_to_power_3p')
-        # At 10A, 230V * 3 = 6900W for 3 phase
         assert car.theoretical_amp_to_power_3p[10] == pytest.approx(6900.0, abs=10)
 
-    def test_get_charge_power_per_phase_A(self):
+    def test_get_charge_power_per_phase_A(self, create_car):
         """Test get_charge_power_per_phase_A returns power table."""
-        car = self.create_car()
+        car = create_car()
 
         steps, min_a, max_a = car.get_charge_power_per_phase_A(for_3p=True)
 
@@ -213,15 +219,15 @@ class TestQSCarDampening:
         assert min_a == car.car_charger_min_charge
         assert max_a == car.car_charger_max_charge
 
-    def test_can_dampen_strongly_dynamically_default(self):
+    def test_can_dampen_strongly_dynamically_default(self, create_car):
         """Test can_dampen_strongly_dynamically is True by default."""
-        car = self.create_car()
+        car = create_car()
 
         assert car.can_dampen_strongly_dynamically is True
 
-    def test_dampening_deltas_dict_exists(self):
+    def test_dampening_deltas_dict_exists(self, create_car):
         """Test _dampening_deltas dictionary is initialized."""
-        car = self.create_car()
+        car = create_car()
 
         assert hasattr(car, '_dampening_deltas')
         assert isinstance(car._dampening_deltas, dict)
@@ -234,43 +240,10 @@ class TestQSCarDampening:
 class TestQSCarRangeEstimation:
     """Test car range and SOC estimation."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-            CONF_CAR_BATTERY_CAPACITY: 75000,  # 75 kWh
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_get_adapt_target_percent_soc_returns_tuple(self):
+    def test_get_adapt_target_percent_soc_returns_tuple(self, create_car):
         """Test get_adapt_target_percent_soc_to_reach_range_km returns tuple."""
-        car = self.create_car()
-        car._km_per_kwh = 6.0  # 6 km/kWh
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
+        car._km_per_kwh = 6.0
 
         time = datetime.datetime.now(pytz.UTC)
         result = car.get_adapt_target_percent_soc_to_reach_range_km(
@@ -278,13 +251,12 @@ class TestQSCarRangeEstimation:
             time=time
         )
 
-        # Should return a 4-tuple
         assert isinstance(result, tuple)
         assert len(result) == 4
 
-    def test_car_battery_capacity_configured(self):
+    def test_car_battery_capacity_configured(self, create_car):
         """Test car battery capacity is configured."""
-        car = self.create_car()
+        car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
         assert car.car_battery_capacity == 75000
 
@@ -296,83 +268,52 @@ class TestQSCarRangeEstimation:
 class TestQSCarPersonInteraction:
     """Test car-person allocation and interaction."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.home.get_best_persons_cars_allocations = AsyncMock()
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_user_selected_person_property_getter(self):
+    def test_user_selected_person_property_getter(self, create_car):
         """Test user_selected_person_name_for_car getter."""
-        car = self.create_car()
+        car = create_car()
         car._user_selected_person_name_for_car = "John"
 
         assert car.user_selected_person_name_for_car == "John"
 
-    def test_user_selected_person_property_setter_triggers_update(self):
+    def test_user_selected_person_property_setter_triggers_update(
+        self, create_car, hass, car_home
+    ):
         """Test user_selected_person_name_for_car setter triggers allocation update."""
-        car = self.create_car()
-        self.home._cars = [car]
-        self.home.get_best_persons_cars_allocations = AsyncMock()
-        self.hass.create_task = MagicMock(side_effect=lambda coro, name=None: coro.close())
+        car = create_car()
+        car_home._cars = [car]
+        car_home.get_best_persons_cars_allocations = AsyncMock()
+        hass.create_task = MagicMock(side_effect=lambda coro, name=None: coro.close())
 
         car.user_selected_person_name_for_car = "Jane"
 
-        self.home.get_best_persons_cars_allocations.assert_called_once_with(force_update=True)
-        assert self.hass.create_task.call_count == 1
+        car_home.get_best_persons_cars_allocations.assert_called_once_with(force_update=True)
+        assert hass.create_task.call_count == 1
 
-    def test_user_selected_person_no_person_attached(self):
+    def test_user_selected_person_no_person_attached(self, create_car):
         """Test setting FORCE_CAR_NO_PERSON_ATTACHED."""
-        car = self.create_car()
+        car = create_car()
 
         car._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
 
         assert car._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
 
-    def test_car_person_option_format(self):
+    def test_car_person_option_format(self, create_car):
         """Test _car_person_option returns person name."""
-        car = self.create_car()
+        car = create_car()
 
         result = car._car_person_option("John Doe")
 
         assert result == "John Doe"
 
-    def test_current_forecasted_person_attribute_exists(self):
+    def test_current_forecasted_person_attribute_exists(self, create_car):
         """Test current_forecasted_person attribute exists."""
-        car = self.create_car()
+        car = create_car()
 
         assert hasattr(car, 'current_forecasted_person')
 
-    def test_get_car_person_readable_forecast_no_person(self):
+    def test_get_car_person_readable_forecast_no_person(self, create_car):
         """Test get_car_person_readable_forecast_mileage with no person."""
-        car = self.create_car()
+        car = create_car()
         car.current_forecasted_person = None
 
         result = car.get_car_person_readable_forecast_mileage()
@@ -387,47 +328,15 @@ class TestQSCarPersonInteraction:
 class TestQSCarChargerIntegration:
     """Test car-charger interaction."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_charger_property_none_by_default(self):
+    def test_charger_property_none_by_default(self, create_car):
         """Test charger is None by default."""
-        car = self.create_car()
+        car = create_car()
 
         assert car.charger is None
 
-    def test_charger_can_be_set(self):
+    def test_charger_can_be_set(self, create_car):
         """Test charger can be assigned."""
-        car = self.create_car()
+        car = create_car()
         mock_charger = MagicMock()
         mock_charger.name = "Test Charger"
 
@@ -435,18 +344,16 @@ class TestQSCarChargerIntegration:
 
         assert car.charger == mock_charger
 
-    def test_user_attached_charger_name(self):
+    def test_user_attached_charger_name(self, create_car):
         """Test user_attached_charger_name property."""
-        car = self.create_car()
+        car = create_car()
         car.user_attached_charger_name = "My Charger"
 
         assert car.user_attached_charger_name == "My Charger"
 
-    def test_hard_wired_charger(self):
+    def test_hard_wired_charger(self, create_car):
         """Test car with hard-wired charger."""
-        car = self.create_car(**{
-            CAR_HARD_WIRED_CHARGER: "charger_1"
-        })
+        car = create_car(**{CAR_HARD_WIRED_CHARGER: "charger_1"})
 
         assert car.car_hard_wired_charger == "charger_1"
 
@@ -458,64 +365,36 @@ class TestQSCarChargerIntegration:
 class TestQSCarChargeTargets:
     """Test car charge target management."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-            CONF_DEFAULT_CAR_CHARGE: 80.0,
-            CONF_MINIMUM_OK_CAR_CHARGE: 20.0,
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_default_charge_target(self):
+    def test_default_charge_target(self, create_car):
         """Test default charge target value."""
-        car = self.create_car()
+        car = create_car(
+            CONF_DEFAULT_CAR_CHARGE=80.0,
+            CONF_MINIMUM_OK_CAR_CHARGE=20.0,
+        )
 
         assert car.car_default_charge == 80.0
 
-    def test_minimum_ok_charge(self):
+    def test_minimum_ok_charge(self, create_car):
         """Test minimum OK charge value."""
-        car = self.create_car()
+        car = create_car(
+            CONF_DEFAULT_CAR_CHARGE=80.0,
+            CONF_MINIMUM_OK_CAR_CHARGE=20.0,
+        )
 
         assert car.car_minimum_ok_charge == 20.0
 
-    def test_force_next_charge_flag(self):
+    def test_force_next_charge_flag(self, create_car):
         """Test do_force_next_charge flag."""
-        car = self.create_car()
+        car = create_car()
 
         assert car.do_force_next_charge is False
 
         car.do_force_next_charge = True
         assert car.do_force_next_charge is True
 
-    def test_next_charge_time(self):
+    def test_next_charge_time(self, create_car):
         """Test do_next_charge_time property."""
-        car = self.create_car()
+        car = create_car()
 
         assert car.do_next_charge_time is None
 
@@ -531,83 +410,44 @@ class TestQSCarChargeTargets:
 class TestQSCarChargePercentSteps:
     """Test car charge percent step handling."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_charge_percent_steps_empty_by_default(self):
+    def test_charge_percent_steps_empty_by_default(self, create_car):
         """Test car_charge_percent_max_number_steps is empty by default."""
-        car = self.create_car()
+        car = create_car()
 
         assert car.car_charge_percent_max_number_steps == []
 
-    def test_charge_percent_steps_from_config(self):
+    def test_charge_percent_steps_from_config(self, create_car):
         """Test car_charge_percent_max_number_steps from config string."""
-        car = self.create_car(**{
-            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 80, 90"
-        })
+        car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 80, 90"})
 
         assert car.car_charge_percent_max_number_steps == [50, 80, 90, 100]
 
-    def test_charge_percent_steps_adds_100(self):
+    def test_charge_percent_steps_adds_100(self, create_car):
         """Test 100% is added if not present."""
-        car = self.create_car(**{
-            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 80"
-        })
+        car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 80"})
 
         assert 100 in car.car_charge_percent_max_number_steps
 
-    def test_charge_percent_steps_sorted(self):
+    def test_charge_percent_steps_sorted(self, create_car):
         """Test steps are sorted."""
-        car = self.create_car(**{
-            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "80, 50, 90"
-        })
+        car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "80, 50, 90"})
 
-        assert car.car_charge_percent_max_number_steps == sorted(car.car_charge_percent_max_number_steps)
+        assert car.car_charge_percent_max_number_steps == sorted(
+            car.car_charge_percent_max_number_steps
+        )
 
-    def test_charge_percent_steps_invalid_values_rejected(self):
+    def test_charge_percent_steps_invalid_values_rejected(self, create_car):
         """Test invalid values result in empty list."""
-        car = self.create_car(**{
+        car = create_car(**{
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "invalid, not_a_number"
         })
 
         assert car.car_charge_percent_max_number_steps == []
 
-    def test_charge_percent_steps_out_of_range_rejected(self):
+    def test_charge_percent_steps_out_of_range_rejected(self, create_car):
         """Test out-of-range values are rejected."""
-        car = self.create_car(**{
-            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 150"  # 150 > 100
-        })
+        car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50, 150"})
 
-        # 150 should be rejected, keeping only valid values
         assert 150 not in car.car_charge_percent_max_number_steps
 
 
@@ -618,41 +458,9 @@ class TestQSCarChargePercentSteps:
 class TestQSCarSaveRestoreState:
     """Test car state persistence."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
-    def test_update_to_be_saved_extra_device_info(self):
+    def test_update_to_be_saved_extra_device_info(self, create_car):
         """Test update_to_be_saved_extra_device_info saves person info."""
-        car = self.create_car()
+        car = create_car()
         car._user_selected_person_name_for_car = "John"
 
         mock_person = MagicMock()
@@ -665,9 +473,9 @@ class TestQSCarSaveRestoreState:
         assert data["user_selected_person_name_for_car"] == "John"
         assert data["current_forecasted_person_name_from_boot"] == "Jane"
 
-    def test_use_saved_extra_device_info(self):
+    def test_use_saved_extra_device_info(self, create_car):
         """Test use_saved_extra_device_info restores person info."""
-        car = self.create_car()
+        car = create_car()
 
         stored_data = {
             "user_selected_person_name_for_car": "John",
@@ -687,43 +495,10 @@ class TestQSCarSaveRestoreState:
 class TestQSCarAsyncOperations:
     """Test car async operations."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_car_entry",
-            data={CONF_NAME: "Test Car"},
-        )
-        self.home = MagicMock()
-        self.home.is_off_grid = MagicMock(return_value=False)
-        self.home.voltage = 230.0
-        self.home.latitude = 48.8566
-        self.home.longitude = 2.3522
-        self.home._cars = []
-        self.home.get_person_by_name = MagicMock(return_value=None)
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def create_car(self, **extra_kwargs):
-        """Helper to create a car with common configuration."""
-        config = {
-            CONF_NAME: "Test Car",
-            CONF_CAR_TRACKER: "device_tracker.car",
-        }
-        config.update(extra_kwargs)
-
-        return QSCar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
-            **config
-        )
-
     @pytest.mark.asyncio
-    async def test_get_car_mileage_on_period_no_sensors(self):
+    async def test_get_car_mileage_on_period_no_sensors(self, create_car):
         """Test get_car_mileage_on_period_km with no sensors."""
-        car = self.create_car()
+        car = create_car()
         car.car_odometer_sensor = None
         car.car_tracker = None
 
@@ -733,21 +508,18 @@ class TestQSCarAsyncOperations:
             time
         )
 
-        # With no sensors, should return None
         assert result is None or result == 0.0
 
-    def test_device_post_home_init(self):
+    def test_device_post_home_init(self, create_car, car_home):
         """Test device_post_home_init restores person."""
-        car = self.create_car()
+        car = create_car()
         car._current_forecasted_person_name_from_boot = "John"
 
         mock_person = MagicMock()
         mock_person.name = "John"
-        self.home.get_person_by_name = MagicMock(return_value=mock_person)
+        car_home.get_person_by_name = MagicMock(return_value=mock_person)
 
         time = datetime.datetime.now(pytz.UTC)
         car.device_post_home_init(time)
 
-        # Should have restored current_forecasted_person
-        # (if home.get_person_by_name returns the person)
-        self.home.get_person_by_name.assert_called()
+        car_home.get_person_by_name.assert_called()

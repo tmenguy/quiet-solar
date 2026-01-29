@@ -19,7 +19,7 @@ def _make_device() -> MagicMock:
     device.device_type = "car"
     device.name = "Device"
     device.qs_enable_device = True
-    device.home = MagicMock()
+    device.home = create_minimal_home_model()
     return device
 
 

@@ -13,9 +13,11 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
+from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.quiet_solar import __init__ as qs_init
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.quiet_solar.config_flow import (
     QSFlowHandler,
     QSOptionsFlowHandler,
@@ -61,51 +63,78 @@ from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.person import QSPerson
-from tests.test_helpers import FakeConfigEntry
+
+from tests.factories import create_minimal_home_model
 
 
 def _schema_has_key(schema, key: str) -> bool:
     return any(getattr(item, "schema", None) == key for item in schema.schema)
 
 
-def _init_options_flow(fake_hass, config_entry) -> QSOptionsFlowHandler:
+def _init_options_flow(hass: HomeAssistant, config_entry: MockConfigEntry) -> QSOptionsFlowHandler:
     flow = QSOptionsFlowHandler(config_entry)
-    flow.hass = fake_hass
+    flow.hass = hass
     flow.handler = config_entry.entry_id
-    fake_hass.data[DOMAIN][config_entry.entry_id] = config_entry
+    hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = config_entry
     return flow
 
 
-def test_get_common_schema_includes_optional_fields(fake_hass):
+@pytest.fixture
+def mock_data_handler(hass: HomeAssistant):
+    """Provide mock data handler for config flow tests using real hass."""
+    handler = MagicMock()
+    handler.hass = hass
+    handler.home = None
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = handler
+    return handler
+
+
+@pytest.fixture
+def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Provide MockConfigEntry for config flow tests, added to hass."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_entry_123",
+        data={CONF_NAME: "Test Device"},
+        title="Test Device",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_includes_optional_fields(hass: HomeAssistant):
     """Test get_common_schema includes optional selectors."""
-    config_entry = FakeConfigEntry(
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
         entry_id="entry_1",
         data={CONF_NAME: "Device", CONF_DEVICE_DASHBOARD_SECTION: "Home"},
     )
-    flow = _init_options_flow(fake_hass, config_entry)
-    fake_hass.config_entries.async_get_known_entry = MagicMock(return_value=config_entry)
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+    hass.config_entries.async_get_entry = MagicMock(return_value=config_entry)
 
-    fake_home = MagicMock()
+    fake_home = create_minimal_home_model()
     fake_home.dashboard_sections = ["Home", "Garage"]
     root_group = QSHome.__new__(QSHome)
     root_group.name = "Root"
     other_group = MagicMock()
     other_group.name = "Group1"
     fake_home._all_dynamic_groups = [root_group, other_group]
-    fake_hass.data[DOMAIN][DATA_HANDLER] = MagicMock(home=fake_home)
-    fake_hass.services.registered.append((NOTIFY_DOMAIN, "mobile_app"))
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = MagicMock(home=fake_home)
+    hass.services.async_register(NOTIFY_DOMAIN, "mobile_app", MagicMock())
 
-    fake_hass.states.set(
+    hass.states.async_set(
         "sensor.power",
         "10",
         {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
     )
-    fake_hass.states.set(
+    hass.states.async_set(
         "sensor.amps",
         "1",
         {ATTR_UNIT_OF_MEASUREMENT: UnitOfElectricCurrent.AMPERE},
     )
-    fake_hass.states.set("calendar.test", "off", {})
+    hass.states.async_set("calendar.test", "off", {})
 
     with patch(
         "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
@@ -143,12 +172,12 @@ def test_get_common_schema_includes_optional_fields(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_flow_user_init_no_home(fake_hass, mock_data_handler):
+async def test_flow_user_init_no_home(hass, mock_data_handler):
     """Test user flow when no home exists - should only show home option."""
     mock_data_handler.home = None
     
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_user()
     
@@ -159,15 +188,15 @@ async def test_flow_user_init_no_home(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_user_init_with_home(fake_hass, mock_data_handler):
+async def test_flow_user_init_with_home(hass, mock_data_handler):
     """Test user flow when home exists - should show all device types except home."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home._battery = None
     mock_home._solar_plant = None
     mock_data_handler.home = mock_home
-    
+
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_user()
     
@@ -179,15 +208,15 @@ async def test_flow_user_init_with_home(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_user_with_battery_installed(fake_hass, mock_data_handler):
+async def test_flow_user_with_battery_installed(hass, mock_data_handler):
     """Test that battery option is hidden when battery already exists."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home._battery = MagicMock()  # Battery installed
     mock_home._solar_plant = None
     mock_data_handler.home = mock_home
-    
+
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_user()
     
@@ -195,15 +224,15 @@ async def test_flow_user_with_battery_installed(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_user_with_solar_installed(fake_hass, mock_data_handler):
+async def test_flow_user_with_solar_installed(hass, mock_data_handler):
     """Test that solar option is hidden when solar already exists."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home._battery = None
     mock_home._solar_plant = MagicMock()  # Solar installed
     mock_data_handler.home = mock_home
-    
+
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_user()
     
@@ -211,10 +240,10 @@ async def test_flow_user_with_solar_installed(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_home_step_shows_form(fake_hass):
+async def test_flow_home_step_shows_form(hass):
     """Test home configuration step shows form."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_home()
     
@@ -223,10 +252,10 @@ async def test_flow_home_step_shows_form(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_flow_home_step_creates_entry(fake_hass):
+async def test_flow_home_step_creates_entry(hass):
     """Test home configuration creates entry with correct data."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     user_input = {
         CONF_NAME: "My Home",
@@ -245,10 +274,10 @@ async def test_flow_home_step_creates_entry(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_flow_charger_menu(fake_hass):
+async def test_flow_charger_menu(hass):
     """Test charger submenu shows charger types."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     result = await flow.async_step_charger()
     
@@ -258,13 +287,13 @@ async def test_flow_charger_menu(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_flow_charger_generic_creates_entry(fake_hass, mock_data_handler):
+async def test_flow_charger_generic_creates_entry(hass, mock_data_handler):
     """Test generic charger configuration creates entry."""
-    mock_data_handler.home = MagicMock()
+    mock_data_handler.home = create_minimal_home_model()
     mock_data_handler.home._all_dynamic_groups = [MagicMock()]
-    
+
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     user_input = {
         CONF_NAME: "Test Charger",
@@ -282,12 +311,12 @@ async def test_flow_charger_generic_creates_entry(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_car_creates_entry(fake_hass, mock_data_handler):
+async def test_flow_car_creates_entry(hass, mock_data_handler):
     """Test car configuration creates entry."""
-    mock_data_handler.home = MagicMock()
-    
+    mock_data_handler.home = create_minimal_home_model()
+
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     user_input = {
         CONF_NAME: "Test Car",
@@ -303,10 +332,10 @@ async def test_flow_car_creates_entry(fake_hass, mock_data_handler):
 
 
 @pytest.mark.asyncio
-async def test_flow_cleans_none_values(fake_hass):
+async def test_flow_cleans_none_values(hass):
     """Test that None values are cleaned from data."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     data = {
         CONF_NAME: "Test",
@@ -322,7 +351,7 @@ async def test_flow_cleans_none_values(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_options_flow_is_creation_flow(fake_hass, mock_config_entry):
+async def test_options_flow_is_creation_flow(hass, mock_config_entry):
     """Test options flow is_creation_flow returns False."""
     from awesomeversion import AwesomeVersion
     from homeassistant.const import __version__ as HAVERSION
@@ -334,20 +363,20 @@ async def test_options_flow_is_creation_flow(fake_hass, mock_config_entry):
     # For newer HA versions, we need to set the handler manually
     if AwesomeVersion(HAVERSION) >= HA_OPTIONS_FLOW_VERSION_THRESHOLD:
         flow.handler = mock_config_entry.entry_id
-        # Register the entry in FakeHass so async_get_known_entry can find it
-        fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_config_entry
+        # Register the entry in hass so async_get_entry can find it
+        hass.data.setdefault(DOMAIN, {})[mock_config_entry.entry_id] = mock_config_entry
     
-    flow.hass = fake_hass
+    flow.hass = hass
     
     # Test the method directly
     assert flow.is_creation_flow() is False
 
 
 @pytest.mark.asyncio
-async def test_get_entry_title_formats_correctly(fake_hass):
+async def test_get_entry_title_formats_correctly(hass):
     """Test entry title formatting."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     data = {
         CONF_NAME: "My Device",
@@ -361,10 +390,10 @@ async def test_get_entry_title_formats_correctly(fake_hass):
 
 
 @pytest.mark.asyncio
-async def test_flow_unique_id_set(fake_hass):
+async def test_flow_unique_id_set(hass):
     """Test that unique ID is set for new entries."""
     flow = QSFlowHandler()
-    flow.hass = fake_hass
+    flow.hass = hass
     
     user_input = {
         CONF_NAME: "Unique Device",
@@ -383,35 +412,40 @@ async def test_flow_unique_id_set(fake_hass):
 
 @pytest.mark.asyncio
 async def test_options_flow_car_includes_percent_and_length_selectors(
-    fake_hass,
-    mock_config_entry,
+    hass: HomeAssistant,
 ):
     """Test car options include percent and length selectors when available."""
-    mock_config_entry.data = {
-        CONF_NAME: "Test Car",
-        DEVICE_TYPE: QSCar.conf_type_name,
-        CONF_CAR_CHARGER_MIN_CHARGE: 6,
-        CONF_CAR_CHARGER_MAX_CHARGE: 16,
-        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: None,
-    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_percent_123",
+        data={
+            CONF_NAME: "Test Car",
+            DEVICE_TYPE: QSCar.conf_type_name,
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 16,
+            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: None,
+        },
+        title="car: Test Car",
+    )
+    config_entry.add_to_hass(hass)
 
-    fake_hass.states.set(
+    hass.states.async_set(
         "sensor.test_percent",
         "50",
         {"unit_of_measurement": "%"},
     )
-    fake_hass.states.set(
+    hass.states.async_set(
         "number.test_percent",
         "80",
         {"unit_of_measurement": "%"},
     )
-    fake_hass.states.set(
+    hass.states.async_set(
         "sensor.test_length",
         "120",
         {"unit_of_measurement": "km"},
     )
 
-    flow = _init_options_flow(fake_hass, mock_config_entry)
+    flow = _init_options_flow(hass, config_entry)
 
     with patch(
         "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
@@ -429,26 +463,29 @@ async def test_options_flow_car_includes_percent_and_length_selectors(
 
 
 @pytest.mark.asyncio
-async def test_options_flow_car_steps_schema(
-    fake_hass,
-    mock_config_entry,
-):
+async def test_options_flow_car_steps_schema(hass: HomeAssistant):
     """Test car options include steps when configured."""
-    mock_config_entry.data = {
-        CONF_NAME: "Test Car",
-        DEVICE_TYPE: QSCar.conf_type_name,
-        CONF_CAR_CHARGER_MIN_CHARGE: 6,
-        CONF_CAR_CHARGER_MAX_CHARGE: 16,
-        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "5",
-    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_steps_123",
+        data={
+            CONF_NAME: "Test Car",
+            DEVICE_TYPE: QSCar.conf_type_name,
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 16,
+            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "5",
+        },
+        title="car: Test Car",
+    )
+    config_entry.add_to_hass(hass)
 
-    fake_hass.states.set(
+    hass.states.async_set(
         "number.test_percent",
         "80",
         {"unit_of_measurement": "%"},
     )
 
-    flow = _init_options_flow(fake_hass, mock_config_entry)
+    flow = _init_options_flow(hass, config_entry)
 
     with patch(
         "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
@@ -461,20 +498,23 @@ async def test_options_flow_car_steps_schema(
 
 
 @pytest.mark.asyncio
-async def test_options_flow_car_force_dampening_fields(
-    fake_hass,
-    mock_config_entry,
-):
+async def test_options_flow_car_force_dampening_fields(hass: HomeAssistant):
     """Test car options add dampening fields when enabled."""
-    mock_config_entry.data = {
-        CONF_NAME: "Test Car",
-        DEVICE_TYPE: QSCar.conf_type_name,
-        CONF_CAR_CHARGER_MIN_CHARGE: 6,
-        CONF_CAR_CHARGER_MAX_CHARGE: 8,
-        CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: False,
-    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_damp_123",
+        data={
+            CONF_NAME: "Test Car",
+            DEVICE_TYPE: QSCar.conf_type_name,
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 8,
+            CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: False,
+        },
+        title="car: Test Car",
+    )
+    config_entry.add_to_hass(hass)
 
-    flow = _init_options_flow(fake_hass, mock_config_entry)
+    flow = _init_options_flow(hass, config_entry)
 
     with patch(
         "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
@@ -496,16 +536,21 @@ async def test_options_flow_car_force_dampening_fields(
 
 @pytest.mark.asyncio
 async def test_options_flow_person_aborts_without_person_entities(
-    fake_hass,
-    mock_config_entry,
+    hass: HomeAssistant,
 ):
     """Test person options aborts when no person entities exist."""
-    mock_config_entry.data = {
-        CONF_NAME: "Test Person",
-        DEVICE_TYPE: QSPerson.conf_type_name,
-    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_person_abort_123",
+        data={
+            CONF_NAME: "Test Person",
+            DEVICE_TYPE: QSPerson.conf_type_name,
+        },
+        title="person: Test Person",
+    )
+    config_entry.add_to_hass(hass)
 
-    flow = _init_options_flow(fake_hass, mock_config_entry)
+    flow = _init_options_flow(hass, config_entry)
 
     result = await flow.async_step_person()
     assert result["type"] == FlowResultType.ABORT
@@ -514,18 +559,23 @@ async def test_options_flow_person_aborts_without_person_entities(
 
 @pytest.mark.asyncio
 async def test_options_flow_person_includes_authorized_cars(
-    fake_hass,
-    mock_config_entry,
+    hass: HomeAssistant,
     mock_data_handler,
 ):
     """Test person options include authorized cars selector."""
-    mock_config_entry.data = {
-        CONF_NAME: "Test Person",
-        DEVICE_TYPE: QSPerson.conf_type_name,
-        CONF_PERSON_PREFERRED_CAR: "Car A",
-    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_person_cars_123",
+        data={
+            CONF_NAME: "Test Person",
+            DEVICE_TYPE: QSPerson.conf_type_name,
+            CONF_PERSON_PREFERRED_CAR: "Car A",
+        },
+        title="person: Test Person",
+    )
+    config_entry.add_to_hass(hass)
 
-    fake_hass.states.set("person.test_person", "home", {})
+    hass.states.async_set("person.test_person", "home", {})
 
     car_regular = MagicMock()
     car_regular.name = "Car A"
@@ -534,11 +584,11 @@ async def test_options_flow_person_includes_authorized_cars(
     car_invited.name = "Car B"
     car_invited.car_is_invited = True
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home._cars = [car_regular, car_invited]
     mock_data_handler.home = mock_home
 
-    flow = _init_options_flow(fake_hass, mock_config_entry)
+    flow = _init_options_flow(hass, config_entry)
 
     result = await flow.async_step_person()
     assert result["type"] == FlowResultType.FORM

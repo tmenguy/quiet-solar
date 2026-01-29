@@ -8,24 +8,42 @@ import pytest
 import pytz
 
 from homeassistant.const import Platform, CONF_NAME
+from homeassistant.core import HomeAssistant
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_HOME_VOLTAGE, CONF_IS_3P
 from custom_components.quiet_solar.data_handler import QSDataHandler
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
+from tests.ha_tests.const import MOCK_CHARGER_CONFIG
 
 
 @pytest.fixture
-def data_handler(fake_hass):
+def data_handler(hass: HomeAssistant):
     """Create data handler instance."""
-    return QSDataHandler(fake_hass)
+    return QSDataHandler(hass)
+
+
+@pytest.fixture
+def mock_charger_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Provide mock charger config entry for data handler tests."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="charger_entry_123",
+        data={**MOCK_CHARGER_CONFIG},
+        title="charger: Test Charger",
+    )
+    entry.add_to_hass(hass)
+    return entry
 
 
 @pytest.mark.asyncio
-async def test_data_handler_init(data_handler, fake_hass):
+async def test_data_handler_init(data_handler, hass: HomeAssistant):
     """Test data handler initialization."""
-    assert data_handler.hass == fake_hass
+    assert data_handler.hass is hass
     assert data_handler.home is None
     assert data_handler._cached_config_entries == []
     assert data_handler._load_update_scan_interval == 7
@@ -36,8 +54,7 @@ async def test_data_handler_init(data_handler, fake_hass):
 @pytest.mark.asyncio
 async def test_async_add_entry_device_before_home(data_handler, mock_charger_config_entry):
     """Test adding device entry before home caches it."""
-    mock_charger_config_entry.data[DEVICE_TYPE] = QSChargerGeneric.conf_type_name
-    
+    # MOCK_CHARGER_CONFIG already includes DEVICE_TYPE
     await data_handler.async_add_entry(mock_charger_config_entry)
     
     # Device should be cached, not added yet
@@ -48,7 +65,7 @@ async def test_async_add_entry_device_before_home(data_handler, mock_charger_con
 @pytest.mark.asyncio
 async def test_async_update_loads_delegates_to_home(data_handler):
     """Test async_update_loads calls home.update_loads."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.update_loads = AsyncMock()
     data_handler.home = mock_home
     
@@ -61,7 +78,7 @@ async def test_async_update_loads_delegates_to_home(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_all_states_delegates_to_home(data_handler):
     """Test async_update_all_states calls home.update_all_states."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.update_all_states = AsyncMock()
     data_handler.home = mock_home
     
@@ -74,7 +91,7 @@ async def test_async_update_all_states_delegates_to_home(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_forecast_probers_delegates_to_home(data_handler):
     """Test async_update_forecast_probers calls home.update_forecast_probers."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.update_forecast_probers = AsyncMock()
     data_handler.home = mock_home
     
@@ -87,8 +104,6 @@ async def test_async_update_forecast_probers_delegates_to_home(data_handler):
 @pytest.mark.asyncio
 async def test_data_handler_stores_entry_in_hass_data(data_handler, mock_charger_config_entry):
     """Test that devices are stored in hass.data."""
-    mock_charger_config_entry.data[DEVICE_TYPE] = QSChargerGeneric.conf_type_name
-    
     # Just verify caching works (won't create device without home)
     await data_handler.async_add_entry(mock_charger_config_entry)
     
@@ -104,18 +119,25 @@ def test_add_device_handles_creation_failure(data_handler, mock_charger_config_e
 
 
 @pytest.mark.asyncio
-async def test_async_add_entry_rehydrates_cached_entries(fake_hass):
+async def test_async_add_entry_rehydrates_cached_entries(hass: HomeAssistant):
     """Test cached entries are attached when home is added."""
-    data_handler = QSDataHandler(fake_hass)
-    cached_entry = MagicMock()
-    cached_entry.entry_id = "cached_entry"
-    cached_entry.data = {DEVICE_TYPE: QSChargerGeneric.conf_type_name}
+    hass.data.setdefault(DOMAIN, {})
+    data_handler = QSDataHandler(hass)
+    cached_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="cached_entry",
+        data={DEVICE_TYPE: QSChargerGeneric.conf_type_name},
+        title="cached",
+    )
     data_handler._cached_config_entries.append(cached_entry)
 
-    home_entry = MagicMock()
-    home_entry.entry_id = "home_entry"
-    home_entry.data = {DEVICE_TYPE: QSHome.conf_type_name}
-    home_entry.async_on_unload = MagicMock()
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="home_entry",
+        data={DEVICE_TYPE: QSHome.conf_type_name},
+        title="home",
+    )
+    home_entry.add_to_hass(hass)
 
     home_device = MagicMock()
     home_device.add_device = MagicMock()
@@ -131,6 +153,10 @@ async def test_async_add_entry_rehydrates_cached_entries(fake_hass):
     with patch(
         "custom_components.quiet_solar.data_handler.create_device_from_type",
         side_effect=[home_device, cached_device],
+    ), patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        new_callable=AsyncMock,
     ):
         await data_handler.async_add_entry(home_entry)
 
@@ -141,7 +167,7 @@ async def test_async_add_entry_rehydrates_cached_entries(fake_hass):
 @pytest.mark.asyncio
 async def test_async_update_loads_skips_when_locked(data_handler):
     """Test async_update_loads skips when lock is held."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_loads = AsyncMock()
 
     await data_handler._update_loads_lock.acquire()
@@ -156,7 +182,7 @@ async def test_async_update_loads_skips_when_locked(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_loads_logs_error(data_handler):
     """Test async_update_loads handles errors."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_loads = AsyncMock(side_effect=RuntimeError("boom"))
 
     await data_handler.async_update_loads(datetime.now(pytz.UTC))
@@ -167,7 +193,7 @@ async def test_async_update_loads_logs_error(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_all_states_skips_when_locked(data_handler):
     """Test async_update_all_states skips when lock is held."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_all_states = AsyncMock()
 
     await data_handler._update_all_states_lock.acquire()
@@ -182,7 +208,7 @@ async def test_async_update_all_states_skips_when_locked(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_all_states_logs_error(data_handler):
     """Test async_update_all_states handles errors."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_all_states = AsyncMock(side_effect=RuntimeError("boom"))
 
     await data_handler.async_update_all_states(datetime.now(pytz.UTC))
@@ -193,7 +219,7 @@ async def test_async_update_all_states_logs_error(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_forecast_probers_skips_when_locked(data_handler):
     """Test async_update_forecast_probers skips when lock is held."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_forecast_probers = AsyncMock()
 
     await data_handler._update_forecast_probers_lock.acquire()
@@ -208,7 +234,7 @@ async def test_async_update_forecast_probers_skips_when_locked(data_handler):
 @pytest.mark.asyncio
 async def test_async_update_forecast_probers_logs_error(data_handler):
     """Test async_update_forecast_probers handles errors."""
-    data_handler.home = MagicMock()
+    data_handler.home = create_minimal_home_model()
     data_handler.home.update_forecast_probers = AsyncMock(side_effect=RuntimeError("boom"))
 
     await data_handler.async_update_forecast_probers(datetime.now(pytz.UTC))

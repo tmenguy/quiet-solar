@@ -7,16 +7,17 @@ import os
 import pickle
 import tempfile
 from datetime import timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from homeassistant.const import (
-    Platform,
-    CONF_NAME,
-)
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.const import Platform, CONF_NAME
+from homeassistant.core import HomeAssistant
+
 import pytz
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.ha_model.solar import (
     QSSolar,
@@ -39,7 +40,45 @@ from custom_components.quiet_solar.const import (
     MAX_AMP_INFINITE,
 )
 
-from tests.test_helpers import FakeHass, FakeConfigEntry
+from tests.factories import create_minimal_home_model
+
+
+@pytest.fixture
+def solar_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """MockConfigEntry for solar device tests, added to hass."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        source=SOURCE_USER,
+        entry_id="test_solar_entry",
+        data={CONF_NAME: "Test Solar"},
+        title="Test Solar",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def solar_setup(hass: HomeAssistant, solar_config_entry: MockConfigEntry):
+    """Provide hass, config_entry, home for solar tests."""
+    home = create_minimal_home_model()
+    home.physical_3p = getattr(home, "is_3p", True)
+    data_handler = MagicMock()
+    data_handler.home = home
+    data_handler.hass = hass
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = data_handler
+    return {
+        "config_entry": solar_config_entry,
+        "home": home,
+        "data_handler": data_handler,
+    }
+
+
+@pytest.fixture
+def solar_mock(hass: HomeAssistant):
+    """MagicMock solar device with hass for provider tests."""
+    mock = MagicMock()
+    mock.hass = hass
+    return mock
 
 
 class _FilterProvider(QSSolarProvider):
@@ -92,26 +131,14 @@ class _UpdateTrackingProvider(QSSolarProvider):
 class TestQSSolarInit:
     """Test QSSolar initialization."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_solar_entry",
-            data={CONF_NAME: "Test Solar"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.physical_3p = False
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def test_init_with_minimal_params(self):
+    def test_init_with_minimal_params(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test initialization with minimal parameters."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -123,12 +150,14 @@ class TestQSSolarInit:
         assert device.solar_forecast_provider is None
         assert device.solar_forecast_provider_handler is None
 
-    def test_init_with_all_params(self):
+    def test_init_with_all_params(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test initialization with all parameters."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -142,12 +171,14 @@ class TestQSSolarInit:
         assert device.solar_max_output_power_value == 5000
         assert device.solar_max_phase_amps == 25.0
 
-    def test_init_with_solcast_provider(self):
+    def test_init_with_solcast_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test initialization with Solcast provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -158,12 +189,14 @@ class TestQSSolarInit:
         assert device.solar_forecast_provider == SOLCAST_SOLAR_DOMAIN
         assert isinstance(device.solar_forecast_provider_handler, QSSolarProviderSolcast)
 
-    def test_init_with_openmeteo_provider(self):
+    def test_init_with_openmeteo_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test initialization with OpenMeteo provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -174,14 +207,16 @@ class TestQSSolarInit:
         assert device.solar_forecast_provider == OPEN_METEO_SOLAR_DOMAIN
         assert isinstance(device.solar_forecast_provider_handler, QSSolarProviderOpenWeather)
 
-    def test_init_calculates_max_power_from_amps_single_phase(self):
+    def test_init_calculates_max_power_from_amps_single_phase(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test max power calculation from amps for single phase."""
-        self.home.physical_3p = False
+        solar_setup["home"].physical_3p = False
 
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -192,14 +227,16 @@ class TestQSSolarInit:
         expected_power = 25.0 * 230.0  # amps * voltage
         assert device.solar_max_output_power_value == expected_power
 
-    def test_init_calculates_max_power_from_amps_three_phase(self):
+    def test_init_calculates_max_power_from_amps_three_phase(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test max power calculation from amps for three phase."""
-        self.home.physical_3p = True
+        solar_setup["home"].physical_3p = True
 
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -210,14 +247,16 @@ class TestQSSolarInit:
         expected_power = 25.0 * 230.0 * 3.0  # amps * voltage * 3 phases
         assert device.solar_max_output_power_value == expected_power
 
-    def test_init_calculates_amps_from_power_single_phase(self):
+    def test_init_calculates_amps_from_power_single_phase(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test amp calculation from power for single phase."""
-        self.home.physical_3p = False
+        solar_setup["home"].physical_3p = False
 
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -232,26 +271,14 @@ class TestQSSolarInit:
 class TestQSSolarOverClamp:
     """Test get_current_over_clamp_production_power method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_solar_entry",
-            data={CONF_NAME: "Test Solar"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.physical_3p = False
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
-    def test_over_clamp_production_below_max(self):
+    def test_over_clamp_production_below_max(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test no over-clamp when production is below max."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -264,12 +291,14 @@ class TestQSSolarOverClamp:
 
         assert result == 0.0
 
-    def test_over_clamp_production_above_max(self):
+    def test_over_clamp_production_above_max(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test over-clamp when production exceeds max."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -282,12 +311,14 @@ class TestQSSolarOverClamp:
 
         assert result == 1000.0
 
-    def test_over_clamp_at_exactly_max(self):
+    def test_over_clamp_at_exactly_max(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test no over-clamp when production equals max."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -304,27 +335,15 @@ class TestQSSolarOverClamp:
 class TestQSSolarForecast:
     """Test forecast-related methods."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_solar_entry",
-            data={CONF_NAME: "Test Solar"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.physical_3p = False
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
     @pytest.mark.asyncio
-    async def test_update_forecast_with_provider(self):
+    async def test_update_forecast_with_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test update_forecast calls provider update."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -339,12 +358,14 @@ class TestQSSolarForecast:
         device.solar_forecast_provider_handler.update.assert_called_once_with(time)
 
     @pytest.mark.asyncio
-    async def test_update_forecast_without_provider(self):
+    async def test_update_forecast_without_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test update_forecast does nothing without provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -356,12 +377,14 @@ class TestQSSolarForecast:
         await device.update_forecast(time)
         assert device.solar_forecast_provider_handler is None
 
-    def test_get_forecast_with_provider(self):
+    def test_get_forecast_with_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test get_forecast returns provider data."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -380,12 +403,14 @@ class TestQSSolarForecast:
 
         assert result == forecast_data
 
-    def test_get_forecast_without_provider(self):
+    def test_get_forecast_without_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test get_forecast returns empty list without provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -397,12 +422,14 @@ class TestQSSolarForecast:
 
         assert result == []
 
-    def test_get_value_from_current_forecast_with_provider(self):
+    def test_get_value_from_current_forecast_with_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test get_value_from_current_forecast returns provider data."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -420,12 +447,14 @@ class TestQSSolarForecast:
         assert result_time == time
         assert result_value == 1500.0
 
-    def test_get_value_from_current_forecast_without_provider(self):
+    def test_get_value_from_current_forecast_without_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test get_value_from_current_forecast returns None without provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -442,17 +471,11 @@ class TestQSSolarForecast:
 class TestQSSolarProviderBase:
     """Test QSSolarProvider base class."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.solar = MagicMock()
-        self.solar.hass = self.hass
-
-    def test_init(self):
+    def test_init(self, hass: HomeAssistant, solar_mock):
         """Test provider initialization."""
-        provider = QSSolarProvider(solar=self.solar, domain="test_domain")
+        provider = QSSolarProvider(solar=solar_mock, domain="test_domain")
 
-        assert provider.solar == self.solar
+        assert provider.solar == solar_mock
         assert provider.domain == "test_domain"
         assert provider.orchestrators == []
         assert provider._latest_update_time is None
@@ -465,9 +488,9 @@ class TestQSSolarProviderBase:
         assert provider.solar is None
         assert provider.hass is None
 
-    def test_get_forecast(self):
+    def test_get_forecast(self, hass: HomeAssistant, solar_mock):
         """Test get_forecast filters by time range."""
-        provider = QSSolarProvider(solar=self.solar, domain="test")
+        provider = QSSolarProvider(solar=solar_mock, domain="test")
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
         provider.solar_forecast = [
@@ -482,9 +505,11 @@ class TestQSSolarProviderBase:
         # Should get slots from time series
         assert len(result) >= 0
 
-    def test_get_value_from_current_forecast(self):
+    def test_get_value_from_current_forecast(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test get_value_from_current_forecast returns correct value."""
-        provider = QSSolarProvider(solar=self.solar, domain="test")
+        provider = QSSolarProvider(solar=solar_mock, domain="test")
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
         provider.solar_forecast = [
@@ -497,18 +522,18 @@ class TestQSSolarProviderBase:
         # Result depends on get_value_from_time_series implementation
         assert result_time is not None or result_value is not None or (result_time is None and result_value is None)
 
-    def test_is_orchestrator_default(self):
+    def test_is_orchestrator_default(self, solar_mock):
         """Test default is_orchestrator returns True."""
-        provider = QSSolarProvider(solar=self.solar, domain="test")
+        provider = QSSolarProvider(solar=solar_mock, domain="test")
 
         result = provider.is_orchestrator("entity_id", MagicMock())
 
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_update_fills_orchestrators(self):
+    async def test_update_fills_orchestrators(self, solar_mock):
         """Test update fills orchestrators and extracts forecast."""
-        provider = QSSolarProvider(solar=self.solar, domain="test")
+        provider = QSSolarProvider(solar=solar_mock, domain="test")
         provider.fill_orchestrators = AsyncMock()
         provider.extract_solar_forecast_from_data = AsyncMock(return_value=[])
 
@@ -526,15 +551,20 @@ class TestQSSolarProviderBaseExtended:
     """Test additional QSSolarProvider base behaviors."""
 
     @pytest.mark.asyncio
-    async def test_fill_orchestrators_filters_entries(self):
+    async def test_fill_orchestrators_filters_entries(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test fill_orchestrators filters by is_orchestrator."""
-        hass = FakeHass()
-        solar = SimpleNamespace(hass=hass)
-        provider = _FilterProvider(solar=solar, domain="test_domain")
+        provider = _FilterProvider(solar=solar_mock, domain="test_domain")
 
+        # Mock domain entries with enabled/disabled items
+        valid_entry = MagicMock()
+        valid_entry.enabled = True
+        invalid_entry = MagicMock()
+        invalid_entry.enabled = False
         hass.data["test_domain"] = {
-            "valid": SimpleNamespace(enabled=True),
-            "invalid": SimpleNamespace(enabled=False),
+            "valid": valid_entry,
+            "invalid": invalid_entry,
             "none": None,
         }
 
@@ -544,25 +574,24 @@ class TestQSSolarProviderBaseExtended:
         assert provider.orchestrators[0].enabled is True
 
     @pytest.mark.asyncio
-    async def test_extract_solar_forecast_aggregates_orchestrators(self):
+    async def test_extract_solar_forecast_aggregates_orchestrators(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test extract_solar_forecast_from_data aggregates series."""
-        hass = FakeHass()
-        solar = SimpleNamespace(hass=hass)
-        provider = _SeriesProvider(solar=solar, domain="test_domain")
+        provider = _SeriesProvider(solar=solar_mock, domain="test_domain")
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
-        orchestrator_1 = SimpleNamespace(
-            power_series=[
-                (time, 500.0),
-                (time + timedelta(minutes=30), 800.0),
-            ]
-        )
-        orchestrator_2 = SimpleNamespace(
-            power_series=[
-                (time, 700.0),
-                (time + timedelta(minutes=30), 600.0),
-            ]
-        )
+        # Mock orchestrators with power series data
+        orchestrator_1 = MagicMock()
+        orchestrator_1.power_series = [
+            (time, 500.0),
+            (time + timedelta(minutes=30), 800.0),
+        ]
+        orchestrator_2 = MagicMock()
+        orchestrator_2.power_series = [
+            (time, 700.0),
+            (time + timedelta(minutes=30), 600.0),
+        ]
 
         provider.orchestrators = [orchestrator_1, orchestrator_2]
         result = await provider.extract_solar_forecast_from_data(time, period=3600)
@@ -573,14 +602,14 @@ class TestQSSolarProviderBaseExtended:
         ]
 
     @pytest.mark.asyncio
-    async def test_update_time_gating(self):
+    async def test_update_time_gating(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test update skips refresh within cache window."""
-        hass = FakeHass()
-        solar = SimpleNamespace(hass=hass)
-        provider = _UpdateTrackingProvider(solar=solar, domain="test_domain")
+        provider = _UpdateTrackingProvider(solar=solar_mock, domain="test_domain")
 
         now = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
-        provider.orchestrators = [SimpleNamespace()]
+        provider.orchestrators = [MagicMock()]
         provider._latest_update_time = now
 
         await provider.update(now + timedelta(minutes=5))
@@ -597,11 +626,11 @@ class TestQSSolarProviderBaseExtended:
         assert provider._latest_update_time == now + timedelta(minutes=16)
 
     @pytest.mark.asyncio
-    async def test_update_logs_when_no_orchestrators(self, caplog):
+    async def test_update_logs_when_no_orchestrators(
+        self, hass: HomeAssistant, solar_mock, caplog
+    ):
         """Test update logs an error when no orchestrators exist."""
-        hass = FakeHass()
-        solar = SimpleNamespace(hass=hass)
-        provider = _UpdateTrackingProvider(solar=solar, domain="test_domain")
+        provider = _UpdateTrackingProvider(solar=solar_mock, domain="test_domain")
         provider.orchestrators = []
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
@@ -611,11 +640,11 @@ class TestQSSolarProviderBaseExtended:
         assert "No solar orchestrator found for domain test_domain" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_dump_for_debug_writes_pickle(self, tmp_path):
+    async def test_dump_for_debug_writes_pickle(
+        self, hass: HomeAssistant, solar_mock, tmp_path
+    ):
         """Test dump_for_debug writes expected pickle file."""
-        hass = FakeHass()
-        solar = SimpleNamespace(hass=hass)
-        provider = _SeriesProvider(solar=solar, domain="test_domain")
+        provider = _SeriesProvider(solar=solar_mock, domain="test_domain")
         provider.solar_forecast = [
             (datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC), 1000.0),
         ]
@@ -631,33 +660,31 @@ class TestQSSolarProviderBaseExtended:
 class TestQSSolarProviderSolcast:
     """Test QSSolarProviderSolcast class."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.solar = MagicMock()
-        self.solar.hass = self.hass
-
-    def test_init(self):
+    def test_init(self, hass: HomeAssistant, solar_mock):
         """Test Solcast provider initialization."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
 
         assert provider.domain == SOLCAST_SOLAR_DOMAIN
-        assert provider.solar == self.solar
+        assert provider.solar == solar_mock
 
     @pytest.mark.asyncio
-    async def test_fill_orchestrators_no_entries(self):
+    async def test_fill_orchestrators_no_entries(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test fill_orchestrators with no config entries."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
-        self.hass.config_entries.async_entries = MagicMock(return_value=[])
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+        hass.config_entries.async_entries = MagicMock(return_value=[])
 
         await provider.fill_orchestrators()
 
         assert provider.orchestrators == []
 
     @pytest.mark.asyncio
-    async def test_fill_orchestrators_with_valid_entry(self):
+    async def test_fill_orchestrators_with_valid_entry(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test fill_orchestrators with valid config entry."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
 
         # Create a mock config entry with the expected structure
         mock_coordinator = MagicMock()
@@ -666,7 +693,7 @@ class TestQSSolarProviderSolcast:
         mock_entry = MagicMock()
         mock_entry.runtime_data.coordinator = mock_coordinator
 
-        self.hass.config_entries.async_entries = MagicMock(return_value=[mock_entry])
+        hass.config_entries.async_entries = MagicMock(return_value=[mock_entry])
 
         await provider.fill_orchestrators()
 
@@ -674,24 +701,32 @@ class TestQSSolarProviderSolcast:
         assert provider.orchestrators[0] == mock_coordinator
 
     @pytest.mark.asyncio
-    async def test_fill_orchestrators_skips_invalid_entry(self):
+    async def test_fill_orchestrators_skips_invalid_entry(
+        self, hass: HomeAssistant, solar_mock
+    ):
         """Test fill_orchestrators ignores entries without coordinators."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
 
-        good_coordinator = SimpleNamespace(solcast=SimpleNamespace(_data_forecasts=[]))
-        good_entry = SimpleNamespace(runtime_data=SimpleNamespace(coordinator=good_coordinator))
-        bad_entry = SimpleNamespace(runtime_data=None)
+        # Mock coordinator with nested structure
+        good_coordinator = MagicMock()
+        good_coordinator.solcast._data_forecasts = []
+        # Mock good entry with runtime_data and coordinator
+        good_entry = MagicMock()
+        good_entry.runtime_data.coordinator = good_coordinator
+        # Mock bad entry with no runtime_data
+        bad_entry = MagicMock()
+        bad_entry.runtime_data = None
 
-        self.hass.config_entries.async_entries = MagicMock(return_value=[good_entry, bad_entry])
+        hass.config_entries.async_entries = MagicMock(return_value=[good_entry, bad_entry])
 
         await provider.fill_orchestrators()
 
         assert provider.orchestrators == [good_coordinator]
 
     @pytest.mark.asyncio
-    async def test_get_power_series_from_orchestrator(self):
+    async def test_get_power_series_from_orchestrator(self, solar_mock):
         """Test extracting power series from Solcast orchestrator."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -710,9 +745,11 @@ class TestQSSolarProviderSolcast:
         assert len(result) >= 0
 
     @pytest.mark.asyncio
-    async def test_get_power_series_handles_boundaries_and_timezone(self):
+    async def test_get_power_series_handles_boundaries_and_timezone(
+        self, solar_mock
+    ):
         """Test Solcast series boundaries and UTC conversion."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
         tz = pytz.timezone("Europe/Paris")
 
         start = tz.localize(datetime.datetime(2024, 6, 15, 12, 30, 0))
@@ -723,7 +760,9 @@ class TestQSSolarProviderSolcast:
             {"period_start": tz.localize(datetime.datetime(2024, 6, 15, 14, 0, 0)), "pv_estimate": 2.0},
         ]
 
-        orchestrator = SimpleNamespace(solcast=SimpleNamespace(_data_forecasts=data))
+        # Mock orchestrator with solcast data
+        orchestrator = MagicMock()
+        orchestrator.solcast._data_forecasts = data
         result = await provider.get_power_series_from_orchestrator(orchestrator, start, end)
 
         assert result[0][0].astimezone(pytz.UTC).hour == 10
@@ -732,9 +771,9 @@ class TestQSSolarProviderSolcast:
         assert [value for _, value in result] == [1000.0, 1500.0, 2000.0]
 
     @pytest.mark.asyncio
-    async def test_get_power_series_empty_data(self):
+    async def test_get_power_series_empty_data(self, solar_mock):
         """Test extracting power series with no data."""
-        provider = QSSolarProviderSolcast(solar=self.solar)
+        provider = QSSolarProviderSolcast(solar=solar_mock)
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -751,22 +790,16 @@ class TestQSSolarProviderSolcast:
 class TestQSSolarProviderOpenWeather:
     """Test QSSolarProviderOpenWeather class."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.solar = MagicMock()
-        self.solar.hass = self.hass
-
-    def test_init(self):
+    def test_init(self, hass: HomeAssistant, solar_mock):
         """Test OpenWeather provider initialization."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         assert provider.domain == OPEN_METEO_SOLAR_DOMAIN
-        assert provider.solar == self.solar
+        assert provider.solar == solar_mock
 
-    def test_is_orchestrator_valid(self):
+    def test_is_orchestrator_valid(self, solar_mock):
         """Test is_orchestrator with valid orchestrator."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.data.watts = {}
@@ -775,9 +808,9 @@ class TestQSSolarProviderOpenWeather:
 
         assert result is True
 
-    def test_is_orchestrator_invalid(self):
+    def test_is_orchestrator_invalid(self, solar_mock):
         """Test is_orchestrator with invalid orchestrator."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         # Create orchestrator without data.watts
         mock_orchestrator = MagicMock()
@@ -788,9 +821,9 @@ class TestQSSolarProviderOpenWeather:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_get_power_series_from_orchestrator(self):
+    async def test_get_power_series_from_orchestrator(self, solar_mock):
         """Test extracting power series from OpenWeather orchestrator."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -809,9 +842,11 @@ class TestQSSolarProviderOpenWeather:
         assert len(result) >= 0
 
     @pytest.mark.asyncio
-    async def test_get_power_series_sorts_and_handles_boundaries(self):
+    async def test_get_power_series_sorts_and_handles_boundaries(
+        self, solar_mock
+    ):
         """Test OpenWeather series sorting, boundaries, and UTC conversion."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
         tz = pytz.timezone("Europe/Paris")
 
         start = tz.localize(datetime.datetime(2024, 6, 15, 12, 30, 0))
@@ -820,9 +855,9 @@ class TestQSSolarProviderOpenWeather:
         t1 = tz.localize(datetime.datetime(2024, 6, 15, 13, 0, 0))
         t2 = tz.localize(datetime.datetime(2024, 6, 15, 14, 0, 0))
 
-        orchestrator = SimpleNamespace(
-            data=SimpleNamespace(watts={t1: 1500, t2: 2000, t0: 1000})
-        )
+        # Mock orchestrator with watts data
+        orchestrator = MagicMock()
+        orchestrator.data.watts = {t1: 1500, t2: 2000, t0: 1000}
 
         result = await provider.get_power_series_from_orchestrator(orchestrator, start, end)
 
@@ -831,9 +866,9 @@ class TestQSSolarProviderOpenWeather:
         assert result[0][0] < result[-1][0]
 
     @pytest.mark.asyncio
-    async def test_get_power_series_none_data(self):
+    async def test_get_power_series_none_data(self, solar_mock):
         """Test extracting power series with None data."""
-        provider = QSSolarProviderOpenWeather(solar=self.solar)
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
@@ -896,27 +931,15 @@ class TestQSSolarProviderSolcastDebug:
 class TestQSSolarDumpForDebug:
     """Test dump_for_debug method."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.hass = FakeHass()
-        self.config_entry = FakeConfigEntry(
-            entry_id="test_solar_entry",
-            data={CONF_NAME: "Test Solar"},
-        )
-        self.home = MagicMock()
-        self.home.voltage = 230.0
-        self.home.physical_3p = False
-        self.data_handler = MagicMock()
-        self.data_handler.home = self.home
-        self.hass.data[DOMAIN][DATA_HANDLER] = self.data_handler
-
     @pytest.mark.asyncio
-    async def test_dump_for_debug_with_provider(self):
+    async def test_dump_for_debug_with_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test dump_for_debug calls provider dump."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
@@ -931,12 +954,14 @@ class TestQSSolarDumpForDebug:
             device.solar_forecast_provider_handler.dump_for_debug.assert_called_once_with(tmpdir)
 
     @pytest.mark.asyncio
-    async def test_dump_for_debug_without_provider(self):
+    async def test_dump_for_debug_without_provider(
+        self, hass: HomeAssistant, solar_setup
+    ):
         """Test dump_for_debug does nothing without provider."""
         device = QSSolar(
-            hass=self.hass,
-            config_entry=self.config_entry,
-            home=self.home,
+            hass=hass,
+            config_entry=solar_setup["config_entry"],
+            home=solar_setup["home"],
             **{
                 CONF_NAME: "My Solar",
                 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",

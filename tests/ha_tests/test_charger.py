@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch, AsyncMock, PropertyMock
 
 import pytz
-from types import SimpleNamespace
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
@@ -1125,12 +1124,12 @@ async def test_charger_stable_dynamic_status_from_consign(
     charger_device.is_charger_unavailable = MagicMock(return_value=False)
     charger_device._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
     charger_device.get_median_sensor = MagicMock(return_value=1200.0)
-    charger_device._inner_expected_charge_state = SimpleNamespace(
-        value=True, is_ok_to_set=MagicMock(return_value=True)
-    )
-    charger_device._inner_amperage = SimpleNamespace(value=charger_device.min_charge)
-    charger_device._inner_num_active_phases = SimpleNamespace(
-        value=3, is_ok_to_set=MagicMock(return_value=True)
+    from tests.factories import setup_charger_inner_states
+    setup_charger_inner_states(
+        charger_device,
+        charge_state_value=True,
+        amperage_value=charger_device.min_charge,
+        num_phases_value=3,
     )
 
     status = charger_device.get_stable_dynamic_charge_status(datetime.now(tz=pytz.UTC))
@@ -1181,12 +1180,12 @@ async def test_charger_stable_dynamic_status_green_cap(
     charger_device.is_charger_unavailable = MagicMock(return_value=False)
     charger_device._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
     charger_device.get_median_sensor = MagicMock(return_value=0.0)
-    charger_device._inner_expected_charge_state = SimpleNamespace(
-        value=False, is_ok_to_set=MagicMock(return_value=True)
-    )
-    charger_device._inner_amperage = SimpleNamespace(value=0)
-    charger_device._inner_num_active_phases = SimpleNamespace(
-        value=3, is_ok_to_set=MagicMock(return_value=True)
+    from tests.factories import setup_charger_inner_states
+    setup_charger_inner_states(
+        charger_device,
+        charge_state_value=False,
+        amperage_value=0,
+        num_phases_value=3,
     )
 
     car_device.qs_bump_solar_charge_priority = True
@@ -1397,37 +1396,37 @@ async def test_charger_get_charge_type_variants(
     charger_device.is_charger_faulted = MagicMock(return_value=False)
     charger_device.possible_charge_error_start_time = None
 
-    fast_ct = SimpleNamespace(
-        as_fast_as_possible=True,
-        end_of_constraint=DATETIME_MAX_UTC,
-        load_info=None,
-        is_constraint_active_for_time_period=MagicMock(return_value=True),
-        is_constraint_met=MagicMock(return_value=False),
-    )
+    # Mock constraint for ASAP charging
+    fast_ct = MagicMock()
+    fast_ct.as_fast_as_possible = True
+    fast_ct.end_of_constraint = DATETIME_MAX_UTC
+    fast_ct.load_info = None
+    fast_ct.is_constraint_active_for_time_period = MagicMock(return_value=True)
+    fast_ct.is_constraint_met = MagicMock(return_value=False)
     charger_device._constraints = [fast_ct]
     charge_type, ct = charger_device.get_charge_type()
     assert charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
     assert ct is fast_ct
 
-    sched_ct = SimpleNamespace(
-        as_fast_as_possible=False,
-        end_of_constraint=datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC),
-        load_info={"person": "Person A"},
-        is_constraint_active_for_time_period=MagicMock(return_value=True),
-        is_constraint_met=MagicMock(return_value=False),
-    )
+    # Mock constraint for scheduled charging
+    sched_ct = MagicMock()
+    sched_ct.as_fast_as_possible = False
+    sched_ct.end_of_constraint = datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC)
+    sched_ct.load_info = {"person": "Person A"}
+    sched_ct.is_constraint_active_for_time_period = MagicMock(return_value=True)
+    sched_ct.is_constraint_met = MagicMock(return_value=False)
     charger_device._constraints = [sched_ct]
     charge_type, ct = charger_device.get_charge_type()
     assert charge_type in (CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
     assert ct is sched_ct
 
-    met_ct = SimpleNamespace(
-        as_fast_as_possible=False,
-        end_of_constraint=DATETIME_MAX_UTC,
-        load_info=None,
-        is_constraint_active_for_time_period=MagicMock(return_value=False),
-        is_constraint_met=MagicMock(return_value=True),
-    )
+    # Mock constraint that's already met
+    met_ct = MagicMock()
+    met_ct.as_fast_as_possible = False
+    met_ct.end_of_constraint = DATETIME_MAX_UTC
+    met_ct.load_info = None
+    met_ct.is_constraint_active_for_time_period = MagicMock(return_value=False)
+    met_ct.is_constraint_met = MagicMock(return_value=True)
     charger_device._constraints = [met_ct]
     charge_type, ct = charger_device.get_charge_type()
     assert charge_type == CAR_CHARGE_TYPE_TARGET_MET
@@ -1565,10 +1564,10 @@ async def test_charger_check_load_activity_with_timed_constraints(
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.home.force_next_solve = MagicMock()
 
-    person = SimpleNamespace(
-        name="Person A",
-        notify_of_forecast_if_needed=AsyncMock(),
-    )
+    # Mock person for testing notification
+    person = MagicMock()
+    person.name = "Person A"
+    person.notify_of_forecast_if_needed = AsyncMock()
 
     car_device.can_use_charge_percent_constraints = MagicMock(return_value=True)
     car_device.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
@@ -1654,12 +1653,12 @@ async def test_charger_scores_and_before_battery(
     car_device.get_car_charge_percent = MagicMock(return_value=50.0)
     car_device.car_battery_capacity = 60000
 
-    ct = SimpleNamespace(
-        is_before_battery=True,
-        end_of_constraint=datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC),
-        as_fast_as_possible=False,
-        is_mandatory=True,
-    )
+    # Mock constraint for testing compute_is_before_battery
+    ct = MagicMock()
+    ct.is_before_battery = True
+    ct.end_of_constraint = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    ct.as_fast_as_possible = False
+    ct.is_mandatory = True
 
     is_before = charger_device.compute_is_before_battery(ct, datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
     score = charger_device.get_normalized_score(ct, datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
@@ -2005,7 +2004,10 @@ async def test_charger_check_load_activity_agenda_person_constraints(
     charger_device._constraints = []
     charger_device._power_steps = [copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1000)]
 
-    person = SimpleNamespace(name="Person A", notify_of_forecast_if_needed=AsyncMock())
+    # Mock person for testing
+    person = MagicMock()
+    person.name = "Person A"
+    person.notify_of_forecast_if_needed = AsyncMock()
 
     car_device.can_use_charge_percent_constraints = MagicMock(return_value=True)
     car_device.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
@@ -2156,19 +2158,23 @@ async def test_charger_check_load_activity_energy_constraints(
 
 def test_charger_status_helpers() -> None:
     """Test QSChargerStatus helper methods."""
-    dummy_car = SimpleNamespace(
-        name="Car A",
-        get_charge_power_per_phase_A=MagicMock(return_value=([0, 1000, 2000], 1, 2)),
-    )
-    dummy_charger = SimpleNamespace(
+    from tests.factories import create_test_car_double, create_test_charger_double
+
+    # Use real test doubles instead of SimpleNamespace
+    dummy_car = create_test_car_double(name="Car A")
+    # Override specific method for controlled test scenario
+    dummy_car.get_charge_power_per_phase_A = MagicMock(return_value=([0, 1000, 2000], 1, 2))
+
+    dummy_charger = create_test_charger_double(
         name="Charger A",
         mono_phase_index=1,
         car=dummy_car,
-        update_amps_with_delta=MagicMock(return_value=[0, 5, 0]),
-        get_delta_dampened_power=MagicMock(return_value=100.0),
-        _get_amps_from_power_steps=MagicMock(return_value=1),
-        can_do_3_to_1_phase_switch=MagicMock(return_value=True),
     )
+    # Override methods for controlled test scenario
+    dummy_charger.update_amps_with_delta = MagicMock(return_value=[0, 5, 0])
+    dummy_charger.get_delta_dampened_power = MagicMock(return_value=100.0)
+    dummy_charger._get_amps_from_power_steps = MagicMock(return_value=1)
+    dummy_charger.can_do_3_to_1_phase_switch = MagicMock(return_value=True)
 
     status = QSChargerStatus(dummy_charger)
     status.current_real_max_charging_amp = 5
@@ -2178,39 +2184,72 @@ def test_charger_status_helpers() -> None:
     status.possible_amps = [0, 6, 8]
     status.possible_num_phases = [1, 3]
 
+    # Verify charger status correctly identifies charger/car combination
     assert status.name == "Charger A/Car A"
-    assert status.get_current_charging_amps() == [0.0, 5, 0.0]
-    assert status.get_budget_amps() == [6, 6, 6]
-    assert status.update_amps_with_delta([0, 5, 0], 1, 1) == [0, 5, 0]
-    assert status.get_diff_power(5, 1, 6, 1) == 100.0
-
+    
+    # Verify current charging amps calculation
+    # With mono_phase_index=1 and 5A, should have [0, 5, 0]
+    current_amps = status.get_current_charging_amps()
+    assert current_amps == [0.0, 5, 0.0], "Current amps should be on the mono-phase only"
+    assert sum(current_amps) == 5.0, "Total current should match max charging amp"
+    
+    # Verify budget amps calculation (6A on all 3 phases)
+    budget_amps = status.get_budget_amps()
+    assert budget_amps == [6, 6, 6], "Budget amps should be equal across phases"
+    assert all(amp == status.budgeted_amp for amp in budget_amps), \
+        "Each phase budget should match budgeted_amp"
+    
+    # Verify amp update with delta
+    updated_amps = status.update_amps_with_delta([0, 5, 0], 1, 1)
+    assert updated_amps == [0, 5, 0], "Delta update should return correct amps"
+    
+    # Verify power difference calculation
+    diff_power = status.get_diff_power(5, 1, 6, 1)
+    assert diff_power == 100.0, "Power difference should be calculated correctly"
+    
+    # Verify budget change capability
     next_amp, next_phases = status.can_change_budget(
         allow_state_change=True, allow_phase_change=True, increase=True
     )
-    assert next_amp is not None
-    assert next_phases in [1, 3]
+    assert next_amp is not None, "Should be able to find next amp for increase"
+    assert next_phases in status.possible_num_phases, \
+        f"Next phases {next_phases} should be in possible phases {status.possible_num_phases}"
+    
+    # Verify next amp is >= current when increasing
+    if next_amp is not None:
+        assert next_amp >= status.current_real_max_charging_amp or next_phases != status.current_active_phase_number, \
+            "Increase should either increase amps or change phases"
 
 
 def test_charger_status_consign_phase_switch() -> None:
-    """Test QSChargerStatus consign amps with phase switch."""
-    dummy_car = SimpleNamespace(
-        name="Car B",
-        get_charge_power_per_phase_A=MagicMock(
-            side_effect=[
-                ([0, 1000, 2000], 1, 2),
-                ([0, 3000, 6000], 1, 2),
-            ]
-        ),
+    """Test QSChargerStatus consign amps with phase switch.
+    
+    This test verifies:
+    - Phase switching logic when power cannot be achieved with current phases
+    - Consign amp calculation with phase adjustment
+    - Return value constraints (valid phase counts and amp values)
+    """
+    from tests.factories import create_test_car_double, create_test_charger_double
+
+    dummy_car = create_test_car_double(name="Car B")
+    # First call returns 1-phase power steps, second returns 3-phase
+    dummy_car.get_charge_power_per_phase_A = MagicMock(
+        side_effect=[
+            ([0, 1000, 2000], 1, 2),  # 1-phase: 1A=1kW, 2A=2kW
+            ([0, 3000, 6000], 1, 2),  # 3-phase: 1A=3kW, 2A=6kW
+        ]
     )
-    dummy_charger = SimpleNamespace(
+
+    dummy_charger = create_test_charger_double(
         name="Charger B",
         mono_phase_index=0,
         car=dummy_car,
-        _get_amps_from_power_steps=MagicMock(side_effect=[None, 2]),
-        can_do_3_to_1_phase_switch=MagicMock(return_value=True),
         min_charge=1,
         max_charge=3,
     )
+    # First call returns None (can't achieve with 1-phase), second returns 2A
+    dummy_charger._get_amps_from_power_steps = MagicMock(side_effect=[None, 2])
+    dummy_charger.can_do_3_to_1_phase_switch = MagicMock(return_value=True)
 
     status = QSChargerStatus(dummy_charger)
     status.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=3000)
@@ -2221,20 +2260,63 @@ def test_charger_status_consign_phase_switch() -> None:
     possible_phases, consign_amp = status.get_consign_amps_values(
         consign_is_minimum=True, add_tolerance=0.0
     )
-    assert possible_phases is not None
-    assert consign_amp is not None
+    
+    # Verify returned values are valid
+    assert possible_phases is not None, "Phase switch should find valid phases"
+    assert consign_amp is not None, "Consign amp should be calculated"
+    
+    # possible_phases can be a list of phase options
+    # Verify at least one returned phase is in allowed range
+    if isinstance(possible_phases, list):
+        assert any(p in status.possible_num_phases for p in possible_phases), \
+            f"At least one returned phase {possible_phases} should be in possible phases {status.possible_num_phases}"
+    else:
+        assert possible_phases in status.possible_num_phases, \
+            f"Returned phase {possible_phases} not in possible phases {status.possible_num_phases}"
+    
+    # Verify amp is in allowed range
+    assert consign_amp in status.possible_amps, \
+        f"Returned amp {consign_amp} not in possible amps {status.possible_amps}"
+    
+    # Verify amp is at least the minimum charge
+    assert consign_amp >= dummy_charger.min_charge, \
+        f"Consign amp {consign_amp} should be >= min_charge {dummy_charger.min_charge}"
 
 
 def test_state_cmd_transitions() -> None:
-    """Test QSStateCmd transitions and launch logic."""
+    """Test QSStateCmd transitions and launch logic.
+    
+    This test verifies the complete state machine behavior:
+    - Initial state allows setting
+    - Set values are persisted
+    - Launch is allowed after set
+    - Launch registration prevents re-launch
+    - State changes are tracked
+    """
     cmd = QSStateCmd()
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
+    # Initial state should allow setting
     assert cmd.is_ok_to_set(time, min_change_time=0) is True
+    assert cmd.value is None, "Initial value should be None"
+    
+    # Set value and verify it's stored
     cmd.set(1, time)
+    assert cmd.value == 1, "Value should be set to 1"
+    
+    # Launch should be allowed for the set value
     assert cmd.is_ok_to_launch(1, time) is True
+    
+    # After registering launch, re-launch should be blocked
     cmd.register_launch(1, time)
-    assert cmd.is_ok_to_launch(1, time) is False
+    assert cmd.is_ok_to_launch(1, time) is False, \
+        "Re-launch should be blocked after registration"
+    
+    # Verify a different value can still be launched
+    cmd.set(2, time)
+    assert cmd.value == 2, "Value should be updated to 2"
+    assert cmd.is_ok_to_launch(2, time) is True, \
+        "Launch should be allowed for new value"
 
 
 async def test_charger_execute_command_and_probe(
@@ -2330,7 +2412,8 @@ async def test_charger_probe_stopped_state_handling(
     )
     assert handled is True
 
-    charger_device.car = SimpleNamespace(
+    from tests.factories import create_test_car_double
+    charger_device.car = create_test_car_double(
         name="Car A",
         car_charger_min_charge=6,
         car_charger_max_charge=32,
@@ -2345,14 +2428,17 @@ async def test_charger_probe_stopped_state_handling(
 
 def test_charger_power_helpers() -> None:
     """Test charger power helper methods."""
-    dummy_car = SimpleNamespace(
-        get_charge_power_per_phase_A=MagicMock(return_value=([0, 1000, 2000], 1, 2))
-    )
-    dummy_charger = SimpleNamespace(
+    from tests.factories import create_test_car_double, create_test_charger_double
+
+    dummy_car = create_test_car_double(name="Test Car")
+    dummy_car.get_charge_power_per_phase_A = MagicMock(return_value=([0, 1000, 2000], 1, 2))
+
+    dummy_charger = create_test_charger_double(
+        name="Test Charger",
         car=dummy_car,
         mono_phase_index=0,
-        get_charge_power_per_phase_A=MagicMock(return_value=([0, 1000, 2000], 1, 2)),
     )
+    dummy_charger.get_charge_power_per_phase_A = MagicMock(return_value=([0, 1000, 2000], 1, 2))
 
     charger_status = QSChargerStatus(dummy_charger)
     charger_status.current_real_max_charging_amp = 0
@@ -2362,29 +2448,20 @@ def test_charger_power_helpers() -> None:
 
 async def test_charger_group_budget_handling() -> None:
     """Test QSChargerGroup budget application."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group A",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=True),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group A")
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger A"
-    charger.mono_phase_index = 0
-    charger.min_charge = 6
-    charger.max_charge = 32
-    charger.charger_default_idle_charge = 6
-    charger._expected_charge_state = QSStateCmd()
-    charger._expected_amperage = QSStateCmd()
-    charger._expected_num_active_phases = QSStateCmd()
-    charger.num_on_off = 0
+    car = create_test_car_double(name="Car A")
+    charger = create_test_charger_double(name="Charger A", car=car)
     charger._ensure_correct_state = AsyncMock()
-    charger.car = SimpleNamespace(name="Car A")
+
     cs = QSChargerStatus(charger)
     cs.current_real_max_charging_amp = 10
     cs.current_active_phase_number = 1
@@ -2398,28 +2475,29 @@ async def test_charger_group_budget_handling() -> None:
 
 async def test_charger_group_ensure_state_and_dyn_handle() -> None:
     """Test QSChargerGroup ensure_correct_state and dyn_handle."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group B",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=True),
-    )
+    from tests.factories import create_test_dynamic_group_double
+
+    dynamic_group = create_test_dynamic_group_double(name="Group B")
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    charger = SimpleNamespace(
-        name="Charger B",
-        qs_enable_device=True,
-        ensure_correct_state=AsyncMock(return_value=(True, False, datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))),
-        get_stable_dynamic_charge_status=MagicMock(
-            return_value=SimpleNamespace(charge_score=10, get_current_charging_amps=MagicMock(return_value=[0, 0, 0]),
-                                         get_budget_amps=MagicMock(return_value=[0, 0, 0]),
-                                         get_diff_power=MagicMock(return_value=0),
-                                         current_real_max_charging_amp=0,
-                                         current_active_phase_number=1,
-                                         budgeted_amp=0,
-                                         budgeted_num_phases=1,
-                                         name="cs")
-        ),
+    # Create a mock charger with specific method returns for this test
+    charger = MagicMock()
+    charger.name = "Charger B"
+    charger.qs_enable_device = True
+    charger.ensure_correct_state = AsyncMock(return_value=(True, False, datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)))
+    charger.get_stable_dynamic_charge_status = MagicMock(
+        return_value=MagicMock(
+            charge_score=10,
+            get_current_charging_amps=MagicMock(return_value=[0, 0, 0]),
+            get_budget_amps=MagicMock(return_value=[0, 0, 0]),
+            get_diff_power=MagicMock(return_value=0),
+            current_real_max_charging_amp=0,
+            current_active_phase_number=1,
+            budgeted_amp=0,
+            budgeted_num_phases=1,
+            name="cs",
+        )
     )
     group._chargers = [charger]
 
@@ -2459,15 +2537,16 @@ async def test_charger_saved_info_and_user_updates(
     charger_device.do_run_check_load_activity_and_constraints = AsyncMock(return_value=True)
 
     data = {}
-    charger_device._auto_constraints_cleaned_at_user_reset = [
-        SimpleNamespace(to_dict=MagicMock(return_value={"key": "value"}))
-    ]
+    # Mock constraint with to_dict method
+    mock_constraint = MagicMock()
+    mock_constraint.to_dict = MagicMock(return_value={"key": "value"})
+    charger_device._auto_constraints_cleaned_at_user_reset = [mock_constraint]
     charger_device.update_to_be_saved_extra_device_info(data)
     assert "auto_constraints_cleaned_at_user_reset" in data
 
     with patch(
         "custom_components.quiet_solar.ha_model.charger.LoadConstraint.new_from_saved_dict",
-        side_effect=[SimpleNamespace(), None],
+        side_effect=[MagicMock(), None],
     ):
         charger_device.use_saved_extra_device_info(
             {"auto_constraints_cleaned_at_user_reset": [{"a": 1}, {"b": 2}]}
@@ -2502,13 +2581,13 @@ async def test_charger_user_clean_constraints_and_group_power(
     charger_device.home.force_next_solve = MagicMock()
     charger_device.update_charger_for_user_change = AsyncMock()
 
-    ct = SimpleNamespace(
-        is_constraint_active_for_time_period=MagicMock(return_value=True),
-        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-        load_param="car",
-        load_info={"person": "Person A"},
-        from_user=False,
-    )
+    # Mock constraint for testing user_clean_constraints
+    ct = MagicMock()
+    ct.is_constraint_active_for_time_period = MagicMock(return_value=True)
+    ct.type = CONSTRAINT_TYPE_MANDATORY_END_TIME
+    ct.load_param = "car"
+    ct.load_info = {"person": "Person A"}
+    ct.from_user = False
     charger_device._constraints = [ct]
 
     with patch(
@@ -2547,42 +2626,42 @@ async def test_charger_group_property_and_bump_solar(
     await hass.async_block_till_done()
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
-    charger_device.father_device = SimpleNamespace(
-        home=charger_device.home,
-        name="Parent",
-        _childrens=[charger_device],
-        charger_group=None,
-        get_average_power=MagicMock(return_value=0.0),
-    )
+    # Mock father_device (dynamic group parent)
+    charger_device.father_device = MagicMock()
+    charger_device.father_device.home = charger_device.home
+    charger_device.father_device.name = "Parent"
+    charger_device.father_device._childrens = [charger_device]
+    charger_device.father_device.charger_group = None
+    charger_device.father_device.get_average_power = MagicMock(return_value=0.0)
 
     group = charger_device.charger_group
     assert isinstance(group, QSChargerGroup)
     assert charger_device.father_device.charger_group is group
 
-    ct = SimpleNamespace(is_before_battery=False)
+    # Mock constraint for testing qs_bump_solar_charge_priority
+    ct = MagicMock()
+    ct.is_before_battery = False
     charger_device.get_current_active_constraint = MagicMock(return_value=ct)
-    charger_device.car = SimpleNamespace(qs_bump_solar_charge_priority=False)
+    from tests.factories import create_test_car_double
+    charger_device.car = create_test_car_double(qs_bump_solar_charge_priority=False)
     charger_device.qs_bump_solar_charge_priority = True
     assert ct.is_before_battery is True
 
 
 async def test_charger_group_budget_strategy() -> None:
     """Test QSChargerGroup apply_budget_strategy splitting."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group C",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=False),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group C")
+    dynamic_group.is_current_acceptable = MagicMock(return_value=False)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger C"
-    charger.mono_phase_index = 0
-    charger.car = SimpleNamespace(name="Car C")
+    car = create_test_car_double(name="Car C")
+    charger = create_test_charger_double(name="Charger C", car=car, mono_phase_index=0)
 
     cs_decrease = QSChargerStatus(charger)
     cs_decrease.current_real_max_charging_amp = 10
@@ -2611,27 +2690,28 @@ async def test_charger_group_budget_strategy() -> None:
 
 async def test_charger_group_update_and_shave_helpers() -> None:
     """Test group shaving helpers."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group D",
-        _childrens=[],
-        dyn_group_max_phase_current=32,
-        is_current_acceptable=MagicMock(return_value=False),
-        is_current_acceptable_and_diff=MagicMock(return_value=(True, [2, 2, 2])),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group D")
+    dynamic_group.dyn_group_max_phase_current = 32
+    dynamic_group.is_current_acceptable = MagicMock(return_value=False)
+    dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(True, [2, 2, 2]))
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger D"
-    charger.mono_phase_index = 0
-    charger.min_charge = 6
-    charger.max_charge = 32
+    car = create_test_car_double(name="Car D")
+    charger = create_test_charger_double(
+        name="Charger D",
+        car=car,
+        mono_phase_index=0,
+        min_charge=6,
+        max_charge=32,
+    )
     charger.update_amps_with_delta = MagicMock(return_value=[6, 0, 0])
     charger.get_delta_dampened_power = MagicMock(return_value=100.0)
-    charger.car = SimpleNamespace(name="Car D")
 
     cs = QSChargerStatus(charger)
     cs.command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=0)
@@ -2651,23 +2731,20 @@ async def test_charger_group_update_and_shave_helpers() -> None:
 
 async def test_charger_group_prepare_budgets_for_algo() -> None:
     """Test prepare budgets for algorithm."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group E",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=True),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group E")
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger E"
-    charger.mono_phase_index = 0
+    car = create_test_car_double(name="Car E")
+    charger = create_test_charger_double(name="Charger E", car=car, mono_phase_index=0)
     charger.update_amps_with_delta = MagicMock(return_value=[0, 0, 0])
     charger.get_delta_dampened_power = MagicMock(return_value=0.0)
-    charger.car = SimpleNamespace(name="Car E")
 
     cs = QSChargerStatus(charger)
     cs.possible_amps = [6, 10]
@@ -2681,23 +2758,20 @@ async def test_charger_group_prepare_budgets_for_algo() -> None:
 
 async def test_charger_group_prepare_and_shave_budgets() -> None:
     """Test _do_prepare_and_shave_budgets flow."""
-    dynamic_group = SimpleNamespace(
-        home=SimpleNamespace(),
-        name="Group F",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=True),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group F")
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger F"
-    charger.mono_phase_index = 0
+    car = create_test_car_double(name="Car F")
+    charger = create_test_charger_double(name="Charger F", car=car, mono_phase_index=0)
     charger.update_amps_with_delta = MagicMock(return_value=[0, 0, 0])
     charger.get_delta_dampened_power = MagicMock(return_value=0.0)
-    charger.car = SimpleNamespace(name="Car F")
 
     cs = QSChargerStatus(charger)
     cs.possible_amps = [6, 10]
@@ -2713,42 +2787,46 @@ async def test_charger_group_prepare_and_shave_budgets() -> None:
 
 async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
     """Test budgeting algorithm decision flow."""
-    home = SimpleNamespace(
-        battery=None,
-        battery_can_discharge=MagicMock(return_value=False),
-        get_best_tariff=MagicMock(return_value=0.25),
-        get_tariff=MagicMock(return_value=0.05),
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
     )
-    dynamic_group = SimpleNamespace(
-        home=home,
-        name="Group G",
-        _childrens=[],
-        is_current_acceptable=MagicMock(return_value=True),
-    )
+
+    # Create mock home with required methods
+    home = MagicMock()
+    home.battery = None
+    home.battery_can_discharge = MagicMock(return_value=False)
+    home.get_best_tariff = MagicMock(return_value=0.25)
+    home.get_tariff = MagicMock(return_value=0.05)
+
+    dynamic_group = create_test_dynamic_group_double(name="Group G", home=home)
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger_best = DummyCharger()
-    charger_best.name = "Charger Best"
-    charger_best.mono_phase_index = 0
-    charger_best.min_charge = 6
-    charger_best.max_charge = 32
+    car_best = create_test_car_double(name="Car Best")
+    charger_best = create_test_charger_double(
+        name="Charger Best",
+        car=car_best,
+        mono_phase_index=0,
+        min_charge=6,
+        max_charge=32,
+    )
     charger_best.qs_bump_solar_charge_priority = False
     charger_best._expected_charge_state = QSStateCmd()
     charger_best.get_delta_dampened_power = MagicMock(return_value=200.0)
-    charger_best.car = SimpleNamespace(name="Car Best")
 
-    charger_other = DummyCharger()
-    charger_other.name = "Charger Other"
-    charger_other.mono_phase_index = 0
-    charger_other.min_charge = 6
-    charger_other.max_charge = 32
+    car_other = create_test_car_double(name="Car Other")
+    charger_other = create_test_charger_double(
+        name="Charger Other",
+        car=car_other,
+        mono_phase_index=0,
+        min_charge=6,
+        max_charge=32,
+    )
     charger_other.qs_bump_solar_charge_priority = False
     charger_other._expected_charge_state = QSStateCmd()
     charger_other.get_delta_dampened_power = MagicMock(return_value=100.0)
-    charger_other.car = SimpleNamespace(name="Car Other")
 
     cs_best = QSChargerStatus(charger_best)
     cs_best.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=1500)
@@ -2791,40 +2869,38 @@ async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
 
 async def test_charger_group_dyn_handle_flow() -> None:
     """Test QSChargerGroup dyn_handle main flow."""
+    from tests.factories import (
+        create_test_car_double,
+        create_test_charger_double,
+        create_test_dynamic_group_double,
+    )
+
     now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
-    home = SimpleNamespace(
-        battery=None,
-        get_available_power_values=MagicMock(
-            return_value=[
-                (now - timedelta(seconds=30), 500.0),
-                (now - timedelta(seconds=10), 500.0),
-            ]
-        ),
-        get_grid_consumption_power_values=MagicMock(
-            return_value=[
-                (now - timedelta(seconds=30), 300.0),
-                (now - timedelta(seconds=10), 300.0),
-            ]
-        ),
+    # Create mock home with power values methods
+    home = MagicMock()
+    home.battery = None
+    home.get_available_power_values = MagicMock(
+        return_value=[
+            (now - timedelta(seconds=30), 500.0),
+            (now - timedelta(seconds=10), 500.0),
+        ]
     )
-    dynamic_group = SimpleNamespace(
-        home=home,
-        name="Group H",
-        _childrens=[],
-        accurate_power_sensor="sensor.accurate",
-        get_median_sensor=MagicMock(return_value=800.0),
-        is_current_acceptable=MagicMock(return_value=True),
+    home.get_grid_consumption_power_values = MagicMock(
+        return_value=[
+            (now - timedelta(seconds=30), 300.0),
+            (now - timedelta(seconds=10), 300.0),
+        ]
     )
+
+    dynamic_group = create_test_dynamic_group_double(name="Group H", home=home)
+    dynamic_group.accurate_power_sensor = "sensor.accurate"
+    dynamic_group.get_median_sensor = MagicMock(return_value=800.0)
+    dynamic_group.is_current_acceptable = MagicMock(return_value=True)
     group = QSChargerGroup(dynamic_group)
 
-    class DummyCharger:
-        pass
-
-    charger = DummyCharger()
-    charger.name = "Charger H"
-    charger.min_charge = 6
+    car = create_test_car_double(name="Car H")
+    charger = create_test_charger_double(name="Charger H", car=car, min_charge=6)
     charger.qs_enable_device = True
-    charger.car = SimpleNamespace(name="Car H")
     charger._expected_charge_state = QSStateCmd()
     charger._expected_charge_state.value = True
     charger.update_car_dampening_value = MagicMock()
@@ -3044,7 +3120,9 @@ async def test_charger_constraint_update_value_callback(
     car_device.is_car_charge_growing = MagicMock(return_value=False)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
 
-    charger_device.father_device.charger_group = SimpleNamespace(dyn_handle=AsyncMock())
+    # Mock charger_group with dyn_handle method
+    charger_device.father_device.charger_group = MagicMock()
+    charger_device.father_device.charger_group.dyn_handle = AsyncMock()
 
     class DummyConstraint:
         def __init__(self) -> None:
@@ -3109,13 +3187,13 @@ async def test_charger_constraint_update_value_callback_unplugged(
     assert result is None
     assert cont is False
 
-    charger_device.car = SimpleNamespace(
-        name="Car X",
-        get_car_charge_percent=MagicMock(return_value=20.0),
-        is_car_charge_growing=MagicMock(return_value=True),
-        setup_car_charge_target_if_needed=AsyncMock(),
-        car_charge_percent_sensor="sensor.car",
-    )
+    from tests.factories import create_test_car_double
+    car_mock = create_test_car_double(name="Car X")
+    car_mock.get_car_charge_percent = MagicMock(return_value=20.0)
+    car_mock.is_car_charge_growing = MagicMock(return_value=True)
+    car_mock.setup_car_charge_target_if_needed = AsyncMock()
+    car_mock.car_charge_percent_sensor = "sensor.car"
+    charger_device.car = car_mock
     charger_device.is_not_plugged = MagicMock(side_effect=[False, True])
     charger_device.current_command = copy_command(CMD_ON)
     result, cont = await charger_device.constraint_update_value_callback_soc(
@@ -3254,12 +3332,13 @@ async def test_charger_check_load_activity_unplugged(
     charger_device.set_max_charging_current = AsyncMock()
     charger_device._charger_default_idle_charge = 6
 
-    car = SimpleNamespace(
+    from tests.factories import create_test_car_double
+    car = create_test_car_double(
         name="Car Unplugged",
-        user_selected_person_name_for_car="user",
         car_charger_min_charge=6,
         car_charger_max_charge=32,
     )
+    car.user_selected_person_name_for_car = "user"
     charger_device.car = car
     charger_device.reset = MagicMock()
 
@@ -3340,24 +3419,24 @@ async def test_charger_check_load_activity_force_and_timed(
         def reset_load_param(self, _name):
             return None
 
-    car = SimpleNamespace(
+    from tests.factories import create_test_car_double
+    car = create_test_car_double(
         name="Car Force",
-        car_battery_capacity=50000,
-        car_default_charge=50,
         car_charger_min_charge=6,
         car_charger_max_charge=32,
-        do_force_next_charge=True,
-        do_next_charge_time=None,
-        car_charge_percent_sensor="sensor.car_soc",
-        get_car_charge_percent=MagicMock(return_value=10.0),
-        get_car_target_SOC=MagicMock(return_value=80.0),
-        get_car_minimum_ok_SOC=MagicMock(return_value=20.0),
-        can_use_charge_percent_constraints=MagicMock(return_value=True),
-        setup_car_charge_target_if_needed=AsyncMock(return_value=80.0),
-        get_best_person_next_need=AsyncMock(return_value=(None, None, None, None)),
-        qs_bump_solar_charge_priority=False
-
     )
+    car.car_battery_capacity = 50000
+    car.car_default_charge = 50
+    car.do_force_next_charge = True
+    car.do_next_charge_time = None
+    car.car_charge_percent_sensor = "sensor.car_soc"
+    car.get_car_charge_percent = MagicMock(return_value=10.0)
+    car.get_car_target_SOC = MagicMock(return_value=80.0)
+    car.get_car_minimum_ok_SOC = MagicMock(return_value=20.0)
+    car.can_use_charge_percent_constraints = MagicMock(return_value=True)
+    car.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
+    car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+    car.qs_bump_solar_charge_priority = False
 
     charger_device.car = car
     charger_device.is_not_plugged = MagicMock(return_value=False)
@@ -3427,26 +3506,31 @@ async def test_charger_check_load_activity_agenda_person(
         def reset_load_param(self, _name):
             return None
 
-    person = SimpleNamespace(name="Person A", notify_of_forecast_if_needed=AsyncMock())
-    car = SimpleNamespace(
+    from tests.factories import create_test_car_double
+    # Mock person for notification testing
+    person = MagicMock()
+    person.name = "Person A"
+    person.notify_of_forecast_if_needed = AsyncMock()
+
+    car = create_test_car_double(
         name="Car Agenda",
-        car_battery_capacity=50000,
-        car_default_charge=60,
         car_charger_min_charge=6,
         car_charger_max_charge=32,
-        do_force_next_charge=False,
-        do_next_charge_time=None,
-        car_charge_percent_sensor="sensor.car_soc",
-        get_car_charge_percent=MagicMock(return_value=20.0),
-        get_car_target_SOC=MagicMock(return_value=80.0),
-        get_car_minimum_ok_SOC=MagicMock(return_value=20.0),
-        can_use_charge_percent_constraints=MagicMock(return_value=True),
-        setup_car_charge_target_if_needed=AsyncMock(return_value=80.0),
-        get_best_person_next_need=AsyncMock(return_value=(False, future, 30.0, person)),
-        get_next_scheduled_event=AsyncMock(return_value=(future, None)),
-        set_next_charge_target_percent=AsyncMock(),
-        qs_bump_solar_charge_priority=False
     )
+    car.car_battery_capacity = 50000
+    car.car_default_charge = 60
+    car.do_force_next_charge = False
+    car.do_next_charge_time = None
+    car.car_charge_percent_sensor = "sensor.car_soc"
+    car.get_car_charge_percent = MagicMock(return_value=20.0)
+    car.get_car_target_SOC = MagicMock(return_value=80.0)
+    car.get_car_minimum_ok_SOC = MagicMock(return_value=20.0)
+    car.can_use_charge_percent_constraints = MagicMock(return_value=True)
+    car.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
+    car.get_best_person_next_need = AsyncMock(return_value=(False, future, 30.0, person))
+    car.get_next_scheduled_event = AsyncMock(return_value=(future, None))
+    car.set_next_charge_target_percent = AsyncMock()
+    car.qs_bump_solar_charge_priority = False
 
     charger_device.car = car
     charger_device.is_not_plugged = MagicMock(return_value=False)
@@ -3511,26 +3595,31 @@ async def test_charger_check_load_activity_person_constraint_creation(
         def reset_load_param(self, _name):
             return None
 
-    person = SimpleNamespace(name="Person Forecast", notify_of_forecast_if_needed=AsyncMock())
-    car = SimpleNamespace(
+    from tests.factories import create_test_car_double
+    # Mock person for forecast notification testing
+    person = MagicMock()
+    person.name = "Person Forecast"
+    person.notify_of_forecast_if_needed = AsyncMock()
+
+    car = create_test_car_double(
         name="Car Person",
-        car_battery_capacity=50000,
-        car_default_charge=40,
         car_charger_min_charge=6,
         car_charger_max_charge=32,
-        do_force_next_charge=False,
-        do_next_charge_time=None,
-        qs_bump_solar_charge_priority=False,
-        car_charge_percent_sensor="sensor.car_soc",
-        get_car_charge_percent=MagicMock(return_value=20.0),
-        get_car_target_SOC=MagicMock(return_value=80.0),
-        get_car_minimum_ok_SOC=MagicMock(return_value=20.0),
-        can_use_charge_percent_constraints=MagicMock(return_value=True),
-        setup_car_charge_target_if_needed=AsyncMock(return_value=80.0),
-        get_best_person_next_need=AsyncMock(return_value=(False, next_usage_time, 30.0, person)),
-        get_next_scheduled_event=AsyncMock(return_value=(None, None)),
-        set_next_charge_target_percent=AsyncMock(),
     )
+    car.car_battery_capacity = 50000
+    car.car_default_charge = 40
+    car.do_force_next_charge = False
+    car.do_next_charge_time = None
+    car.qs_bump_solar_charge_priority = False
+    car.car_charge_percent_sensor = "sensor.car_soc"
+    car.get_car_charge_percent = MagicMock(return_value=20.0)
+    car.get_car_target_SOC = MagicMock(return_value=80.0)
+    car.get_car_minimum_ok_SOC = MagicMock(return_value=20.0)
+    car.can_use_charge_percent_constraints = MagicMock(return_value=True)
+    car.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
+    car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, 30.0, person))
+    car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+    car.set_next_charge_target_percent = AsyncMock()
 
     charger_device.car = car
     charger_device.is_not_plugged = MagicMock(return_value=False)
@@ -3845,16 +3934,17 @@ async def test_charger_get_best_car_boot_and_default(
     charger_device.home._chargers = [charger_device]
     charger_device.is_plugged = MagicMock(return_value=False)
 
-    boot_car = SimpleNamespace(
-        name="Boot Car",
-        user_attached_charger_name="charger",
-        charger=None,
-    )
+    from tests.factories import create_test_car_double
+    boot_car = create_test_car_double(name="Boot Car")
+    boot_car.user_attached_charger_name = "charger"
+    boot_car.charger = None
     charger_device._boot_car = boot_car
     assert charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == boot_car
 
     charger_device._boot_car = None
-    default_car = SimpleNamespace(name="Default Car", user_attached_charger_name=None, charger=None)
+    default_car = create_test_car_double(name="Default Car")
+    default_car.user_attached_charger_name = None
+    default_car.charger = None
     charger_device._default_generic_car = default_car
     assert charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == default_car
 
@@ -3905,13 +3995,11 @@ async def test_charger_best_car_and_user_selection(
     assert best in [car_a, car_b]
 
     charger_device.user_attached_car_name = car_a.name
-    other_charger = SimpleNamespace(
-        qs_enable_device=True,
-        car=car_a,
-        user_attached_car_name=None,
-        name="Other",
-        detach_car=MagicMock(),
-    )
+    from tests.factories import create_test_charger_double
+    other_charger = create_test_charger_double(name="Other", car=car_a)
+    other_charger.qs_enable_device = True
+    other_charger.user_attached_car_name = None
+    other_charger.detach_car = MagicMock()
     charger_device.home._chargers = [charger_device, other_charger]
     best = charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
     assert best == car_a

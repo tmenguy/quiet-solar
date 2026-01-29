@@ -1,7 +1,6 @@
 """Tests for number platform."""
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -17,6 +16,7 @@ from custom_components.quiet_solar.number import (
     async_unload_entry,
 )
 from custom_components.quiet_solar.const import DOMAIN
+from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
 
 
@@ -268,12 +268,11 @@ async def test_qs_base_number_restore_falls_back_to_default():
 
     mock_handler = MagicMock()
     mock_handler.hass = MagicMock()
-    mock_device = SimpleNamespace(
-        device_id="test_device",
-        device_type="bistate",
-        name="Test Device",
-        qs_enable_device=True,
-    )
+    mock_device = MagicMock()
+    mock_device.device_id = "test_device"
+    mock_device.device_type = "bistate"
+    mock_device.name = "Test Device"
+    mock_device.qs_enable_device = True
 
     mock_description = QSNumberEntityDescription(
         key="default_on_duration",
@@ -432,13 +431,13 @@ async def test_async_unload_entry():
     mock_config_entry.entry_id = "test_entry"
     
     mock_device = create_mock_device("bistate")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_device.home = mock_home
-    
+
     fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
-    
+
     result = await async_unload_entry(fake_hass, mock_config_entry)
-    
+
     assert result is True
 
 
@@ -450,7 +449,7 @@ async def test_async_unload_entry_handles_exception():
     mock_config_entry.entry_id = "test_entry"
 
     mock_device = create_mock_device("bistate")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=RuntimeError("boom"))
     mock_device.home = mock_home
 
@@ -484,10 +483,10 @@ async def test_async_unload_entry_handles_exception():
     mock_config_entry.entry_id = "test_entry"
     
     mock_device = create_mock_device("test")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=Exception("Test error"))
     mock_device.home = mock_home
-    
+
     fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
     
     result = await async_unload_entry(fake_hass, mock_config_entry)
