@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -15,7 +16,11 @@ from custom_components.quiet_solar.switch import (
     create_ha_switch_for_AbstractLoad,
     QSSwitchEntity,
     QSSwitchEntityChargerOrCar,
-    async_setup_entry, QSSwitchEntityDescription,
+    QSSwitchEntityWithRestore,
+    QSExtraStoredData,
+    async_setup_entry,
+    async_unload_entry,
+    QSSwitchEntityDescription,
 )
 from custom_components.quiet_solar.const import (
     DOMAIN,
@@ -144,6 +149,86 @@ async def test_qs_switch_entity_turn_off():
     assert switch._attr_is_on is False
 
 
+@pytest.mark.asyncio
+async def test_qs_switch_entity_async_switch_callback():
+    """Test async_switch callback is used."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = create_mock_device("test")
+    mock_device.home = MagicMock()
+    mock_device.home.force_update_all = AsyncMock()
+
+    async_switch = AsyncMock()
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+        async_switch=async_switch,
+    )
+
+    switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+
+    await switch.async_turn_on(for_init=True)
+    async_switch.assert_called_with(mock_device, True, True)
+
+    await switch.async_turn_off(for_init=True)
+    async_switch.assert_called_with(mock_device, False, True)
+
+
+@pytest.mark.asyncio
+async def test_qs_switch_restore_uses_last_state():
+    """Test switch restore uses last stored value."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = create_mock_device("test")
+    mock_device.test_switch = False
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntityWithRestore(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+    switch.async_get_last_extra_data = AsyncMock(return_value=QSExtraStoredData(True))
+
+    await switch.async_added_to_hass()
+
+    assert switch._attr_is_on is True
+
+
+@pytest.mark.asyncio
+async def test_qs_switch_restore_defaults_when_no_attr():
+    """Test switch restore falls back to False when attribute missing."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = SimpleNamespace(
+        device_id="test_device",
+        device_type="test",
+        name="Test Device",
+        qs_enable_device=True,
+        home=None,
+    )
+
+    mock_description = QSSwitchEntityDescription(
+        key="missing_attr",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntityWithRestore(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+    switch.async_get_last_extra_data = AsyncMock(return_value=None)
+
+    await switch.async_added_to_hass()
+
+    assert switch._attr_is_on is False
+
+
+def test_switch_extra_restore_data_from_dict_error():
+    """Test QSExtraStoredData.from_dict handles errors."""
+    assert QSExtraStoredData.from_dict({}) is None
+
+
 def test_qs_switch_entity_availability_disabled_device():
     """Test switch unavailable when device disabled (except enable switch itself)."""
     mock_handler = MagicMock()
@@ -242,3 +327,21 @@ async def test_async_setup_entry(fake_hass, mock_config_entry):
         await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
         
         mock_add_entities.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_unload_entry_handles_exception():
+    """Test switch platform unload handles errors."""
+    fake_hass = FakeHass()
+    mock_config_entry = FakeConfigEntry(entry_id="test_entry", data={})
+
+    mock_device = create_mock_device("test")
+    mock_home = MagicMock()
+    mock_home.remove_device = MagicMock(side_effect=RuntimeError("boom"))
+    mock_device.home = mock_home
+
+    fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
+
+    result = await async_unload_entry(fake_hass, mock_config_entry)
+
+    assert result is True

@@ -316,8 +316,7 @@ class TestPersonsCarForecast:
 
         # Setup cars and persons
         per_day_data = person_and_car_data.get("per_day", [])
-        if not per_day_data:
-            pytest.skip("No per_day data available in pickle file")
+        assert per_day_data, "Expected per_day data in pickle file"
 
         first_day = per_day_data[0]
         start, end, car_data, person_data = first_day
@@ -436,9 +435,7 @@ class TestPersonsCarForecast:
         # Setup
         test_time = person_and_car_data.get("time")
         per_day_data = person_and_car_data.get("per_day", [])
-
-        if not per_day_data:
-            pytest.skip("No per_day data available")
+        assert per_day_data, "Expected per_day data"
 
         # Create REAL cars and persons from first day
         first_day = per_day_data[0]
@@ -521,8 +518,7 @@ class TestPersonsCarForecast:
         test_time = person_and_car_data.get("time")
         per_day_data = person_and_car_data.get("per_day", [])
 
-        if not per_day_data:
-            pytest.skip("No per_day data available")
+        assert per_day_data, "Expected per_day data"
 
         # Setup REAL cars and persons
         first_day = per_day_data[0]
@@ -609,9 +605,7 @@ class TestPersonsCarForecast:
 
         test_time = person_and_car_data.get("time")
         per_day_data = person_and_car_data.get("per_day", [])
-
-        if not per_day_data or len(per_day_data) == 0:
-            pytest.skip("No per_day data available")
+        assert per_day_data, "Expected per_day data"
 
         first_day = per_day_data[0]
         start, end, car_data, person_data = first_day
@@ -639,8 +633,7 @@ class TestPersonsCarForecast:
             mock_home._cars.append(car)
             all_cars.append(car)
 
-        if len(all_cars) == 0:
-            pytest.skip("No cars in test data")
+        assert len(all_cars) > 0, "Expected cars in test data"
 
         # Create person with only first car authorized
         for person_entity_id, _ in person_data:
@@ -684,15 +677,12 @@ class TestPersonsCarForecast:
         """Test handling of multiple persons using the same car with real QSCar instances."""
 
         per_day_data = person_and_car_data.get("per_day", [])
-
-        if not per_day_data or len(per_day_data) == 0:
-            pytest.skip("No per_day data available")
+        assert per_day_data, "Expected per_day data"
 
         first_day = per_day_data[0]
         start, end, car_data, person_data = first_day
 
-        if len(car_data) == 0:
-            pytest.skip("No cars in test data")
+        assert len(car_data) > 0, "Expected cars in test data"
 
         # Create one REAL car
         car_name, car_positions, car_odos = car_data[0]

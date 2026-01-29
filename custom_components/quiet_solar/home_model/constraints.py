@@ -754,11 +754,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             _LOGGER.info(f"Probe commands for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off}")
 
+            quantity_to_recover = 0.0
+
             if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
 
-                quantity_to_recover = 0.0
+
 
                 if start_witch_switch and len(inner_empty_cmds) > 0:
                     # we are starting with a switch...can we try to not do it?
@@ -808,115 +810,112 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # switch has been removed at the start ....
                         start_witch_switch = False
 
-                if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
-
-                    for empty_cmd in inner_empty_cmds:
-                        empty_cmd.append(0)
-                        for i in range(empty_cmd[0], empty_cmd[1]+1):
-                            empty_cmd[2] += power_slots_duration_s[i]
-
-                    #removed the smallest holes first
-                    sorted_inner_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
-
-                    for empty_cmd in sorted_inner_empty_cmds:
-                        # if we start with a non switch and the first is empty : it means the previous was empty so replacing it will actually NOT remove any switch
-                        if empty_cmd[0] == first_slot and start_witch_switch is False:
-                            continue
-
-                        if empty_cmd[0] == first_slot:
-                            start_witch_switch = False
-
-                        num_removed += 1
-                        num_command_state_change -= 2  # 2 changes removed
-
-                        delta_quantity, durations_s, _ = self._replace_by_command_in_slots(out_commands,
-                                                                                           out_power,
-                                                                                           power_slots_duration_s,
-                                                                                           empty_cmd[0],
-                                                                                           empty_cmd[1],
-                                                                                           self._power_sorted_cmds[0])
-
-                        budgeting_quantity_to_be_added += delta_quantity
-                        quantity_to_recover += delta_quantity
 
 
 
-                        if num_command_state_change <= num_allowed_switch:
-                            break
+            if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
+                do_for_num_switch_reduction = True
+            else:
+                do_for_num_switch_reduction = False
 
-                if quantity_to_recover != 0.0:
-                    # quantity_to_recover is positive ... we have removed a command, we have more quantity to add
-                    # if negative ... the contrary we have added a command we will need to remove some quantity
-                    init_quantity_to_recover = quantity_to_recover
+            sorted_by_size_empty_cmds = []
+            for empty_cmd in inner_empty_cmds:
+                empty_cmd.append(empty_cmd[1] +1 - empty_cmd[0])
+                empty_cmd.append(False)
+                if empty_cmd[2] == 1:
+                    # only single slots
+                    sorted_by_size_empty_cmds.append(empty_cmd)
+                    empty_cmd[3] = True
+                elif do_for_num_switch_reduction:
+                    sorted_by_size_empty_cmds.append(empty_cmd)
 
-                    def is_cmd_to_be_replaced(i):
-                        if init_quantity_to_recover > 0.0:
-                            # need to add some quantity
-                            return out_commands[i] is None
-                        else:
-                            # need to remove some quantity
-                            return out_commands[i] is not None
+            #remove the smallest holes first
+            sorted_by_size_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
 
+            if len(sorted_by_size_empty_cmds) > 0:
+
+                for empty_cmd in sorted_by_size_empty_cmds:
+                    # if we start with a non switch and the first is empty : it means the previous was empty so replacing it will actually NOT remove any switch
+                    if empty_cmd[0] == first_slot and start_witch_switch is False:
+                        continue
+
+                    # if we do have already removed enough switches ... stop
+                    if empty_cmd[3] is False and num_command_state_change <= num_allowed_switch:
+                        break
+
+                    if empty_cmd[0] == first_slot:
+                        start_witch_switch = False
+
+                    num_removed += 1
+                    num_command_state_change -= 2  # 2 changes removed
+
+                    delta_quantity, durations_s, _ = self._replace_by_command_in_slots(out_commands,
+                                                                                       out_power,
+                                                                                       power_slots_duration_s,
+                                                                                       empty_cmd[0],
+                                                                                       empty_cmd[1],
+                                                                                       self._power_sorted_cmds[0])
+
+                    budgeting_quantity_to_be_added += delta_quantity
+                    quantity_to_recover += delta_quantity
+
+            if quantity_to_recover != 0.0:
+                # quantity_to_recover is positive ... we have removed a command, we have more quantity to add
+                # if negative ... the contrary we have added a command we will need to remove some quantity
+                init_quantity_to_recover = quantity_to_recover
+
+                def is_cmd_to_be_replaced(i):
                     if init_quantity_to_recover > 0.0:
-                        cmd_to_push = self._power_sorted_cmds[-1]
+                        # need to add some quantity
+                        return out_commands[i] is None
                     else:
-                        cmd_to_push = None
+                        # need to remove some quantity
+                        return out_commands[i] is not None
 
-                    for do_invert in [False, True]:
+                if init_quantity_to_recover > 0.0:
+                    cmd_to_push = self._power_sorted_cmds[-1]
+                else:
+                    cmd_to_push = None
 
-                        if do_invert:
-                            start_recovery_idx = last_slot
+
+
+                # well just a xor :)
+                if start_witch_switch:
+                    prev_cmd_is_to_be_replaced = not is_cmd_to_be_replaced(first_slot)
+                else:
+                    prev_cmd_is_to_be_replaced = is_cmd_to_be_replaced(first_slot)
+
+
+
+                for i in range(first_slot, last_slot + 1):
+
+                    limit_reached = False
+
+                    # to not add any additional switch... only "flip" commands at transition points
+                    if prev_cmd_is_to_be_replaced is False and is_cmd_to_be_replaced(i):
+
+                        if init_quantity_to_recover < 0.0:
+                            limit_to_not_change_sign = quantity_to_recover
                         else:
-                            start_recovery_idx = first_slot
+                            limit_to_not_change_sign = None
 
-                        if start_witch_switch is False and do_invert is False:
-                            # we cannot replace at start idx first_slot as it would add a switch
-                            # find a transition
-                            if is_cmd_to_be_replaced(first_slot):
-                                # find a transition
-                                start_recovery_idx = last_slot + 1
-                                for i in range(first_slot, last_slot + 1):
-                                    if not is_cmd_to_be_replaced(i):
-                                        start_recovery_idx = i
-                                        break
+                        delta_quantity, durations_s, limit_reached = self._replace_by_command_in_slots( out_commands,
+                                                                                                        out_power,
+                                                                                                        power_slots_duration_s,
+                                                                                                        i,
+                                                                                                        i,
+                                                                                                        cmd_to_push,
+                                                                                                        quantity_to_forbid_if_sign_changed=limit_to_not_change_sign)
+                        quantity_to_recover += delta_quantity
+                        budgeting_quantity_to_be_added += delta_quantity
 
-                                if start_recovery_idx >= last_slot:
-                                    break
+                    if quantity_to_recover*init_quantity_to_recover <= 0.0 or limit_reached:
+                        # we changed sign between the two ...  or we have no more quantity to be added
+                        break
 
-                        if do_invert is False:
-                            rg = range(start_recovery_idx, last_slot + 1)
-                        else:
-                            rg = range(start_recovery_idx, first_slot - 1, -1)
+                    # could have been changed by the flipping cmd code above
+                    prev_cmd_is_to_be_replaced = is_cmd_to_be_replaced(i)
 
-                        for i in rg:
-
-                            limit_reached = False
-
-                            if is_cmd_to_be_replaced(i):
-
-                                if init_quantity_to_recover < 0.0:
-                                    limit_to_not_change_sign = quantity_to_recover
-                                else:
-                                    limit_to_not_change_sign = None
-
-                                delta_quantity, durations_s, limit_reached = self._replace_by_command_in_slots( out_commands,
-                                                                                                                out_power,
-                                                                                                                power_slots_duration_s,
-                                                                                                                i,
-                                                                                                                i,
-                                                                                                                cmd_to_push,
-                                                                                                                quantity_to_forbid_if_sign_changed=limit_to_not_change_sign)
-                                quantity_to_recover += delta_quantity
-                                budgeting_quantity_to_be_added += delta_quantity
-
-                            if quantity_to_recover*init_quantity_to_recover <= 0.0 or limit_reached:
-                                # we changed sign between the two ...  or we have no more quantity to be added
-                                quantity_to_recover = 0.0
-                                break
-
-                        if quantity_to_recover * init_quantity_to_recover <= 0.0:
-                            # we changed sign between the two ...  or we have no more quantity to be added
-                            break
 
             _LOGGER.info(f"Adapted command for on_off num/max:{self.load.name} {self.load.num_on_off}/{self.load.num_max_on_off} Removed empty segments {num_removed}")
 
@@ -1429,6 +1428,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             if self.current_start_of_constraint != DATETIME_MIN_UTC:
                 first_slot = bisect_left(time_slots, self.current_start_of_constraint)
+                if first_slot > 0 and time_slots[first_slot] > self.current_start_of_constraint:
+                    # to get the proper slot we are in
+                    first_slot -= 1
+
+                if first_slot >= len(power_available_power):
+                    first_slot = len(power_available_power) - 1
 
             # no need to reduce in case of OFF GRID Mode
             if has_a_proper_end_time and self.load.is_time_sensitive() and not self.load.is_off_grid():
@@ -1832,7 +1837,23 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def __init__(self, **kwargs):
 
+        # in fact the code below is not usefull really it extend artificially the need of the constraint, and it is a bad behavior
+        # I leave it here as a trace of the thought process
+
+        # exact_start_end_coverage = kwargs.get("exact_start_end_coverage", False)
+        # if exact_start_end_coverage:
+        #     kwargs["always_end_at_end_of_constraint"] = True
+        #     start_of_constraint = kwargs.get("start_of_constraint", None)
+        #     if start_of_constraint is not None:
+        #         end_of_constraint = kwargs.get("end_of_constraint", None)
+        #         if end_of_constraint is not None:
+        #             duration_s = (end_of_constraint - start_of_constraint).total_seconds()
+        #             # force complete time coverage, has to exceed the end-constraint - start time by at least one solver step
+        #             kwargs["target_value"] = (duration_s//SOLVER_STEP_S)*SOLVER_STEP_S + SOLVER_STEP_S + 2
+
+        # well in  fact for TimeBased do that alsways ...
         kwargs["always_end_at_end_of_constraint"] = True
+
         super().__init__(**kwargs)
 
     @property

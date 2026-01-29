@@ -4,14 +4,21 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     PERCENTAGE,
     UnitOfElectricCurrent,
+    UnitOfLength,
     UnitOfPower,
+    UnitOfTemperature,
 )
 
 from custom_components.quiet_solar.config_flow import (
     selectable_amps_entities,
+    selectable_calendar_entities,
+    _get_entity_key_from_selector_key,
+    _get_reset_selector_entity_name,
+    selectable_length_sensor_entities,
     selectable_percent_number_entities,
     selectable_percent_sensor_entities,
     selectable_power_entities,
+    selectable_temperature_entities,
 )
 from custom_components.quiet_solar.const import DOMAIN
 
@@ -130,4 +137,69 @@ def test_selectable_percent_number_entities_includes_percentage_numbers():
     result = selectable_percent_number_entities(hass)
 
     assert result == ["number.charge_limit"]
+
+
+def test_selectable_amps_entities_custom_domains():
+    hass = _build_hass_with_states(
+        DummyState("sensor.phase_current", UnitOfElectricCurrent.AMPERE),
+        DummyState("switch.current", UnitOfElectricCurrent.AMPERE),
+    )
+
+    result = selectable_amps_entities(hass, domains=["sensor", "switch"])
+
+    assert result == ["sensor.phase_current", "switch.current"]
+
+
+def test_selectable_calendar_entities_custom_domains():
+    hass = _build_hass_with_states(
+        DummyState("calendar.work", None),
+        DummyState("sensor.not_calendar", None),
+    )
+
+    result = selectable_calendar_entities(hass, domains=["calendar"])
+
+    assert result == ["calendar.work"]
+
+
+def test_selectable_temperature_entities_filters_units():
+    hass = _build_hass_with_states(
+        DummyState("sensor.temp", UnitOfTemperature.CELSIUS),
+        DummyState("sensor.not_temp", UnitOfPower.WATT),
+    )
+
+    result = selectable_temperature_entities(hass)
+
+    assert result == ["sensor.temp"]
+
+
+def test_selectable_length_sensor_entities_filters_units():
+    hass = _build_hass_with_states(
+        DummyState("sensor.distance", UnitOfLength.KILOMETERS),
+        DummyState("sensor.not_distance", UnitOfPower.WATT),
+    )
+
+    result = selectable_length_sensor_entities(hass)
+
+    assert result == ["sensor.distance"]
+
+
+def test_filter_quiet_solar_entities_excludes_domain_entities():
+    hass = _build_hass_with_states(
+        DummyState("sensor.valid_watt", UnitOfPower.WATT),
+        DummyState("sensor.qs_watt", UnitOfPower.WATT),
+        quiet_solar_entities=["sensor.qs_watt"],
+    )
+
+    result = selectable_power_entities(hass)
+
+    assert result == ["sensor.valid_watt"]
+
+
+def test_reset_selector_helpers():
+    """Test reset selector helpers."""
+    key = "sensor.test"
+    reset_key = _get_reset_selector_entity_name(key)
+    assert reset_key == "sensor.test_qs_reset_selector"
+    assert _get_entity_key_from_selector_key(reset_key) == key
+    assert _get_entity_key_from_selector_key("sensor.other") is None
 

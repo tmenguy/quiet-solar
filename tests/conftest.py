@@ -21,6 +21,12 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_MAX_CHARGE,
     CONF_CAR_BATTERY_CAPACITY,
 )
+from tests.ha_tests.const import (
+    MOCK_CAR_CONFIG,
+    MOCK_CHARGER_CONFIG,
+    MOCK_HOME_CONFIG,
+    MOCK_SENSOR_STATES,
+)
 
 
 @dataclass
@@ -47,6 +53,7 @@ class FakeState:
     """Fake Home Assistant state."""
     def __init__(self, entity_id: str, state: str, attributes: Dict[str, Any] | None = None):
         self.entity_id = entity_id
+        self.domain = entity_id.split(".")[0]
         self.state = state
         self.attributes = attributes or {}
 
@@ -394,12 +401,7 @@ def real_home_config_entry(hass):
     
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Home",
-            "device_type": "home",
-            CONF_HOME_VOLTAGE: 230,
-            CONF_IS_3P: True,
-        },
+        data={**MOCK_HOME_CONFIG},
         entry_id=f"test_home_real_{uuid.uuid4().hex[:8]}",
         title="home: Test Home",
         unique_id=f"home_test_home_real_{uuid.uuid4().hex[:8]}"
@@ -416,13 +418,7 @@ def real_charger_config_entry(hass):
     
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Charger",
-            "device_type": "charger_generic",  # Use the actual conf_type_name
-            CONF_CHARGER_MIN_CHARGE: 6,
-            CONF_CHARGER_MAX_CHARGE: 16,
-            CONF_IS_3P: False,
-        },
+        data={**MOCK_CHARGER_CONFIG},
         entry_id=f"test_charger_real_{uuid.uuid4().hex[:8]}",
         title="charger: Test Charger",
         unique_id=f"charger_test_charger_real_{uuid.uuid4().hex[:8]}"
@@ -439,17 +435,19 @@ def real_car_config_entry(hass):
     
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Car",
-            "device_type": "car",
-            CONF_CAR_BATTERY_CAPACITY: 50000,
-        },
+        data={**MOCK_CAR_CONFIG},
         entry_id=f"test_car_real_{uuid.uuid4().hex[:8]}",
         title="car: Test Car",
         unique_id=f"car_test_car_real_{uuid.uuid4().hex[:8]}"
     )
     entry.add_to_hass(hass)
     return entry
+
+
+def _apply_mock_states(hass) -> None:
+    """Seed HA state machine with mock sensor states."""
+    for entity_id, data in MOCK_SENSOR_STATES.items():
+        hass.states.async_set(entity_id, data["state"], data.get("attributes", {}))
 
 
 @pytest.fixture
@@ -479,6 +477,7 @@ async def setup_home_first(hass, real_home_config_entry):
     
     This fixture ensures home is fully initialized before other devices can be added.
     """
+    _apply_mock_states(hass)
     with patch("custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers", new_callable=AsyncMock):
         result = await hass.config_entries.async_setup(real_home_config_entry.entry_id)
         await hass.async_block_till_done()
@@ -501,13 +500,7 @@ async def home_and_charger(hass, setup_home_first):
     # Create charger entry with unique ID (using generic charger type)
     charger_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Charger",
-            "device_type": "charger_generic",  # Use the actual conf_type_name
-            CONF_CHARGER_MIN_CHARGE: 6,
-            CONF_CHARGER_MAX_CHARGE: 16,
-            CONF_IS_3P: False,
-        },
+        data={**MOCK_CHARGER_CONFIG},
         entry_id=f"test_charger_composite_{uuid.uuid4().hex[:8]}",
         title="charger: Test Charger",
         unique_id=f"charger_test_composite_{uuid.uuid4().hex[:8]}"
@@ -536,11 +529,7 @@ async def home_and_car(hass, setup_home_first):
     # Create car entry with unique ID
     car_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Car",
-            "device_type": "car",
-            CONF_CAR_BATTERY_CAPACITY: 50000,
-        },
+        data={**MOCK_CAR_CONFIG},
         entry_id=f"test_car_composite_{uuid.uuid4().hex[:8]}",
         title="car: Test Car",
         unique_id=f"car_test_composite_{uuid.uuid4().hex[:8]}"
@@ -569,13 +558,7 @@ async def home_charger_and_car(hass, setup_home_first):
     # Create charger entry (using generic charger type)
     charger_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Charger",
-            "device_type": "charger_generic",  # Use the actual conf_type_name
-            CONF_CHARGER_MIN_CHARGE: 6,
-            CONF_CHARGER_MAX_CHARGE: 16,
-            CONF_IS_3P: False,
-        },
+        data={**MOCK_CHARGER_CONFIG},
         entry_id=f"test_charger_all_{uuid.uuid4().hex[:8]}",
         title="charger: Test Charger",
         unique_id=f"charger_test_all_{uuid.uuid4().hex[:8]}"
@@ -587,11 +570,7 @@ async def home_charger_and_car(hass, setup_home_first):
     # Create car entry
     car_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_NAME: "Test Car",
-            "device_type": "car",
-            CONF_CAR_BATTERY_CAPACITY: 50000,
-        },
+        data={**MOCK_CAR_CONFIG},
         entry_id=f"test_car_all_{uuid.uuid4().hex[:8]}",
         title="car: Test Car",
         unique_id=f"car_test_all_{uuid.uuid4().hex[:8]}"

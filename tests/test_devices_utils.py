@@ -4,7 +4,16 @@ from unittest import TestCase
 import pytz
 
 
-from custom_components.quiet_solar.ha_model.device import HADeviceMixin, get_median_sensor
+from custom_components.quiet_solar.ha_model.device import (
+    HADeviceMixin,
+    compute_energy_Wh_rieman_sum,
+    convert_current_to_amps,
+    convert_distance_to_km,
+    convert_power_to_w,
+    get_average_power_energy_based,
+    get_median_sensor,
+)
+from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT, UnitOfElectricCurrent, UnitOfLength, UnitOfPower
 from custom_components.quiet_solar.home_model.home_utils import get_average_time_series
 from custom_components.quiet_solar.home_model.load import AbstractLoad, align_time_series_and_values
 
@@ -198,6 +207,72 @@ class TestDeviceUtils(TestCase):
 
         assert int(a_no) ==  3574 # before was ... but changed with time based calculus np.mean([v for _, v, _ in sum_no_invalid_res])
         assert int(a_all) == 3473  # np.mean([v for _, v, _ in sum_all_res if v is not None])
-
         assert int(m_no) == 3440 # np.median([v for _, v, _ in sum_no_invalid_res])
         assert int(m_all) == 2030 # np.median([v for _, v, _ in sum_all_res if v is not None])
+
+
+def test_compute_energy_rieman_sum_basic():
+    """Test energy computation with rieman sum."""
+    t0 = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
+    t1 = datetime(2024, 6, 1, 1, 0, tzinfo=pytz.UTC)
+    energy, duration = compute_energy_Wh_rieman_sum([(t0, 1000), (t1, 1000)])
+    assert duration == 1.0
+    assert energy == 1000.0
+
+
+def test_compute_energy_rieman_sum_conservative_and_clip():
+    """Test conservative energy and clip-to-zero behavior."""
+    t0 = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
+    t1 = datetime(2024, 6, 1, 0, 30, tzinfo=pytz.UTC)
+    t2 = datetime(2024, 6, 1, 1, 0, tzinfo=pytz.UTC)
+    energy, duration = compute_energy_Wh_rieman_sum(
+        [(t0, -10), (t1, 100), (t2, 200)],
+        conservative=True,
+        clip_to_zero_under_power=0,
+    )
+    assert duration == 1.0
+    assert energy == 50.0
+
+
+def test_convert_units_helpers():
+    """Test unit conversion helpers and attribute updates."""
+    value, attrs = convert_power_to_w(1.0, {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.KILO_WATT})
+    assert value == 1000.0
+    assert attrs[ATTR_UNIT_OF_MEASUREMENT] == UnitOfPower.WATT
+
+    value, attrs = convert_current_to_amps(1.0, {ATTR_UNIT_OF_MEASUREMENT: UnitOfElectricCurrent.AMPERE})
+    assert value == 1.0
+    assert attrs[ATTR_UNIT_OF_MEASUREMENT] == UnitOfElectricCurrent.AMPERE
+
+    value, attrs = convert_distance_to_km(1.0, {ATTR_UNIT_OF_MEASUREMENT: UnitOfLength.METERS})
+    assert value == 0.001
+    assert attrs[ATTR_UNIT_OF_MEASUREMENT] == UnitOfLength.KILOMETERS
+
+    value, attrs = convert_power_to_w(500.0)
+    assert value == 500.0
+    assert attrs is None
+
+
+def test_average_power_energy_based():
+    """Test average power calculation from energy."""
+    t0 = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
+    t1 = datetime(2024, 6, 1, 1, 0, tzinfo=pytz.UTC)
+
+    assert get_average_power_energy_based([]) == 0
+    assert get_average_power_energy_based([(t0, None)]) == 0.0
+    assert get_average_power_energy_based([(t0, 100.0)]) == 100.0
+    assert get_average_power_energy_based([(t0, 100.0), (t1, 300.0)]) == 200.0
+
+
+def test_get_median_sensor_filters_and_last_timing():
+    """Test median sensor with filtering and last timing."""
+    t0 = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
+    t1 = datetime(2024, 6, 1, 0, 0, 10, tzinfo=pytz.UTC)
+    t2 = datetime(2024, 6, 1, 0, 0, 20, tzinfo=pytz.UTC)
+    data = [(t0, 1.0), (t1, None), (t2, 3.0)]
+
+    assert get_median_sensor([], None) == 0
+    assert get_median_sensor([(t0, None)], None) == 0.0
+
+    val = get_median_sensor(data, last_timing=t2 + timedelta(seconds=10), min_val=1.0, max_val=3.0)
+    assert val == 2.0

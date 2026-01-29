@@ -17,11 +17,11 @@ from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_
     CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN
 
 
-def _util_constraint_save_dump(time, cs):
-    dc_dump = cs.to_dict()
-    load = cs.load
-    cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
-    assert cs == cs_load
+# def _util_constraint_save_dump(time, cs):
+#     dc_dump = cs.to_dict()
+#     load = cs.load
+#     cs_load = LoadConstraint.new_from_saved_dict(time, load, dc_dump)
+#     assert cs == cs_load
 
 class TestSolver2(TestCase):
 

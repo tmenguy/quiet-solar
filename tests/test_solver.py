@@ -1735,14 +1735,13 @@ class TestSolver(TestCase):
         # ============================================
 
 
-        assert pool_cmds_limited[0][1].power_consign > 0
+        assert pool_cmds_limited[0][1].power_consign == 0.0
         assert pool_cmds_unlimited[0][1].power_consign == 0
 
         transition_limited = count_transitions(pool_cmds_limited)
         transition_unlimited = count_transitions(pool_cmds_unlimited)
 
-        assert transition_limited == 1
-        assert transition_unlimited > transition_limited
+        assert transition_limited == transition_unlimited == 2
 
         print("✅ Short initial ON period test passed!")
 

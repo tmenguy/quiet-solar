@@ -36,16 +36,10 @@ async def test_button_press_service(
     entities = er.async_entries_for_config_entry(entity_registry, config_entry.entry_id)
     button_entities = [e for e in entities if e.entity_id.startswith("button.")]
     
-    if not button_entities:
-        pytest.skip("No button entities created for this device")
+    assert button_entities, "Expected button entities to be created"
     
     # Try to press first button with a state
-    button_entity_id = next(
-        (entry.entity_id for entry in button_entities if hass.states.get(entry.entity_id) is not None),
-        None,
-    )
-    if button_entity_id is None:
-        pytest.skip("No button entities have a state to press")
+    button_entity_id = button_entities[0].entity_id
 
     with patch(
         "custom_components.quiet_solar.button.QSButtonEntity.async_press",
@@ -100,8 +94,7 @@ async def test_switch_turn_on_service(
     entities = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     switch_entities = [e for e in entities if e.entity_id.startswith("switch.")]
     
-    if not switch_entities:
-        pytest.skip("No switch entities created for this device")
+    assert switch_entities, "Expected switch entities to be created"
     
     # Try to turn on first switch
     switch_entity_id = switch_entities[0].entity_id
@@ -131,8 +124,7 @@ async def test_switch_turn_off_service(
     entities = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     switch_entities = [e for e in entities if e.entity_id.startswith("switch.")]
     
-    if not switch_entities:
-        pytest.skip("No switch entities created for this device")
+    assert switch_entities, "Expected switch entities to be created"
     
     # Try to turn off first switch
     switch_entity_id = switch_entities[0].entity_id
@@ -165,16 +157,9 @@ async def test_button_press_all_buttons(
     entities = er.async_entries_for_config_entry(entity_registry, config_entry.entry_id)
     button_entities = [e for e in entities if e.entity_id.startswith("button.")]
     
-    if not button_entities:
-        pytest.skip("No button entities created for this device")
+    assert button_entities, "Expected button entities to be created"
     
-    button_entity_ids = [
-        entry.entity_id
-        for entry in button_entities
-        if hass.states.get(entry.entity_id) is not None
-    ]
-    if not button_entity_ids:
-        pytest.skip("No button entities have a state to press")
+    button_entity_ids = [entry.entity_id for entry in button_entities]
 
     with patch(
         "custom_components.quiet_solar.button.QSButtonEntity.async_press",

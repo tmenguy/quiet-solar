@@ -83,8 +83,7 @@ async def test_state_updates_after_time_change(
             entities = er.async_entries_for_config_entry(entity_registry, config_entry.entry_id)
             sensor_entities = [e for e in entities if e.entity_id.startswith("sensor.")]
             
-            if not sensor_entities:
-                pytest.skip("No sensor entities to test")
+            assert sensor_entities, "Expected sensor entities to be created"
             
             sensor_id = sensor_entities[0].entity_id
             
@@ -117,8 +116,7 @@ async def test_switch_state_toggling(
     entities = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     switch_entities = [e for e in entities if e.entity_id.startswith("switch.")]
     
-    if not switch_entities:
-        pytest.skip("No switch entities to test")
+    assert switch_entities, "Expected switch entities to be created"
     
     switch_id = switch_entities[0].entity_id
     
@@ -242,8 +240,7 @@ async def test_state_attributes_present(
     entities = er.async_entries_for_config_entry(entity_registry, config_entry.entry_id)
     sensor_entities = [e for e in entities if e.entity_id.startswith("sensor.")]
     
-    if not sensor_entities:
-        pytest.skip("No sensor entities to test")
+    assert sensor_entities, "Expected sensor entities to be created"
     
     # Check first sensor has attributes
     sensor_id = sensor_entities[0].entity_id

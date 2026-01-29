@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytz
@@ -13,7 +13,15 @@ from custom_components.quiet_solar.home_model.load import (
     extract_name_and_index_from_dashboard_section_option,
     map_section_selected_name_in_section_list,
 )
-from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_OFF, CMD_ON, CMD_IDLE
+from custom_components.quiet_solar.home_model.commands import (
+    LoadCommand,
+    CMD_CST_OFF,
+    CMD_CST_ON,
+    CMD_CST_IDLE,
+    CMD_OFF,
+    CMD_ON,
+    CMD_IDLE,
+)
 from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraint,
     DATETIME_MAX_UTC,
@@ -29,6 +37,26 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
 )
+
+
+class _CommandLoad(AbstractLoad):
+    """Minimal AbstractLoad for command tests."""
+
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        return True
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        return False
+
+
+class _FailingCommandLoad(_CommandLoad):
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        raise RuntimeError("boom")
+
+
+class _ProbeSetCommandLoad(_CommandLoad):
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        return True
 
 
 # =============================================================================
@@ -155,6 +183,201 @@ def test_map_section_name_priority_over_index():
     result_idx, _ = map_section_selected_name_in_section_list("#1 - Section B", section_list)
 
     assert result_idx == 1
+
+
+def test_dashboard_sort_string_truncates_long_values():
+    """Test dashboard sort string truncates long values."""
+    long_name = "x" * 300
+    long_type = "y" * 300
+
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    device = AbstractDevice(
+        name=long_name,
+        device_type=long_type,
+        home=mock_home,
+        power=1000,
+    )
+
+    sort_string = device.dashboard_sort_string
+    assert len(sort_string) == 255 * 3
+    assert sort_string.startswith(long_type[:255])
+
+
+@pytest.mark.asyncio
+async def test_async_get_info_from_storage_updates_num_on_off():
+    """Test async_get_info_from_storage applies saved info."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    device = AbstractDevice(
+        name="Device",
+        device_type="device",
+        home=mock_home,
+        power=1000,
+        num_max_on_off=10,
+    )
+    device.num_on_off = 0
+
+    await device.async_get_info_from_storage(datetime.now(pytz.UTC), {"num_on_off": 3})
+    assert device.num_on_off == 2
+
+
+def test_ack_command_counts_transitions():
+    """Test _ack_command increments num_on_off on transitions."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    device = AbstractDevice(
+        name="Device",
+        device_type="device",
+        home=mock_home,
+        power=1000,
+    )
+
+    device.current_command = LoadCommand(command=CMD_CST_OFF, power_consign=0.0)
+    device.num_on_off = 0
+    device._ack_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_ON, power_consign=0.0))
+    assert device.num_on_off == 1
+
+    device._ack_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_IDLE, power_consign=0.0))
+    assert device.num_on_off == 2
+
+
+@pytest.mark.asyncio
+async def test_launch_command_stacks_when_running():
+    """Test launch_command stacks when already running."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _CommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+    load.running_command = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+
+    await load.launch_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_OFF, power_consign=0.0))
+    assert load._stacked_command is not None
+
+
+@pytest.mark.asyncio
+async def test_launch_command_noop_when_current_matches():
+    """Test launch_command returns early when current matches."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _CommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+    load.current_command = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+
+    await load.launch_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_ON, power_consign=0.0))
+    assert load.running_command is None
+
+
+def test_is_load_has_command_now_or_coming():
+    """Test is_load_has_a_command_now_or_coming across states."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _CommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+
+    assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is False
+
+    load.current_command = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+    assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is True
+
+    load.current_command = None
+    load.running_command = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+    assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is True
+
+    load.running_command = None
+    load._stacked_command = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+    assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is True
+
+
+@pytest.mark.asyncio
+async def test_launch_qs_command_back_uses_idle():
+    """Test launch_qs_command_back falls back to idle."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _CommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+    load.launch_command = AsyncMock()
+
+    await load.launch_qs_command_back(datetime.now(pytz.UTC))
+
+    load.launch_command.assert_awaited_once()
+    assert load.current_command is None
+    assert load.running_command is None
+
+
+@pytest.mark.asyncio
+async def test_launch_command_handles_execute_error():
+    """Test launch_command handles execute_command error."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _FailingCommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+
+    await load.launch_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_ON, power_consign=0.0))
+    assert load.running_command is not None
+
+
+@pytest.mark.asyncio
+async def test_launch_command_probe_already_set():
+    """Test launch_command acknowledges when already set."""
+    mock_home = MagicMock()
+    mock_home.voltage = 230.0
+    mock_home.is_off_grid = MagicMock(return_value=False)
+    mock_home.dashboard_sections = None
+
+    load = _ProbeSetCommandLoad(
+        name="Load",
+        device_type="load",
+        home=mock_home,
+        power=1000,
+    )
+
+    await load.launch_command(datetime.now(pytz.UTC), LoadCommand(command=CMD_CST_ON, power_consign=0.0))
+    assert load.current_command is not None
 
 
 # =============================================================================

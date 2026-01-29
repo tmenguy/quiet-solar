@@ -93,3 +93,124 @@ async def test_data_handler_stores_entry_in_hass_data(data_handler, mock_charger
     await data_handler.async_add_entry(mock_charger_config_entry)
     
     assert mock_charger_config_entry in data_handler._cached_config_entries
+
+
+def test_add_device_handles_creation_failure(data_handler, mock_charger_config_entry):
+    """Test _add_device handles creation failures."""
+    with patch("custom_components.quiet_solar.data_handler.create_device_from_type", return_value=None):
+        result = data_handler._add_device(mock_charger_config_entry)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_async_add_entry_rehydrates_cached_entries(fake_hass):
+    """Test cached entries are attached when home is added."""
+    data_handler = QSDataHandler(fake_hass)
+    cached_entry = MagicMock()
+    cached_entry.entry_id = "cached_entry"
+    cached_entry.data = {DEVICE_TYPE: QSChargerGeneric.conf_type_name}
+    data_handler._cached_config_entries.append(cached_entry)
+
+    home_entry = MagicMock()
+    home_entry.entry_id = "home_entry"
+    home_entry.data = {DEVICE_TYPE: QSHome.conf_type_name}
+    home_entry.async_on_unload = MagicMock()
+
+    home_device = MagicMock()
+    home_device.add_device = MagicMock()
+    home_device.get_platforms = MagicMock(return_value=[Platform.SENSOR])
+    home_device.config_entry = home_entry
+    home_device.config_entry_initialized = False
+
+    cached_device = MagicMock()
+    cached_device.get_platforms = MagicMock(return_value=[Platform.SENSOR])
+    cached_device.config_entry = cached_entry
+    cached_device.config_entry_initialized = False
+
+    with patch(
+        "custom_components.quiet_solar.data_handler.create_device_from_type",
+        side_effect=[home_device, cached_device],
+    ):
+        await data_handler.async_add_entry(home_entry)
+
+    assert data_handler.home is home_device
+    assert cached_entry not in data_handler._cached_config_entries
+
+
+@pytest.mark.asyncio
+async def test_async_update_loads_skips_when_locked(data_handler):
+    """Test async_update_loads skips when lock is held."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_loads = AsyncMock()
+
+    await data_handler._update_loads_lock.acquire()
+    try:
+        await data_handler.async_update_loads(datetime.now(pytz.UTC))
+    finally:
+        data_handler._update_loads_lock.release()
+
+    data_handler.home.update_loads.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_update_loads_logs_error(data_handler):
+    """Test async_update_loads handles errors."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_loads = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await data_handler.async_update_loads(datetime.now(pytz.UTC))
+
+    data_handler.home.update_loads.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_update_all_states_skips_when_locked(data_handler):
+    """Test async_update_all_states skips when lock is held."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_all_states = AsyncMock()
+
+    await data_handler._update_all_states_lock.acquire()
+    try:
+        await data_handler.async_update_all_states(datetime.now(pytz.UTC))
+    finally:
+        data_handler._update_all_states_lock.release()
+
+    data_handler.home.update_all_states.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_update_all_states_logs_error(data_handler):
+    """Test async_update_all_states handles errors."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_all_states = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await data_handler.async_update_all_states(datetime.now(pytz.UTC))
+
+    data_handler.home.update_all_states.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_update_forecast_probers_skips_when_locked(data_handler):
+    """Test async_update_forecast_probers skips when lock is held."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_forecast_probers = AsyncMock()
+
+    await data_handler._update_forecast_probers_lock.acquire()
+    try:
+        await data_handler.async_update_forecast_probers(datetime.now(pytz.UTC))
+    finally:
+        data_handler._update_forecast_probers_lock.release()
+
+    data_handler.home.update_forecast_probers.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_update_forecast_probers_logs_error(data_handler):
+    """Test async_update_forecast_probers handles errors."""
+    data_handler.home = MagicMock()
+    data_handler.home.update_forecast_probers = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await data_handler.async_update_forecast_probers(datetime.now(pytz.UTC))
+
+    data_handler.home.update_forecast_probers.assert_called_once()

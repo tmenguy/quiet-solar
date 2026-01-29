@@ -20,11 +20,15 @@ from custom_components.quiet_solar.ha_model.bistate_duration import (
     QSBiStateDuration,
     bistate_modes,
     MAX_USER_OVERRIDE_DURATION_S,
+    USER_OVERRIDE_STATE_BACK_DURATION_S,
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
     CMD_OFF,
     CMD_IDLE,
+)
+from custom_components.quiet_solar.home_model.constraints import (
+    TimeBasedSimplePowerLoadConstraint,
 )
 from custom_components.quiet_solar.const import (
     DOMAIN,
@@ -61,6 +65,22 @@ class ConcreteBiStateDevice(QSBiStateDuration):
 
     def get_select_translation_key(self):
         return "test_select_key"
+
+
+class SequencePowerDevice(ConcreteBiStateDevice):
+    """BiState device with deterministic power samples."""
+
+    def __init__(self, power_samples: list[float | None], **kwargs):
+        super().__init__(**kwargs)
+        self._power_samples = list(power_samples)
+        self._power_sample_calls: list[tuple[int, float | None]] = []
+
+    def get_average_sensor(self, *args, **kwargs):
+        """Return next value from the power sample list."""
+        idx = len(self._power_sample_calls)
+        value = self._power_samples.pop(0) if self._power_samples else None
+        self._power_sample_calls.append((idx, value))
+        return value
 
 
 class TestQSBiStateDurationInit:
@@ -326,6 +346,69 @@ class TestQSBiStateDurationPowerUse:
 
         assert device.power_use == pytest.approx(1500.0, rel=0.01)
 
+    def test_power_use_recompute_fallback_chain(self):
+        """Test power_use recomputation uses fallback chain."""
+        hass = FakeHass()
+        config_entry = FakeConfigEntry(
+            entry_id="test_bistate_entry",
+            data={CONF_NAME: "Test BiState"},
+        )
+        home = MagicMock()
+        data_handler = MagicMock()
+        data_handler.home = home
+        hass.data[DOMAIN][DATA_HANDLER] = data_handler
+
+        device = SequencePowerDevice(
+            hass=hass,
+            config_entry=config_entry,
+            home=home,
+            power_samples=[None, 0.0, 500.0],
+            **{
+                CONF_NAME: "Test Device",
+                CONF_ACCURATE_POWER_SENSOR: "sensor.test_power",
+            },
+        )
+        device.power_use = 900.0
+        device._last_power_use_computation_time = datetime.datetime.now(
+            tz=pytz.UTC
+        ) - datetime.timedelta(seconds=SOLVER_STEP_S + 1)
+
+        assert device.power_use == 500.0
+        assert len(device._power_sample_calls) == 3
+
+        device._last_power_use_computation_time = datetime.datetime.now(tz=pytz.UTC)
+        assert device.power_use == 900.0
+        assert len(device._power_sample_calls) == 3
+
+    def test_power_use_fallback_to_config(self):
+        """Test power_use falls back to configured power when samples empty."""
+        hass = FakeHass()
+        config_entry = FakeConfigEntry(
+            entry_id="test_bistate_entry",
+            data={CONF_NAME: "Test BiState"},
+        )
+        home = MagicMock()
+        data_handler = MagicMock()
+        data_handler.home = home
+        hass.data[DOMAIN][DATA_HANDLER] = data_handler
+
+        device = SequencePowerDevice(
+            hass=hass,
+            config_entry=config_entry,
+            home=home,
+            power_samples=[None, 0.0, None],
+            **{
+                CONF_NAME: "Test Device",
+                CONF_ACCURATE_POWER_SENSOR: "sensor.test_power",
+            },
+        )
+        device.power_use = 750.0
+        device._last_power_use_computation_time = datetime.datetime.now(
+            tz=pytz.UTC
+        ) - datetime.timedelta(seconds=SOLVER_STEP_S + 1)
+
+        assert device.power_use == 750.0
+
 
 class TestQSBiStateDurationExpectedState:
     """Test expected_state_from_command methods."""
@@ -536,6 +619,21 @@ class TestQSBiStateDurationExecuteCommand:
         assert len(self.device._execute_command_system_calls) == 1
         assert self.device._execute_command_system_calls[0][2] is None
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [STATE_UNKNOWN, STATE_UNAVAILABLE])
+    async def test_execute_command_override_unknown_state(self, state):
+        """Test execute_command when override but state unavailable."""
+        self.hass.states.set("switch.test_device", state)
+        self.device.external_user_initiated_state = "off"
+        self.device.get_current_active_constraint = MagicMock(return_value=None)
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = await self.device.execute_command(time, CMD_ON)
+
+        assert result is True
+        assert len(self.device._execute_command_system_calls) == 1
+        assert self.device._execute_command_system_calls[0][2] == "off"
+
 
 class TestQSBiStateDurationPlatforms:
     """Test get_platforms method."""
@@ -623,6 +721,53 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
 
         # No force solve needed if no constraints
         self.device.command_and_constraint_reset.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mode_off_keeps_only_override_constraint(self):
+        """Test bistate_mode_off keeps override constraint only."""
+        self.device.bistate_mode = "bistate_mode_off"
+        self.device.is_load_command_set = MagicMock(return_value=True)
+        self.device.set_live_constraints = MagicMock()
+        self.device.current_command = None
+        self.device.running_command = None
+        self.hass.states.set("switch.test_device", "off")
+        self.device.power_use = 1000.0
+
+        time = datetime.datetime.now(pytz.UTC)
+        override_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=time,
+            load=self.device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            end_of_constraint=time + datetime.timedelta(hours=2),
+            power=self.device.power_use,
+            initial_value=0,
+            target_value=3600.0,
+        )
+        normal_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=time,
+            load=self.device,
+            load_param="on",
+            load_info={"originator": "system"},
+            from_user=False,
+            end_of_constraint=time + datetime.timedelta(hours=1),
+            power=self.device.power_use,
+            initial_value=0,
+            target_value=1800.0,
+        )
+        self.device._constraints = [override_constraint, normal_constraint]
+
+        result = await self.device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        self.device.set_live_constraints.assert_called_once()
+        _, constraints = self.device.set_live_constraints.call_args[0]
+        assert constraints == [override_constraint]
 
 
 class TestQSBiStateDurationCheckLoadActivityModeOn:
@@ -945,6 +1090,75 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
 
         # Should reset because user set to idle state
         self.device.command_and_constraint_reset.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_user_override_expired_resets_state(self):
+        """Test that an expired override resets state."""
+        self.device.bistate_mode = "bistate_mode_auto"
+        self.device.is_load_command_set = MagicMock(return_value=True)
+        self.device.external_user_initiated_state = "on"
+        time = datetime.datetime.now(pytz.UTC)
+        self.device.external_user_initiated_state_time = time - datetime.timedelta(
+            seconds=(3600.0 * self.device.override_duration + 1)
+        )
+        self.device.asked_for_reset_user_initiated_state_time = None
+        self.device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        self.device.reset_override_state_and_set_reset_ask_time = MagicMock(
+            wraps=self.device.reset_override_state_and_set_reset_ask_time
+        )
+        self.device.command_and_constraint_reset = MagicMock()
+
+        result = await self.device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        self.device.reset_override_state_and_set_reset_ask_time.assert_called_once()
+        self.device.command_and_constraint_reset.assert_called_once()
+        assert self.device.external_user_initiated_state is None
+        assert self.device.asked_for_reset_user_initiated_state_time is not None
+        assert self.device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+    @pytest.mark.asyncio
+    async def test_user_override_reset_window_skips_new_override(self):
+        """Test reset window prevents immediate re-override."""
+        self.device.bistate_mode = "bistate_mode_auto"
+        self.device.is_load_command_set = MagicMock(return_value=True)
+        self.device.external_user_initiated_state = None
+        self.device.external_user_initiated_state_time = None
+        self.device.current_command = CMD_OFF
+        self.device.running_command = CMD_OFF
+
+        time = datetime.datetime.now(pytz.UTC)
+        self.device.asked_for_reset_user_initiated_state_time = time - datetime.timedelta(
+            seconds=USER_OVERRIDE_STATE_BACK_DURATION_S - 1
+        )
+        self.device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        self.hass.states.set("switch.test_device", "on")
+        self.device.push_live_constraint = MagicMock(return_value=True)
+
+        result = await self.device.check_load_activity_and_constraints(time)
+
+        assert result is False
+        assert self.device.external_user_initiated_state is None
+        self.device.push_live_constraint.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_user_override_reset_first_command_done(self):
+        """Test override reset first command handling."""
+        self.device.bistate_mode = "bistate_mode_auto"
+        self.device.is_load_command_set = MagicMock(return_value=True)
+        time = datetime.datetime.now(pytz.UTC)
+        self.device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
+            time - datetime.timedelta(seconds=5)
+        )
+        self.device.command_and_constraint_reset = MagicMock()
+
+        result = await self.device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        self.device.command_and_constraint_reset.assert_called_once()
+        assert self.device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
 
 
 class TestQSBiStateDurationAbstractMethods:

@@ -1,6 +1,7 @@
 """Tests for number platform."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -228,6 +229,71 @@ async def test_qs_base_number_restore_invalid_state():
 
 
 @pytest.mark.asyncio
+async def test_qs_base_number_restore_non_numeric_state():
+    """Test number when previous state is non-numeric."""
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from homeassistant.core import State
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = MagicMock(spec=QSBiStateDuration)
+    mock_device.device_id = "test_device"
+    mock_device.device_type = "bistate"
+    mock_device.name = "Test Device"
+    mock_device.qs_enable_device = True
+    mock_device.default_on_duration = 4.0
+
+    mock_description = QSNumberEntityDescription(
+        key="default_on_duration",
+        translation_key="default_on_duration",
+        native_max_value=24,
+        native_min_value=0,
+        native_step=0.5,
+    )
+
+    number = QSBaseNumber(mock_handler, mock_device, mock_description)
+    number.async_write_ha_state = MagicMock()
+
+    last_state = State("number.test", "bad")
+    with patch.object(number, "async_get_last_state", return_value=last_state):
+        await number.async_added_to_hass()
+
+    assert number._attr_native_value == 4.0
+
+
+@pytest.mark.asyncio
+async def test_qs_base_number_restore_falls_back_to_default():
+    """Test number falls back to default when device has no value."""
+    from homeassistant.core import State
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = SimpleNamespace(
+        device_id="test_device",
+        device_type="bistate",
+        name="Test Device",
+        qs_enable_device=True,
+    )
+
+    mock_description = QSNumberEntityDescription(
+        key="default_on_duration",
+        translation_key="default_on_duration",
+        native_max_value=24,
+        native_min_value=0,
+        native_step=0.5,
+    )
+
+    number = QSBaseNumber(mock_handler, mock_device, mock_description)
+    number.async_write_ha_state = MagicMock()
+
+    last_state = State("number.test", STATE_UNKNOWN)
+    with patch.object(number, "async_get_last_state", return_value=last_state):
+        await number.async_added_to_hass()
+
+    assert number._attr_native_value == 1.0
+
+
+@pytest.mark.asyncio
 async def test_qs_base_number_set_value_error():
     """Test setting number value when setattr fails."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
@@ -292,6 +358,37 @@ async def test_async_setup_entry():
 
 
 @pytest.mark.asyncio
+async def test_async_setup_entry_with_attached_devices():
+    """Test number platform setup with attached devices."""
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+
+    fake_hass = MagicMock()
+    mock_config_entry = MagicMock()
+    mock_config_entry.entry_id = "test_entry"
+
+    mock_device = create_mock_device("bistate", name="Root BiState")
+    mock_device.__class__ = QSBiStateDuration
+    mock_device.data_handler = MagicMock()
+    mock_device.default_on_duration = 2.0
+
+    attached_device = create_mock_device("bistate", name="Attached BiState")
+    attached_device.__class__ = QSBiStateDuration
+    attached_device.data_handler = MagicMock()
+    attached_device.default_on_duration = 1.0
+
+    mock_device.get_attached_virtual_devices = MagicMock(return_value=[attached_device])
+
+    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
+
+    mock_add_entities = MagicMock()
+    await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
+
+    mock_add_entities.assert_called_once()
+    added_entities = mock_add_entities.call_args[0][0]
+    assert len(added_entities) == 4
+
+
+@pytest.mark.asyncio
 async def test_async_setup_entry_no_device():
     """Test number platform setup with no device."""
     fake_hass = MagicMock()
@@ -342,6 +439,25 @@ async def test_async_unload_entry():
     
     result = await async_unload_entry(fake_hass, mock_config_entry)
     
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_async_unload_entry_handles_exception():
+    """Test number platform unload handles errors."""
+    fake_hass = MagicMock()
+    mock_config_entry = MagicMock()
+    mock_config_entry.entry_id = "test_entry"
+
+    mock_device = create_mock_device("bistate")
+    mock_home = MagicMock()
+    mock_home.remove_device = MagicMock(side_effect=RuntimeError("boom"))
+    mock_device.home = mock_home
+
+    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
+
+    result = await async_unload_entry(fake_hass, mock_config_entry)
+
     assert result is True
     mock_home.remove_device.assert_called_once_with(mock_device)
 

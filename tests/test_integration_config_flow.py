@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_NAME
+from homeassistant.const import (
+    ATTR_UNIT_OF_MEASUREMENT,
+    CONF_NAME,
+    UnitOfElectricCurrent,
+    UnitOfPower,
+)
+from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.quiet_solar import __init__ as qs_init
@@ -25,12 +31,115 @@ from custom_components.quiet_solar.const import (
     CONF_CAR_BATTERY_CAPACITY,
     CONF_GRID_POWER_SENSOR,
     DATA_HANDLER,
+    CONF_CAR_CHARGER_MIN_CHARGE,
+    CONF_CAR_CHARGER_MAX_CHARGE,
+    CONF_CAR_CHARGE_PERCENT_SENSOR,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
+    CONF_CAR_ODOMETER_SENSOR,
+    CONF_CAR_ESTIMATED_RANGE_SENSOR,
+    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
+    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
+    CONF_DEVICE_DASHBOARD_SECTION,
+    CONF_DEVICE_DYNAMIC_GROUP_NAME,
+    CONF_MONO_PHASE,
+    CONF_LOAD_IS_BOOST_ONLY,
+    CONF_NUM_MAX_ON_OFF,
+    CONF_POWER,
+    CONF_DYN_GROUP_MAX_PHASE_AMPS,
+    CONF_ACCURATE_POWER_SENSOR,
+    CONF_PHASE_1_AMPS_SENSOR,
+    CONF_CALENDAR,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_PREFERRED_CAR,
 )
+from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.battery import QSBattery
 from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
 from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.person import QSPerson
+from tests.test_helpers import FakeConfigEntry
+
+
+def _schema_has_key(schema, key: str) -> bool:
+    return any(getattr(item, "schema", None) == key for item in schema.schema)
+
+
+def _init_options_flow(fake_hass, config_entry) -> QSOptionsFlowHandler:
+    flow = QSOptionsFlowHandler(config_entry)
+    flow.hass = fake_hass
+    flow.handler = config_entry.entry_id
+    fake_hass.data[DOMAIN][config_entry.entry_id] = config_entry
+    return flow
+
+
+def test_get_common_schema_includes_optional_fields(fake_hass):
+    """Test get_common_schema includes optional selectors."""
+    config_entry = FakeConfigEntry(
+        entry_id="entry_1",
+        data={CONF_NAME: "Device", CONF_DEVICE_DASHBOARD_SECTION: "Home"},
+    )
+    flow = _init_options_flow(fake_hass, config_entry)
+    fake_hass.config_entries.async_get_known_entry = MagicMock(return_value=config_entry)
+
+    fake_home = MagicMock()
+    fake_home.dashboard_sections = ["Home", "Garage"]
+    root_group = QSHome.__new__(QSHome)
+    root_group.name = "Root"
+    other_group = MagicMock()
+    other_group.name = "Group1"
+    fake_home._all_dynamic_groups = [root_group, other_group]
+    fake_hass.data[DOMAIN][DATA_HANDLER] = MagicMock(home=fake_home)
+    fake_hass.services.registered.append((NOTIFY_DOMAIN, "mobile_app"))
+
+    fake_hass.states.set(
+        "sensor.power",
+        "10",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+    fake_hass.states.set(
+        "sensor.amps",
+        "1",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfElectricCurrent.AMPERE},
+    )
+    fake_hass.states.set("calendar.test", "off", {})
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        schema = flow.get_common_schema(
+            type=QSDynamicGroup.conf_type_name,
+            add_power_value_selector=1000,
+            add_load_power_sensor=True,
+            add_load_power_sensor_mandatory=True,
+            add_calendar=True,
+            add_boost_only=True,
+            add_mobile_app=True,
+            add_efficiency_selector=True,
+            add_is_3p=True,
+            add_max_phase_amps_selector=16,
+            add_power_group_selector=True,
+            add_max_on_off=True,
+            add_amps_sensors=True,
+            add_phase_number=True,
+        )
+
+    key_names = {key.schema for key in schema}
+    assert CONF_NAME in key_names
+    assert CONF_DEVICE_DYNAMIC_GROUP_NAME in key_names
+    assert CONF_IS_3P in key_names
+    assert CONF_MONO_PHASE in key_names
+    assert CONF_LOAD_IS_BOOST_ONLY in key_names
+    assert CONF_NUM_MAX_ON_OFF in key_names
+    assert CONF_POWER in key_names
+    assert CONF_DYN_GROUP_MAX_PHASE_AMPS in key_names
+    assert CONF_ACCURATE_POWER_SENSOR in key_names
+    assert CONF_PHASE_1_AMPS_SENSOR in key_names
+    assert CONF_CALENDAR in key_names
 
 
 @pytest.mark.asyncio
@@ -270,3 +379,169 @@ async def test_flow_unique_id_set(fake_hass):
     call_arg = mock_set_unique.call_args[0][0]
     assert "Unique Device" in call_arg
     assert QSHome.conf_type_name in call_arg
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_includes_percent_and_length_selectors(
+    fake_hass,
+    mock_config_entry,
+):
+    """Test car options include percent and length selectors when available."""
+    mock_config_entry.data = {
+        CONF_NAME: "Test Car",
+        DEVICE_TYPE: QSCar.conf_type_name,
+        CONF_CAR_CHARGER_MIN_CHARGE: 6,
+        CONF_CAR_CHARGER_MAX_CHARGE: 16,
+        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: None,
+    }
+
+    fake_hass.states.set(
+        "sensor.test_percent",
+        "50",
+        {"unit_of_measurement": "%"},
+    )
+    fake_hass.states.set(
+        "number.test_percent",
+        "80",
+        {"unit_of_measurement": "%"},
+    )
+    fake_hass.states.set(
+        "sensor.test_length",
+        "120",
+        {"unit_of_measurement": "km"},
+    )
+
+    flow = _init_options_flow(fake_hass, mock_config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _hass, entities: entities,
+    ):
+        result = await flow.async_step_car()
+    assert result["type"] == FlowResultType.FORM
+
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_CAR_CHARGE_PERCENT_SENSOR)
+    assert _schema_has_key(schema, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER)
+    assert _schema_has_key(schema, CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS)
+    assert _schema_has_key(schema, CONF_CAR_ODOMETER_SENSOR)
+    assert _schema_has_key(schema, CONF_CAR_ESTIMATED_RANGE_SENSOR)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_steps_schema(
+    fake_hass,
+    mock_config_entry,
+):
+    """Test car options include steps when configured."""
+    mock_config_entry.data = {
+        CONF_NAME: "Test Car",
+        DEVICE_TYPE: QSCar.conf_type_name,
+        CONF_CAR_CHARGER_MIN_CHARGE: 6,
+        CONF_CAR_CHARGER_MAX_CHARGE: 16,
+        CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "5",
+    }
+
+    fake_hass.states.set(
+        "number.test_percent",
+        "80",
+        {"unit_of_measurement": "%"},
+    )
+
+    flow = _init_options_flow(fake_hass, mock_config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _hass, entities: entities,
+    ):
+        result = await flow.async_step_car()
+
+    assert result["type"] == FlowResultType.FORM
+    assert _schema_has_key(result["data_schema"], CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_force_dampening_fields(
+    fake_hass,
+    mock_config_entry,
+):
+    """Test car options add dampening fields when enabled."""
+    mock_config_entry.data = {
+        CONF_NAME: "Test Car",
+        DEVICE_TYPE: QSCar.conf_type_name,
+        CONF_CAR_CHARGER_MIN_CHARGE: 6,
+        CONF_CAR_CHARGER_MAX_CHARGE: 8,
+        CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: False,
+    }
+
+    flow = _init_options_flow(fake_hass, mock_config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _hass, entities: entities,
+    ):
+        result = await flow.async_step_car(
+            {
+                CONF_CAR_CHARGER_MIN_CHARGE: 6,
+                CONF_CAR_CHARGER_MAX_CHARGE: 8,
+                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert _schema_has_key(result["data_schema"], CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P)
+    assert _schema_has_key(result["data_schema"], "charge_6")
+    assert _schema_has_key(result["data_schema"], "charge_8")
+
+
+@pytest.mark.asyncio
+async def test_options_flow_person_aborts_without_person_entities(
+    fake_hass,
+    mock_config_entry,
+):
+    """Test person options aborts when no person entities exist."""
+    mock_config_entry.data = {
+        CONF_NAME: "Test Person",
+        DEVICE_TYPE: QSPerson.conf_type_name,
+    }
+
+    flow = _init_options_flow(fake_hass, mock_config_entry)
+
+    result = await flow.async_step_person()
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "no_person_entities"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_person_includes_authorized_cars(
+    fake_hass,
+    mock_config_entry,
+    mock_data_handler,
+):
+    """Test person options include authorized cars selector."""
+    mock_config_entry.data = {
+        CONF_NAME: "Test Person",
+        DEVICE_TYPE: QSPerson.conf_type_name,
+        CONF_PERSON_PREFERRED_CAR: "Car A",
+    }
+
+    fake_hass.states.set("person.test_person", "home", {})
+
+    car_regular = MagicMock()
+    car_regular.name = "Car A"
+    car_regular.car_is_invited = False
+    car_invited = MagicMock()
+    car_invited.name = "Car B"
+    car_invited.car_is_invited = True
+
+    mock_home = MagicMock()
+    mock_home._cars = [car_regular, car_invited]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(fake_hass, mock_config_entry)
+
+    result = await flow.async_step_person()
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_PERSON_PERSON_ENTITY)
+    assert _schema_has_key(schema, CONF_PERSON_AUTHORIZED_CARS)

@@ -74,18 +74,10 @@ async def test_charger_creates_entities(
     
     home_entry, charger_entry = home_and_charger
     
-    # Only test if charger loaded successfully (may have SETUP_ERROR without sensors)
-    if charger_entry.state == ConfigEntryState.LOADED:
-        # Check charger entities
-        entities = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
-        entity_ids = [entity.entity_id for entity in entities]
-        
-        # Charger should have entities (sensors, switches, buttons, etc.)
-        assert len(entity_ids) > 0
-    else:
-        # Charger needs sensor configuration to fully load
-        # This test verifies the multi-device setup mechanism works
-        pytest.skip("Charger needs sensor configuration to test entity creation")
+    assert charger_entry.state == ConfigEntryState.LOADED
+    entities = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
+    entity_ids = [entity.entity_id for entity in entities]
+    assert len(entity_ids) > 0
 
 
 async def test_car_creates_entities(

@@ -55,19 +55,11 @@ async def test_charger_device_registered(
     
     home_entry, charger_entry = home_and_charger
     
-    # Only test if charger loaded successfully
-    if charger_entry.state == ConfigEntryState.LOADED:
-        # Get devices for charger config entry
-        devices = dr.async_entries_for_config_entry(device_registry, charger_entry.entry_id)
-        
-        # Should have charger device
-        assert len(devices) >= 1
-        
-        charger_device = devices[0]
-        assert "Test Charger" in charger_device.name
-    else:
-        # Charger needs sensor configuration
-        pytest.skip("Charger needs sensor configuration for full setup")
+    assert charger_entry.state == ConfigEntryState.LOADED
+    devices = dr.async_entries_for_config_entry(device_registry, charger_entry.entry_id)
+    assert len(devices) >= 1
+    charger_device = devices[0]
+    assert "Test Charger" in charger_device.name
 
 
 async def test_car_device_registered(

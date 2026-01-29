@@ -25,6 +25,23 @@ from custom_components.quiet_solar.const import (
 )
 
 
+class _FakeLoad:
+    def __init__(self) -> None:
+        self.efficiency_factor = 1.0
+        self.current_command = LoadCommand(command="on", power_consign=1000)
+        self.num_max_on_off = 4
+        self.num_on_off = 0
+
+    def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int, add: bool) -> float:
+        return 0.0
+
+    def get_update_value_callback_for_constraint_class(self, _constraint):
+        return None
+
+    def is_off_grid(self) -> bool:
+        return False
+
+
 # =============================================================================
 # Test get_readable_date_string
 # =============================================================================
@@ -204,6 +221,95 @@ def test_load_constraint_always_end_at_end():
     )
 
     assert constraint.always_end_at_end_of_constraint is True
+
+
+def test_constraint_best_duration_extension():
+    """Test best duration extension with push count."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power=1000,
+        initial_value=0.0,
+        target_value=1000.0,
+    )
+    constraint.pushed_count = 1
+    extension = constraint.best_duration_extension_to_push_constraint(time, timedelta(seconds=10))
+    assert extension >= timedelta(seconds=1200)
+
+
+def test_multisteps_from_dict_strips_legacy_fields():
+    """Test legacy fields are removed from power steps."""
+    now = datetime.now(tz=pytz.UTC)
+    data = {
+        "start_of_constraint": now.isoformat(),
+        "end_of_constraint": now.isoformat(),
+        "power_steps": [
+            {"command": "on", "power_consign": 1000, "phase_current": 10, "load_param": "x"},
+        ]
+    }
+    kwargs = MultiStepsPowerLoadConstraint.from_dict_to_kwargs(data)
+    assert kwargs["power_steps"][0].power_consign == 1000
+
+
+def test_num_command_state_change_and_empty_segments():
+    """Test command state change detection and empty segments."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+    )
+    out_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        None,
+        None,
+        LoadCommand(command="on", power_consign=1000),
+    ]
+    num, empty_cmds, start_switch, start_cmd = constraint._num_command_state_change_and_empty_inner_commands(
+        out_commands, 0, 3
+    )
+    assert num >= 1
+    assert empty_cmds
+    assert start_cmd is not None
+    assert start_switch is False
+
+
+def test_replace_by_command_in_slots():
+    """Test replacing commands in slots."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+    )
+    out_commands = [None, None]
+    out_power = [0.0, 0.0]
+    durations = [900, 900]
+
+    delta, dur, aborted = constraint._replace_by_command_in_slots(
+        out_commands,
+        out_power,
+        durations,
+        0,
+        1,
+        constraint._power_sorted_cmds[0],
+    )
+    assert aborted is False
+    assert dur == sum(durations)
+
+    delta, dur, aborted = constraint._replace_by_command_in_slots(
+        out_commands,
+        out_power,
+        durations,
+        0,
+        1,
+        None,
+    )
+    assert aborted is False
 
 
 def test_load_constraint_load_info():
