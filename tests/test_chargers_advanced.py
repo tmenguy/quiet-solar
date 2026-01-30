@@ -8,6 +8,8 @@ import asyncio
 # Import from Home Assistant
 from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
 
+from tests.factories import create_minimal_home_model
+
 # Import the necessary classes
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
@@ -64,8 +66,7 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         self.hass.services = MagicMock()
         
         # Mock home
-        self.home = MagicMock()
-        self.home._chargers = []
+        self.home = create_minimal_home_model()
         
         # Mock config entry
         self.config_entry = MagicMock()
@@ -321,10 +322,10 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
             charger = QSChargerGeneric(**self.charger_config)
         
-        # Mock car and home
+        # Mock car and home (override get_car_by_name from factory with mock)
         mock_car = MagicMock()
         mock_car.name = "UserSelectedCar"
-        charger.home.get_car_by_name.return_value = mock_car
+        charger.home.get_car_by_name = MagicMock(return_value=mock_car)
         charger.user_attached_car_name = "UserSelectedCar"
         charger.home._chargers = [charger]
         

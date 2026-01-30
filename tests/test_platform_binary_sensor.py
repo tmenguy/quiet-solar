@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.binary_sensor import (
     QSBaseBinarySensor,
     QSBinarySensorEntityDescription,

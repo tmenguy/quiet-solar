@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.number import (
     create_ha_number,
@@ -18,6 +20,17 @@ from custom_components.quiet_solar.number import (
 from custom_components.quiet_solar.const import DOMAIN
 from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
+
+
+@pytest.fixture
+def number_config_entry() -> MockConfigEntry:
+    """Config entry for number platform tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_entry",
+        data={CONF_NAME: "Test Number"},
+        title="Test Number",
+    )
 
 
 def test_create_ha_number_for_bistate_duration():
@@ -328,27 +341,22 @@ async def test_qs_base_number_set_value_error():
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry():
+async def test_async_setup_entry(hass, number_config_entry):
     """Test number platform setup."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
-    
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-    
-    # Use create_mock_device for proper mocking
+
     mock_device = create_mock_device("bistate", name="Test BiState")
     mock_device.__class__ = QSBiStateDuration
     mock_device.data_handler = MagicMock()
     mock_device.default_on_duration = 2.0
-    
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
-    
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_device
+
     mock_add_entities = MagicMock()
-    
-    await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-    
-    # Should add entities
+
+    await async_setup_entry(hass, number_config_entry, mock_add_entities)
+
     mock_add_entities.assert_called_once()
     added_entities = mock_add_entities.call_args[0][0]
     assert len(added_entities) == 2
@@ -357,13 +365,9 @@ async def test_async_setup_entry():
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_with_attached_devices():
+async def test_async_setup_entry_with_attached_devices(hass, number_config_entry):
     """Test number platform setup with attached devices."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
-
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
 
     mock_device = create_mock_device("bistate", name="Root BiState")
     mock_device.__class__ = QSBiStateDuration
@@ -377,10 +381,11 @@ async def test_async_setup_entry_with_attached_devices():
 
     mock_device.get_attached_virtual_devices = MagicMock(return_value=[attached_device])
 
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_device
 
     mock_add_entities = MagicMock()
-    await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
+    await async_setup_entry(hass, number_config_entry, mock_add_entities)
 
     mock_add_entities.assert_called_once()
     added_entities = mock_add_entities.call_args[0][0]
@@ -388,110 +393,86 @@ async def test_async_setup_entry_with_attached_devices():
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_no_device():
+async def test_async_setup_entry_no_device(hass, number_config_entry):
     """Test number platform setup with no device."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-    
-    fake_hass.data = {DOMAIN: {}}
-    
+    hass.data.setdefault(DOMAIN, {})
+
     mock_add_entities = MagicMock()
-    
-    await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-    
-    # Should not add entities
+
+    await async_setup_entry(hass, number_config_entry, mock_add_entities)
+
     mock_add_entities.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_device_without_numbers():
+async def test_async_setup_entry_device_without_numbers(hass, number_config_entry):
     """Test number platform setup for device without number entities."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-    
-    # Home device doesn't have number entities
     mock_home = create_mock_device("home")
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_home}}
-    
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_home
+
     mock_add_entities = MagicMock()
-    
-    await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-    
-    # Should not add entities for home device
+
+    await async_setup_entry(hass, number_config_entry, mock_add_entities)
+
     mock_add_entities.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_async_unload_entry():
+async def test_async_unload_entry(hass, number_config_entry):
     """Test number platform unload."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-    
     mock_device = create_mock_device("bistate")
     mock_home = create_minimal_home_model()
     mock_device.home = mock_home
 
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_device
 
-    result = await async_unload_entry(fake_hass, mock_config_entry)
+    result = await async_unload_entry(hass, number_config_entry)
 
     assert result is True
 
 
 @pytest.mark.asyncio
-async def test_async_unload_entry_handles_exception():
-    """Test number platform unload handles errors."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-
+async def test_async_unload_entry_handles_remove_device_error(hass, number_config_entry):
+    """Test number platform unload handles errors from remove_device."""
     mock_device = create_mock_device("bistate")
     mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=RuntimeError("boom"))
     mock_device.home = mock_home
 
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_device
 
-    result = await async_unload_entry(fake_hass, mock_config_entry)
+    result = await async_unload_entry(hass, number_config_entry)
 
     assert result is True
     mock_home.remove_device.assert_called_once_with(mock_device)
 
 
 @pytest.mark.asyncio
-async def test_async_unload_entry_no_device():
+async def test_async_unload_entry_no_device(hass, number_config_entry):
     """Test number platform unload with no device."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "nonexistent"
-    
-    fake_hass.data = {DOMAIN: {}}
-    
-    result = await async_unload_entry(fake_hass, mock_config_entry)
-    
+    hass.data.setdefault(DOMAIN, {})
+
+    result = await async_unload_entry(hass, number_config_entry)
+
     assert result is True
 
 
 @pytest.mark.asyncio
-async def test_async_unload_entry_handles_exception():
+async def test_async_unload_entry_handles_exception_gracefully(hass, number_config_entry):
     """Test number platform unload handles exceptions gracefully."""
-    fake_hass = MagicMock()
-    mock_config_entry = MagicMock()
-    mock_config_entry.entry_id = "test_entry"
-    
     mock_device = create_mock_device("test")
     mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=Exception("Test error"))
     mock_device.home = mock_home
 
-    fake_hass.data = {DOMAIN: {mock_config_entry.entry_id: mock_device}}
-    
-    result = await async_unload_entry(fake_hass, mock_config_entry)
-    
-    # Should still return True even with exception
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][number_config_entry.entry_id] = mock_device
+
+    result = await async_unload_entry(hass, number_config_entry)
+
     assert result is True
 
 

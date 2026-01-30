@@ -2788,13 +2788,14 @@ async def test_charger_group_prepare_and_shave_budgets() -> None:
 async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
     """Test budgeting algorithm decision flow."""
     from tests.factories import (
+        create_minimal_home_model,
         create_test_car_double,
         create_test_charger_double,
         create_test_dynamic_group_double,
     )
 
     # Create mock home with required methods
-    home = MagicMock()
+    home = create_minimal_home_model()
     home.battery = None
     home.battery_can_discharge = MagicMock(return_value=False)
     home.get_best_tariff = MagicMock(return_value=0.25)
@@ -2870,6 +2871,7 @@ async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
 async def test_charger_group_dyn_handle_flow() -> None:
     """Test QSChargerGroup dyn_handle main flow."""
     from tests.factories import (
+        create_minimal_home_model,
         create_test_car_double,
         create_test_charger_double,
         create_test_dynamic_group_double,
@@ -2877,7 +2879,7 @@ async def test_charger_group_dyn_handle_flow() -> None:
 
     now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     # Create mock home with power values methods
-    home = MagicMock()
+    home = create_minimal_home_model()
     home.battery = None
     home.get_available_power_values = MagicMock(
         return_value=[

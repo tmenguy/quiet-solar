@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
+from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.ui.dashboard import (
     generate_dashboard_resource_qs_tag,
@@ -83,14 +84,14 @@ def create_mock_hass(config_dir: str = None) -> MagicMock:
 
 def test_generate_dashboard_resource_qs_tag_returns_string():
     """Test that qs_tag is a string."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     tag = generate_dashboard_resource_qs_tag(mock_home)
     assert isinstance(tag, str)
 
 
 def test_generate_dashboard_resource_qs_tag_is_numeric():
     """Test that qs_tag is a numeric string (epoch seconds)."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     tag = generate_dashboard_resource_qs_tag(mock_home)
     assert tag.isdigit()
 
@@ -98,7 +99,7 @@ def test_generate_dashboard_resource_qs_tag_is_numeric():
 def test_generate_dashboard_resource_qs_tag_changes_over_time():
     """Test that qs_tag changes between calls (with time mocking)."""
     import time
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
 
     with patch.object(time, 'time', return_value=1000):
         tag1 = generate_dashboard_resource_qs_tag(mock_home)
@@ -117,14 +118,14 @@ def test_generate_dashboard_resource_qs_tag_changes_over_time():
 
 def test_generate_dashboard_resource_namespace_format():
     """Test that namespace follows the correct format."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     namespace = generate_dashboard_resource_namespace(mock_home)
     assert namespace == f"/local/{DOMAIN}"
 
 
 def test_generate_dashboard_resource_namespace_starts_with_local():
     """Test that namespace starts with /local/."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     namespace = generate_dashboard_resource_namespace(mock_home)
     assert namespace.startswith("/local/")
 
@@ -135,7 +136,7 @@ def test_generate_dashboard_resource_namespace_starts_with_local():
 
 def test_get_resource_handler_no_hass_data():
     """Test when hass.data is empty/None."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = None
 
     result = _get_resource_handler(mock_home)
@@ -144,7 +145,7 @@ def test_get_resource_handler_no_hass_data():
 
 def test_get_resource_handler_no_lovelace_data():
     """Test when lovelace data is missing."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {}
 
     result = _get_resource_handler(mock_home)
@@ -153,7 +154,7 @@ def test_get_resource_handler_no_lovelace_data():
 
 def test_get_resource_handler_no_resources_in_lovelace():
     """Test when lovelace has no resources (old HA version)."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {}}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -168,7 +169,7 @@ def test_get_resource_handler_no_resources_in_lovelace_new_ha():
     mock_lovelace = MagicMock()
     mock_lovelace.resources = None
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": mock_lovelace}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -183,7 +184,7 @@ def test_get_resource_handler_yaml_mode_no_store():
     mock_resources = MagicMock()
     mock_resources.store = None
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
     # Test with version < 2025.2.0
@@ -198,7 +199,7 @@ def test_get_resource_handler_yaml_mode_no_store_attr():
     """Test when resources doesn't have store attribute (YAML mode)."""
     mock_resources = MagicMock(spec=[])  # No attributes
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -214,7 +215,7 @@ def test_get_resource_handler_wrong_store_key():
     mock_resources.store.key = "wrong_key"
     mock_resources.store.version = 1
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -230,7 +231,7 @@ def test_get_resource_handler_wrong_store_version():
     mock_resources.store.key = "lovelace_resources"
     mock_resources.store.version = 2  # Wrong version
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -246,7 +247,7 @@ def test_get_resource_handler_success_old_ha_version():
     mock_resources.store.key = "lovelace_resources"
     mock_resources.store.version = 1
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -265,7 +266,7 @@ def test_get_resource_handler_success_new_ha_version():
     mock_lovelace = MagicMock()
     mock_lovelace.resources = mock_resources
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": mock_lovelace}
 
     with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
@@ -282,7 +283,7 @@ def test_get_resource_handler_success_new_ha_version():
 @pytest.mark.asyncio
 async def test_update_resource_loads_if_not_loaded():
     """Test that resources are loaded if not already loaded."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection()
 
     await update_resource(mock_home, resources, "/local/test", "/local/test?qs_tag=123")
@@ -293,7 +294,7 @@ async def test_update_resource_loads_if_not_loaded():
 @pytest.mark.asyncio
 async def test_update_resource_skips_load_if_already_loaded():
     """Test that loading is skipped if already loaded."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection()
     resources.loaded = True
 
@@ -316,7 +317,7 @@ async def test_update_resource_skips_load_if_already_loaded():
 @pytest.mark.asyncio
 async def test_update_resource_creates_new_resource():
     """Test creating a new resource when none exists."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection()
 
     await update_resource(mock_home, resources, "/local/test", "/local/test?qs_tag=123")
@@ -329,7 +330,7 @@ async def test_update_resource_creates_new_resource():
 @pytest.mark.asyncio
 async def test_update_resource_updates_existing_resource():
     """Test updating an existing resource."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection([
         {"id": "resource_1", "url": "/local/test?qs_tag=old"},
     ])
@@ -344,7 +345,7 @@ async def test_update_resource_updates_existing_resource():
 @pytest.mark.asyncio
 async def test_update_resource_no_update_if_same_url():
     """Test that no update occurs if URL is the same."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection([
         {"id": "resource_1", "url": "/local/test?qs_tag=123"},
     ])
@@ -358,7 +359,7 @@ async def test_update_resource_no_update_if_same_url():
 @pytest.mark.asyncio
 async def test_update_resource_matches_by_prefix():
     """Test that resources are matched by URL prefix."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     resources = MockResourceStorageCollection([
         {"id": "resource_1", "url": "/local/other/file.js?tag=1"},
         {"id": "resource_2", "url": "/local/test/file.js?tag=old"},
@@ -526,7 +527,7 @@ async def test_qs_copy_resources_creates_destination_dir():
         to_dir = os.path.join(tmp_dir, "dest")
         os.makedirs(from_dir)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
             mock_home, from_dir, to_dir, "/local/test", "123", None
@@ -548,7 +549,7 @@ async def test_qs_copy_resources_copies_files():
         with open(test_file, "w") as f:
             f.write("console.log('test');")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
             mock_home, from_dir, to_dir, "/local/test", "123", None
@@ -574,7 +575,7 @@ async def test_qs_copy_resources_copies_binary_files():
         with open(test_file, "wb") as f:
             f.write(binary_content)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
             mock_home, from_dir, to_dir, "/local/test", "123", None
@@ -604,7 +605,7 @@ async def test_qs_copy_resources_recursive_directories():
         with open(sub_file, "w") as f:
             f.write("sub")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
             mock_home, from_dir, to_dir, "/local/test", "123", None
@@ -628,7 +629,7 @@ async def test_qs_copy_resources_registers_resources():
         with open(os.path.join(from_dir, "test2.js"), "w") as f:
             f.write("test2")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         resources = MockResourceStorageCollection()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
@@ -650,7 +651,7 @@ async def test_qs_copy_resources_registers_with_qs_tag():
         with open(os.path.join(from_dir, "test.js"), "w") as f:
             f.write("test")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         resources = MockResourceStorageCollection()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
@@ -672,7 +673,7 @@ async def test_qs_copy_resources_no_register_when_handler_none():
         with open(os.path.join(from_dir, "test.js"), "w") as f:
             f.write("test")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
 
         # Should not raise, just skip registration
         await qs_copy_resources_dir_and_resources_register_recursive(
@@ -695,7 +696,7 @@ async def test_qs_copy_resources_recursive_namespace():
         with open(os.path.join(subdir, "card.js"), "w") as f:
             f.write("card")
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         resources = MockResourceStorageCollection()
 
         await qs_copy_resources_dir_and_resources_register_recursive(
@@ -715,7 +716,7 @@ async def test_qs_copy_resources_empty_directory():
         to_dir = os.path.join(tmp_dir, "dest")
         os.makedirs(from_dir)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         resources = MockResourceStorageCollection()
 
         await qs_copy_resources_dir_and_resources_register_recursive(

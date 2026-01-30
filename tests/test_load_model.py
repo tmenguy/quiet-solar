@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytz
 
+from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.home_model.load import (
     AbstractDevice,
     AbstractLoad,
@@ -190,7 +191,7 @@ def test_dashboard_sort_string_truncates_long_values():
     long_name = "x" * 300
     long_type = "y" * 300
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -210,7 +211,7 @@ def test_dashboard_sort_string_truncates_long_values():
 @pytest.mark.asyncio
 async def test_async_get_info_from_storage_updates_num_on_off():
     """Test async_get_info_from_storage applies saved info."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -230,7 +231,7 @@ async def test_async_get_info_from_storage_updates_num_on_off():
 
 def test_ack_command_counts_transitions():
     """Test _ack_command increments num_on_off on transitions."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -254,7 +255,7 @@ def test_ack_command_counts_transitions():
 @pytest.mark.asyncio
 async def test_launch_command_stacks_when_running():
     """Test launch_command stacks when already running."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -274,7 +275,7 @@ async def test_launch_command_stacks_when_running():
 @pytest.mark.asyncio
 async def test_launch_command_noop_when_current_matches():
     """Test launch_command returns early when current matches."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -293,7 +294,7 @@ async def test_launch_command_noop_when_current_matches():
 
 def test_is_load_has_command_now_or_coming():
     """Test is_load_has_a_command_now_or_coming across states."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -322,7 +323,7 @@ def test_is_load_has_command_now_or_coming():
 @pytest.mark.asyncio
 async def test_launch_qs_command_back_uses_idle():
     """Test launch_qs_command_back falls back to idle."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -345,7 +346,7 @@ async def test_launch_qs_command_back_uses_idle():
 @pytest.mark.asyncio
 async def test_launch_command_handles_execute_error():
     """Test launch_command handles execute_command error."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -364,7 +365,7 @@ async def test_launch_command_handles_execute_error():
 @pytest.mark.asyncio
 async def test_launch_command_probe_already_set():
     """Test launch_command acknowledges when already set."""
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.voltage = 230.0
     mock_home.is_off_grid = MagicMock(return_value=False)
     mock_home.dashboard_sections = None
@@ -396,7 +397,7 @@ class TestAbstractDevice:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -514,7 +515,7 @@ class TestAbstractLoad:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -618,7 +619,7 @@ class TestAbstractDevicePhaseCalculations:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -751,7 +752,7 @@ class TestAbstractDeviceCommands:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -884,7 +885,7 @@ class TestAbstractLoadConstraints:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1242,7 +1243,7 @@ class TestTestLoad:
 
     def test_testload_init(self):
         """Test TestLoad initialization."""
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1264,7 +1265,7 @@ class TestTestLoad:
 
     def test_testload_get_min_max_power(self):
         """Test TestLoad get_min_max_power."""
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1301,7 +1302,7 @@ class TestPilotedDevice:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1408,7 +1409,7 @@ class TestAbstractDeviceStorage:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1475,7 +1476,7 @@ class TestCheckCommands:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1581,7 +1582,7 @@ class TestForceRelaunchCommand:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1690,7 +1691,7 @@ class TestDoProbeStateChange:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1787,7 +1788,7 @@ class TestMatchCt:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -1877,7 +1878,7 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2028,7 +2029,7 @@ class TestAckCompletedConstraint:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2089,7 +2090,7 @@ class TestGetActiveStateHash:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2215,7 +2216,7 @@ class TestSetLiveConstraints:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2429,7 +2430,7 @@ class TestPushLiveConstraint:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2630,7 +2631,7 @@ class TestUpdateLiveConstraints:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2768,7 +2769,7 @@ class TestMarkCurrentConstraintHasDone:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
@@ -2834,7 +2835,7 @@ class TestAbstractLoadStorage:
         }
         defaults.update(kwargs)
 
-        mock_home = MagicMock()
+        mock_home = create_minimal_home_model()
         mock_home.voltage = 230.0
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None

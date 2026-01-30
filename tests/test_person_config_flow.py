@@ -51,7 +51,7 @@ async def test_person_step_with_person_entities(
     mock_car3.name = "Guest Car"
     mock_car3.car_is_invited = True
 
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home._cars = [mock_car1, mock_car2, mock_car3]
     mock_data_handler = MagicMock()
     mock_data_handler.home = mock_home

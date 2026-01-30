@@ -7,6 +7,8 @@ import pytest
 # Import from Home Assistant
 from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
 
+from tests.factories import create_minimal_home_model
+
 # Import the necessary classes
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
@@ -457,7 +459,7 @@ class TestQSChargerGroup(unittest.TestCase):
         self.mock_dynamic_group.name = "TestGroup"
         
         # Create mock home
-        self.mock_home = MagicMock()
+        self.mock_home = create_minimal_home_model()
         self.mock_dynamic_group.home = self.mock_home
         
         # Create mock chargers with proper type checking
@@ -541,7 +543,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         self.hass.states.get = MagicMock(return_value=None)
         
         # Mock home
-        self.home = MagicMock()
+        self.home = create_minimal_home_model()
         
         # Mock config entry
         self.config_entry = MagicMock()
@@ -782,7 +784,7 @@ class TestQSChargerWallbox(unittest.TestCase):
     def setUp(self):
         self.hass = MagicMock()
         self.hass.states.get = MagicMock(return_value=None)
-        self.home = MagicMock()
+        self.home = create_minimal_home_model()
         self.config_entry = MagicMock()
     
     def test_init_with_device(self):
@@ -840,7 +842,7 @@ class TestQSChargerOCPP(unittest.TestCase):
     def setUp(self):
         self.hass = MagicMock()
         self.hass.states.get = MagicMock(return_value=None)
-        self.home = MagicMock()
+        self.home = create_minimal_home_model()
         self.config_entry = MagicMock()
     
     def test_init_with_device(self):

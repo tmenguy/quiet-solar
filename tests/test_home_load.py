@@ -22,6 +22,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     DATETIME_MAX_UTC,
     DATETIME_MIN_UTC,
 )
+from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.const import (
     CONF_POWER,
     CONF_DEVICE_EFFICIENCY,
@@ -44,7 +45,7 @@ class TestAbstractDeviceInit:
 
     def test_init_minimal(self):
         """Test initialization with minimal parameters."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home)
 
         assert device.name == "Test Device"
@@ -53,42 +54,42 @@ class TestAbstractDeviceInit:
 
     def test_init_with_power(self):
         """Test initialization with power setting."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home, **{CONF_POWER: 1500})
 
         assert device.power_use == 1500
 
     def test_init_with_efficiency(self):
         """Test initialization with efficiency setting."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home, **{CONF_DEVICE_EFFICIENCY: 90.0})
 
         assert device.efficiency == 90.0
 
     def test_init_efficiency_capped_at_100(self):
         """Test that efficiency is capped at 100."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home, **{CONF_DEVICE_EFFICIENCY: 150.0})
 
         assert device.efficiency == 100.0
 
     def test_init_with_3p(self):
         """Test initialization with 3-phase setting."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home, **{CONF_IS_3P: True})
 
         assert device._device_is_3p_conf is True
 
     def test_init_device_id_generated(self):
         """Test that device_id is generated correctly."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="My Test Device", home=home)
 
         assert "my_test_device" in device.device_id
 
     def test_init_num_max_on_off(self):
         """Test initialization with num_max_on_off setting."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home, **{CONF_NUM_MAX_ON_OFF: 5})
 
         # Should be rounded to even number
@@ -100,7 +101,7 @@ class TestAbstractDeviceOffGrid:
 
     def test_is_off_grid_with_home(self):
         """Test is_off_grid delegates to home."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=True)
         device = AbstractDevice(name="Test Device", home=home)
 
@@ -131,7 +132,7 @@ class TestAbstractDeviceDashboard:
 
     def test_dashboard_section_none_when_no_sections(self):
         """Test dashboard_section returns None when home has no sections."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.dashboard_sections = None
         device = AbstractDevice(name="Test Device", home=home)
 
@@ -141,7 +142,7 @@ class TestAbstractDeviceDashboard:
 
     def test_dashboard_section_with_valid_section(self):
         """Test dashboard_section returns correct section."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.dashboard_sections = [("Section A", "type_a"), ("Section B", "type_b")]
         device = AbstractDevice(name="Test Device", home=home)
         device._conf_dashboard_section_option = "Section A"
@@ -152,7 +153,7 @@ class TestAbstractDeviceDashboard:
 
     def test_dashboard_sort_string_in_type(self):
         """Test dashboard_sort_string_in_type returns ZZZ by default."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home)
 
         result = device.dashboard_sort_string_in_type
@@ -165,7 +166,7 @@ class TestAbstractDevicePilotedDevices:
 
     def test_get_possible_delta_power_no_devices(self):
         """Test get_possible_delta_power_from_piloted_devices_for_budget with no devices."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home)
 
         result = device.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=0)
@@ -174,7 +175,7 @@ class TestAbstractDevicePilotedDevices:
 
     def test_get_possible_delta_power_with_devices(self):
         """Test get_possible_delta_power_from_piloted_devices_for_budget with devices."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home)
 
         # Mock piloted device
@@ -188,7 +189,7 @@ class TestAbstractDevicePilotedDevices:
 
     def test_get_phase_amps_from_power_no_devices(self):
         """Test get_phase_amps_from_power_for_piloted_budgeting with no devices."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         device = AbstractDevice(name="Test Device", home=home)
 
         result = device.get_phase_amps_from_power_for_piloted_budgeting(power=1000.0)
@@ -212,7 +213,7 @@ class TestAbstractLoadInit:
 
     def test_init_minimal(self):
         """Test initialization with minimal parameters."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         assert load.name == "Test Load"
@@ -220,7 +221,7 @@ class TestAbstractLoadInit:
 
     def test_init_with_boost_only(self):
         """Test initialization with boost only mode."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(
             name="Test Load",
             home=home,
@@ -231,7 +232,7 @@ class TestAbstractLoadInit:
 
     def test_init_qs_best_effort_green_only_default(self):
         """Test qs_best_effort_green_only defaults to False."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         assert load.qs_best_effort_green_only is False
@@ -242,7 +243,7 @@ class TestAbstractLoadBestEffort:
 
     def test_is_best_effort_only_load_false(self):
         """Test is_best_effort_only_load returns False by default."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         result = load.is_best_effort_only_load()
@@ -251,7 +252,7 @@ class TestAbstractLoadBestEffort:
 
     def test_is_best_effort_only_load_with_boost(self):
         """Test is_best_effort_only_load returns True with boost only."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(
             name="Test Load",
             home=home,
@@ -264,7 +265,7 @@ class TestAbstractLoadBestEffort:
 
     def test_is_best_effort_only_load_with_green_only(self):
         """Test is_best_effort_only_load returns True with green only."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load.qs_best_effort_green_only = True
 
@@ -278,7 +279,7 @@ class TestAbstractLoadConstraints:
 
     def test_get_for_solver_constraints_empty(self):
         """Test get_for_solver_constraints returns empty list by default."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
@@ -290,7 +291,7 @@ class TestAbstractLoadConstraints:
 
     def test_get_for_solver_constraints_with_constraint(self):
         """Test get_for_solver_constraints returns constraints."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load.power_use = 1000.0
@@ -320,7 +321,7 @@ class TestAbstractLoadReset:
 
     def test_reset(self):
         """Test reset clears device state."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load._constraints = [MagicMock()]
         load.current_command = MagicMock()
@@ -332,7 +333,7 @@ class TestAbstractLoadReset:
 
     def test_command_and_constraint_reset(self):
         """Test command_and_constraint_reset clears state."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load._constraints = [MagicMock()]
 
@@ -346,7 +347,7 @@ class TestAbstractLoadCommands:
 
     def test_ack_command_none(self):
         """Test ack_command with None command."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         load._ack_command(None, None)
@@ -355,7 +356,7 @@ class TestAbstractLoadCommands:
 
     def test_ack_command_is_callable(self):
         """Test ack_command method exists and is callable."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         # Just verify the method exists
@@ -365,7 +366,7 @@ class TestAbstractLoadCommands:
     @pytest.mark.asyncio
     async def test_execute_command_is_async(self):
         """Test execute_command is an async method."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
@@ -380,7 +381,7 @@ class TestAbstractLoadPushConstraint:
 
     def test_push_agenda_constraints(self):
         """Test pushing agenda constraints."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load.power_use = 1000.0
@@ -427,7 +428,7 @@ class TestAbstractLoadConstraintValue:
 
     def test_constraint_value_attributes_exist(self):
         """Test constraint value attributes exist."""
-        home = MagicMock()
+        home = create_minimal_home_model()
         home.is_off_grid = MagicMock(return_value=False)
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 

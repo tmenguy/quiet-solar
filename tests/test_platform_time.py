@@ -20,6 +20,7 @@ from custom_components.quiet_solar.time import (
     async_unload_entry,
 )
 from custom_components.quiet_solar.const import DOMAIN
+from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
 
 
@@ -571,7 +572,7 @@ async def test_async_unload_entry_no_home(fake_hass, mock_config_entry):
 async def test_async_unload_entry_exception(fake_hass, mock_config_entry):
     """Test time platform unload handles exceptions."""
     mock_device = create_mock_device("test")
-    mock_device.home = MagicMock()
+    mock_device.home = create_minimal_home_model()
     mock_device.home.remove_device = MagicMock(side_effect=Exception("Test error"))
 
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device

@@ -18,6 +18,7 @@ from custom_components.quiet_solar.button import (
     async_unload_entry, QSButtonEntityDescription,
 )
 from custom_components.quiet_solar.const import DOMAIN
+from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
 
 
@@ -253,7 +254,7 @@ async def test_async_setup_entry_no_device(fake_hass, mock_config_entry):
 async def test_async_unload_entry(fake_hass, mock_config_entry):
     """Test button platform unload."""
     mock_device = create_mock_device("test")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_device.home = mock_home
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
     
@@ -267,7 +268,7 @@ async def test_async_unload_entry(fake_hass, mock_config_entry):
 async def test_async_unload_entry_handles_exception(fake_hass, mock_config_entry):
     """Test button platform unload handles exceptions."""
     mock_device = create_mock_device("test")
-    mock_home = MagicMock()
+    mock_home = create_minimal_home_model()
     mock_home.remove_device = MagicMock(side_effect=Exception("Test error"))
     mock_device.home = mock_home
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
