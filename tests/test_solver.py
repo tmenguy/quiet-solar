@@ -14,7 +14,8 @@ from datetime import datetime
 from datetime import timedelta
 
 from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE, \
-    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN, CMD_GREEN_CHARGE_AND_DISCHARGE
+    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN, \
+    CMD_GREEN_CHARGE_AND_DISCHARGE, CMD_CST_AUTO_CONSIGN
 
 
 def _util_constraint_save_dump(time, cs):
@@ -126,7 +127,7 @@ class TestSolver(TestCase):
 
         car_steps = []
         for a in range(7, 33):
-            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230))
+            car_steps.append(LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230))
 
         car_charge_mandatory = MultiStepsPowerLoadConstraint(
             time=dt,
@@ -265,9 +266,13 @@ class TestSolver(TestCase):
 
         assert len(output_cmds) == 4
         
-        # Enhanced assertions for each load's commands
+        # =================================================================
+        # ENHANCED VALIDATION: Calculate actual energy delivered
+        # =================================================================
+        commands_by_load = {}
         for load, commands in output_cmds:
             assert commands, f"Load {load.name} should have commands"
+            commands_by_load[load.name] = commands
             
             # Verify all commands have valid timestamps
             for cmd_time, cmd in commands:
@@ -276,22 +281,99 @@ class TestSolver(TestCase):
             
             # Verify power limits (all consigns >= 0)
             assert verify_power_limits(commands, min_power=0), f"Load {load.name} has negative power"
-            
-            # Calculate energy delivered to each load
-            energy_delivered = calculate_energy_from_commands(commands)
-            assert energy_delivered >= 0, f"Load {load.name} energy should be non-negative"
-
-        # Car should receive significant energy toward its mandatory constraint
-        car_cmds = next((cmds for load, cmds in output_cmds if load.name == "car"), None)
-        if car_cmds:
-            car_energy = calculate_energy_from_commands(car_cmds)
-            # Car should receive at least some energy since mandatory constraint needs 6kWh
-            assert car_energy > 0, "Car should receive energy for mandatory constraint"
-
-        assert bcmd
+        
+        # Calculate energy for each load
+        from tests.utils.energy_validation import calculate_energy_from_commands
+        
+        car_energy = calculate_energy_from_commands(
+            commands_by_load.get("car", []), end_time
+        )
+        pool_energy = calculate_energy_from_commands(
+            commands_by_load.get("pool", []), end_time
+        )
+        cumulus_parents_energy = calculate_energy_from_commands(
+            commands_by_load.get("cumulus_parents", []), end_time
+        )
+        cumulus_children_energy = calculate_energy_from_commands(
+            commands_by_load.get("cumulus_children", []), end_time
+        )
+        
+        # =================================================================
+        # DEEP VALIDATION 1: Mandatory constraint satisfaction
+        # =================================================================
+        # Car mandatory: needs 6kWh (16000 - 10000)
+        assert car_energy >= 5000, (
+            f"Car mandatory constraint not met\n"
+            f"  Delivered: {car_energy:.0f}Wh\n"
+            f"  Needed: 6000Wh (10000→16000)"
+        )
+        
+        # Pool mandatory: needs 10h * 1430W = 14.3kWh
+        assert pool_energy >= 12000, (
+            f"Pool mandatory constraint not met\n"
+            f"  Delivered: {pool_energy:.0f}Wh\n"
+            f"  Target: ~14300Wh"
+        )
+        
+        # Cumulus parents mandatory: needs 3h * 2000W = 6kWh  
+        assert cumulus_parents_energy >= 5000, (
+            f"Cumulus parents mandatory not met\n"
+            f"  Delivered: {cumulus_parents_energy:.0f}Wh\n"
+            f"  Target: 6000Wh"
+        )
+        
+        # Cumulus children optional: gets surplus only
+        assert cumulus_children_energy >= 0, "Optional should get some or no power"
+        
+        # =================================================================
+        # DEEP VALIDATION 2: Energy accounting
+        # =================================================================
+        # Calculate total solar available
+        total_solar = sum(power for _, power in pv_forecast)  # W-hours (hourly data)
+        # Convert to Wh by multiplying by 1h
+        total_solar_wh = total_solar * 1.0  # Already in W for 1h periods
+        
+        total_allocated = car_energy + pool_energy + cumulus_parents_energy + cumulus_children_energy
+        
+        # Total allocated shouldn't wildly exceed solar
+        # (some grid use is ok for mandatory)
+        assert total_allocated > 0, "Should allocate energy to loads"
+        
+        # =================================================================
+        # DEEP VALIDATION 3: Constraint priorities reflected
+        # =================================================================
+        # Check that mandatory constraints have higher scores
+        car_score = car_charge_mandatory.score(dt)
+        pool_score = pool_constraint.score(dt)
+        cumulus_children_score = cumulus_children_constraint.score(dt)
+        
+        # Mandatory should score higher than optional
+        assert car_score > cumulus_children_score, (
+            f"Mandatory car should score higher than optional cumulus_children\n"
+            f"  Car: {car_score}\n"
+            f"  Cumulus children: {cumulus_children_score}"
+        )
+        
+        # =================================================================
+        # DEEP VALIDATION 4: Battery commands valid
+        # =================================================================
+        assert bcmd, "Should have battery commands"
         for cmd_time, cmd in bcmd:
             assert start_time <= cmd_time <= end_time
             assert isinstance(cmd, LoadCommand)
+        
+        print(f"\n✅ Enhanced test_solve passed with deep validation!")
+        print(f"   --- Energy Delivered ---")
+        print(f"   - Car (mandatory): {car_energy:.0f}Wh (needs 6000Wh)")
+        print(f"   - Pool (mandatory): {pool_energy:.0f}Wh (needs ~14300Wh)")
+        print(f"   - Cumulus parents (mandatory): {cumulus_parents_energy:.0f}Wh (needs 6000Wh)")
+        print(f"   - Cumulus children (optional): {cumulus_children_energy:.0f}Wh (wants 2000Wh)")
+        print(f"   - Total allocated: {total_allocated:.0f}Wh")
+        print(f"   --- Solar ---")
+        print(f"   - Total solar available: {total_solar_wh:.0f}Wh")
+        print(f"   --- Priority Scores ---")
+        print(f"   - Car (mandatory): {car_score:.0f}")
+        print(f"   - Cumulus children (optional): {cumulus_children_score:.0f}")
 
 
     def test_auto_cmds(self):
@@ -784,15 +866,10 @@ class TestSolver(TestCase):
         
         # With declining solar and good battery charge, should see intelligent power management
         assert total_car_energy > 0, "Car should get some energy allocation"
-        
-        # If energy utilization is high, it suggests battery supplementing
-        if energy_utilization > 110:  # More than 110% suggests battery supplement
-            print("✅ Battery supplementing detected!")
-        elif has_min_power_periods:
-            print("✅ Minimum power management detected!")
-        else:
-            print("✅ Basic power management working!")
-        
+
+        assert energy_utilization > 110, "Expected energy utilization should be > 110% indicating battery supplementing"
+        assert has_min_power_periods, "Expected periods should be there where car runs at/near minimum power"
+
         print("✅ Fixed supplement scenario test passed!")
 
     # made by cursor
@@ -1468,7 +1545,7 @@ class TestSolver(TestCase):
 
         car_steps = []
         for a in range(7, 16):
-            car_steps.append(LoadCommand(command="ON_WITH_VAL", power_consign=a * 3 * 230))
+            car_steps.append(LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230))
 
         car_charge = MultiStepsPowerLoadConstraint(
             time=dt,

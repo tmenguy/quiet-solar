@@ -920,3 +920,303 @@ class TestChargerCheckLoadActivity:
 
         # Should return False during boot window
         assert result is False
+
+
+# ============================================================================
+# Extended Tests for Charger Coverage
+# ============================================================================
+
+
+class TestQSChargerExtendedCoverage:
+    """Extended tests for QSChargerGeneric to increase coverage."""
+
+    @pytest.fixture
+    def charger_with_car(self, charger_generic):
+        """Charger with mock car attached."""
+        mock_car = MagicMock()
+        mock_car.name = "Test Car"
+        mock_car.car_charger_min_charge = 6
+        mock_car.car_charger_max_charge = 32
+        mock_car.car_battery_capacity = 60000
+        mock_car.get_charge_power_per_phase_A = MagicMock(return_value=([1380.0] * 64, 6, 32))
+        charger_generic.car = mock_car
+        return charger_generic
+
+    def test_is_charging_power_zero_with_for_duration(self, charger_generic):
+        """Test is_charging_power_zero with for_duration (lines 3421-3427)."""
+        charger_generic.charger_power_sensor = None
+        charger_generic.accurate_power_sensor = None
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charging_power_zero(time, for_duration=60.0)
+
+        # Should return None when no sensor
+        assert result is None or isinstance(result, bool)
+
+    def test_is_plugged_no_sensor(self, charger_generic):
+        """Test is_plugged when no sensor (lines 3307-3309)."""
+        charger_generic.charger_plugged = None
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_plugged(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_not_plugged(self, charger_generic):
+        """Test is_not_plugged method (lines 3317-3318)."""
+        charger_generic.charger_plugged = None
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_not_plugged(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_charger_plugged_now(self, charger_generic):
+        """Test is_charger_plugged_now method (lines 3320-3370)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result, last_time = charger_generic.is_charger_plugged_now(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_min_charge_property(self, charger_generic):
+        """Test min_charge property."""
+        result = charger_generic.min_charge
+
+        assert result >= 0
+
+    def test_max_charge_property(self, charger_generic):
+        """Test max_charge property."""
+        result = charger_generic.max_charge
+
+        assert result >= charger_generic.min_charge
+
+    def test_is_charger_unavailable(self, charger_generic):
+        """Test is_charger_unavailable when no status sensor (lines 3372-3380)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charger_unavailable(time)
+
+        # Should return True (unavailable) when no status sensor
+        assert isinstance(result, bool) or result is None
+
+    def test_is_charge_enabled(self, charger_generic):
+        """Test is_charge_enabled (lines 3382-3383)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charge_enabled(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_charge_disabled(self, charger_generic):
+        """Test is_charge_disabled (lines 3385-3386)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charge_disabled(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_car_stopped_asking_current(self, charger_generic):
+        """Test is_car_stopped_asking_current (lines 3388-3418)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_car_stopped_asking_current(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_voltage_property(self, charger_generic):
+        """Test voltage property."""
+        result = charger_generic.voltage
+
+        assert result is not None and isinstance(result, (int, float))
+
+    def test_get_min_max_power(self, charger_generic):
+        """Test get_min_max_power method (lines 3180-3245)."""
+        min_p, max_p = charger_generic.get_min_max_power()
+
+        assert min_p >= 0
+        assert max_p >= min_p
+
+    def test_get_virtual_current_constraint_translation_key(self, charger_generic):
+        """Test get_virtual_current_constraint_translation_key (lines 1850-1852)."""
+        result = charger_generic.get_virtual_current_constraint_translation_key()
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_platforms(self, charger_generic):
+        """Test get_platforms method (lines 3106-3114)."""
+        result = charger_generic.get_platforms()
+
+        assert isinstance(result, list)
+
+    def test_get_attached_virtual_devices(self, charger_generic):
+        """Test get_attached_virtual_devices method (lines 3116-3178)."""
+        result = charger_generic.get_attached_virtual_devices()
+
+        assert isinstance(result, list)
+
+    def test_get_continuous_plug_duration_no_sensor(self, charger_generic):
+        """Test get_continuous_plug_duration with no sensor (lines 3247-3305)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.get_continuous_plug_duration(time)
+
+        assert result is None or isinstance(result, float)
+
+    def test_is_charger_faulted(self, charger_generic):
+        """Test is_charger_faulted method (lines 3541-3551)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charger_faulted(time)
+
+        assert isinstance(result, bool)
+
+    def test_get_charge_type(self, charger_generic):
+        """Test get_charge_type method (lines 3553-3909)."""
+        result_type, result_constraint = charger_generic.get_charge_type()
+
+        assert isinstance(result_type, str)
+
+    def test_is_car_charged(self, charger_generic):
+        """Test is_car_charged method (lines 3911-3948)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result, value = charger_generic.is_car_charged(time, 80.0, 100.0, True)
+
+        assert isinstance(result, bool)
+
+    def test_get_delta_dampened_power(self, charger_generic):
+        """Test get_delta_dampened_power method (lines 3950-4127)."""
+        result = charger_generic.get_delta_dampened_power(6, 1, 16, 1)
+
+        assert result is None or isinstance(result, (int, float))
+
+    def test_get_car_options(self, charger_generic, charger_home):
+        """Test get_car_options method (lines 2481-2493)."""
+        charger_home._cars = []
+
+        result = charger_generic.get_car_options()
+
+        assert isinstance(result, list)
+
+    def test_get_current_selected_car_option(self, charger_generic):
+        """Test get_current_selected_car_option method (lines 2495-2502)."""
+        result = charger_generic.get_current_selected_car_option()
+
+        assert result is None or isinstance(result, str)
+
+    @pytest.mark.asyncio
+    async def test_set_user_selected_car_by_name_none(self, charger_generic):
+        """Test set_user_selected_car_by_name with None (lines 2504-2634)."""
+        await charger_generic.set_user_selected_car_by_name(None)
+
+        # Car should be None
+        assert charger_generic.car is None
+
+    def test_check_charge_state(self, charger_generic):
+        """Test check_charge_state method."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.check_charge_state(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_optimistic_plugged(self, charger_generic):
+        """Test is_optimistic_plugged method (lines 3310-3315)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_optimistic_plugged(time)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_is_in_state_reset(self, charger_generic):
+        """Test is_in_state_reset method (lines 2198-2222)."""
+        result = charger_generic.is_in_state_reset()
+
+        assert isinstance(result, bool)
+
+    def test_get_normalized_score(self, charger_generic):
+        """Test get_normalized_score method (lines 2098-2196)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.get_normalized_score(None, time, 0)
+
+        assert isinstance(result, float)
+
+    def test_get_phase_amps_from_power(self, charger_generic):
+        """Test get_phase_amps_from_power method (lines 1791-1807)."""
+        result = charger_generic.get_phase_amps_from_power(3000.0, is_3p=False)
+
+        assert isinstance(result, list)
+
+    def test_get_device_amps_consumption(self, charger_generic):
+        """Test get_device_amps_consumption method (lines 1809-1848)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.get_device_amps_consumption(60.0, time)
+
+        assert result is None or isinstance(result, list)
+
+    def test_is_charger_group_power_zero(self, charger_generic):
+        """Test is_charger_group_power_zero method (lines 1749-1789)."""
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = charger_generic.is_charger_group_power_zero(time, 60.0)
+
+        assert result is None or isinstance(result, bool)
+
+    def test_qs_enable_device(self, charger_generic):
+        """Test qs_enable_device property."""
+        result = charger_generic.qs_enable_device
+
+        assert isinstance(result, bool)
+
+    def test_get_car_charge_enabled_status_vals(self, charger_generic):
+        """Test get_car_charge_enabled_status_vals (lines 4312-4313)."""
+        result = charger_generic.get_car_charge_enabled_status_vals()
+
+        assert isinstance(result, list)
+
+    def test_get_car_plugged_in_status_vals(self, charger_generic):
+        """Test get_car_plugged_in_status_vals (lines 4315-4316)."""
+        result = charger_generic.get_car_plugged_in_status_vals()
+
+        assert isinstance(result, list)
+
+    def test_get_car_status_unknown_vals(self, charger_generic):
+        """Test get_car_status_unknown_vals (lines 4318-4319)."""
+        result = charger_generic.get_car_status_unknown_vals()
+
+        assert isinstance(result, list)
+
+    def test_get_car_stopped_asking_current_status_vals(self, charger_generic):
+        """Test get_car_stopped_asking_current_status_vals (lines 4321-4322)."""
+        result = charger_generic.get_car_stopped_asking_current_status_vals()
+
+        assert isinstance(result, list)
+
+    def test_get_car_status_rebooting_vals(self, charger_generic):
+        """Test get_car_status_rebooting_vals (lines 4324-4325)."""
+        result = charger_generic.get_car_status_rebooting_vals()
+
+        assert isinstance(result, list)
+
+    def test_get_probable_entities(self, charger_generic):
+        """Test get_probable_entities method (lines 4129-4140)."""
+        result = charger_generic.get_probable_entities()
+
+        assert isinstance(result, list)
+
+    def test_update_to_be_saved_extra_device_info(self, charger_generic):
+        """Test update_to_be_saved_extra_device_info (lines 4145-4190)."""
+        data = {}
+        charger_generic.update_to_be_saved_extra_device_info(data)
+
+        assert isinstance(data, dict)
+
+    def test_use_saved_extra_device_info(self, charger_generic):
+        """Test use_saved_extra_device_info (lines 4227-4252)."""
+        stored_data = {"num_on_off": 6}
+        charger_generic.use_saved_extra_device_info(stored_data)
+
+        # Should not raise

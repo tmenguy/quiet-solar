@@ -111,6 +111,7 @@ class PeriodSolver(object):
 
         self._load_power_usage_for_test = None
         self._battery_power_external_consumption_for_test = None
+        self._loads_energy_and_time_consumption_for_test = None
 
 
     def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
@@ -672,15 +673,17 @@ class PeriodSolver(object):
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
 
-    def _get_power_from_commands(self, loads: dict[AbstractLoad, list[LoadCommand]]) -> npt.NDArray[np.float64]:
+    def _get_power_from_commands(self, loads: dict[AbstractLoad, list[LoadCommand]]) -> tuple[npt.NDArray[np.float64], dict]:
 
         out_power = np.zeros(len(self._available_power), dtype=np.float64)
+        out_loads_consumption = {}
 
         if len(loads) > 0:
 
             piloted_device_set = set()
             for load in self._loads:
                 piloted_device_set.update(load.devices_to_pilot)
+                out_loads_consumption[load] = [0.0, 0.0]
 
             for pd in piloted_device_set:
                 pd.prepare_slots_for_piloted_device_budget(len(self._available_power))
@@ -695,13 +698,19 @@ class PeriodSolver(object):
 
                     cmd = commands[s]
 
+                    load_power = 0.0
+
                     if cmd is not None and (not cmd.is_off_or_idle() or cmd.power_consign != 0):
-                        power += load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
-                        power += cmd.power_consign
+                        load_power += load.update_demanding_clients_for_piloted_devices_for_budget(s, add=True)
+                        load_power += cmd.power_consign
+                        out_loads_consumption[load][1] += self._durations_s[s]
+                        out_loads_consumption[load][0] += (load_power * self._durations_s[s]) / 3600.0
+
+                    power += load_power
 
                 out_power[s] = power
 
-        return out_power
+        return out_power, out_loads_consumption
 
 
 
@@ -1056,7 +1065,7 @@ class PeriodSolver(object):
 
         if with_self_test:
 
-            self._load_power_usage_for_test = self._get_power_from_commands(actions)
+            self._load_power_usage_for_test, self._loads_energy_and_time_consumption_for_test = self._get_power_from_commands(actions)
 
             res = available_power_init + self._load_power_usage_for_test
 

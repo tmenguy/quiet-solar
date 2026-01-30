@@ -416,3 +416,333 @@ class TestQSDynamicGroupBudgeting:
         dyn_group_device.prepare_slots_for_amps_budget(time, num_slots=4)
 
         mock_child.prepare_slots_for_amps_budget.assert_called_once()
+
+
+class TestQSDynamicGroupCoverageExtensions:
+    """Additional tests to cover remaining uncovered lines in dynamic_group.py."""
+
+    @pytest.fixture
+    def dyn_group_with_father(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """QSDynamicGroup with a father device for delegation tests."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        # Create a mock father device for delegation tests
+        father = MagicMock()
+        father.is_delta_current_acceptable = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
+        device.father_device = father
+        device.get_device_amps_consumption = MagicMock(return_value=[10.0, 10.0, 10.0])
+        return device
+
+    def test_is_delta_current_acceptable_new_amps_exceeds_at_start(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_delta_current_acceptable when new_amps_consumption exceeds limits at start (lines 72-76)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.father_device = None
+        device.get_device_amps_consumption = MagicMock(return_value=[10.0, 10.0, 10.0])
+        time = datetime.datetime.now(pytz.UTC)
+
+        # new_amps_consumption exceeds dynamic_group_phase_current at start
+        acceptable, diff = device.is_delta_current_acceptable(
+            delta_amps=[5.0, 5.0, 5.0],
+            time=time,
+            new_amps_consumption=[50.0, 50.0, 50.0]  # Exceeds 32A limit
+        )
+
+        assert acceptable is False
+        # diff should show how much we exceed
+        assert diff[0] == 50.0 - 32  # 18.0
+
+    def test_is_delta_current_acceptable_exceeds_at_recompute(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_delta_current_acceptable when sum exceeds limits at recompute (lines 82-85)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.father_device = None
+        # Current consumption is 25A per phase
+        device.get_device_amps_consumption = MagicMock(return_value=[25.0, 25.0, 25.0])
+        time = datetime.datetime.now(pytz.UTC)
+
+        # new_amps_consumption is within limits but delta + current exceeds
+        acceptable, diff = device.is_delta_current_acceptable(
+            delta_amps=[10.0, 10.0, 10.0],  # 25 + 10 = 35 > 32
+            time=time,
+            new_amps_consumption=[30.0, 30.0, 30.0]  # Within 32A but computation will exceed
+        )
+
+        assert acceptable is False
+
+    def test_is_delta_current_acceptable_delegates_to_father(self, dyn_group_with_father):
+        """Test is_delta_current_acceptable delegates to father device when within limits (line 90)."""
+        device = dyn_group_with_father
+        time = datetime.datetime.now(pytz.UTC)
+
+        # Reset to ensure no interference
+        device.get_device_amps_consumption = MagicMock(return_value=[5.0, 5.0, 5.0])
+
+        acceptable, diff = device.is_delta_current_acceptable(
+            delta_amps=[5.0, 5.0, 5.0],
+            time=time,
+            new_amps_consumption=[10.0, 10.0, 10.0]  # Within limits
+        )
+
+        # Should delegate to father
+        device.father_device.is_delta_current_acceptable.assert_called_once()
+
+    def test_is_current_acceptable_and_diff_only_phases_amps(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_current_acceptable_and_diff when only phases_amps is available (lines 116-118)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.father_device = None
+        device.get_device_amps_consumption = MagicMock(return_value=[10.0, 10.0, 10.0])
+        time = datetime.datetime.now(pytz.UTC)
+
+        # Call with estimated_current_amps=None to trigger lines 116-118
+        acceptable, diff = device.is_current_acceptable_and_diff(
+            new_amps=[20.0, 20.0, 20.0],
+            estimated_current_amps=None,  # None to trigger the elif branch
+            time=time
+        )
+
+        assert acceptable is True
+
+    def test_is_current_acceptable_and_diff_only_estimated_amps(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_current_acceptable_and_diff when only estimated_current_amps is available (lines 113-115)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.father_device = None
+        # Return None for phases_amps
+        device.get_device_amps_consumption = MagicMock(return_value=None)
+        time = datetime.datetime.now(pytz.UTC)
+
+        # Call with phases_amps=None to trigger lines 113-115
+        acceptable, diff = device.is_current_acceptable_and_diff(
+            new_amps=[20.0, 20.0, 20.0],
+            estimated_current_amps=[10.0, 10.0, 10.0],
+            time=time
+        )
+
+        assert acceptable is True
+
+    def test_is_current_acceptable_and_diff_exceeds_at_recompute(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_current_acceptable_and_diff when exceeding at recompute step (lines 128-131)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.father_device = None
+        # High current consumption
+        device.get_device_amps_consumption = MagicMock(return_value=[28.0, 28.0, 28.0])
+        time = datetime.datetime.now(pytz.UTC)
+
+        # new_amps is 30 (within 32), but with delta recomputation:
+        # estimated=20, phases=28, max of them = 28
+        # delta = 30-20 = 10
+        # new_amps = 10 + 28 = 38 > 32
+        acceptable, diff = device.is_current_acceptable_and_diff(
+            new_amps=[30.0, 30.0, 30.0],  # Within limit at start
+            estimated_current_amps=[20.0, 20.0, 20.0],
+            time=time
+        )
+
+        assert acceptable is False
+
+    def test_is_current_acceptable_and_diff_delegates_to_father(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test is_current_acceptable_and_diff delegates to father when within limits (lines 135-138)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        father = MagicMock()
+        father.is_delta_current_acceptable = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
+        device.father_device = father
+        device.get_device_amps_consumption = MagicMock(return_value=[5.0, 5.0, 5.0])
+        time = datetime.datetime.now(pytz.UTC)
+
+        acceptable, diff = device.is_current_acceptable_and_diff(
+            new_amps=[15.0, 15.0, 15.0],
+            estimated_current_amps=[10.0, 10.0, 10.0],
+            time=time
+        )
+
+        # Should delegate to father
+        father.is_delta_current_acceptable.assert_called_once()
+
+    def test_get_device_power_accurate_sensor_returns_none(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test get_device_power when accurate_power_sensor returns None (lines 147-148)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.accurate_power_sensor = "sensor.power"
+        device.get_sensor_latest_possible_valid_value = MagicMock(return_value=None)
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = device.get_device_power_latest_possible_valid_value(
+            tolerance_seconds=None,
+            time=time
+        )
+
+        assert result == 0.0
+
+    def test_get_device_power_with_children_aggregation(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test get_device_power aggregates power from children (lines 151-156)."""
+        from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        device.accurate_power_sensor = None  # Ensure we go through children path
+
+        # Create mock children that are HADeviceMixin instances
+        child1 = MagicMock(spec=HADeviceMixin)
+        child1.get_device_power_latest_possible_valid_value = MagicMock(return_value=1000.0)
+
+        child2 = MagicMock(spec=HADeviceMixin)
+        child2.get_device_power_latest_possible_valid_value = MagicMock(return_value=500.0)
+
+        # Child that returns None
+        child3 = MagicMock(spec=HADeviceMixin)
+        child3.get_device_power_latest_possible_valid_value = MagicMock(return_value=None)
+
+        device._childrens = [child1, child2, child3]
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = device.get_device_power_latest_possible_valid_value(
+            tolerance_seconds=None,
+            time=time
+        )
+
+        # 1000 + 500 = 1500 (None is skipped)
+        assert result == 1500.0
+
+    def test_prepare_slots_with_none_dyn_group_budget(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test prepare_slots when dyn_group_max_phase_current_for_budget returns None (line 183-184)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        # Force dyn_group_max_phase_current_for_budget to be None
+        device._dyn_group_max_phase_current_for_budget = None
+        time = datetime.datetime.now(pytz.UTC)
+
+        # When from_father_budget is None AND dyn_group_max_phase_current_for_budget is None
+        device.prepare_slots_for_amps_budget(time, num_slots=4, from_father_budget=None)
+
+        # Should default to MAX_AMP_INFINITE for each phase
+        assert device.available_amps_for_group is not None
+        assert len(device.available_amps_for_group) == 4
+        assert device.available_amps_for_group[0] == [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE]
+
+    def test_update_available_amps_with_father_device(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Test update_available_amps_for_group delegates to father device (lines 47-48)."""
+        device = QSDynamicGroup(
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
+            **{
+                CONF_NAME: "Test Group",
+                CONF_IS_3P: True,
+                CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
+            }
+        )
+        father = MagicMock()
+        father.update_available_amps_for_group = MagicMock()
+        device.father_device = father
+        device.available_amps_for_group = [[10.0, 10.0, 10.0]]
+
+        device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
+
+        # Should also call father's method
+        father.update_available_amps_for_group.assert_called_once_with(0, [5.0, 5.0, 5.0], True)

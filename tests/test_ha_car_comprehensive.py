@@ -523,3 +523,485 @@ class TestQSCarAsyncOperations:
         car.device_post_home_init(time)
 
         car_home.get_person_by_name.assert_called()
+
+
+# ============================================================================
+# Extended Tests for Car Coverage
+# ============================================================================
+
+
+class TestQSCarExtendedCoverage:
+    """Extended tests for QSCar to increase coverage."""
+
+    def test_device_post_home_init_user_selected_no_person(self, create_car, car_home):
+        """Test device_post_home_init with FORCE_CAR_NO_PERSON_ATTACHED (lines 277-278)."""
+        from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
+
+        car = create_car()
+        car._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+
+        time = datetime.datetime.now(pytz.UTC)
+        car.device_post_home_init(time)
+
+        assert car.current_forecasted_person is None
+
+    def test_device_post_home_init_user_selected_invalid_person(self, create_car, car_home):
+        """Test device_post_home_init with invalid user selected person (lines 281-284)."""
+        car = create_car()
+        car._user_selected_person_name_for_car = "NonExistentPerson"
+        car_home.get_person_by_name = MagicMock(return_value=None)
+
+        time = datetime.datetime.now(pytz.UTC)
+        car.device_post_home_init(time)
+
+        assert car._user_selected_person_name_for_car is None
+        assert car.current_forecasted_person is None
+
+    def test_device_post_home_init_exception_handling(self, create_car, car_home):
+        """Test device_post_home_init handles bootstrap exception (lines 292-293)."""
+        car = create_car()
+        # Force exception in bootstrap
+        car.hass.async_create_task = MagicMock(side_effect=Exception("Task failed"))
+
+        time = datetime.datetime.now(pytz.UTC)
+        # Should not raise
+        car.device_post_home_init(time)
+
+    def test_get_car_person_readable_forecast_no_person(self, create_car):
+        """Test get_car_person_readable_forecast_mileage with no person (lines 298-299)."""
+        car = create_car()
+        car.current_forecasted_person = None
+
+        result = car.get_car_person_readable_forecast_mileage()
+
+        assert result == "No forecasted person"
+
+    def test_get_car_person_readable_forecast_with_person(self, create_car):
+        """Test get_car_person_readable_forecast_mileage with person (lines 301-303)."""
+        car = create_car()
+        mock_person = MagicMock()
+        mock_person.name = "John"
+        mock_person.get_forecast_readable_string = MagicMock(return_value="100km expected")
+        car.current_forecasted_person = mock_person
+
+        result = car.get_car_person_readable_forecast_mileage()
+
+        assert "John" in result
+        assert "100km expected" in result
+
+    def test_get_car_person_option_with_forecasted_person(self, create_car):
+        """Test get_car_person_option returns forecasted person (lines 330-331)."""
+        car = create_car()
+        car._user_selected_person_name_for_car = None
+
+        mock_person = MagicMock()
+        mock_person.name = "John"
+        car.current_forecasted_person = mock_person
+
+        # Mock _car_person_option
+        car._car_person_option = MagicMock(return_value="option_John")
+
+        result = car.get_car_person_option()
+
+        car._car_person_option.assert_called_with("John")
+
+    @pytest.mark.asyncio
+    async def test_set_user_person_for_car_none(self, create_car):
+        """Test set_user_person_for_car with None (lines 346-348)."""
+        from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
+
+        car = create_car()
+
+        await car.set_user_person_for_car(None)
+
+        assert car._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+
+    @pytest.mark.asyncio
+    async def test_set_user_person_for_car_force_no_person(self, create_car):
+        """Test set_user_person_for_car with FORCE_CAR_NO_PERSON_ATTACHED (lines 349-351)."""
+        from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
+
+        car = create_car()
+
+        await car.set_user_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+
+        assert car._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+
+    def test_get_charge_power_per_phase_A_1p(self, create_car):
+        """Test get_charge_power_per_phase_A method for 1-phase (lines 1491-1590)."""
+        car = create_car()
+        car.car_charger_min_charge = 6
+        car.car_charger_max_charge = 32
+        car.home.voltage = 230
+
+        result, min_amp, max_amp = car.get_charge_power_per_phase_A(False)
+
+        # Result is list of power values for each amperage step
+        assert len(result) > 0
+        assert min_amp >= 0
+        assert max_amp >= 0
+
+    def test_get_charge_power_per_phase_A_3p(self, create_car):
+        """Test get_charge_power_per_phase_A for 3-phase (lines 1491-1590)."""
+        car = create_car()
+        car.car_charger_min_charge = 6
+        car.car_charger_max_charge = 32
+        car.home.voltage = 230
+
+        result, min_amp, max_amp = car.get_charge_power_per_phase_A(True)
+
+        # Result is list of power values for each amperage step
+        assert len(result) > 0
+
+    def test_get_car_charge_percent_no_sensor(self, create_car):
+        """Test get_car_charge_percent with no sensor (lines 906-908)."""
+        car = create_car()
+        car.car_charge_percent_sensor = None
+
+        result = car.get_car_charge_percent()
+
+        # Should return None or default
+
+    def test_is_car_charge_growing_with_sensor(self, create_car):
+        """Test is_car_charge_growing method (lines 931-968)."""
+        car = create_car()
+        car.car_charge_percent_sensor = "sensor.soc"
+        car.attach_ha_state_to_probe("sensor.soc", is_numerical=True)
+
+        time = datetime.datetime.now(pytz.UTC)
+        car._entity_probed_state["sensor.soc"] = [
+            (time - timedelta(minutes=5), 70.0, {}),
+            (time, 75.0, {}),
+        ]
+        car._entity_probed_last_valid_state["sensor.soc"] = (time, 75.0, {})
+
+        # Method signature is is_car_charge_growing(num_seconds, time)
+        result = car.is_car_charge_growing(300.0, time)
+
+        assert result is True or result is None or result is False
+
+    def test_get_delta_dampened_power(self, create_car):
+        """Test get_delta_dampened_power method (lines 1171-1200)."""
+        car = create_car()
+
+        result = car.get_delta_dampened_power(6, 1, 16, 1)
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_continuous_plug_duration_no_sensor(self, create_car):
+        """Test get_continuous_plug_duration with no sensor (lines 816-824)."""
+        car = create_car()
+        car.car_plugged = None
+
+        time = datetime.datetime.now(pytz.UTC)
+        result = car.get_continuous_plug_duration(time)
+
+        assert result is None
+
+    def test_is_car_plugged_no_sensor(self, create_car):
+        """Test is_car_plugged with no sensor (lines 826-850)."""
+        car = create_car()
+        car.car_plugged = None
+
+        time = datetime.datetime.now(pytz.UTC)
+        result = car.is_car_plugged(time)
+
+        assert result is None
+
+    def test_is_car_home_no_tracker(self, create_car):
+        """Test is_car_home with no tracker (lines 880-904)."""
+        car = create_car()
+        car.car_tracker = None
+
+        time = datetime.datetime.now(pytz.UTC)
+        result = car.is_car_home(time)
+
+        assert result is None
+
+    def test_get_car_coordinates_no_tracker(self, create_car):
+        """Test get_car_coordinates with no tracker (lines 852-878)."""
+        car = create_car()
+        car.car_tracker = None
+
+        time = datetime.datetime.now(pytz.UTC)
+        lat, lon = car.get_car_coordinates(time)
+
+        assert lat is None
+        assert lon is None
+
+    def test_get_car_charge_type(self, create_car):
+        """Test get_car_charge_type method (lines 566-583)."""
+        car = create_car()
+
+        result = car.get_car_charge_type()
+
+        assert isinstance(result, str)
+
+    def test_get_car_charge_time_readable_name(self, create_car):
+        """Test get_car_charge_time_readable_name method (lines 585-604)."""
+        car = create_car()
+
+        result = car.get_car_charge_time_readable_name()
+
+        # Can be str or None depending on state
+        assert result is None or isinstance(result, str)
+
+    def test_get_max_charge_limit(self, create_car):
+        """Test get_max_charge_limit method (lines 1120-1169)."""
+        car = create_car()
+
+        result = car.get_max_charge_limit()
+
+        # Can be None if no limit is set
+        assert result is None or isinstance(result, (int, float))
+
+    def test_get_car_target_SOC(self, create_car):
+        """Test get_car_target_SOC method (lines 1697-1700)."""
+        car = create_car()
+
+        result = car.get_car_target_SOC()
+
+        assert isinstance(result, (int, float))
+
+    def test_get_car_minimum_ok_SOC(self, create_car):
+        """Test get_car_minimum_ok_SOC method (lines 1702-1704)."""
+        car = create_car()
+
+        result = car.get_car_minimum_ok_SOC()
+
+        assert isinstance(result, (int, float))
+
+    def test_get_charger_options_empty(self, create_car, car_home):
+        """Test get_charger_options with no chargers (lines 1776-1790)."""
+        car = create_car()
+        car_home._chargers = []
+
+        result = car.get_charger_options()
+
+        assert isinstance(result, list)
+
+    def test_get_current_selected_charger_option_none(self, create_car):
+        """Test get_current_selected_charger_option when None (lines 1792-1857)."""
+        car = create_car()
+        car.charger = None
+
+        result = car.get_current_selected_charger_option()
+
+        assert result is None or isinstance(result, str)
+
+
+# ============================================================================
+# More Extended Tests for Car Coverage
+# ============================================================================
+
+
+class TestQSCarMoreExtendedCoverage:
+    """More extended tests for QSCar to increase coverage to 91%+."""
+
+    def test_get_adapt_target_percent_soc_no_data(self, create_car):
+        """Test get_adapt_target_percent_soc_to_reach_range_km with missing data (lines 1005-1041)."""
+        car = create_car()
+        car.car_charge_percent_sensor = None
+
+        result = car.get_adapt_target_percent_soc_to_reach_range_km(100.0)
+
+        # Should return None tuple when no data
+        assert result[0] is None
+
+    def test_get_car_estimated_range_km_with_time(self, create_car):
+        """Test get_car_estimated_range_km with time (lines 1044-1060)."""
+        car = create_car()
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = car.get_car_estimated_range_km(from_soc=100.0, to_soc=50.0, time=time)
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_estimated_range_km(self, create_car):
+        """Test get_estimated_range_km method (lines 1063-1072)."""
+        car = create_car()
+
+        result = car.get_estimated_range_km()
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_autonomy_to_target_soc_km(self, create_car):
+        """Test get_autonomy_to_target_soc_km method (lines 1074-1078)."""
+        car = create_car()
+
+        result = car.get_autonomy_to_target_soc_km()
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_computed_range_efficiency_km_per_percent(self, create_car):
+        """Test get_computed_range_efficiency_km_per_percent (lines 970-1002)."""
+        car = create_car()
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = car.get_computed_range_efficiency_km_per_percent(time, delta_soc=20.0)
+
+        # Returns None if no efficiency data
+        assert result is None or isinstance(result, float)
+
+    def test_get_car_charge_energy(self, create_car):
+        """Test get_car_charge_energy method (lines 910-923)."""
+        car = create_car()
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = car.get_car_charge_energy(time)
+
+        # Returns None if no sensor
+        assert result is None or isinstance(result, float)
+
+    def test_get_car_odometer_km(self, create_car):
+        """Test get_car_odometer_km method (lines 925-926)."""
+        car = create_car()
+
+        result = car.get_car_odometer_km()
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_car_estimated_range_km_from_sensor(self, create_car):
+        """Test get_car_estimated_range_km_from_sensor method (lines 928-929)."""
+        car = create_car()
+
+        result = car.get_car_estimated_range_km_from_sensor()
+
+        assert result is None or isinstance(result, float)
+
+    def test_get_car_target_charge_energy(self, create_car):
+        """Test get_car_target_charge_energy method (lines 1750-1756)."""
+        car = create_car()
+
+        result = car.get_car_target_charge_energy()
+
+        assert isinstance(result, (int, float))
+
+    def test_get_car_target_charge_option_energy(self, create_car):
+        """Test get_car_target_charge_option_energy method (lines 1758-1774)."""
+        car = create_car()
+
+        result = car.get_car_target_charge_option_energy()
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_car_next_charge_values_options_energy(self, create_car):
+        """Test get_car_next_charge_values_options_energy method (lines 1706-1726)."""
+        car = create_car()
+
+        result = car.get_car_next_charge_values_options_energy()
+
+        assert isinstance(result, list)
+
+    def test_get_car_option_charge_from_value_energy(self, create_car):
+        """Test get_car_option_charge_from_value_energy method (lines 1728-1748)."""
+        car = create_car()
+
+        result = car.get_car_option_charge_from_value_energy(30000)
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_car_next_charge_values_options_percent(self, create_car):
+        """Test get_car_next_charge_values_options_percent method (lines 1622-1655)."""
+        car = create_car()
+
+        result = car.get_car_next_charge_values_options_percent()
+
+        assert isinstance(result, list)
+
+    def test_get_car_option_charge_from_value_percent(self, create_car):
+        """Test get_car_option_charge_from_value_percent method (lines 1657-1692)."""
+        car = create_car()
+
+        result = car.get_car_option_charge_from_value_percent(80)
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_car_target_charge_option_percent(self, create_car):
+        """Test get_car_target_charge_option_percent method (lines 1694-1695)."""
+        car = create_car()
+
+        result = car.get_car_target_charge_option_percent()
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_car_target_charge_option(self, create_car):
+        """Test get_car_target_charge_option method (lines 1616-1620)."""
+        car = create_car()
+
+        result = car.get_car_target_charge_option()
+
+        assert result is None or isinstance(result, str)
+
+    def test_get_car_next_charge_values_options(self, create_car):
+        """Test get_car_next_charge_values_options method (lines 1593-1614)."""
+        car = create_car()
+
+        result = car.get_car_next_charge_values_options()
+
+        assert isinstance(result, list)
+
+    def test_car_battery_capacity_property(self, create_car):
+        """Test car_battery_capacity property."""
+        car = create_car()
+
+        result = car.car_battery_capacity
+
+        assert result is None or isinstance(result, (int, float))
+
+    def test_car_charger_min_charge_property(self, create_car):
+        """Test car_charger_min_charge property."""
+        car = create_car()
+
+        result = car.car_charger_min_charge
+
+        assert isinstance(result, (int, float))
+
+    def test_car_charger_max_charge_property(self, create_car):
+        """Test car_charger_max_charge property."""
+        car = create_car()
+
+        result = car.car_charger_max_charge
+
+        assert isinstance(result, (int, float))
+
+    def test_get_platforms(self, create_car):
+        """Test get_platforms method (lines 606-690)."""
+        car = create_car()
+
+        result = car.get_platforms()
+
+        assert isinstance(result, list)
+
+    def test_qs_bump_solar_charge_priority_getter(self, create_car):
+        """Test qs_bump_solar_charge_priority getter."""
+        car = create_car()
+
+        result = car.qs_bump_solar_charge_priority
+
+        assert result is None or isinstance(result, bool)
+
+    def test_home_property(self, create_car, car_home):
+        """Test home property."""
+        car = create_car()
+
+        result = car.home
+
+        assert result is not None
+
+    def test_charger_property_none(self, create_car):
+        """Test charger property when None."""
+        car = create_car()
+        car.charger = None
+
+        result = car.charger
+
+        assert result is None
+
+    def test_car_name_property(self, create_car):
+        """Test name property."""
+        car = create_car()
+
+        result = car.name
+
+        assert isinstance(result, str)

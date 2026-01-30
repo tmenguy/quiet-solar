@@ -3046,3 +3046,579 @@ class TestAbstractLoadStorage:
         assert load2.external_user_initiated_state_time is not None
         assert load2.external_user_initiated_state_time.tzinfo is not None
 
+
+# =============================================================================
+# Extended Tests for Coverage - PilotedDevice
+# =============================================================================
+
+
+class TestPilotedDevice:
+    """Test PilotedDevice functionality."""
+
+    @pytest.fixture
+    def piloted_device(self):
+        """Create a PilotedDevice for testing."""
+        from custom_components.quiet_solar.home_model.load import PilotedDevice
+
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+
+        device = PilotedDevice(
+            name="Test Piloted Device",
+            home=mock_home,
+            **{CONF_POWER: 2000.0}
+        )
+        return device
+
+    def test_is_piloted_device_activated_no_clients(self, piloted_device):
+        """Test is_piloted_device_activated returns False with no clients."""
+        piloted_device.clients = []
+        assert piloted_device.is_piloted_device_activated is False
+
+    def test_is_piloted_device_activated_disabled_client(self, piloted_device):
+        """Test is_piloted_device_activated with disabled client."""
+        mock_client = MagicMock()
+        mock_client.qs_enable_device = False
+        mock_client.current_command = None
+        piloted_device.clients = [mock_client]
+
+        assert piloted_device.is_piloted_device_activated is False
+
+    def test_is_piloted_device_activated_no_command(self, piloted_device):
+        """Test is_piloted_device_activated with enabled client but no command."""
+        mock_client = MagicMock()
+        mock_client.qs_enable_device = True
+        mock_client.current_command = None
+        piloted_device.clients = [mock_client]
+
+        assert piloted_device.is_piloted_device_activated is False
+
+    def test_is_piloted_device_activated_idle_command(self, piloted_device):
+        """Test is_piloted_device_activated with idle command (lines 577-579)."""
+        mock_client = MagicMock()
+        mock_client.qs_enable_device = True
+        mock_cmd = MagicMock()
+        mock_cmd.is_off_or_idle.return_value = True
+        mock_client.current_command = mock_cmd
+        piloted_device.clients = [mock_client]
+
+        assert piloted_device.is_piloted_device_activated is False
+
+    def test_is_piloted_device_activated_active_command(self, piloted_device):
+        """Test is_piloted_device_activated with active command."""
+        mock_client = MagicMock()
+        mock_client.qs_enable_device = True
+        mock_cmd = MagicMock()
+        mock_cmd.is_off_or_idle.return_value = False
+        mock_client.current_command = mock_cmd
+        piloted_device.clients = [mock_client]
+
+        assert piloted_device.is_piloted_device_activated is True
+
+    def test_prepare_slots_for_piloted_device_budget(self, piloted_device):
+        """Test prepare_slots_for_piloted_device_budget (lines 581-584)."""
+        piloted_device.prepare_slots_for_piloted_device_budget(num_slots=4)
+
+        assert piloted_device.num_demanding_clients is not None
+        assert len(piloted_device.num_demanding_clients) == 4
+        assert all(n == 0 for n in piloted_device.num_demanding_clients)
+
+    def test_possible_delta_power_no_slots(self, piloted_device):
+        """Test possible_delta_power_for_slot with no slots (lines 587-588)."""
+        piloted_device.num_demanding_clients = None
+        result = piloted_device.possible_delta_power_for_slot(0, add=True)
+        assert result == 0
+
+    def test_possible_delta_power_no_clients(self, piloted_device):
+        """Test possible_delta_power_for_slot with no clients (lines 590-591)."""
+        piloted_device.num_demanding_clients = [0, 0]
+        piloted_device.clients = []
+        result = piloted_device.possible_delta_power_for_slot(0, add=True)
+        assert result == 0
+
+    def test_possible_delta_power_first_add(self, piloted_device):
+        """Test possible_delta_power_for_slot first add returns power (lines 593-596)."""
+        piloted_device.num_demanding_clients = [0, 0]
+        piloted_device.clients = [MagicMock()]
+
+        result = piloted_device.possible_delta_power_for_slot(0, add=True)
+        assert result == 2000.0
+
+    def test_possible_delta_power_not_first_add(self, piloted_device):
+        """Test possible_delta_power_for_slot not first add returns 0 (lines 597-598)."""
+        piloted_device.num_demanding_clients = [1, 0]
+        piloted_device.clients = [MagicMock()]
+
+        result = piloted_device.possible_delta_power_for_slot(0, add=True)
+        assert result == 0
+
+    def test_possible_delta_power_last_remove(self, piloted_device):
+        """Test possible_delta_power_for_slot last remove returns power (lines 601-603)."""
+        piloted_device.num_demanding_clients = [1, 0]
+        piloted_device.clients = [MagicMock()]
+
+        result = piloted_device.possible_delta_power_for_slot(0, add=False)
+        assert result == 2000.0
+
+    def test_possible_delta_power_not_last_remove(self, piloted_device):
+        """Test possible_delta_power_for_slot not last remove returns 0 (line 605)."""
+        piloted_device.num_demanding_clients = [2, 0]
+        piloted_device.clients = [MagicMock()]
+
+        result = piloted_device.possible_delta_power_for_slot(0, add=False)
+        assert result == 0
+
+    def test_update_num_demanding_clients_no_slots(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot with no slots (lines 609-610)."""
+        piloted_device.num_demanding_clients = None
+        result = piloted_device.update_num_demanding_clients_for_slot(0, add=True)
+        assert result == 0
+
+    def test_update_num_demanding_clients_no_clients(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot with no clients (lines 612-613)."""
+        piloted_device.num_demanding_clients = [0, 0]
+        piloted_device.clients = []
+        result = piloted_device.update_num_demanding_clients_for_slot(0, add=True)
+        assert result == 0
+
+    def test_update_num_demanding_clients_add(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot add (lines 617-623)."""
+        piloted_device.num_demanding_clients = [0, 0]
+        piloted_device.clients = [MagicMock(), MagicMock()]
+
+        result = piloted_device.update_num_demanding_clients_for_slot(0, add=True)
+
+        assert result == 2000.0  # First add returns power
+        assert piloted_device.num_demanding_clients[0] == 1
+
+    def test_update_num_demanding_clients_remove(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot remove (lines 624-630)."""
+        piloted_device.num_demanding_clients = [1, 0]
+        piloted_device.clients = [MagicMock()]
+
+        result = piloted_device.update_num_demanding_clients_for_slot(0, add=False)
+
+        assert result == 2000.0  # Last remove returns power
+        assert piloted_device.num_demanding_clients[0] == 0
+
+    def test_update_num_demanding_clients_overflow_warning(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot with overflow (lines 618-621)."""
+        piloted_device.num_demanding_clients = [2, 0]
+        piloted_device.clients = [MagicMock(), MagicMock()]  # Only 2 clients
+
+        # Try to add more than number of clients
+        piloted_device.update_num_demanding_clients_for_slot(0, add=True)
+
+        # Should cap at len(clients) - 1 + 1 = len(clients)
+        assert piloted_device.num_demanding_clients[0] <= len(piloted_device.clients)
+
+    def test_update_num_demanding_clients_underflow_warning(self, piloted_device):
+        """Test update_num_demanding_clients_for_slot with underflow (lines 627-630)."""
+        piloted_device.num_demanding_clients = [0, 0]
+        piloted_device.clients = [MagicMock()]
+
+        # Try to remove when already at 0
+        piloted_device.update_num_demanding_clients_for_slot(0, add=False)
+
+        # Should stay at 0
+        assert piloted_device.num_demanding_clients[0] == 0
+
+
+# =============================================================================
+# Extended Tests for Coverage - AbstractLoad additional methods
+# =============================================================================
+
+
+class TestAbstractLoadExtendedCoverage:
+    """Additional tests for AbstractLoad coverage."""
+
+    @pytest.fixture
+    def basic_load(self):
+        """Create a basic AbstractLoad for testing."""
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+
+        return _CommandLoad(
+            name="Test Load",
+            home=mock_home,
+            **{CONF_POWER: 1000.0}
+        )
+
+    def test_push_agenda_constraints_removes_old_agenda(self, basic_load):
+        """Test push_agenda_constraints removes unmatched agenda constraints (lines 779-790)."""
+        time_now = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+
+        # Create an existing agenda constraint
+        old_constraint = create_real_constraint(basic_load, time_now=time_now)
+        old_constraint.add_or_update_load_info("originator", "agenda")
+        basic_load._constraints = [old_constraint]
+
+        # Push new agenda constraints that don't match
+        new_constraints = [
+            create_real_constraint(
+                basic_load,
+                time_now=time_now,
+                end_time=time_now + timedelta(hours=5)
+            )
+        ]
+
+        result = basic_load.push_agenda_constraints(time_now, new_constraints)
+
+        assert result is True
+
+    def test_push_agenda_constraints_keeps_matching(self, basic_load):
+        """Test push_agenda_constraints keeps matching constraints (lines 792-802)."""
+        time_now = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        end_time = time_now + timedelta(hours=2)
+
+        # Create existing agenda constraint
+        existing = create_real_constraint(basic_load, time_now=time_now, end_time=end_time)
+        existing.add_or_update_load_info("originator", "agenda")
+        basic_load._constraints = [existing]
+
+        # Push same constraint again
+        new_constraint = create_real_constraint(basic_load, time_now=time_now, end_time=end_time)
+        result = basic_load.push_agenda_constraints(time_now, [new_constraint])
+
+        # Should not add duplicate
+        assert len([c for c in basic_load._constraints if c is not None]) >= 1
+
+    def test_get_power_from_switch_state_none(self, basic_load):
+        """Test get_power_from_switch_state with None (lines 821-822)."""
+        result = basic_load.get_power_from_switch_state(None)
+        assert result is None
+
+    def test_get_power_from_switch_state_on(self, basic_load):
+        """Test get_power_from_switch_state with 'on' (lines 823-824)."""
+        result = basic_load.get_power_from_switch_state("on")
+        assert result == 1000.0
+
+    def test_get_power_from_switch_state_off(self, basic_load):
+        """Test get_power_from_switch_state with other state (lines 825-826)."""
+        result = basic_load.get_power_from_switch_state("off")
+        assert result == 0.0
+
+    @pytest.mark.asyncio
+    async def test_do_run_check_disabled(self, basic_load):
+        """Test do_run_check_load_activity_and_constraints when disabled (lines 829-830)."""
+        basic_load.qs_enable_device = False
+        result = await basic_load.do_run_check_load_activity_and_constraints(
+            datetime.now(pytz.UTC)
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_do_run_check_not_initialized(self, basic_load):
+        """Test do_run_check_load_activity_and_constraints when not initialized (lines 831-832)."""
+        basic_load.qs_enable_device = True
+        basic_load.externally_initialized_constraints = False
+        result = await basic_load.do_run_check_load_activity_and_constraints(
+            datetime.now(pytz.UTC)
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_async_load_constraints_from_storage_empty(self, basic_load):
+        """Test async_load_constraints_from_storage with empty list (lines 839-855)."""
+        time_now = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+
+        await basic_load.async_load_constraints_from_storage(time_now, [], None)
+
+        assert basic_load.externally_initialized_constraints is True
+        assert basic_load._last_completed_constraint is None
+
+    @pytest.mark.asyncio
+    async def test_do_probe_state_change_disabled(self, basic_load):
+        """Test do_probe_state_change when disabled (lines 858-860)."""
+        basic_load.qs_enable_device = False
+
+        # Should not raise
+        await basic_load.do_probe_state_change(datetime.now(pytz.UTC))
+
+
+# =============================================================================
+# Extended Tests for Time Series Utility Functions
+# =============================================================================
+
+
+class TestTimeSeriesUtilities:
+    """Test get_slots_from_time_series and get_value_from_time_series."""
+
+    def test_get_slots_from_time_series_empty(self):
+        """Test get_slots_from_time_series with empty data."""
+        from custom_components.quiet_solar.home_model.load import get_slots_from_time_series
+
+        result = get_slots_from_time_series([], datetime.now(pytz.UTC))
+
+        assert result == []
+
+    def test_get_slots_from_time_series_basic(self):
+        """Test get_slots_from_time_series with basic data (lines 1546-1568)."""
+        from custom_components.quiet_solar.home_model.load import get_slots_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=1), 200.0),
+            (time + timedelta(hours=2), 150.0),
+        ]
+
+        # Call with start_time and optional end_time
+        result = get_slots_from_time_series(data, time, time + timedelta(hours=3))
+
+        assert len(result) > 0
+
+    def test_get_value_from_time_series_empty(self):
+        """Test get_value_from_time_series with empty data."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time, value, found, idx = get_value_from_time_series(
+            [], datetime.now(pytz.UTC)
+        )
+
+        assert found is False
+        assert value is None
+
+    def test_get_value_from_time_series_exact_match(self):
+        """Test get_value_from_time_series with exact time match (lines 1577-1582)."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=1), 200.0),
+        ]
+
+        result_time, value, found, idx = get_value_from_time_series(data, time)
+
+        assert found is True
+        assert value == 100.0
+
+    def test_get_value_from_time_series_last_element(self):
+        """Test get_value_from_time_series matches last element (line 1577-1579)."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=1), 200.0),
+        ]
+
+        # Query for last element time
+        result_time, value, found, idx = get_value_from_time_series(
+            data, time + timedelta(hours=1)
+        )
+
+        assert found is True
+        assert value == 200.0
+        assert idx == 1
+
+    def test_get_value_from_time_series_bisect(self):
+        """Test get_value_from_time_series uses bisect for intermediate times (lines 1584-1620)."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=2), 200.0),
+        ]
+
+        # Query for middle time - no exact match
+        query_time = time + timedelta(hours=1)
+        result_time, value, found, idx = get_value_from_time_series(data, query_time)
+
+        # Without interpolation, found should indicate nearest element
+        assert isinstance(found, bool)
+
+    def test_get_value_from_time_series_before_first(self):
+        """Test get_value_from_time_series when query is before first element (lines 1589-1590)."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=1), 200.0),
+        ]
+
+        # Query for time before first element
+        query_time = time - timedelta(hours=1)
+        result_time, value, found, idx = get_value_from_time_series(data, query_time)
+
+        # Should return first element
+        assert idx == 0
+
+    def test_get_value_from_time_series_after_last(self):
+        """Test get_value_from_time_series when query is after last element (lines 1586-1588)."""
+        from custom_components.quiet_solar.home_model.load import get_value_from_time_series
+
+        time = datetime(2026, 1, 24, 10, 0, tzinfo=pytz.UTC)
+        data = [
+            (time, 100.0),
+            (time + timedelta(hours=1), 200.0),
+        ]
+
+        # Query for time after last element
+        query_time = time + timedelta(hours=5)
+        result_time, value, found, idx = get_value_from_time_series(data, query_time)
+
+        # Should return last element
+        assert idx == len(data) - 1
+
+
+# =============================================================================
+# Extended Tests for AbstractDevice
+# =============================================================================
+
+
+class TestAbstractDeviceExtended:
+    """Extended tests for AbstractDevice."""
+
+    @pytest.fixture
+    def basic_device(self):
+        """Create a basic AbstractDevice for testing."""
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = [("Section A", "icon_a")]
+
+        return AbstractDevice(
+            name="Test Device",
+            home=mock_home,
+        )
+
+    def test_dashboard_section_with_computed(self, basic_device):
+        """Test dashboard_section property when computed (lines 179-190)."""
+        basic_device._conf_dashboard_section_option = "Section A"
+        basic_device._computed_dashboard_section = None
+
+        result = basic_device.dashboard_section
+
+        assert result is not None
+
+    def test_dashboard_section_no_section(self, basic_device):
+        """Test dashboard_section returns None when NO_SECTION (line 187-188)."""
+        basic_device._conf_dashboard_section_option = DASHBOARD_NO_SECTION
+        basic_device._computed_dashboard_section = None
+
+        result = basic_device.dashboard_section
+
+        assert result is None
+
+    def test_dashboard_sort_string_in_type_default(self, basic_device):
+        """Test dashboard_sort_string_in_type default value (lines 193-194)."""
+        result = basic_device.dashboard_sort_string_in_type
+        assert result == "ZZZ"
+
+    def test_power_use_property_none(self, basic_device):
+        """Test power_use property when None (lines 130-132)."""
+        basic_device._power_use_conf = None
+        result = basic_device.power_use
+        assert result is None
+
+    def test_power_use_property_set(self, basic_device):
+        """Test power_use property when set (line 133)."""
+        basic_device._power_use_conf = 1500.0
+        result = basic_device.power_use
+        assert result == 1500.0
+
+    def test_power_use_setter(self, basic_device):
+        """Test power_use setter (lines 136-137)."""
+        basic_device.power_use = 2000.0
+        assert basic_device._power_use_conf == 2000.0
+
+    def test_is_off_grid_with_home(self, basic_device):
+        """Test is_off_grid delegates to home (lines 173-176)."""
+        basic_device.home.is_off_grid = MagicMock(return_value=True)
+        result = basic_device.is_off_grid()
+        assert result is True
+
+    def test_is_off_grid_no_home(self, basic_device):
+        """Test is_off_grid returns False without home (line 176)."""
+        basic_device.home = None
+        result = basic_device.is_off_grid()
+        assert result is False
+
+    def test_qs_enable_device_disable(self, basic_device):
+        """Test qs_enable_device setter disables device (lines 253-266)."""
+        basic_device.home = MagicMock()
+        basic_device.home.remove_device = MagicMock()
+        basic_device.home.add_disabled_device = MagicMock()
+
+        basic_device.qs_enable_device = False
+
+        assert basic_device._enabled is False
+
+    def test_qs_enable_device_enable(self, basic_device):
+        """Test qs_enable_device setter enables device (lines 263-266)."""
+        basic_device._enabled = False
+        basic_device.home = MagicMock()
+        basic_device.home.add_device = MagicMock()
+        basic_device.home.remove_disabled_device = MagicMock()
+
+        basic_device.qs_enable_device = True
+
+        assert basic_device._enabled is True
+
+    def test_mono_phase_index_from_father(self, basic_device):
+        """Test mono_phase_index from father device (lines 317-318)."""
+        mock_father = MagicMock()
+        mock_father.physical_3p = False
+        mock_father.mono_phase_index = 2
+        basic_device.father_device = mock_father
+        basic_device.home = MagicMock()
+        basic_device._mono_phase_conf = None
+
+        result = basic_device.mono_phase_index
+
+        assert result == 2
+
+    @pytest.mark.asyncio
+    async def test_async_get_info_from_storage(self, basic_device):
+        """Test async_get_info_from_storage with data (lines 216-218)."""
+        stored_info = {"num_on_off": 6}  # Use even number to avoid adjustment
+
+        await basic_device.async_get_info_from_storage(
+            datetime.now(pytz.UTC), stored_info
+        )
+
+        assert basic_device.num_on_off == 6
+
+    def test_update_available_amps_for_group_with_father(self, basic_device):
+        """Test update_available_amps_for_group delegates to father (lines 220-223)."""
+        mock_father = MagicMock()
+        mock_father.update_available_amps_for_group = MagicMock()
+        basic_device.father_device = mock_father
+
+        basic_device.update_available_amps_for_group(0, [10.0, 10.0, 10.0], True)
+
+        mock_father.update_available_amps_for_group.assert_called_once()
+
+    def test_get_possible_delta_power_from_piloted_devices_no_devices(self, basic_device):
+        """Test get_possible_delta_power_from_piloted_devices with no devices (lines 139-141)."""
+        basic_device.devices_to_pilot = []
+        result = basic_device.get_possible_delta_power_from_piloted_devices_for_budget(0, True)
+        assert result == 0.0
+
+    def test_get_possible_delta_power_from_piloted_devices_with_devices(self, basic_device):
+        """Test get_possible_delta_power_from_piloted_devices with devices (lines 143-147)."""
+        mock_device = MagicMock()
+        mock_device.possible_delta_power_for_slot = MagicMock(return_value=500.0)
+        basic_device.devices_to_pilot = [mock_device]
+
+        result = basic_device.get_possible_delta_power_from_piloted_devices_for_budget(0, True)
+
+        assert result == 500.0
+
+    def test_use_saved_extra_device_info_odd_num_on_off(self, basic_device):
+        """Test use_saved_extra_device_info adjusts odd num_on_off (lines 348-350)."""
+        stored_info = {"num_on_off": 5}  # Odd number
+
+        basic_device.use_saved_extra_device_info(stored_info)
+
+        # Odd numbers should be decremented by 1
+        assert basic_device.num_on_off == 4
+

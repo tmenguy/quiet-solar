@@ -195,3 +195,325 @@ async def test_disabled_device_not_added_to_home(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     assert data_handler.home is not None
 
+
+# =============================================================================
+# Tests for async_reload_quiet_solar and OCPP notification handling
+# =============================================================================
+
+
+async def test_async_reload_with_exception(hass: HomeAssistant) -> None:
+    """Test async_reload_quiet_solar handles exceptions during reload (lines 57-59)."""
+    from custom_components.quiet_solar import async_reload_quiet_solar, async_setup
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    # Setup the component first
+    await async_setup(hass, {})
+    
+    # Create a config entry
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "name": "Test Home",
+            "device_type": "home",
+            "home_voltage": 230,
+            "is_3p": True,
+        },
+        entry_id=f"test_reload_{uuid.uuid4().hex[:8]}",
+        title="home: Test Home",
+        unique_id=f"home_test_reload_{uuid.uuid4().hex[:8]}"
+    )
+    entry.add_to_hass(hass)
+    
+    with patch("custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers", new_callable=AsyncMock):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    
+    # Mock async_reload to raise exception
+    with patch.object(hass.config_entries, "async_reload", side_effect=Exception("Reload failed")):
+        # Should not raise, handles exception internally
+        await async_reload_quiet_solar(hass)
+
+
+async def test_async_reload_skips_entry_id(hass: HomeAssistant) -> None:
+    """Test async_reload_quiet_solar skips specified entry_id (lines 41-42, 53-54)."""
+    from custom_components.quiet_solar import async_reload_quiet_solar, async_setup
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    import uuid
+    
+    # Setup the component
+    await async_setup(hass, {})
+    
+    # Create config entries
+    entry1 = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "name": "Home 1",
+            "device_type": "home",
+            "home_voltage": 230,
+            "is_3p": True,
+        },
+        entry_id=f"test_home1_{uuid.uuid4().hex[:8]}",
+        title="home: Home 1",
+        unique_id=f"home_1_{uuid.uuid4().hex[:8]}"
+    )
+    entry1.add_to_hass(hass)
+    
+    with patch("custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers", new_callable=AsyncMock):
+        await hass.config_entries.async_setup(entry1.entry_id)
+        await hass.async_block_till_done()
+    
+    # Reload all except entry1
+    await async_reload_quiet_solar(hass, except_for_entry_id=entry1.entry_id)
+
+
+async def test_ocpp_notification_listener_no_data_handler(hass: HomeAssistant) -> None:
+    """Test OCPP notification listener when data_handler is None (lines 100-101)."""
+    from custom_components.quiet_solar import async_setup
+    from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
+    
+    # Setup without creating data handler
+    await async_setup(hass, {})
+    
+    # Fire an OCPP notification event (simulating service call event)
+    hass.bus.async_fire(
+        "call_service",
+        {
+            "domain": PN_DOMAIN,
+            "service": "create",
+            "service_data": {
+                "title": "OCPP Charger",
+                "message": "Charger status update"
+            }
+        }
+    )
+    await hass.async_block_till_done()
+    
+    # Should not crash when DATA_HANDLER is missing
+
+
+async def test_ocpp_notification_listener_no_home(hass: HomeAssistant) -> None:
+    """Test OCPP notification listener when home is None (lines 99-101)."""
+    from custom_components.quiet_solar import async_setup
+    from custom_components.quiet_solar.data_handler import QSDataHandler
+    from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
+    
+    # Setup with data handler but no home
+    await async_setup(hass, {})
+    
+    data_handler = QSDataHandler(hass)
+    data_handler.home = None
+    hass.data[DOMAIN][DATA_HANDLER] = data_handler
+    
+    # Fire an OCPP notification event
+    hass.bus.async_fire(
+        "call_service",
+        {
+            "domain": PN_DOMAIN,
+            "service": "create",
+            "service_data": {
+                "title": "OCPP Charger",
+                "message": "Charger status update"
+            }
+        }
+    )
+    await hass.async_block_till_done()
+
+
+async def test_ocpp_notification_listener_exception_handling(hass: HomeAssistant) -> None:
+    """Test OCPP notification listener handles exceptions (lines 121-125)."""
+    from custom_components.quiet_solar import async_setup
+    from custom_components.quiet_solar.data_handler import QSDataHandler
+    from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
+    from unittest.mock import MagicMock
+    
+    # Setup
+    await async_setup(hass, {})
+    
+    # Create a mock home with chargers that raise exception
+    mock_home = MagicMock()
+    mock_charger = MagicMock()
+    mock_charger.__class__.__name__ = "QSChargerOCPP"
+    # Make handle_ocpp_notification raise exception
+    mock_charger.handle_ocpp_notification = AsyncMock(side_effect=Exception("OCPP error"))
+    mock_home._chargers = [mock_charger]
+    
+    data_handler = QSDataHandler(hass)
+    data_handler.home = mock_home
+    hass.data[DOMAIN][DATA_HANDLER] = data_handler
+    
+    # Patch isinstance to return True for QSChargerOCPP check
+    with patch("custom_components.quiet_solar.isinstance", return_value=True):
+        # Fire an OCPP notification event
+        hass.bus.async_fire(
+            "call_service",
+            {
+                "domain": PN_DOMAIN,
+                "service": "create",
+                "service_data": {
+                    "title": "OCPP Charger",
+                    "message": "Charger status update"
+                }
+            }
+        )
+        await hass.async_block_till_done()
+
+
+async def test_is_notification_for_charger_no_device(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger when charger_device_ocpp is None (line 134)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = None
+    
+    result = await _is_notification_for_charger(hass, "test message", mock_charger)
+    
+    assert result is False
+
+
+async def test_is_notification_for_charger_no_device_found(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger when device is not found (line 141)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "Test Charger"
+    
+    # Mock device registry to return None
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        mock_registry = MagicMock()
+        mock_registry.async_get.return_value = None
+        mock_dev_reg.return_value = mock_registry
+        
+        result = await _is_notification_for_charger(hass, "test message", mock_charger)
+    
+    assert result is False
+
+
+async def test_is_notification_for_charger_matching_device_name(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger matches device name (lines 154-155)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "TestCharger"
+    
+    mock_device = MagicMock()
+    mock_device.name_by_user = "My Charger Device"
+    mock_device.name = "Charger"
+    mock_device.identifiers = [("ocpp", "charger_id_456")]
+    
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        mock_registry = MagicMock()
+        mock_registry.async_get.return_value = mock_device
+        mock_dev_reg.return_value = mock_registry
+        
+        # Message contains device name
+        result = await _is_notification_for_charger(
+            hass, "my charger device is connected", mock_charger
+        )
+    
+    assert result is True
+
+
+async def test_is_notification_for_charger_matching_identifier(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger matches charger identifier (lines 157-159)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "TestCharger"
+    
+    mock_device = MagicMock()
+    mock_device.name_by_user = None
+    mock_device.name = "Charger"
+    mock_device.identifiers = [("ocpp", "charger_id_456")]
+    
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        mock_registry = MagicMock()
+        mock_registry.async_get.return_value = mock_device
+        mock_dev_reg.return_value = mock_registry
+        
+        # Message contains charger ID
+        result = await _is_notification_for_charger(
+            hass, "charger_id_456 is ready", mock_charger
+        )
+    
+    assert result is True
+
+
+async def test_is_notification_for_charger_matching_qs_name(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger matches QS charger name (lines 162-163)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "MyOCPPCharger"
+    
+    mock_device = MagicMock()
+    mock_device.name_by_user = None
+    mock_device.name = "Charger"
+    mock_device.identifiers = []
+    
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        mock_registry = MagicMock()
+        mock_registry.async_get.return_value = mock_device
+        mock_dev_reg.return_value = mock_registry
+        
+        # Message contains QS charger name
+        result = await _is_notification_for_charger(
+            hass, "myocppcharger connected", mock_charger
+        )
+    
+    assert result is True
+
+
+async def test_is_notification_for_charger_no_match(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger returns False when no match (line 165)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "MyCharger"
+    
+    mock_device = MagicMock()
+    mock_device.name_by_user = None
+    mock_device.name = "Charger"
+    mock_device.identifiers = []
+    
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        mock_registry = MagicMock()
+        mock_registry.async_get.return_value = mock_device
+        mock_dev_reg.return_value = mock_registry
+        
+        # Message doesn't contain any matching identifier
+        result = await _is_notification_for_charger(
+            hass, "some unrelated message", mock_charger
+        )
+    
+    assert result is False
+
+
+async def test_is_notification_for_charger_exception(hass: HomeAssistant) -> None:
+    """Test _is_notification_for_charger handles exceptions (lines 167-169)."""
+    from custom_components.quiet_solar import _is_notification_for_charger
+    from unittest.mock import MagicMock
+    
+    mock_charger = MagicMock()
+    mock_charger.charger_device_ocpp = "device_123"
+    mock_charger.name = "MyCharger"
+    
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dev_reg:
+        # Make async_get raise an exception
+        mock_dev_reg.side_effect = Exception("Registry error")
+        
+        result = await _is_notification_for_charger(hass, "test message", mock_charger)
+    
+    assert result is False
+

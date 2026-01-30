@@ -1215,6 +1215,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             budget_quantity_to_be_reclaimed = d_budget_quantity
                             has_reclaimed = False
                             for k in range(len(power_slots_duration_s) - 1, last_slot, -1 ):
+
+                                if out_commands[k] is not None:
+                                    # it has been reclaimed already
+                                    continue
+
                                 cmd = existing_commands[k]
                                 if cmd is None or cmd.power_consign <= 0.0:
                                     continue
@@ -1225,20 +1230,36 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign + possible_power_piloted_delta, power_slots_duration_s[k])
 
                                 do_reclaim = False
-                                if reclaimed_budget_quantity < budget_quantity_to_be_reclaimed:
+                                reclaim_cmd = None
+                                if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
                                     do_reclaim = True
                                 elif self.is_mandatory is False:
                                     do_reclaim = True
+                                elif len(self._power_sorted_cmds) > 1:
+                                    # we can use directly as we want to go lower than cmd.power_consign
+                                    j = self._get_lower_consign_idx_for_power(self._power_sorted_cmds, cmd.power_consign)
+                                    if j is not None and j > 0:
+                                        # we won't "stop" the load, but we will reduce its power consumption
+                                        possible_power_piloted_delta = 0.0
+                                        reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign - self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
+                                        if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
+                                            do_reclaim = True
+                                            reclaim_cmd = copy_command(cmd, power_consign=self._power_sorted_cmds[0].power_consign)
+
 
                                 if do_reclaim:
                                     has_reclaimed = True
                                     budget_quantity_to_be_reclaimed -= reclaimed_budget_quantity
 
-                                    out_delta_power[k] -= (cmd.power_consign + possible_power_piloted_delta)
-                                    if self.support_auto:
-                                        out_commands[k] = copy_command(CMD_AUTO_GREEN_CAP)
-                                    else:
-                                        out_commands[k] = copy_command(CMD_IDLE)
+                                    if reclaim_cmd is None:
+                                        if self.support_auto:
+                                            reclaim_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                                        else:
+                                            reclaim_cmd = copy_command(CMD_IDLE)
+
+                                    out_delta_power[k] -= (cmd.power_consign - reclaim_cmd.power_consign + possible_power_piloted_delta)
+                                    out_commands[k] = reclaim_cmd
+
 
                                     if budget_quantity_to_be_reclaimed < 0:
                                         break
