@@ -89,11 +89,11 @@ class QSPool(QSOnOffDuration):
             self.qs_pool_daily_duration_h = duration_s/3600.0
 
             if self.bistate_mode == self._bistate_mode_on:
-                self.qs_pool_daily_on_h = 24.0
+                self.qs_pool_daily_duration_h = 24.0
             elif self.bistate_mode == self._bistate_mode_off:
-                self.qs_pool_daily_on_h = 0.0
+                self.qs_pool_daily_duration_h = 0.0
             elif self.bistate_mode == "bistate_mode_auto":
-                self.qs_pool_daily_on_h = self.default_on_duration
+                self.qs_pool_daily_duration_h = self.default_on_duration
             return ret
         else:
 
