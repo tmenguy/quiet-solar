@@ -29,6 +29,8 @@ views:
         cards:
           {%- if  device.device_type == "car" %}
           - type: custom:qs-car-card
+          {%- elif  device.device_type == "pool" %}
+          - type: custom:qs-pool-card
           {%- else %}
           - type: entities
           {%- endif %}
@@ -161,63 +163,22 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
             {% elif device.device_type == "pool" -%}
-              {%- set ha_entity = device.ha_entities.get("qs_enable_device") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_best_effort_green_only") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {{ "  icon: mdi:solar-power" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("default_on_finish_time") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("default_on_duration") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("bistate_mode") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("current_constraint") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("load_current_command") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("best_power_value") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("current_constraint_current_percent_completion") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {{ "  icon: mdi:gauge" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_load_mark_current_constraint_done") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
-              {%- if  ha_entity != None %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%- endif %}
+              {%- set ha = device.ha_entities %}
+              {% if device.pool_temperature_sensor %}temperature_sensor: {{ device.pool_temperature_sensor }}{% endif %}
+              {%- set e = ha.get("qs_pool_daily_duration_h") %}
+              {% if e %}duration_limit: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_pool_daily_on_h") %}
+              {% if e %}current_daily_run_duration: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("load_current_command") %}
+              {% if e %}command: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("bistate_mode") %}
+              {% if e %}pool_mode: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_best_effort_green_only") %}
+              {% if e %}green_only: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_device_clean_and_reset") %}
+              {% if e %}reset: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("default_on_duration") %}
+              {% if e %}default_on_duration: {{ e.entity_id }}{% endif %}
             {% elif device.device_type == "on_off_duration" -%}
               {%- set ha_entity = device.ha_entities.get("qs_enable_device") %}
               {%- if  ha_entity != None %}

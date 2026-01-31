@@ -4,13 +4,15 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Callable
 
+from .ha_model.pool import QSPool
 
 _LOGGER = logging.getLogger(__name__)
 
 import pytz
 from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE, UnitOfLength
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE, \
+    UnitOfLength, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
@@ -29,7 +31,7 @@ from .const import (
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT,
     SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
     SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
-    SENSOR_CAR_PERSON_FORECAST
+    SENSOR_CAR_PERSON_FORECAST, SENSOR_POOL_DAILY_DURATION_H, SENSOR_POOL_DAILY_ON_H
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -37,6 +39,29 @@ from .ha_model.home import QSHome
 from .ha_model.person import QSPerson
 from .home_model.load import AbstractDevice, AbstractLoad
 
+def create_ha_sensor_for_QSPool(device: QSPool):
+    entities = []
+
+    load_current_command = QSSensorEntityDescription(
+        key=SENSOR_POOL_DAILY_DURATION_H,
+        translation_key=SENSOR_POOL_DAILY_DURATION_H,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        device_class = SensorDeviceClass.DURATION
+    )
+    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    load_current_command = QSSensorEntityDescription(
+        key=SENSOR_POOL_DAILY_ON_H,
+        translation_key=SENSOR_POOL_DAILY_ON_H,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        device_class=SensorDeviceClass.DURATION
+    )
+    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+
+
+    return entities
 
 def create_ha_sensor_for_QSPerson(device: QSPerson):
     entities = []
@@ -47,6 +72,7 @@ def create_ha_sensor_for_QSPerson(device: QSPerson):
         value_fn_and_attr=lambda device, key: device.get_person_mileage_serialized_prediction(),
     )
     entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+
     return entities
 
 
@@ -299,6 +325,8 @@ def create_ha_sensor(device: AbstractDevice):
         ret.extend(create_ha_sensor_for_QSHome(device))
     elif isinstance(device, QSPerson):
         ret.extend(create_ha_sensor_for_QSPerson(device))
+    elif isinstance(device, QSPool):
+        ret.extend(create_ha_sensor_for_QSPool(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_sensor_for_Load(device))

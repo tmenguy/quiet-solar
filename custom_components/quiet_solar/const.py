@@ -203,6 +203,9 @@ SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
 
 SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
 
+SENSOR_POOL_DAILY_DURATION_H = "qs_pool_daily_duration_h"
+SENSOR_POOL_DAILY_ON_H= "qs_pool_daily_on_h"
+
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 
 BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"

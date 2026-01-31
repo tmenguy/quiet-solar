@@ -80,7 +80,7 @@ async def test_select_uses_custom_setter():
 
     await entity.async_select_option("option_1")
 
-    setter.assert_awaited_once_with(device, "mode", "option_1")
+    setter.assert_awaited_once_with(device, "mode", "option_1", False)
     device.home.force_update_all.assert_awaited_once()
 
 
@@ -106,7 +106,7 @@ async def test_simple_select_restore_uses_default_option():
     with patch.object(entity, "async_get_last_state", return_value=invalid_state):
         await entity.async_added_to_hass()
 
-    entity.async_select_option.assert_awaited_once_with("option_2")
+    entity.async_select_option.assert_awaited_once_with("option_2", for_init=True)
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_simple_select_restore_uses_first_option_when_missing():
     with patch.object(entity, "async_get_last_state", return_value=None):
         await entity.async_added_to_hass()
 
-    entity.async_select_option.assert_awaited_once_with("option_1")
+    entity.async_select_option.assert_awaited_once_with("option_1", for_init=True)
 
 
 @pytest.mark.asyncio
@@ -232,7 +232,7 @@ async def test_user_override_select_no_restore_data():
     await entity.async_added_to_hass()
 
     assert entity.user_selected_option is None
-    entity.async_select_option.assert_called_once_with(None)
+    entity.async_select_option.assert_called_once()
 
 
 def test_user_override_select_extra_restore_data():

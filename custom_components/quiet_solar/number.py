@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-
+from typing import Callable, Any, Coroutine
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -22,6 +22,7 @@ from .entity import QSDeviceEntity
 @dataclass(frozen=True, kw_only=True)
 class QSNumberEntityDescription(NumberEntityDescription):
     qs_default_option:str | None  = None
+    async_set_fn: Callable[[AbstractDevice, float, bool], Any] | None = None
 
 
 def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
@@ -35,6 +36,7 @@ def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
         native_step=0.25,
         native_unit_of_measurement=UnitOfTime.HOURS,
         mode=NumberMode.BOX,
+        async_set_fn = lambda device, value, for_init: device.user_set_default_on_duration(value, for_init),
     )
     entities.append(QSBaseNumber(data_handler=device.data_handler, device=device, description=selected_car_description))
 
@@ -123,15 +125,18 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
         if val is None:
             val = 1.0
 
-        await self.async_set_native_value(val)
+        await self.async_set_native_value(val, for_init=True)
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def async_set_native_value(self, value: float, for_init:bool=False) -> None:
         """Change the value."""
         _LOGGER.info(f"QSBaseNumber:async_set_native_value: {value} {self.entity_description.key} on {self.device.name}")
         self._attr_native_value = value
-        try:
-            setattr(self.device, self.entity_description.key, value)
-        except Exception as e:
-            _LOGGER.info(f"can't set number {value} on {self.device.name} for {self.entity_description.key}: {e}")
+        if self.entity_description.async_set_fn:
+            await self.entity_description.async_set_fn(self.device, value, for_init)
+        else:
+            try:
+                setattr(self.device, self.entity_description.key, value)
+            except Exception as e:
+                _LOGGER.info(f"can't set number {value} on {self.device.name} for {self.entity_description.key}: {e}")
         self._set_availabiltiy()
         self.async_write_ha_state()

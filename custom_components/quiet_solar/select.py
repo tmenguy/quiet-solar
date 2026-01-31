@@ -28,7 +28,7 @@ class QSSelectEntityDescription(SelectEntityDescription):
     qs_default_option:str | None  = None
     get_available_options_fn: Callable[[AbstractDevice, str], list[str] | None] | None = None
     get_current_option_fn   : Callable[[AbstractDevice, str], str|None] | None = None
-    async_set_current_option_fn   : Callable[[AbstractDevice, str, str], Any] | None = None
+    async_set_current_option_fn   : Callable[[AbstractDevice, str, str, bool], Any] | None = None
 
 
 
@@ -41,7 +41,7 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         translation_key="selected_car_for_charger",
         get_available_options_fn=lambda device, key: device.get_car_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_car_option(),
-        async_set_current_option_fn=lambda device, key, option: device.set_user_selected_car_by_name(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_car_by_name(option),
 
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
@@ -56,7 +56,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_charger_for_car",
         get_available_options_fn=lambda device, key: device.get_charger_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_charger_option(),
-        async_set_current_option_fn=lambda device, key, option: device.set_user_selected_charger_by_name(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_charger_by_name(option),
 
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
@@ -69,7 +69,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_next_charge_limit_for_car",
         get_available_options_fn=lambda device, key: device.get_car_next_charge_values_options(),
         get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
-        async_set_current_option_fn=lambda device, key, option: device.user_set_next_charge_target(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_next_charge_target(option),
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
 
@@ -80,7 +80,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_person_for_car",
         get_available_options_fn=lambda device, key: device.get_car_persons_options(),
         get_current_option_fn=lambda device, key: device.get_car_person_option(),
-        async_set_current_option_fn=lambda device, key, option: device.set_user_person_for_car(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_person_for_car(option),
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the car device infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
@@ -95,7 +95,8 @@ def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
         key="bistate_mode",
         translation_key=device.get_select_translation_key(),
         get_available_options_fn=lambda device, key: device.get_bistate_modes(),
-        qs_default_option="bistate_mode_default"
+        qs_default_option="bistate_mode_default",
+        async_set_current_option_fn = lambda device, key, option, for_init: device.user_set_bistate_mode(option, for_init=for_init),
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
 
@@ -219,7 +220,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         else:
             return self.entity_description.get_current_option_fn(self.device, self.entity_description.key)
 
-    async def set_current_option(self, option):
+    async def set_current_option(self, option, for_init=False):
         """Return the current option."""
         if self.entity_description.async_set_current_option_fn is None:
             try:
@@ -228,16 +229,16 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
                 _LOGGER.info(
                     f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}")
         else:
-            await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option)
+            await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option, for_init)
         if self.device.home:
             await self.device.home.force_update_all()
 
-    async def async_select_option(self, option: str | None) -> None:
+    async def async_select_option(self, option: str | None, for_init=False) -> None:
         """Select an option."""
         _LOGGER.info(f"QSBaseSelect:async_select_option: {option} {self.entity_description.key} on {self.device.name}")
 
         self._attr_current_option = option
-        await self.set_current_option(option)
+        await self.set_current_option(option, for_init=for_init)
         self._set_availabiltiy()
         self.async_write_ha_state()
 
@@ -297,7 +298,7 @@ class QSSimpleSelectRestore(QSBaseSelectRestore):
         if new_option is None:
             new_option = self.options[0]
 
-        await self.async_select_option(new_option)
+        await self.async_select_option(new_option, for_init=True)
 
 
 @dataclass
@@ -349,11 +350,11 @@ class QSUserOverrideSelectRestore(QSBaseSelectRestore):
         self.user_selected_option = user_option
         self._attr_current_option = self.user_selected_option
 
-        await self.async_select_option(self.user_selected_option)
+        await self.async_select_option(self.user_selected_option, for_init=True)
 
-    async def async_select_option(self, option: str) -> None:
+    async def async_select_option(self, option: str, for_init=False) -> None:
         """Select an option."""
         self.user_selected_option = option
-        await super().async_select_option(option)
+        await super().async_select_option(option, for_init=for_init)
 
 

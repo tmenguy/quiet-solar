@@ -692,6 +692,12 @@
       },
       "qs_car_person_forecast": {
         "name": "Person Forecasted Mileage"
+      },
+      "qs_pool_daily_duration_h": {
+        "name": "Pool Daily Duration (h)"
+      },
+      "qs_pool_daily_on_h": {
+        "name": "Pool Daily ON Time (h)"
       }
     },
     "button": {

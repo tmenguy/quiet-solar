@@ -49,6 +49,25 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self._last_power_use_computation_time: datetime | None = None
 
+    async def user_set_default_on_duration(self, float_value: float, for_init:bool = False):
+        self.default_on_duration = float_value
+        if for_init is False:
+            time = datetime.now(pytz.UTC)
+            if await self.do_run_check_load_activity_and_constraints(time):
+                self.home.force_next_solve()
+            await self.home.update_all_states(time)
+
+    async def user_set_bistate_mode(self, option: str, for_init:bool = False):
+        if option not in self.get_bistate_modes():
+            _LOGGER.error(f"bistate_mode: {option} is not a valid bistate_mode")
+            return
+        self.bistate_mode = option
+        if for_init is False:
+            time = datetime.now(pytz.UTC)
+            if await self.do_run_check_load_activity_and_constraints(time):
+                self.home.force_next_solve()
+            await self.home.update_all_states(time)
+
     @property
     def power_use(self):
         power = self._power_use_conf

@@ -967,7 +967,6 @@ async def test_real_dashboard_yaml_contains_devices():
         # Check for entity IDs
         assert "sensor.test_car_soc" in content, "Car SoC entity not found"
         assert "switch.heat_pump_enable" in content, "Heat pump enable switch not found"
-        assert "sensor.pool_power" in content, "Pool power sensor not found"
         assert "sensor.battery_command" in content, "Battery command sensor not found"
         assert "sensor.john_mileage_prediction" in content, "Person mileage prediction sensor not found"
 
