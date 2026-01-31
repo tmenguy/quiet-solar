@@ -112,6 +112,7 @@ class PeriodSolver(object):
         self._load_power_usage_for_test = None
         self._battery_power_external_consumption_for_test = None
         self._loads_energy_and_time_consumption_for_test = None
+        self._constraints_for_test = None
 
 
     def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
@@ -1014,14 +1015,14 @@ class PeriodSolver(object):
                         c_now = constraints_evolution.get(c, c)
                         first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
                         add_to_probe = True
-                        if c_now.is_constraint_met(self._start_time) and max_idx_with_energy_impact < probe_window_start:
+                        if c_now.is_constraint_met() and max_idx_with_energy_impact < probe_window_start:
                             # we don't want to give a constraint some more energy AFTER it has been completed
                             add_to_probe = False
 
                         if add_to_probe:
                             constraints.append((c, c.score(self._start_time)))
 
-                        all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(self._start_time), c.is_mandatory))
+                        all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(), c.is_mandatory))
 
                     _LOGGER.info(
                         f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
@@ -1075,7 +1076,11 @@ class PeriodSolver(object):
             else:
                 ref = self._available_power
 
-
+            self._constraints_for_test = []
+            for c in constraints_evolution:
+                c_out = constraints_evolution[c]
+                if c_out is not None:
+                    self._constraints_for_test.append(c_out)
 
 
             max_diff = np.max(np.abs(res - ref))

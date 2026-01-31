@@ -109,9 +109,12 @@ class TestConstraintPriorityAllocation:
         pool.push_live_constraint(dt, pool_constraint)
         
         # Moderate solar
-        pv_forecast = [(dt + timedelta(hours=h), 2000.0) for h in range(11)]
-        ua_forecast = [(dt + timedelta(hours=h), 200.0) for h in range(11)]
-        
+        pv_forecast = [[dt + timedelta(hours=h), 2300.0] for h in range(11)]
+        ua_forecast = [[dt + timedelta(hours=h), 200.0] for h in range(11)]
+
+        for i in range(6, 11):
+            pv_forecast[i][1] = 1000.0  # Lower solar later
+
         solver = PeriodSolver(
             start_time=start_time,
             end_time=end_time,
@@ -132,7 +135,7 @@ class TestConstraintPriorityAllocation:
         heater_constraint_final = None
         pool_constraint_final = None
         
-        for c in solver._active_constraints:
+        for c in solver._constraints_for_test:
             if c.load.name == "car":
                 car_constraint_final = c
             elif c.load.name == "heater":
@@ -147,13 +150,13 @@ class TestConstraintPriorityAllocation:
         car_satisfied = car_constraint_final.is_constraint_met(end_time)
         heater_satisfied = heater_constraint_final.is_constraint_met(end_time)
         pool_satisfied = pool_constraint_final.is_constraint_met(end_time) if pool_constraint_final else False
-        
-        # At least one mandatory should be satisfied, or both should be close
-        assert car_satisfied or heater_satisfied or (
-            car_constraint_final.current_value >= car_constraint_final.target_value * 0.8
-            and heater_constraint_final.current_value >= heater_constraint_final.target_value * 0.8
-        ), "Mandatory constraints should be prioritized"
-        
+
+        assert car_satisfied and heater_satisfied
+
+        assert pool_satisfied is False
+
+        assert pool_constraint_final.current_value > pool_constraint_final.target_value*0.3
+
         # Check priority scores
         car_score = car_constraint.score(dt)
         pool_score = pool_constraint.score(dt)
@@ -258,9 +261,9 @@ class TestConstraintPriorityAllocation:
         # VALIDATE: Check constraint satisfaction and priority
         # =================================================================
         # Find final states
-        constraint_a_final = next((c for c in solver._active_constraints if c.load.name == "load_asap"), None)
-        constraint_b_final = next((c for c in solver._active_constraints if c.load.name == "load_mandatory"), None)
-        constraint_c_final = next((c for c in solver._active_constraints if c.load.name == "load_optional"), None)
+        constraint_a_final = next((c for c in solver._constraints_for_test if c.load.name == "load_asap"), None)
+        constraint_b_final = next((c for c in solver._constraints_for_test if c.load.name == "load_mandatory"), None)
+        constraint_c_final = next((c for c in solver._constraints_for_test if c.load.name == "load_optional"), None)
         
         assert constraint_a_final is not None
         assert constraint_b_final is not None
@@ -270,12 +273,11 @@ class TestConstraintPriorityAllocation:
         asap_satisfied = constraint_a_final.is_constraint_met(end_time)
         mandatory_satisfied = constraint_b_final.is_constraint_met(end_time)
         optional_satisfied = constraint_c_final.is_constraint_met(end_time)
-        
-        # ASAP should be satisfied (highest priority)
-        assert asap_satisfied or constraint_a_final.current_value >= constraint_a_final.target_value * 0.9, (
-            "ASAP constraint should be prioritized"
-        )
-        
+
+        assert asap_satisfied and mandatory_satisfied
+        assert not optional_satisfied
+
+
         # Check scores reflect priority
         score_a = constraint_a.score(dt)
         score_b = constraint_b.score(dt)
@@ -385,12 +387,15 @@ class TestConstraintPriorityAllocation:
         # VALIDATE: Check constraint priorities
         # =================================================================
         # Find final states  
-        mandatory_final = next((c for c in solver._active_constraints if c.load.name == "mandatory"), None)
-        optional_final = next((c for c in solver._active_constraints if c.load.name == "optional"), None)
+        mandatory_final = next((c for c in solver._constraints_for_test if c.load.name == "mandatory"), None)
+        optional_final = next((c for c in solver._constraints_for_test if c.load.name == "optional"), None)
         
         assert mandatory_final is not None, "Should have mandatory constraint"
         assert optional_final is not None, "Should have optional constraint"
-        
+
+        assert mandatory_final.is_constraint_met(end_time), "Mandatory constraint should be met"
+        assert optional_final.is_constraint_met(end_time) is False, "Optional constraint shouldn't be met"
+
         # Check scores (mandatory should have higher priority)
         mandatory_score = mandatory_constraint.score(dt)
         optional_score = optional_constraint.score(dt)
@@ -508,8 +513,8 @@ class TestConstraintPriorityAllocation:
         # VALIDATE
         # =================================================================
         # Find final constraint states
-        constraint_before_final = next((c for c in solver._active_constraints if c.load.name == "before_battery"), None)
-        constraint_after_final = next((c for c in solver._active_constraints if c.load.name == "after_battery"), None)
+        constraint_before_final = next((c for c in solver._constraints_for_test if c.load.name == "before_battery"), None)
+        constraint_after_final = next((c for c in solver._constraints_for_test if c.load.name == "after_battery"), None)
         
         assert constraint_before_final is not None
         assert constraint_after_final is not None
@@ -629,8 +634,8 @@ class TestConstraintPriorityAllocation:
         )
         
         # Find final states
-        constraint_user_final = next((c for c in solver._active_constraints if c.load.name == "load_from_user"), None)
-        constraint_auto_final = next((c for c in solver._active_constraints if c.load.name == "load_automatic"), None)
+        constraint_user_final = next((c for c in solver._constraints_for_test if c.load.name == "load_from_user"), None)
+        constraint_auto_final = next((c for c in solver._constraints_for_test if c.load.name == "load_automatic"), None)
         
         # Check progress - user should get at least as much as auto
         if constraint_user_final and constraint_auto_final:
@@ -747,14 +752,17 @@ class TestSolverComplexScenarios:
         assert battery_commands is not None
         
         # Find constraint final states
-        car_final = next((c for c in solver._active_constraints if c.load.name == "car"), None)
-        heater_final = next((c for c in solver._active_constraints if c.load.name == "heater"), None)
-        pool_final = next((c for c in solver._active_constraints if c.load.name == "pool"), None)
+        car_final = next((c for c in solver._constraints_for_test if c.load.name == "car"), None)
+        heater_final = next((c for c in solver._constraints_for_test if c.load.name == "heater"), None)
+        pool_final = next((c for c in solver._constraints_for_test if c.load.name == "pool"), None)
         
         # Check mandatory constraints are met or nearly met
         car_satisfied = car_final.is_constraint_met(end_time) if car_final else False
         heater_satisfied = heater_final.is_constraint_met(end_time) if heater_final else False
-        
+        pool_satisfied = pool_final.is_constraint_met(end_time) if pool_final else False
+
+        assert car_satisfied and heater_satisfied and pool_satisfied
+
         # At least one mandatory should be satisfied
         assert car_satisfied or heater_satisfied or (
             car_final and car_final.current_value >= car_final.target_value * 0.8

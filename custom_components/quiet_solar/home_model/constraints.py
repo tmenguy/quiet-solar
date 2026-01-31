@@ -458,10 +458,10 @@ class LoadConstraint(object):
 
 
 
-    def is_constraint_met(self, time:datetime, current_value=None) -> bool:
+    def is_constraint_met(self, time:datetime | None=None, current_value=None) -> bool:
         """ is the constraint met in its current form? """
 
-        if self.always_end_at_end_of_constraint and self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC and time >= self.end_of_constraint:
+        if time is not None and self.always_end_at_end_of_constraint and time >= self.end_of_constraint:
             return True
 
         if current_value is None:
@@ -528,6 +528,10 @@ class LoadConstraint(object):
             out.current_value = self.convert_added_time_to_target_value(added_budget_quantity)
         else:
             out.current_value = self.convert_added_energy_to_target_value(added_budget_quantity)
+
+        # if we are only simulating for budgeting, we don't want to always end at end of constraint
+        out.always_end_at_end_of_constraint = False
+
         return out
 
     def get_quantity_to_be_added_for_budgeting(self) -> float:
@@ -557,6 +561,10 @@ class LoadConstraint(object):
 
     def get_delta_budget_quantity(self, power_w:float, duration_s:float) -> float:
         if self.use_time_for_budgeting:
+            if power_w == 0:
+                return 0.0
+            if power_w < 0:
+                return 0.0 - duration_s
             return duration_s
         else:
             return (power_w * duration_s) / 3600.0
@@ -728,12 +736,17 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     old_cmd = self._power_sorted_cmds[0]
                 old_cmd = copy_command(old_cmd)
                 new_power = max(0, prev_power - old_cmd.power_consign - power_piloted_delta)
-                new_d = self.get_delta_budget_quantity(prev_power - out_power[i], power_slots_duration_s[i])
+                new_d = self.get_delta_budget_quantity(old_cmd.power_consign, power_slots_duration_s[i])
             else:
                 power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=i,
                                                                                                          add=True)
                 new_power = cmd_to_push.power_consign + power_piloted_delta
-                new_d = 0.0 - self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+
+                old_cmd = out_commands[i]
+                if old_cmd is not None:
+                    new_d = self.get_delta_budget_quantity(old_cmd.power_consign, power_slots_duration_s[i])
+
+                new_d = new_d - self.get_delta_budget_quantity(cmd_to_push.power_consign, power_slots_duration_s[i])
 
             if quantity_to_forbid_if_sign_changed is None or (quantity_to_forbid_if_sign_changed + delta_quantity + new_d)*quantity_to_forbid_if_sign_changed >= 0.0:
                 out_commands[i] = copy_command(cmd_to_push)
@@ -1029,7 +1042,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         out_constraint = self
 
-        is_current_constraint_met = self.is_constraint_met(time)
+        is_current_constraint_met = self.is_constraint_met()
 
         num_non_zero_existing_commands = 0
 
@@ -1166,7 +1179,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         continue # no change in power, nothing to do
 
                     d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
-                    d_budget_quantity = self.get_delta_budget_quantity(delta_power, power_slots_duration_s[i])
+
+                    d_budget_quantity = self.get_delta_budget_quantity(base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
 
                     if (energy_delta - d_energy)* init_energy_delta <= 0:
                         # sign has changed ... we are no more in over consume or under consume
@@ -1190,7 +1204,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 j += 1
                                 delta_power = new_delta_power
                                 d_energy = new_d_energy
-                                d_budget_quantity = self.get_delta_budget_quantity(new_delta_power, power_slots_duration_s[i])
+                                d_budget_quantity = self.get_delta_budget_quantity(new_base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
                                 base_cmd = new_base_cmd
 
                     out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
@@ -1227,7 +1241,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 # we go to 0 : we reclaim all
                                 possible_power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=k, add=False)
 
-                                reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign + possible_power_piloted_delta, power_slots_duration_s[k])
+                                reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k])
 
                                 do_reclaim = False
                                 reclaim_cmd = None
@@ -1241,7 +1255,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     if j is not None and j > 0:
                                         # we won't "stop" the load, but we will reduce its power consumption
                                         possible_power_piloted_delta = 0.0
-                                        reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign - self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
+                                        reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k]) - self.get_delta_budget_quantity(self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
                                         if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
                                             do_reclaim = True
                                             reclaim_cmd = copy_command(cmd, power_consign=self._power_sorted_cmds[0].power_consign)
@@ -1429,7 +1443,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 out_commands[i] = as_fast_cmd
                 out_power[i] = as_fast_power + power_piloted_delta
 
-                quantity_to_be_added -= self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+                quantity_to_be_added -= self.get_delta_budget_quantity(as_fast_cmd.power_consign, power_slots_duration_s[i])
 
                 max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                 min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
@@ -1582,7 +1596,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         out_power[i] = out_commands[i].power_consign + power_piloted_delta
                         out_power_idxs[i] = j
 
-                        local_quantity_to_be_added -= self.get_delta_budget_quantity(float(out_power[i]), float(power_slots_duration_s[i]))
+                        local_quantity_to_be_added -= self.get_delta_budget_quantity(out_commands[i].power_consign, float(power_slots_duration_s[i]))
 
                         max_idx_with_energy_impact = max(max_idx_with_energy_impact, i)
                         min_idx_with_energy_impact = min(min_idx_with_energy_impact, i)
@@ -1617,6 +1631,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 # this is checked in the charger budgeting algorithm, with self.home.battery_can_discharge() is False
                 for i in range(first_slot, last_slot + 1):
 
+                    if quantity_to_be_added <= 0.0:
+                        break
+
                     if power_available_power[i] + out_power[i] < 0:
                         # there is still some solar to get
                         power_sorted_cmds, is_current_slot_empty, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=out_commands, for_add=True)
@@ -1639,7 +1656,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             # all command in ECO mode now....
                             prev_quantity = 0.0
                             if not is_current_slot_empty:
-                                prev_quantity = self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+                                if out_commands[i] :
+                                    prev_quantity = self.get_delta_budget_quantity(float(out_commands[i].power_consign), power_slots_duration_s[i])
 
                             # check if the price of the extra energy we add is better than the best price we have
                             power_to_add: float = power_sorted_cmds[power_to_add_idx].power_consign + power_piloted_delta
@@ -1647,7 +1665,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             energy_to_add: float = ((power_to_add - float(out_power[i]))* float(power_slots_duration_s[i])) / 3600.0
                             cost: float = ((power_to_add + float(power_available_power[i])) * float(power_slots_duration_s[i]) * float(prices[i])) / 3600.0
                             cost_per_watt_hour = cost / energy_to_add
-                            quantity_to_add = self.get_delta_budget_quantity(power_to_add, power_slots_duration_s[i])
+                            quantity_to_add = self.get_delta_budget_quantity(power_sorted_cmds[power_to_add_idx].power_consign, power_slots_duration_s[i])
 
                             if cost_per_watt_hour > prices_ordered_values[0]:
                                 # not interesting to add this energy
@@ -1716,7 +1734,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                             for i in explore_range:
                                 if prices[i] == price and out_commands[i] is not None:
-                                    quantity_to_replace += self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+                                    quantity_to_replace += self.get_delta_budget_quantity(out_commands[i].power_consign, power_slots_duration_s[i])
 
                             # to try to fill as smoothly as possible: is it possible to fill the slot with the maximum power value?
                             fill_power_idx = 0
@@ -1726,7 +1744,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     if prices[i] == price:
                                         power_sorted_cmds, is_current_slot_empty, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=out_commands, for_add=True)
                                         if power_sorted_cmds is not None and len(power_sorted_cmds) > fill_power_idx:
-                                            filling_quantity_on_price += self.get_delta_budget_quantity(power_sorted_cmds[fill_power_idx].power_consign + power_piloted_delta, power_slots_duration_s[i])
+                                            filling_quantity_on_price += self.get_delta_budget_quantity(power_sorted_cmds[fill_power_idx].power_consign, power_slots_duration_s[i])
 
                                 if (quantity_to_be_added + quantity_to_replace) <= filling_quantity_on_price: #price_span_h * power_sorted_cmds[fill_power_idx].power_consign:
                                     break
@@ -1754,7 +1772,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                                 if is_prev_empty is False or out_power[i] > 0.0:
                                     # add back the previously removed energy or time
-                                    quantity_to_be_added += self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+                                    if out_commands[i]:
+                                        quantity_to_be_added += self.get_delta_budget_quantity(out_commands[i].power_consign, power_slots_duration_s[i])
 
                                     truly_consumed_power_before = power_available_power[i] + out_power[i]
                                     if truly_consumed_power_before >= 0:
@@ -1771,7 +1790,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                                 out_commands[i] = price_cmd
                                 out_power[i] = price_cmd.power_consign + power_piloted_delta
-                                quantity_to_be_added -= self.get_delta_budget_quantity(out_power[i], power_slots_duration_s[i])
+                                quantity_to_be_added -= self.get_delta_budget_quantity(price_cmd.power_consign, power_slots_duration_s[i])
 
                                 truly_consumed_power = power_available_power[i] + out_power[i]
                                 if truly_consumed_power >= 0:
@@ -1902,9 +1921,9 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
     def best_duration_extension_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
         return self.best_duration_to_meet()
 
-    def is_constraint_met(self, time:datetime, current_value=None) -> bool:
+    def is_constraint_met(self, time:datetime|None = None, current_value=None) -> bool:
 
-        if self.always_end_at_end_of_constraint and self.end_of_constraint is not None and self.end_of_constraint != DATETIME_MAX_UTC and time >= self.end_of_constraint:
+        if time is not None and self.always_end_at_end_of_constraint and  time >= self.end_of_constraint:
             return True
 
         if current_value is None:
@@ -1916,7 +1935,7 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         if current_value >= (0.995*self.target_value): #0.5% tolerance
             return True
 
-        if self.end_of_constraint <= time and current_value >= (0.9*self.target_value): # 10% tolerance if close to end
+        if time is not None and self.end_of_constraint <= time and current_value >= (0.9*self.target_value): # 10% tolerance if close to end
             return True
 
         return False

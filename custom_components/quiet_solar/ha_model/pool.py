@@ -112,7 +112,7 @@ class QSPool(QSOnOffDuration):
                     duration_s += ct.target_value
                     run_s += ct.current_value
 
-            self.qs_pool_daily_duration_h = duration_s/3600.0
+            self.qs_pool_daily_on_h = run_s / 3600.0
 
             if end_schedule is not None:
 

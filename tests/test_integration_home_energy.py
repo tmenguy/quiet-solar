@@ -386,9 +386,13 @@ class TestCompleteHomeEnergy:
         validate_battery_soc_bounds(battery_charge, battery)
         
         # Check pool made progress
-        pool_final = next((c for c in solver._active_constraints if c.load.name == "pool"), None)
+        pool_final = next((c for c in solver._constraints_for_test if c.load.name == "pool"), None)
+
+        assert pool_final is not None
+
         if pool_final:
             pool_progress = pool_final.current_value / pool_final.target_value
+            assert pool_final.is_constraint_met()
             print(f"   - Pool progress: {100*pool_progress:.0f}%")
         
         print(f"\n✅ Solar surplus integration test passed!")
@@ -599,11 +603,13 @@ class TestCompleteHomeEnergy:
         assert len(load_commands) >= 1
         
         # Find constraints for car
-        constraints = [c for c in solver._active_constraints if c.load.name == "car"]
+        constraints = [c for c in solver._constraints_for_test if c.load.name == "car"]
         
         # Should have constraints (may be merged internally)
         assert len(constraints) >= 1, "Should have at least 1 constraint for car"
-        
+
+        assert constraints[0].is_constraint_met(), "Car mandatory constraint should be met"
+
         # Check that car has commands
         car_cmds = next((cmds for load, cmds in load_commands if load.name == "car"), None)
         assert car_cmds is not None and len(car_cmds) > 0, "Car should have commands"
