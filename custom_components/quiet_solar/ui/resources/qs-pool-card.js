@@ -91,9 +91,9 @@ class QsPoolCard extends HTMLElement {
       const targetHours = Number(sDurationLimit?.state || 12);
       const hoursRun = Number(sCurrentDailyRunDuration?.state || 0);
       
-      // Determine if pool is running (power command state)
-      const powerState = sCommand?.state || '';
-      const running = powerState.toLowerCase() !== 'no cmd' && powerState.toLowerCase() !== 'unknown' && powerState !== '';
+      // Determine if pool is running (command state must be "on")
+      const commandState = sCommand?.state || '';
+      const running = commandState.toLowerCase() === 'on';
       
       const css = `
       :host { --pad: 18px; display:block; }
