@@ -1148,7 +1148,6 @@ class AbstractLoad(AbstractDevice):
         if not self._constraints:
             self._constraints = []
 
-
     def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
 
         if self.qs_enable_device is False:

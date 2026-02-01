@@ -398,7 +398,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                                 end_schedule=end_schedule,
                                                 target_value=self.default_on_duration * 3600.0,
                                                 has_user_forced_constraint=False,
-                                                agenda_push=True)
+                                                agenda_push=False)
                         constraints.append(ct)
                     _LOGGER.debug(
                         f"check_load_activity_and_constraints: bistate bistate_mode_default for load {self.name} {ct}")

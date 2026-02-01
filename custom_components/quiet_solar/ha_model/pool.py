@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
@@ -72,27 +72,48 @@ class QSPool(QSOnOffDuration):
 
         return self.pool_steps[idx][2]*3600.0
 
+    def update_daily_metrics(self, time:datetime, end_range: dt_time | None = None):
+
+        if end_range is None:
+            end_range = dt_time(hour=0, minute=0, second=0)
+
+        end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time,
+                                                output_in_utc=True)
+        duration_s = 0.0
+        run_s = 0.0
+
+        ct_to_probe = []
+        if self._last_completed_constraint is not None:
+            ct_to_probe.append(self._last_completed_constraint)
+        if self._constraints:
+            ct_to_probe.extend(self._constraints)
+
+        # keep only the one for the current day
+        for ct in ct_to_probe:
+            if ct.end_of_constraint <= end_day or (
+                    ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day):
+                if ct.end_of_constraint >= end_day - timedelta(hours=24) or (
+                        ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint >= end_day - timedelta(
+                        hours=24)):
+                    duration_s += ct.target_value
+                    run_s += ct.current_value
+
+        self.qs_pool_daily_on_h = run_s / 3600.0
+        self.qs_pool_daily_duration_h = duration_s / 3600.0
+
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
         if self.bistate_mode != "bistate_mode_auto" and self.bistate_mode != "pool_winter_mode":
             ret =  await super().check_load_activity_and_constraints(time)
 
-            end_day = self.get_next_time_from_hours(local_hours=dt_time(hour=0, minute=0, second=0), time_utc_now=time, output_in_utc=True)
-            duration_s = 0.0
-            run_s = 0.0
-            for ct in self._constraints:
-                if  ct.end_of_constraint <= end_day or (ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day):
-                    duration_s += ct.target_value
-                    run_s += ct.current_value
-            self.qs_pool_daily_on_h = run_s/3600.0
-            self.qs_pool_daily_duration_h = duration_s/3600.0
+            self.update_daily_metrics(time)
 
             if self.bistate_mode == self._bistate_mode_on:
                 self.qs_pool_daily_duration_h = 24.0
             elif self.bistate_mode == self._bistate_mode_off:
                 self.qs_pool_daily_duration_h = 0.0
-            elif self.bistate_mode == "bistate_mode_auto":
+            elif self.bistate_mode == "bistate_mode_default":
                 self.qs_pool_daily_duration_h = self.default_on_duration
             return ret
         else:
@@ -102,17 +123,10 @@ class QSPool(QSOnOffDuration):
 
             end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
 
+            self.update_daily_metrics(time, end_range=self.default_on_finish_time)
+
             force_winter = self.bistate_mode == "pool_winter_mode"
             self.qs_pool_daily_duration_h = self.get_pool_filter_time_s(force_winter, time)/3600.0
-
-            duration_s = 0.0
-            run_s = 0.0
-            for ct in self._constraints:
-                if  ct.end_of_constraint <= end_schedule or (ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_schedule):
-                    duration_s += ct.target_value
-                    run_s += ct.current_value
-
-            self.qs_pool_daily_on_h = run_s / 3600.0
 
             if end_schedule is not None:
 
@@ -133,7 +147,7 @@ class QSPool(QSOnOffDuration):
                         initial_value=0,
                         target_value=self.get_pool_filter_time_s(force_winter, time),
                 )
-                return self.push_agenda_constraints(time, [load_mandatory])
+                return self.push_live_constraint(time, load_mandatory)
 
             return False
 
