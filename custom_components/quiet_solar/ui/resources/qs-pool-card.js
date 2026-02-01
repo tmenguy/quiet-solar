@@ -288,8 +288,12 @@ class QsPoolCard extends HTMLElement {
                   <div class="pct" style="margin-bottom:0;">${tempDisplay}</div>
                 </div>
                 <div class="target-block">
-                  <div class="target-label">Target hours</div>
-                  <div class="target-value">${this._fmt(targetHours)}h</div>
+                  <div class="target-label">Actual / Target Hours</div>
+                  <div class="target-value">
+                    <span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span>
+                    <span style="color: var(--primary-text-color);"> / </span>
+                    <span style="color: var(--primary-color);">${this._fmt(targetHours)}h</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -461,7 +465,11 @@ class QsPoolCard extends HTMLElement {
                   handleText.textContent = this._fmt(snapHours);
               }
               const tv = this._root.querySelector('.target-value');
-              if (tv) tv.textContent = `${this._fmt(snapHours)}h`;
+              if (tv) {
+                  // Get current run hours from entity
+                  const currentRunHours = Number(sCurrentDailyRunDuration?.state || 0);
+                  tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(currentRunHours, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: var(--primary-color);">${this._fmt(snapHours)}h</span>`;
+              }
           };
           
           const onUp = async (ev) => {
