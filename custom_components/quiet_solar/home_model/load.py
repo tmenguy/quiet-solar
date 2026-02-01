@@ -797,6 +797,7 @@ class AbstractLoad(AbstractDevice):
                 if ct.eq_no_current(new_ct):
                     # it is already in the constraints don't add it back
                     found = True
+                    ct.carry_info_from_other_constraint(new_ct)
                     break
             if found:
                 new_constraints[i] = None  # mark as found
@@ -1172,10 +1173,12 @@ class AbstractLoad(AbstractDevice):
 
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):
+                    c.carry_info_from_other_constraint(constraint)
                     return False
                 if  c.end_of_constraint == constraint.end_of_constraint or (c.as_fast_as_possible and constraint.as_fast_as_possible):
                     if c.score(time) == constraint.score(time):
                         _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
+                        c.carry_info_from_other_constraint(constraint)
                         return False
                     else:
                         self._constraints[i] = None

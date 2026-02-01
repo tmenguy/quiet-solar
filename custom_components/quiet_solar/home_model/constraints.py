@@ -148,6 +148,8 @@ class LoadConstraint(object):
     def use_time_for_budgeting(self):
         return False
 
+    def carry_info_from_other_constraint(self, other: Self):
+        pass
 
     @property
     def type(self)-> int:
@@ -211,8 +213,10 @@ class LoadConstraint(object):
             return False
         od = other.to_dict()
         od["current_value"] = 0
+        od["power_steps"] = 0
         d = self.to_dict()
         d["current_value"] = 0
+        d["power_steps"] = 0
 
         return od == d
 
@@ -617,6 +621,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         self.update_power_steps(power_steps)
 
         super().__init__(**kwargs)
+
+    def carry_info_from_other_constraint(self, other: LoadConstraint):
+        super().carry_info_from_other_constraint(other)
+        if isinstance(other, MultiStepsPowerLoadConstraint):
+            self.update_power_steps(other._power_cmds)
 
     def update_power_steps(self, power_steps: list[LoadCommand]):
         self._power_cmds = power_steps
