@@ -224,7 +224,7 @@ class AbstractDevice(object):
 
 
     def command_and_constraint_reset(self):
-        _LOGGER.info(f"Reset device {self.name}")
+        _LOGGER.info(f"Constraint Reset device {self.name}")
         self._constraints: list[LoadConstraint | None] = []
         self.current_command : LoadCommand | None = None
         self.prev_command: LoadCommand | None = None
@@ -234,6 +234,8 @@ class AbstractDevice(object):
         self.running_command_last_launch: datetime | None = None
         self.running_command_num_relaunch : int = 0
         self.running_command_num_relaunch_after_invalid: int = 0
+
+
 
     # for class overcharging reset
     def reset(self):
@@ -648,9 +650,15 @@ class AbstractLoad(AbstractDevice):
 
 
         self._last_completed_constraint: LoadConstraint | None = None
+
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
         self.current_constraint_current_percent_completion: float | None = None
+        self.next_or_current_constraint_start_time: datetime | None = None
+        self.next_or_current_constraint_end_time: datetime | None = None
+
+
+
         self.externally_initialized_constraints = False
 
         self.qs_best_effort_green_only = False
@@ -659,6 +667,15 @@ class AbstractLoad(AbstractDevice):
         self._last_hash_state = None
 
         self.is_load_time_sensitive = False
+
+    def command_and_constraint_reset(self):
+        super().command_and_constraint_reset()
+
+        self.current_constraint_current_value = None
+        self.current_constraint_current_energy = None
+        self.current_constraint_current_percent_completion = None
+        self.next_or_current_constraint_start_time = None
+        self.next_or_current_constraint_end_time = None
 
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
@@ -1345,6 +1362,15 @@ class AbstractLoad(AbstractDevice):
                 self.current_constraint_current_value = None
                 self.current_constraint_current_energy = None
                 self.current_constraint_current_percent_completion = None
+
+        self.next_or_current_constraint_start_time = None
+        self.next_or_current_constraint_end_time = None
+        if self._constraints:
+            c = self._constraints[0]
+            if c.current_start_of_constraint > DATETIME_MIN_UTC:
+                self.next_or_current_constraint_start_time = c.current_start_of_constraint
+            if c.end_of_constraint < DATETIME_MAX_UTC:
+                self.next_or_current_constraint_end_time = c.end_of_constraint
 
         self._last_constraint_update = time
         return force_solving

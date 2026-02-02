@@ -24,7 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def get_readable_date_string(time:datetime | None, for_small_standalone: bool = False) -> str:
-    if time is None or time == DATETIME_MAX_UTC:
+    if time is None or time == DATETIME_MAX_UTC or time == DATETIME_MIN_UTC:
         if for_small_standalone:
             return "--:--"
         else:
@@ -42,7 +42,7 @@ def get_readable_date_string(time:datetime | None, for_small_standalone: bool = 
                 # the target hour/mn/ss is enough to describe unambiguously the target date vs now
                 target = local_target_date.strftime("%H:%M")
             else:
-                target = local_target_date.strftime("%y-%m-%d\n%H:%M")
+                target = local_target_date.strftime("%m-%d\n%H:%M")
         elif local_constraint_day == local_today:
             target = "today " + local_target_date.strftime("%H:%M")
         elif local_constraint_day == local_tomorrow:

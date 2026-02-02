@@ -693,11 +693,17 @@
       "qs_car_person_forecast": {
         "name": "Person Forecasted Mileage"
       },
-      "qs_pool_daily_duration_h": {
-        "name": "Pool Daily Duration (h)"
+      "qs_bistate_current_duration_h": {
+        "name": "Current Duration (h)"
       },
-      "qs_pool_daily_on_h": {
-        "name": "Pool Daily ON Time (h)"
+      "qs_bistate_current_on_h": {
+        "name": "Current ON Time (h)"
+      },
+      "qs_next_or_current_constraint_start_time": {
+        "name": "Next/Current Start Time"
+      },
+      "qs_next_or_current_constraint_end_time": {
+        "name": "Next/Current End Time"
       }
     },
     "button": {
@@ -769,9 +775,9 @@
         "name": "ON/OFF Load Mode",
         "state": {
           "on_off_mode_off": "Force OFF",
-          "bistate_mode_auto": "Use Calendar For End/Duration",
-          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
-          "bistate_mode_default": "Use Default",
+          "bistate_mode_auto": "Calendar: End+Duration",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
           "on_off_mode_on": "Force ON"
         }
       },
@@ -780,8 +786,8 @@
         "state": {
           "on_off_mode_off": "Force OFF",
           "bistate_mode_auto": "Auto from T°",
-          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
-          "bistate_mode_default": "Use Default",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
           "on_off_mode_on": "Force ON",
           "pool_winter_mode": "Winter Mode"
         }
@@ -789,9 +795,9 @@
       "climate_mode": {
         "name": "Climate Control Mode",
         "state": {
-          "bistate_mode_auto": "Use Calendar For End/Duration",
-          "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
-          "bistate_mode_default": "Use Default",
+          "bistate_mode_auto": "Calendar: End+Duration",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
           "off": "Force HVAC Mode OFF",
           "heat": "Force HVAC Mode HEAT",
           "cool": "Force HVAC Mode COOL",

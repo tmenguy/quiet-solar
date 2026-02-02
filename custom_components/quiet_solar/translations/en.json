@@ -378,9 +378,9 @@
                 "name": "Climate Control Mode",
                 "state": {
                     "auto": "Force HVAC Mode AUTO",
-                    "bistate_mode_auto": "Use Calendar For End/Duration",
-                    "bistate_mode_default": "Use Default",
-                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
+                    "bistate_mode_auto": "Calendar: End+Duration",
+                    "bistate_mode_default": "Default: End+Duration",
+                    "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
                     "cool": "Force HVAC Mode COOL",
                     "dry": "Force HVAC Mode DRY",
                     "fan_only": "Force HVAC Mode FAN ONLY",
@@ -428,9 +428,9 @@
             "on_off_mode": {
                 "name": "ON/OFF Load Mode",
                 "state": {
-                    "bistate_mode_auto": "Use Calendar For End/Duration",
-                    "bistate_mode_default": "Use Default",
-                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
+                    "bistate_mode_auto": "Calendar: End+Duration",
+                    "bistate_mode_default": "Default: End+Duration",
+                    "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON"
                 }
@@ -439,8 +439,8 @@
                 "name": "Pool Mode",
                 "state": {
                     "bistate_mode_auto": "Auto from T\u00b0",
-                    "bistate_mode_default": "Use Default",
-                    "bistate_mode_exact_calendar": "Use Exact Calendar Schedule",
+                    "bistate_mode_default": "Default: End+Duration",
+                    "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
                     "on_off_mode_off": "Force OFF",
                     "on_off_mode_on": "Force ON",
                     "pool_winter_mode": "Winter Mode"
@@ -462,6 +462,12 @@
         "sensor": {
             "device_information_storage": {
                 "name": "Device Information Storage"
+            },
+            "qs_bistate_current_duration_h": {
+                "name": "Current Duration (h)"
+            },
+            "qs_bistate_current_on_h": {
+                "name": "Current ON Time (h)"
             },
             "qs_car_autonomy_to_target_soc_km": {
                 "name": "Autonomy to Target SOC (km)"
@@ -523,14 +529,14 @@
             "qs_load_override_state_sensor": {
                 "name": "Load External Override"
             },
+            "qs_next_or_current_constraint_end_time": {
+                "name": "Next/Current End Time"
+            },
+            "qs_next_or_current_constraint_start_time": {
+                "name": "Next/Current Start Time"
+            },
             "qs_person_mileage_prediction_km": {
                 "name": "Predicted Next Day Mileage (km)"
-            },
-            "qs_pool_daily_duration_h": {
-                "name": "Pool Daily Duration (h)"
-            },
-            "qs_pool_daily_on_h": {
-                "name": "Pool Daily ON Time (h)"
             }
         },
         "switch": {

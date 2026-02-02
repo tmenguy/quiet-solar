@@ -9,7 +9,7 @@ import pytz
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, SOLVER_STEP_S
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
-from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC
+from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
@@ -48,6 +48,21 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.is_load_time_sensitive = True
 
         self._last_power_use_computation_time: datetime | None = None
+
+        self.qs_bistate_current_duration_h : float = 0.0
+        self.qs_bistate_current_on_h : float = 0.0
+
+    def update_current_metrics(self, time:datetime, end_range: dt_time | None = None):
+
+        self.qs_bistate_current_on_h = 0
+        self.qs_bistate_current_duration_h = 0
+
+        if self._constraints:
+            ct = self._constraints[0]
+            self.qs_bistate_current_on_h = ct.convert_target_value_to_time(ct.current_value)/3600.0
+            self.qs_bistate_current_duration_h = ct.convert_target_value_to_time(ct.target_value)/3600.0
+
+
 
     async def user_set_default_on_duration(self, float_value: float, for_init:bool = False):
         self.default_on_duration = float_value
@@ -317,6 +332,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 load_param=self.external_user_initiated_state,
                                 load_info={"originator":"user_override"},
                                 from_user=True,
+                                start_time=time,
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,
                                 initial_value=0,
@@ -471,5 +487,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if push_res:
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}")
+
+        self.update_current_metrics(time)
 
         return do_force_next_solve

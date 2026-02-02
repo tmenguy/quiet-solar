@@ -78,8 +78,12 @@ class QsPoolCard extends HTMLElement {
       const sCommand = this._entity(e.command);
       const selPoolMode = this._entity(e.pool_mode);
       const swGreenOnly = this._entity(e.green_only);
+      const swEnableDevice = this._entity(e.enable_device);
 
       const title = (cfg.title || cfg.name) || "Pool";
+      
+      // Check if device is enabled
+      const isEnabled = swEnableDevice?.state === 'on';
       
       // Get pool temperature
       const temp = sTemperature?.state;
@@ -115,6 +119,16 @@ class QsPoolCard extends HTMLElement {
 
       .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
+      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; }
+      .ring .green-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
+      .ring .green-btn.on { border-color: rgba(56,142,60,.45); background: rgba(46,204,113,.14); box-shadow: 0 0 0 3px rgba(46,204,113,.20), 0 0 16px #4CAF50; }
+      .ring .green-btn.on ha-icon { color: #4CAF50; }
+      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; }
+      .ring .power-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
+      .ring .power-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
+      .ring .power-btn.on ha-icon { color: #2196F3; }
+      .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
+      .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(16px); }
       .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
@@ -123,10 +137,6 @@ class QsPoolCard extends HTMLElement {
       .ring .temp-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .stack > * { text-align:center; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:4px; margin-top:8px; }
-      .green-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; top: var(--pad); right: var(--pad); z-index: 10; }
-      .green-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
-      .green-btn.on { border-color: rgba(56,142,60,.45); background: rgba(46,204,113,.14); box-shadow: 0 0 0 3px rgba(46,204,113,.20), 0 0 16px #4CAF50; }
-      .green-btn.on ha-icon { color: #4CAF50; }
 
       select {
         background: var(--ha-card-background, var(--card-background-color));
@@ -192,7 +202,8 @@ class QsPoolCard extends HTMLElement {
       const progressPct = hoursToPct(hoursRun);
       const progressEndDeg = pctToDeg(progressPct);
       
-      // Handle: target hours
+      // Handle: target hours (only show if enabled and valid)
+      const hasValidTarget = isEnabled && targetHours > 0;
       const handlePct = this._targetDragPct != null ? this._targetDragPct : 
                         (this._localTargetPct != null ? this._localTargetPct : hoursToPct(targetHours));
       const handleDeg = pctToDeg(handlePct);
@@ -238,14 +249,14 @@ class QsPoolCard extends HTMLElement {
       ).join('');
 
       this._root.innerHTML = `
-      <ha-card class="card">
+      <ha-card class="card ${!isEnabled ? 'disabled' : ''}">
         <style>${css}</style>
-        <div id="green_btn" class="green-btn ${swGreenOnly?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:leaf"></ha-icon></div>
         <div class="card-title">${title}</div>
         <div class="top"></div>
 
         <div class="hero">
           <div class="ring">
+            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
             <svg viewBox="0 0 320 320" width="300" height="300" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -279,8 +290,10 @@ class QsPoolCard extends HTMLElement {
                     style="mix-blend-mode:screen; will-change: stroke-dashoffset"
               />
               ` : ''}
+              ${hasValidTarget ? `
               <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="var(--primary-color)" stroke-width="3" style="cursor: grab; pointer-events: all;" />
               <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="var(--primary-color)" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${this._fmt(pctToHours(handlePct))}</text>
+              ` : ''}
             </svg>
             <div class="center">
               <div class="stack">
@@ -297,6 +310,7 @@ class QsPoolCard extends HTMLElement {
                 </div>
               </div>
             </div>
+            <div id="green_btn" class="green-btn ${swGreenOnly?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:leaf"></ha-icon></div>
           </div>
         </div>
 
@@ -371,6 +385,29 @@ class QsPoolCard extends HTMLElement {
           if (gbtn) {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
+          }
+      }
+
+      // Power/Enable device toggle button
+      if (swEnableDevice) {
+          const togglePower = async () => {
+              const btn = ids('power_btn');
+              try {
+                  if (swEnableDevice.state === 'on') {
+                      await this._turnOff(e.enable_device);
+                      btn?.classList.remove('on');
+                  } else {
+                      await this._turnOn(e.enable_device);
+                      btn?.classList.add('on');
+                  }
+              } catch (_) {
+                  // ignore errors; HA state will resync UI on next render
+              }
+          };
+          const pbtn = ids('power_btn');
+          if (pbtn) {
+              pbtn.style.pointerEvents = 'auto';
+              pbtn.addEventListener('click', togglePower);
           }
       }
 

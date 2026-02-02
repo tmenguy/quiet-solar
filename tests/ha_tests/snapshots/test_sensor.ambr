@@ -273,6 +273,34 @@
     'state': 'unknown',
   })
 # ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Next/Current End Time',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Next/Current Start Time',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
 # name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_best_power_value-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({

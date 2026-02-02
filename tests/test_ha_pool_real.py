@@ -271,14 +271,14 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_agenda_constraints = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
         result = await pool_device.check_load_activity_and_constraints(time)
 
-        pool_device.push_agenda_constraints.assert_called_once()
-        call_args = pool_device.push_agenda_constraints.call_args
-        constraint = call_args[0][1][0]
+        pool_device.push_live_constraint.assert_called_once()
+        call_args = pool_device.push_live_constraint.call_args
+        constraint = call_args[0][1]
         assert constraint is not None
 
     @pytest.mark.asyncio
@@ -290,14 +290,14 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_agenda_constraints = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=True)
 
         time = datetime.datetime.now(pytz.UTC)
         result = await pool_device.check_load_activity_and_constraints(time)
 
-        pool_device.push_agenda_constraints.assert_called_once()
-        call_args = pool_device.push_agenda_constraints.call_args
-        constraint = call_args[0][1][0]
+        pool_device.push_live_constraint.assert_called_once()
+        call_args = pool_device.push_live_constraint.call_args
+        constraint = call_args[0][1]
         expected_target = pool_device.pool_steps[CONF_POOL_WINTER_IDX][2] * 3600.0
         assert constraint.target_value == expected_target
 
@@ -327,14 +327,14 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_agenda_constraints = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=True)
         pool_home.is_off_grid = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
         await pool_device.check_load_activity_and_constraints(time)
 
-        call_args = pool_device.push_agenda_constraints.call_args
-        constraint = call_args[0][1][0]
+        call_args = pool_device.push_live_constraint.call_args
+        constraint = call_args[0][1]
         assert constraint._type == CONSTRAINT_TYPE_FILLER_AUTO
 
     @pytest.mark.asyncio

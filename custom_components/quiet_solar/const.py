@@ -192,6 +192,8 @@ SENSOR_CONSTRAINT_SENSOR_CHARGE = "qs_constraint_sensor_charge"
 SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
 SENSOR_CONSTRAINT_SENSOR_CLIMATE = "qs_constraint_sensor_climate"
 SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
+SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START = "qs_next_or_current_constraint_start_time"
+SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END = "qs_next_or_current_constraint_end_time"
 
 SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
@@ -203,8 +205,8 @@ SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
 
 SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
 
-SENSOR_POOL_DAILY_DURATION_H = "qs_pool_daily_duration_h"
-SENSOR_POOL_DAILY_ON_H= "qs_pool_daily_on_h"
+SENSOR_BISTATE_CURRENT_DURATION_H = "qs_bistate_current_duration_h"
+SENSOR_BISTATE_CURRENT_ON_H= "qs_bistate_current_on_h"
 
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 

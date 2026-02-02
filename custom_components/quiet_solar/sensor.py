@@ -4,7 +4,9 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Callable
 
+from .ha_model.bistate_duration import QSBiStateDuration
 from .ha_model.pool import QSPool
+from .home_model.constraints import get_readable_date_string
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ from .const import (
     SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT,
     SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
     SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
-    SENSOR_CAR_PERSON_FORECAST, SENSOR_POOL_DAILY_DURATION_H, SENSOR_POOL_DAILY_ON_H
+    SENSOR_CAR_PERSON_FORECAST, SENSOR_BISTATE_CURRENT_DURATION_H, SENSOR_BISTATE_CURRENT_ON_H,
+    SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START, SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END
 )
 from .entity import QSDeviceEntity
 from .ha_model.device import HADeviceMixin
@@ -39,12 +42,12 @@ from .ha_model.home import QSHome
 from .ha_model.person import QSPerson
 from .home_model.load import AbstractDevice, AbstractLoad
 
-def create_ha_sensor_for_QSPool(device: QSPool):
+def create_ha_sensor_for_QSBiStateDuration(device: QSBiStateDuration):
     entities = []
 
     load_current_command = QSSensorEntityDescription(
-        key=SENSOR_POOL_DAILY_DURATION_H,
-        translation_key=SENSOR_POOL_DAILY_DURATION_H,
+        key=SENSOR_BISTATE_CURRENT_DURATION_H,
+        translation_key=SENSOR_BISTATE_CURRENT_DURATION_H,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class = SensorDeviceClass.DURATION
@@ -52,8 +55,8 @@ def create_ha_sensor_for_QSPool(device: QSPool):
     entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
 
     load_current_command = QSSensorEntityDescription(
-        key=SENSOR_POOL_DAILY_ON_H,
-        translation_key=SENSOR_POOL_DAILY_ON_H,
+        key=SENSOR_BISTATE_CURRENT_ON_H,
+        translation_key=SENSOR_BISTATE_CURRENT_ON_H,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION
@@ -233,6 +236,20 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
+        constraints_sensor = QSSensorEntityDescription(
+            key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START,
+            translation_key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START,
+            value_fn=lambda device, key: get_readable_date_string(device.next_or_current_constraint_start_time, for_small_standalone=True)
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
+        constraints_sensor = QSSensorEntityDescription(
+            key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END,
+            translation_key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END,
+            value_fn=lambda device, key: get_readable_date_string(device.next_or_current_constraint_end_time, for_small_standalone=True)
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
+
 
     return entities
 
@@ -325,8 +342,8 @@ def create_ha_sensor(device: AbstractDevice):
         ret.extend(create_ha_sensor_for_QSHome(device))
     elif isinstance(device, QSPerson):
         ret.extend(create_ha_sensor_for_QSPerson(device))
-    elif isinstance(device, QSPool):
-        ret.extend(create_ha_sensor_for_QSPool(device))
+    elif isinstance(device, QSBiStateDuration):
+        ret.extend(create_ha_sensor_for_QSBiStateDuration(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_sensor_for_Load(device))
