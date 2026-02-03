@@ -377,7 +377,7 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_home_is_off_grid") %}
+              {%- set ha_entity = device.ha_entities.get("qs_home_switch_off_grid") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}

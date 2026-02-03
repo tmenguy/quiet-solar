@@ -45,6 +45,9 @@ views:
               {%- if  car_tracker != None %}
               {%-    set trackers_list.trackers = trackers_list.trackers + [(car_tracker, device.name)] %}
               {%- endif %}
+              {%- set ha = device.home.ha_entities %}
+              {%- set e = ha.get("qs_home_is_off_grid") %}
+              {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
               {%- set ha = device.ha_entities %}
               {%- set e = ha.get("qs_car_use_charge_percent_constraints") %}
               {% if e %}use_percent_mode: {{ e.entity_id }}{% endif %}
@@ -79,6 +82,9 @@ views:
               {% if ha.get("car_estimated_range_km") %}range_now: {{ ha.get("car_estimated_range_km").entity_id }}{% endif %}
               {% if ha.get("car_autonomy_to_target_soc_km") %}range_target: {{ ha.get("car_autonomy_to_target_soc_km").entity_id }}{% endif %}
             {%- elif device.device_type == "climate" -%}
+              {%- set ha = device.home.ha_entities %}
+              {%- set e = ha.get("qs_home_is_off_grid") %}
+              {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
               {%- set ha = device.ha_entities %}
               {%- set e = ha.get("qs_bistate_current_duration_h") %}
               {% if e %}duration_limit: {{ e.entity_id }}{% endif %}
@@ -111,6 +117,9 @@ views:
               {%- set e = ha.get("qs_device_clean_and_reset") %}
               {% if e %}reset: {{ e.entity_id }}{% endif %}
             {% elif device.device_type == "pool" -%}
+              {%- set ha = device.home.ha_entities %}
+              {%- set e = ha.get("qs_home_is_off_grid") %}
+              {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
               {%- set ha = device.ha_entities %}
               {% if device.pool_temperature_sensor %}temperature_sensor: {{ device.pool_temperature_sensor }}{% endif %}
               {%- set e = ha.get("qs_bistate_current_duration_h") %}
@@ -130,6 +139,9 @@ views:
               {%- set e = ha.get("default_on_duration") %}
               {% if e %}default_on_duration: {{ e.entity_id }}{% endif %}
             {% elif device.device_type == "on_off_duration" -%}
+              {%- set ha = device.home.ha_entities %}
+              {%- set e = ha.get("qs_home_is_off_grid") %}
+              {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
               {%- set ha = device.ha_entities %}
               {%- set e = ha.get("qs_bistate_current_duration_h") %}
               {% if e %}duration_limit: {{ e.entity_id }}{% endif %}
@@ -163,7 +175,7 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_home_is_off_grid") %}
+              {%- set ha_entity = device.ha_entities.get("qs_home_switch_off_grid") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}

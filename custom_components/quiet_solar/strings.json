@@ -623,6 +623,9 @@
       },
       "qs_car_use_charge_percent_constraints": {
         "name": "Use Charge Percent Constraints"
+      },
+      "qs_home_is_off_grid": {
+        "name": "Is Off-Grid"
       }
     },
 
@@ -754,7 +757,7 @@
       "qs_enable_device": {
         "name": "Enabled for quiet solar"
       },
-      "qs_home_is_off_grid": {
+      "qs_home_switch_off_grid": {
         "name": "Set Off-Grid"
       }
     },

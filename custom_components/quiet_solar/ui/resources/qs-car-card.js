@@ -93,8 +93,12 @@ class QsCarCard extends HTMLElement {
       const sRangeTarget = this._entity(e.range_target);
       const sPersonForecast = this._entity(e.person_forecast);
       const sUsePercentMode = this._entity(e.use_percent_mode);
+      const sIsOffGrid = this._entity(e.is_off_grid);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
+      
+      // Check if system is off-grid
+      const isOffGrid = sIsOffGrid?.state === 'on';
       let soc = this._percent(sSoc?.state);
       const power = sPower?.state || "0";
       const target = selLimit?.state || "";
@@ -202,6 +206,7 @@ class QsCarCard extends HTMLElement {
       const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); }
+      .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:260px; margin-left:auto; margin-right:auto; }
@@ -434,7 +439,7 @@ class QsCarCard extends HTMLElement {
       const displayTitle = title;
 
       this._root.innerHTML = `
-      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''}">
+      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
         <div class="card-title">${displayTitle}</div>
         <div class="top"></div>

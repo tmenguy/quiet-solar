@@ -86,11 +86,15 @@ class QsClimateCard extends HTMLElement {
       const sOverrideState = this._entity(e.override_state);
       const sStartTime = this._entity(e.start_time);
       const sEndTime = this._entity(e.end_time);
+      const sIsOffGrid = this._entity(e.is_off_grid);
 
       const title = (cfg.title || cfg.name) || "Climate";
       
       // Check if device is enabled
       const isEnabled = swEnableDevice?.state === 'on';
+      
+      // Check if system is off-grid
+      const isOffGrid = sIsOffGrid?.state === 'on';
       
       // Get target hours and current run hours directly (in hours)
       const targetHours = Number(sDurationLimit?.state || 12);
@@ -186,6 +190,7 @@ class QsClimateCard extends HTMLElement {
       const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); position: relative; }
+      .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 8px; width:260px; margin-left:auto; margin-right:auto; }
@@ -430,7 +435,7 @@ class QsClimateCard extends HTMLElement {
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
       this._root.innerHTML = `
-      <ha-card class="card ${!isEnabled ? 'disabled' : ''}">
+      <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
         <div class="card-title">${title}</div>
         <div class="top"></div>

@@ -209,8 +209,8 @@ SENSOR_BISTATE_CURRENT_DURATION_H = "qs_bistate_current_duration_h"
 SENSOR_BISTATE_CURRENT_ON_H= "qs_bistate_current_on_h"
 
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
-
 BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"
+BINARY_SENSOR_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
@@ -257,7 +257,7 @@ BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS = "qs_device_clean_command_and_const
 
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 SWITCH_ENABLE_DEVICE = "qs_enable_device"
-SWITCH_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
+SWITCH_HOME_IS_OFF_GRID = "qs_home_switch_off_grid"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"

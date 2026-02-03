@@ -8,9 +8,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED, BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS
+from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED, BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS, \
+    BINARY_SENSOR_HOME_IS_OFF_GRID
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
+from .ha_model.home import QSHome
 from .home_model.load import AbstractDevice, PilotedDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,6 +26,18 @@ def create_ha_binary_sensor_for_PilotedDevice(device: PilotedDevice):
         key="is_piloted_device_activated",
         translation_key=BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
         value_fn=lambda d, key: d.is_piloted_device_activated,
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
+
+    return entities
+
+def create_ha_binary_sensor_for_QSHome(device: QSHome):
+    """Create binary sensors for a QSHome."""
+    entities = []
+
+    piloted_activated = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_HOME_IS_OFF_GRID,
+        translation_key=BINARY_SENSOR_HOME_IS_OFF_GRID
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
 
@@ -53,6 +67,9 @@ def create_ha_binary_sensor(device: AbstractDevice):
 
     if isinstance(device, QSCar):
         ret.extend(create_ha_binary_sensor_for_QSCar(device))
+
+    if isinstance(device, QSHome):
+        ret.extend(create_ha_binary_sensor_for_QSHome(device))
 
     return ret
 
