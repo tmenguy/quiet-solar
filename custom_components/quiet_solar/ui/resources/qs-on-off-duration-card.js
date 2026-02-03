@@ -296,16 +296,29 @@ class QsOnOffDurationCard extends HTMLElement {
           `<option value="${o}" ${o === modeState ? 'selected' : ''}>${translateBistateMode(o)}</option>`
       ).join('');
 
+      // Parse override command from override state
+      const parseOverrideCommand = (overrideStateStr) => {
+        if (!overrideStateStr || overrideStateStr === 'NO OVERRIDE') return null;
+        const match = String(overrideStateStr).match(/Override:\s*(.+)/i);
+        return match ? match[1].trim() : null;
+      };
+      
+      const overrideCommand = parseOverrideCommand(overrideState);
+      const overrideCommandLower = overrideCommand ? overrideCommand.toLowerCase() : '';
+      
+      // Check if override is for "off" state (ends with "off")
+      const isOverrideOff = overrideCommand && overrideCommandLower.endsWith('off');
+
       // Override button classes
       let overrideBtnClass = 'override-btn';
       let overrideBtnIcon = 'mdi:hand-back-right-off';
       let overrideBtnClickable = false;
       if (isResettingOverride) {
         overrideBtnClass += ' resetting disabled';
-        overrideBtnIcon = 'mdi:hand-back-right';
+        overrideBtnIcon = isOverrideOff ? 'mdi:power-off' : 'mdi:hand-back-right';
       } else if (isOverridden) {
         overrideBtnClass += ' active';
-        overrideBtnIcon = 'mdi:hand-back-right';
+        overrideBtnIcon = isOverrideOff ? 'mdi:power-off' : 'mdi:hand-back-right';
         overrideBtnClickable = true;
       }
 
