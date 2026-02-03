@@ -134,6 +134,55 @@ class QsClimateCard extends HTMLElement {
       const startTime = (sStartTime && isValidState(sStartTime.state)) ? sStartTime.state : '--:--';
       const endTime = (sEndTime && isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
       
+      // Color schemes based on climate_state_on - MUST BE DEFINED BEFORE CSS
+      const climateStateOn = (selClimateStateOn?.state || 'cool').toLowerCase();
+      const colorSchemes = {
+        cool: {
+          primary: '#2196F3',
+          gradStart: '#00bcd4',
+          gradEnd: '#8bc34a',
+          animStart: '#00e1ff',
+          animEnd: '#0066ff'
+        },
+        heat: {
+          primary: '#FF5722',
+          gradStart: '#FF5722',
+          gradEnd: '#D32F2F',
+          animStart: '#FF6E40',
+          animEnd: '#E64A19'
+        },
+        heat_cool: {
+          primary: '#9C27B0',
+          gradStart: '#9C27B0',
+          gradEnd: '#BA68C8',
+          animStart: '#AB47BC',
+          animEnd: '#8E24AA'
+        },
+        auto: {
+          primary: '#9C27B0',
+          gradStart: '#9C27B0',
+          gradEnd: '#BA68C8',
+          animStart: '#AB47BC',
+          animEnd: '#8E24AA'
+        },
+        fan_only: {
+          primary: '#00BCD4',
+          gradStart: '#00BCD4',
+          gradEnd: '#4DD0E1',
+          animStart: '#00E5FF',
+          animEnd: '#00B8D4'
+        },
+        dry: {
+          primary: '#D4A574',
+          gradStart: '#D4A574',
+          gradEnd: '#E6C9A8',
+          animStart: '#E0B589',
+          animEnd: '#C9935D'
+        }
+      };
+      
+      const colors = colorSchemes[climateStateOn] || colorSchemes.cool;
+      
       const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); position: relative; }
@@ -166,7 +215,7 @@ class QsClimateCard extends HTMLElement {
       .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(-5px); }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 2.5rem; line-height: 1.1; }
+      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; width: 220px; margin: 0 auto; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:6px; }
       .ring .from-to-row { display:flex; justify-content:space-between; width:140px; margin-top: 8px; gap:20px; }
@@ -181,9 +230,10 @@ class QsClimateCard extends HTMLElement {
       .ring .override-btn.active ha-icon { color: #FF9800; }
       .ring .override-btn.resetting { border-color: rgba(76,175,80,.45); background: rgba(76,175,80,.14); }
       .ring .override-btn.resetting ha-icon { color: #4CAF50; }
-      .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; margin-top: 6px; }
-      .time-btn:hover { border-color: var(--primary-color); background: rgba(255,255,255,.08); }
-      .time-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; color: #2196F3; }
+      .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; line-height: 1; margin-top: 6px; }
+      .time-btn:hover { border-color: ${colors.primary}; background: rgba(255,255,255,.08); }
+      .time-btn { color: ${colors.primary}; }
+      .time-btn.on { border-color: ${colors.primary}; background: color-mix(in srgb, ${colors.primary} 14%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, ${colors.primary} 20%, transparent), 0 0 16px ${colors.primary}; color: ${colors.primary}; }
 
       select {
         background: var(--ha-card-background, var(--card-background-color));
@@ -318,6 +368,7 @@ class QsClimateCard extends HTMLElement {
           `<option value="${o}" ${o === stateOnState ? 'selected' : ''}>${translateClimateState(o)}</option>`
       ).join('');
 
+      // Override button - parse and determine icon
       // Parse override command from override state
       const parseOverrideCommand = (overrideStateStr) => {
         if (!overrideStateStr || overrideStateStr === 'NO OVERRIDE') return null;
@@ -390,12 +441,12 @@ class QsClimateCard extends HTMLElement {
             <svg viewBox="0 0 320 320" width="300" height="300" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#00bcd4"/>
-                  <stop offset="100%" stop-color="#8bc34a"/>
+                  <stop offset="0%" stop-color="${colors.gradStart}"/>
+                  <stop offset="100%" stop-color="${colors.gradEnd}"/>
                 </linearGradient>
                 <linearGradient id="${gradRunningId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#00e1ff"/>
-                  <stop offset="100%" stop-color="#0066ff"/>
+                  <stop offset="0%" stop-color="${colors.animStart}"/>
+                  <stop offset="100%" stop-color="${colors.animEnd}"/>
                 </linearGradient>
                 <filter id="runningGlow" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="2" result="blur" />
@@ -421,8 +472,8 @@ class QsClimateCard extends HTMLElement {
               />
               ` : ''}
               ${canDragHandle ? `
-              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="var(--primary-color)" stroke-width="3" style="cursor: grab; pointer-events: all;" />
-              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="var(--primary-color)" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${this._fmt(pctToHours(handlePct))}</text>
+              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${colors.primary}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
+              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${colors.primary}" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${this._fmt(pctToHours(handlePct))}</text>
               ` : ''}
             </svg>
             <div class="center">
@@ -432,7 +483,7 @@ class QsClimateCard extends HTMLElement {
                   <div class="target-value">
                     <span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span>
                     <span style="color: var(--primary-text-color);"> / </span>
-                    <span style="color: var(--primary-color);">${this._fmt(displayTargetHours)}h</span>
+                    <span style="color: ${colors.primary};">${this._fmt(displayTargetHours)}h</span>
                   </div>
                 </div>
                 ${showFromTo ? `
@@ -778,7 +829,7 @@ class QsClimateCard extends HTMLElement {
                   }
                   const tv = this._root.querySelector('.target-value');
                   if (tv) {
-                      tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: var(--primary-color);">${this._fmt(snapHours, false)}h</span>`;
+                      tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: ${colors.primary};">${this._fmt(snapHours, false)}h</span>`;
                   }
               };
               
