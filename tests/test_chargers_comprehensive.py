@@ -876,8 +876,8 @@ class TestQSChargerOCPP(unittest.TestCase):
         
         self.assertEqual(charger.charger_device_ocpp, "device_456")
         # FIXED: The _find_charger_entity_id method returns computed entity ID even when not found
-        self.assertEqual(charger.charger_ocpp_current_import, "sensor.ocppdevice_current_import")
-        self.assertIsNone(charger.charger_ocpp_power_active_import)
+        self.assertEqual(charger.charger_ocpp_power_active_import, "sensor.ocppdevice_power_active_import")
+        self.assertIsNone(charger.charger_ocpp_current_import)
     
     def test_init_without_device(self):
         """Test QSChargerOCPP initialization without device."""
