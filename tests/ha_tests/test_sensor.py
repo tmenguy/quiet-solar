@@ -1,9 +1,11 @@
 """Tests for quiet_solar sensor platform."""
 
 from collections.abc import Generator
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -15,6 +17,8 @@ from custom_components.quiet_solar.const import DOMAIN
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+# Fixed time for snapshot tests so timestamps are deterministic
+FROZEN_TEST_TIME = "2025-01-01T12:00:00-08:00"
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -24,8 +28,10 @@ async def test_home_sensors(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
     snapshot: SnapshotAssertion,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test home sensors are created with correct states."""
+    freezer.move_to(FROZEN_TEST_TIME)
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -54,10 +60,12 @@ async def test_car_sensors(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
     snapshot: SnapshotAssertion,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test car sensors are created with correct states."""
     from .const import MOCK_CAR_CONFIG
 
+    freezer.move_to(FROZEN_TEST_TIME)
     # Setup home first
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -97,10 +105,12 @@ async def test_person_sensors(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
     snapshot: SnapshotAssertion,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test person sensors are created with correct states."""
     from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
+    freezer.move_to(FROZEN_TEST_TIME)
     # Setup dependencies
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -151,10 +161,12 @@ async def test_charger_sensors(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
     snapshot: SnapshotAssertion,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test charger sensors are created with correct states."""
     from .const import MOCK_CHARGER_CONFIG
 
+    freezer.move_to(FROZEN_TEST_TIME)
     # Setup home first
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()

@@ -4,6 +4,9 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from pathlib import Path
+import json
+from dataclasses import dataclass
+from typing import Any
 
 import pytz
 
@@ -20,6 +23,163 @@ from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.car import QSCar
 
 
+
+@dataclass
+class SimpleState:
+    """Minimal stand-in for HA state objects used by tests."""
+    entity_id: str
+    state: str
+    attributes: dict[str, Any]
+    last_updated: datetime
+    last_changed: datetime  # <-- add this
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "SimpleState":
+        lu = datetime.fromisoformat(d["last_updated"])
+        # If older JSON doesn't have last_changed, default it to last_updated
+        lc_str = d.get("last_changed")
+        lc = datetime.fromisoformat(lc_str) if lc_str else lu
+
+        return SimpleState(
+            entity_id=d["entity_id"],
+            state=str(d.get("state", "")),
+            attributes=dict(d.get("attributes") or {}),
+            last_updated=lu,
+            last_changed=lc,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entity_id": self.entity_id,
+            "state": self.state,
+            "attributes": self.attributes,
+            "last_updated": self.last_updated.isoformat(),
+            "last_changed": self.last_changed.isoformat(),
+        }
+
+def _state_to_simple_dict(s: Any) -> dict[str, Any]:
+    # Prefer HA's last_changed if present; otherwise fall back to last_updated
+    last_updated = getattr(s, "last_updated")
+    last_changed = getattr(s, "last_changed", None) or last_updated
+
+    return SimpleState(
+        entity_id=getattr(s, "entity_id"),
+        state=str(getattr(s, "state", "")),
+        attributes=dict(getattr(s, "attributes", None) or {}),
+        last_updated=last_updated,
+        last_changed=last_changed,
+    ).to_dict()
+
+def _rebuild_state_list(lst: list[dict[str, Any]]) -> list[SimpleState]:
+    return [SimpleState.from_dict(d) for d in lst]
+
+
+def _convert_day_entry_to_json(day_entry: Any) -> list[Any]:
+    start, end, car_data, person_data = day_entry
+
+    car_out: list[Any] = []
+    for car_name, car_positions, car_odos in car_data:
+        car_out.append(
+            [
+                car_name,
+                [_state_to_simple_dict(s) for s in (car_positions or [])],
+                [_state_to_simple_dict(s) for s in (car_odos or [])],
+            ]
+        )
+
+    person_out: list[Any] = []
+    for person_entity_id, person_positions in person_data:
+        person_out.append(
+            [
+                person_entity_id,
+                [_state_to_simple_dict(s) for s in (person_positions or [])],
+            ]
+        )
+
+    return [start.isoformat(), end.isoformat(), car_out, person_out]
+
+def _rebuild_day_entry_from_json(day_entry: Any) -> tuple[datetime, datetime, list[Any], list[Any]]:
+    start_s, end_s, car_data, person_data = day_entry
+    start = datetime.fromisoformat(start_s)
+    end = datetime.fromisoformat(end_s)
+
+    car_out: list[Any] = []
+    for car_name, car_positions, car_odos in car_data:
+        car_out.append(
+            (
+                car_name,
+                _rebuild_state_list(car_positions or []),
+                _rebuild_state_list(car_odos or []),
+            )
+        )
+
+    person_out: list[Any] = []
+    for person_entity_id, person_positions in person_data:
+        person_out.append(
+            (
+                person_entity_id,
+                _rebuild_state_list(person_positions or []),
+            )
+        )
+
+    return (start, end, car_out, person_out)
+
+def convert_pickle_like_payload_to_json_payload(person_and_car_data: dict[str, Any]) -> dict[str, Any]:
+    """One-time converter if you can still load the old pickle somewhere."""
+    out: dict[str, Any] = {
+        "time": person_and_car_data["time"].isoformat(),
+        "local_day_utc": person_and_car_data.get("local_day_utc").isoformat()
+        if person_and_car_data.get("local_day_utc") is not None
+        else None,
+        "per_day": [_convert_day_entry_to_json(d) for d in person_and_car_data.get("per_day", [])],
+        "full_range": _convert_day_entry_to_json(person_and_car_data["full_range"])
+        if person_and_car_data.get("full_range") is not None
+        else None,
+    }
+    return out
+
+def rebuild_payload_from_json_payload(json_payload: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the structure expected by tests, using SimpleState objects."""
+    out: dict[str, Any] = {
+        "time": datetime.fromisoformat(json_payload["time"]),
+        "local_day_utc": datetime.fromisoformat(json_payload["local_day_utc"])
+        if json_payload.get("local_day_utc")
+        else None,
+        "per_day": [_rebuild_day_entry_from_json(d) for d in json_payload.get("per_day", [])],
+        "full_range": _rebuild_day_entry_from_json(json_payload["full_range"])
+        if json_payload.get("full_range") is not None
+        else None,
+    }
+    return out
+
+def _write_json_fixture_once(test_data_path: Path, *, force: bool = False) -> Path:
+    """
+    One-time converter:
+    - reads `person_and_car.pickle`
+    - converts to JSON-safe payload via `convert_pickle_like_payload_to_json_payload`
+    - writes `person_and_car.json`
+
+    If `force` is False, it won't overwrite an existing JSON file.
+    """
+    pickle_file = test_data_path / "person_and_car.pickle"
+    json_file = test_data_path / "person_and_car.json"
+
+    if json_file.exists() and not force:
+        return json_file
+
+    assert pickle_file.exists(), f"Test data file not found: {pickle_file}"
+
+    with pickle_file.open("rb") as f:
+        data: dict[str, Any] = pickle.load(f)
+
+    payload = convert_pickle_like_payload_to_json_payload(data)
+
+    json_file.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return json_file
+
 class TestPersonsCarForecast:
     """Test person and car forecast computation."""
 
@@ -32,13 +192,14 @@ class TestPersonsCarForecast:
 
     @pytest.fixture
     def person_and_car_data(self, test_data_path):
-        """Load the pickled person and car data."""
-        pickle_file = test_data_path / "person_and_car.pickle"
-        assert pickle_file.exists(), f"Test data file not found: {pickle_file}"
+        """Load person and car data from a JSON fixture (pickle-free)."""
+        json_file = _write_json_fixture_once(test_data_path, force=False)
+        json_file = test_data_path / "person_and_car.json"
 
-        with open(pickle_file, 'rb') as f:
-            data = pickle.load(f)
+        assert json_file.exists(), f"Test data file not found: {json_file}"
 
+        payload = json.loads(json_file.read_text(encoding="utf-8"))
+        data = rebuild_payload_from_json_payload(payload)
         return data
 
     @pytest.fixture

@@ -504,7 +504,7 @@ class HADeviceMixin:
         data = {ATTR_ENTITY_ID: self.calendar}
         service = calendar.SERVICE_GET_EVENTS
         data[calendar.EVENT_START_DATETIME] = time
-        data[calendar.EVENT_DURATION] = end_time - time
+        data[calendar.EVENT_END_DATETIME] = end_time
         domain = calendar.DOMAIN
 
         try:

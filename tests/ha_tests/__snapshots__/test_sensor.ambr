@@ -1,0 +1,142 @@
+# serializer version: 1
+# name: test_car_sensors[sensor.qs_test_car_car_best_power_value-state]
+  <state sensor.qs_test_car_car_best_power_value=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=car Test Car Power Consumption @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_car_autonomy_to_target_soc_km-state]
+  <state sensor.qs_test_car_car_car_autonomy_to_target_soc_km=unknown; state_class=measurement, unit_of_measurement=km, attribution=Data provided by QuietSolarAbstraction, device_class=distance, friendly_name=car Test Car Autonomy to Target SOC (km) @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_car_charge_time-state]
+  <state sensor.qs_test_car_car_car_charge_time=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Charge ETA @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_car_charge_type-state]
+  <state sensor.qs_test_car_car_car_charge_type=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Charge Type @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_car_estimated_range_km-state]
+  <state sensor.qs_test_car_car_car_estimated_range_km=unknown; state_class=measurement, unit_of_measurement=km, attribution=Data provided by QuietSolarAbstraction, device_class=distance, friendly_name=car Test Car Estimated Range (km) @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_car_soc_percentage-state]
+  <state sensor.qs_test_car_car_car_soc_percentage=unknown; state_class=measurement, unit_of_measurement=%, attribution=Data provided by QuietSolarAbstraction, device_class=battery, friendly_name=car Test Car Current Charge @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_current_constraint_car-state]
+  <state sensor.qs_test_car_car_current_constraint_car=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Next Charge @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_current_constraint_current_energy-state]
+  <state sensor.qs_test_car_car_current_constraint_current_energy=unknown; unit_of_measurement=Wh, attribution=Data provided by QuietSolarAbstraction, device_class=energy, friendly_name=car Test Car Constraint Current Energy @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_device_information_storage-state]
+  <state sensor.qs_test_car_car_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Device Information Storage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_load_current_command-state]
+  <state sensor.qs_test_car_car_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Load Current Command @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_car_sensors[sensor.qs_test_car_car_qs_car_person_forecast-state]
+  <state sensor.qs_test_car_car_qs_car_person_forecast=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Car Person Forecasted Mileage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_best_power_value-state]
+  <state sensor.qs_test_charger_charger_generic_best_power_value=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=charger Test Charger Power Consumption @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint-state]
+  <state sensor.qs_test_charger_charger_generic_current_constraint=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Next Charge @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_energy-state]
+  <state sensor.qs_test_charger_charger_generic_current_constraint_current_energy=unknown; unit_of_measurement=Wh, attribution=Data provided by QuietSolarAbstraction, device_class=energy, friendly_name=charger Test Charger Constraint Current Energy @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_percent_completion-state]
+  <state sensor.qs_test_charger_charger_generic_current_constraint_current_percent_completion=unknown; state_class=measurement, unit_of_measurement=%, attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Constraint % completion @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_value-state]
+  <state sensor.qs_test_charger_charger_generic_current_constraint_current_value=unknown; state_class=measurement, attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Constraint Current Value @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_device_information_storage-state]
+  <state sensor.qs_test_charger_charger_generic_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Device Information Storage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_load_current_command-state]
+  <state sensor.qs_test_charger_charger_generic_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Load Current Command @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time-state]
+  <state sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Next/Current End Time @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time-state]
+  <state sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=charger Test Charger Next/Current Start Time @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_best_power_value-state]
+  <state sensor.qs_test_charger_generic_car_car_best_power_value=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=car Test Charger generic car Power Consumption @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_car_charge_time-state]
+  <state sensor.qs_test_charger_generic_car_car_car_charge_time=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Charge ETA @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_car_charge_type-state]
+  <state sensor.qs_test_charger_generic_car_car_car_charge_type=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Charge Type @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_current_constraint_car-state]
+  <state sensor.qs_test_charger_generic_car_car_current_constraint_car=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Next Charge @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_current_constraint_current_energy-state]
+  <state sensor.qs_test_charger_generic_car_car_current_constraint_current_energy=unknown; unit_of_measurement=Wh, attribution=Data provided by QuietSolarAbstraction, device_class=energy, friendly_name=car Test Charger generic car Constraint Current Energy @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_device_information_storage-state]
+  <state sensor.qs_test_charger_generic_car_car_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Device Information Storage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_load_current_command-state]
+  <state sensor.qs_test_charger_generic_car_car_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Load Current Command @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_qs_car_person_forecast-state]
+  <state sensor.qs_test_charger_generic_car_car_qs_car_person_forecast=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=car Test Charger generic car Person Forecasted Mileage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_device_information_storage-state]
+  <state sensor.qs_test_home_home_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=home Test Home Device Information Storage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_home_available_power-state]
+  <state sensor.qs_test_home_home_home_available_power=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_extra_available_power @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_home_consumption-state]
+  <state sensor.qs_test_home_home_home_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_consumption_power @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_home_non_controlled_consumption-state]
+  <state sensor.qs_test_home_home_home_non_controlled_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_non_controlled_consumption_power @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_load_current_command-state]
+  <state sensor.qs_test_home_home_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=home Test Home Load Current Command @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_15mn-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_15mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_15mn @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_1h-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_1h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_1h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_30mn-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_30mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_30mn @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_3h-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_3h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_3h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_6h-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_6h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_6h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_now-state]
+  <state sensor.qs_test_home_home_qs_no_control_forecast_now=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_now @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_solar_forecast_15mn-state]
+  <state sensor.qs_test_home_home_qs_solar_forecast_15mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_solar_forecast_15mn @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_solar_forecast_1h-state]
+  <state sensor.qs_test_home_home_qs_solar_forecast_1h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_solar_forecast_1h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_solar_forecast_30mn-state]
+  <state sensor.qs_test_home_home_qs_solar_forecast_30mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_solar_forecast_30mn @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_solar_forecast_3h-state]
+  <state sensor.qs_test_home_home_qs_solar_forecast_3h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_solar_forecast_3h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_home_sensors[sensor.qs_test_home_home_qs_solar_forecast_6h-state]
+  <state sensor.qs_test_home_home_qs_solar_forecast_6h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_solar_forecast_6h @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_person_sensors[sensor.qs_test_person_person_device_information_storage-state]
+  <state sensor.qs_test_person_person_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=person Test Person Device Information Storage @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_person_sensors[sensor.qs_test_person_person_load_current_command-state]
+  <state sensor.qs_test_person_person_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=person Test Person Load Current Command @ 2025-01-01T12:00:00-08:00>
+# ---
+# name: test_person_sensors[sensor.qs_test_person_person_person_mileage_prediction-state]
+  <state sensor.qs_test_person_person_person_mileage_prediction=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=person Test Person Predicted Next Day Mileage (km) @ 2025-01-01T12:00:00-08:00>
+# ---

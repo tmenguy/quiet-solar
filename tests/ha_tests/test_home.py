@@ -147,7 +147,7 @@ async def test_home_off_grid_switch(hass: HomeAssistant, home_config_entry: Conf
     """Test home off-grid switch entity."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
-    state = hass.states.get("switch.qs_test_home_home_qs_home_is_off_grid")
+    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
     assert state is not None
     assert state.state == "off"
 

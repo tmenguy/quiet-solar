@@ -894,8 +894,13 @@ def create_real_home_for_dashboard(hass, dashboard_sections=None):
         "qs_home_generate_yaml_dashboard": MockEntity("button.home_generate_dashboard", "Generate Dashboard"),
     }
 
-    home.devices = [car, climate, pool, battery, person, home_device]
+    devices = [car, climate, pool, battery, person, home_device]
 
+    # Fix: templates expect each device to have a `.home` attribute
+    for device in devices:
+        device.home = home
+
+    home.devices = devices
     return home
 
 
@@ -1066,6 +1071,7 @@ async def test_real_dashboard_yaml_with_empty_sections():
         car.ha_entities = {
             "car_soc_percentage": MockEntity("sensor.test_car_soc", "Battery Level"),
         }
+        car.home = mock_home  # Ensure the car has a reference to the home
         mock_home.devices = [car]
 
         with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
@@ -1132,6 +1138,9 @@ async def test_real_dashboard_yaml_multiple_device_types():
         devices.append(home_device)
 
         mock_home.devices = devices
+
+        for device in devices:
+            device.home = mock_home  # Ensure each device has a reference to the home
 
         with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
             await generate_dashboard_yaml(mock_home)

@@ -39,30 +39,30 @@ async def test_home_off_grid_switch_toggle(
     await hass.async_block_till_done()
 
     # Find off-grid switch
-    state = hass.states.get("switch.qs_test_home_home_qs_home_is_off_grid")
+    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
     assert state is not None
     assert state.state == "off"
 
     # Turn on
     await hass.services.async_call(
         "switch", "turn_on",
-        {"entity_id": "switch.qs_test_home_home_qs_home_is_off_grid"},
+        {"entity_id": "switch.qs_test_home_home_qs_home_switch_off_grid"},
         blocking=True
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("switch.qs_test_home_home_qs_home_is_off_grid")
+    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
     assert state.state == "on"
 
     # Turn off
     await hass.services.async_call(
         "switch", "turn_off",
-        {"entity_id": "switch.qs_test_home_home_qs_home_is_off_grid"},
+        {"entity_id": "switch.qs_test_home_home_qs_home_switch_off_grid"},
         blocking=True
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("switch.qs_test_home_home_qs_home_is_off_grid")
+    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
     assert state.state == "off"
 
 

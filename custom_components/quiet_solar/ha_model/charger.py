@@ -3755,7 +3755,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                 clip_to_zero_under_power=self.charger_consumption_W)
         added_percent = None
 
-        real_car_added_nrj = added_nrj / self.efficiency_factor
+        real_car_added_nrj = None
+
+        if added_nrj is not None:
+            real_car_added_nrj = added_nrj / self.efficiency_factor
 
         if self.car.car_battery_capacity is not None and real_car_added_nrj is not None and self.car.car_battery_capacity > 0:
             added_percent = (100.0 * real_car_added_nrj) / self.car.car_battery_capacity
@@ -3871,6 +3874,26 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     charger_is_zero = self.is_charging_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
 
                     father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+
+                    # If this charger has no accurate power sensor but the group does,
+                    # and no other charger in the group is expected to be charging,
+                    # then the group's power reading can be attributed to this charger alone
+                    if charger_is_zero is None or (charger_is_zero != father_is_zero) and self.accurate_power_sensor is None and \
+                            self.father_device.accurate_power_sensor is not None:
+                        other_charger_charging = any(
+                            c._expected_charge_state.value is True
+                            for c in self.charger_group._chargers
+                            if c is not self
+                        )
+                        if not other_charger_charging:
+                            # We are the only charger charging in this group:
+                            # the group sensor value reflects this charger alone
+                            charger_is_zero = father_is_zero
+                            _LOGGER.info(
+                                f"update_value_callback:{self.name} {self.car.name} "
+                                f"using group power sensor as charger has no accurate sensor "
+                                f"and no other charger is charging in group: "
+                                f"father_is_zero={father_is_zero}")
 
                     if father_is_zero is not None and father_is_zero is True:
                         # if the group is zero ... it means no power is going to the cars at all .. so not to this one either
@@ -4391,88 +4414,88 @@ class QSChargerOCPP(QSChargerGeneric):
 
         try:
             _LOGGER.info(f"Received OCPP notification for charger {self.name}: {title} - {message}")
-            
+
             # Analyze the notification content and take appropriate actions
             message_lower = message.lower()
             title_lower = title.lower()
-            
+
             # Check for conditions that require a reboot
             reboot_triggers = [
                 "firmware upload status",
-                "configuration changed", 
+                "configuration changed",
                 "reset required",
                 "reboot required",
                 "restart needed",
                 "configuration update",
                 "profile updated"
             ]
-            
+
             should_reboot = False
             for trigger in reboot_triggers:
                 if trigger in message_lower:
                     should_reboot = True
                     _LOGGER.info(f"OCPP notification indicates reboot needed: {trigger}")
                     break
-            
+
             # Check for error conditions that might need attention
             error_triggers = [
                 "error",
-                "failed", 
+                "failed",
                 "fault",
                 "warning",
                 "exception",
                 "timeout"
             ]
-            
+
             is_error = False
             for error_trigger in error_triggers:
                 if error_trigger in message_lower:
                     is_error = True
                     _LOGGER.warning(f"OCPP notification indicates error condition: {error_trigger}")
                     break
-            
+
             # Take automated actions based on notification content
             current_time = datetime.now(pytz.UTC)
-            
+
             if should_reboot and self.can_reboot():
                 _LOGGER.info(f"Automatically rebooting charger {self.name} due to OCPP notification: {message}")
                 await self.reboot(current_time)
-                
+
             elif is_error:
                 # For error conditions, we might want to reset the charger state or take other actions
                 _LOGGER.info(f"Handling error condition for charger {self.name}: {message}")
-                
+
                 # Reset the charger's internal state if it's having issues
                 if "connection" in message_lower or "communication" in message_lower:
                     self._reset_state_machine()
                     _LOGGER.info(f"Reset state machine for charger {self.name} due to communication issues")
-                
+
                 # If the charger reports being unavailable, mark it as such
                 if "unavailable" in message_lower or "offline" in message_lower:
                     self.status = "unavailable"
                     _LOGGER.info(f"Marked charger {self.name} as unavailable due to OCPP notification")
-            
-            # Log successful operations  
+
+            # Log successful operations
             elif any(keyword in message_lower for keyword in ["success", "completed", "ready", "available"]):
                 _LOGGER.info(f"OCPP operation successful for charger {self.name}: {message}")
-                
+
                 # If charger is back online, ensure it's marked as available
                 if "available" in message_lower or "ready" in message_lower:
                     self.status = "ok"
                     _LOGGER.info(f"Marked charger {self.name} as available due to OCPP notification")
-            
+
             # Handle firmware update notifications
             elif "firmware" in message_lower:
                 _LOGGER.info(f"Firmware-related notification for charger {self.name}: {message}")
-                
+
                 if "upload status" in message_lower and ("completed" in message_lower or "success" in message_lower):
                     _LOGGER.info(f"Firmware upload completed for charger {self.name}, scheduling reboot")
                     await self.reboot(current_time)
-            
+
             # Handle diagnostic upload notifications
             elif "diagnostic" in message_lower:
                 _LOGGER.info(f"Diagnostic-related notification for charger {self.name}: {message}")
-            
+
             # General notification logging
             else:
                 _LOGGER.info(f"General OCPP notification for charger {self.name}: {message}")
@@ -4781,3 +4804,5 @@ class QSChargerWallbox(QSChargerGeneric):
         return [
             WallboxChargerStatus.DISCONNECTED.value,
         ]
+
+

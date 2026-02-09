@@ -58,7 +58,7 @@ class Battery(AbstractDevice):
             charging_power = min(charging_power, max_inverter_dc_to_ac_power)
 
         if self.charge_from_grid is False:
-            if solar_production < charging_power:
+            if solar_production < 0.99*charging_power: # a bit of legroom ...1% for the trace
                 _LOGGER.warning(
                     f"get_best_charge_power: clamping charging_power:{charging_power} > solar_production:{solar_production}")
 

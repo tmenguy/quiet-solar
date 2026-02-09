@@ -1345,7 +1345,8 @@ class QSHome(QSDynamicGroup):
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
                 maximum_production_output = self.get_current_maximum_production_output_power()
 
-                if solar_production_minus_battery + self.home_available_power > (1.05*maximum_production_output): # 5% tolerance
+                if self.home_available_power > (1.05*maximum_production_output): # 5% tolerance
+
                     if self.battery is not None:
                         max_battery_discharge = self.battery.battery_get_current_possible_max_discharge_power()
                     else:
@@ -1356,8 +1357,8 @@ class QSHome(QSDynamicGroup):
                     else:
                         solar_production = -1
 
-                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, maximum_production_output - solar_production_minus_battery), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
-                    self.home_available_power = max(0.0, 1.05*(maximum_production_output - solar_production_minus_battery))
+                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, 1.05*maximum_production_output), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
+                    self.home_available_power = max(0.0, 1.05*(maximum_production_output))
 
         val = self.home_non_controlled_consumption
 
