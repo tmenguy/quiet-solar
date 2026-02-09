@@ -4348,7 +4348,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return []
 
 
-
+# for OCPP charger : OCPP integration , do no use automatic measurehands ... and select the power active import one at minimum
 class QSChargerOCPP(QSChargerGeneric):
 
     conf_type_name = CONF_TYPE_NAME_QSChargerOCPP
@@ -4391,20 +4391,20 @@ class QSChargerOCPP(QSChargerGeneric):
             kwargs[CONF_CHARGER_STATUS_SENSOR] = self._find_charger_entity_id(device, entries, "sensor.", "_status_connector")
             # kwargs[CONF_CHARGER_REBOOT_BUTTON] = self._find_charger_entity_id(device, entries, "button.", "_reset")
 
-            self.charger_ocpp_current_import = self._find_charger_entity_id(device, entries, "sensor.", "_current_import")
+            # self.charger_ocpp_current_import = self._find_charger_entity_id(device, entries, "sensor.", "_current_import")
             # measured current ... but well not super usefull as even if 0 charge in case of error ... there is still a value there ex for the twingo :
             # it was below 7amp (the car minimum) at 6.67, even if we had 15 in _current_offered ... the car was not charging
 
-            # this one below is updated every 15mn and can give if some energy has really been in to the car
-            # TODO: use it to throw alterts in case it should charge ... and it is not!
-            # self.charger_energy_active_import = self._find_charger_entity_id(device, entries, "sensor.", "_energy_active_import_register")
+
+            self.charger_ocpp_power_active_import = self._find_charger_entity_id(device, entries, "sensor.",
+                                                                            "_power_active_import")
 
 
         super().__init__(**kwargs)
 
-        self.secondary_power_sensor = self.charger_ocpp_current_import # it is one phase (so need 3x for 3 phases sum)
-        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self.convert_ocpp_current_import_amps_to_W)
-        # self.attach_power_to_probe(self.charger_ocpp_power_active_import)
+        self.secondary_power_sensor = self.charger_ocpp_power_active_import # it is one phase (so need 3x for 3 phases sum)
+        #self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_ocpp_current_import_amps_to_W)
+        self.attach_power_to_probe(self.secondary_power_sensor)
 
     async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
         """Handle notifications from the OCPP integration and take automated actions."""
@@ -4505,6 +4505,8 @@ class QSChargerOCPP(QSChargerGeneric):
 
     def get_probable_entities(self) -> list[str]:
         entities = super().get_probable_entities()
+        if self.charger_ocpp_power_active_import is not None:
+            entities.append(self.charger_ocpp_power_active_import)
         if self.charger_ocpp_current_import is not None:
             entities.append(self.charger_ocpp_current_import)
         if self.charger_ocpp_transaction_id is not None:
