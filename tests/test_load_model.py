@@ -320,28 +320,6 @@ def test_is_load_has_command_now_or_coming():
     assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is True
 
 
-@pytest.mark.asyncio
-async def test_launch_qs_command_back_uses_idle():
-    """Test launch_qs_command_back falls back to idle."""
-    mock_home = create_minimal_home_model()
-    mock_home.voltage = 230.0
-    mock_home.is_off_grid = MagicMock(return_value=False)
-    mock_home.dashboard_sections = None
-
-    load = _CommandLoad(
-        name="Load",
-        device_type="load",
-        home=mock_home,
-        power=1000,
-    )
-    load.launch_command = AsyncMock()
-
-    await load.launch_qs_command_back(datetime.now(pytz.UTC))
-
-    load.launch_command.assert_awaited_once()
-    assert load.current_command is None
-    assert load.running_command is None
-
 
 @pytest.mark.asyncio
 async def test_launch_command_handles_execute_error():

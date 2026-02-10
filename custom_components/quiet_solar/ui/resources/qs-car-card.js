@@ -404,7 +404,7 @@ class QsCarCard extends HTMLElement {
       const gradFaultId = `gradF-${Math.floor(Math.random() * 1e6)}`;
       const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
       const chargeTypeState = (sChargeType?.state || '').toLowerCase();
-      const isFaulted = chargeTypeState === 'faulted' || chargeTypeState === 'unknown' || chargeTypeState === 'not charging' || chargeTypeState === 'no power to car';
+      const isFaulted = chargeTypeState === 'faulted' || chargeTypeState === 'unknown' || chargeTypeState === 'no power to car';
 
       const chargerOptions = selCharger?.attributes?.options || [];
       const chargerState = (selCharger?.state || '').trim();

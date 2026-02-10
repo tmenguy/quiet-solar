@@ -105,7 +105,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY, \
     CAR_CHARGE_TYPE_TARGET_MET, CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CHARGER_CHARGING_CURRENT_SENSOR, \
     CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR, \
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, CAR_CHARGE_ERROR
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, CAR_CHARGE_NO_POWER_ERROR
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
     MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
 from ..ha_model.car import QSCar
@@ -850,13 +850,13 @@ class QSChargerGroup(object):
             # if actionable_chargers[0].possible_amps[0] is not 0: ... it will be started by nature right after in the normal _do_prepare_budgets_for_algo
             if actionable_chargers[0].current_real_max_charging_amp == 0 and (actionable_chargers[0].possible_amps[0] == 0 and len(actionable_chargers[0].possible_amps) > 1):
                 do_try_to_stop_other_chargers = True
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"budgeting_algorithm_minimize_diffs: DO TRY RESET ALLOCATION for not charging best charger {actionable_chargers[0].name}")
 
             elif actionable_chargers[0].current_real_max_charging_amp > 0 and actionable_chargers[0].charger.qs_bump_solar_charge_priority:
                 # if there is a bump solar charge priority, we may want to stop all the other chargers to allow the best one to charge
                 do_try_to_stop_other_chargers = True
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"budgeting_algorithm_minimize_diffs: DO TRY RESET ALLOCATION for bump solar best charger {actionable_chargers[0].name}")
 
             if do_try_to_stop_other_chargers:
@@ -2060,7 +2060,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} for {self.car.name} score:{score} possible_amps:{cs.possible_amps} possible_num_phases:{cs.possible_num_phases} current_amps:{cs.get_current_charging_amps()} command:{cs.command}")
 
+        native_score_span_duration, native_score_span_battery, native_score_span = self._get_normalized_score_native_spans()
         cs.charge_score = score
+
+        if cs.possible_amps is not None and len(cs.possible_amps) > 0 and cs.possible_amps[0] > 0:
+            cs.charge_score += native_score_span # to be sure that we are above the ones that are not forced to charge
 
         return cs
 
@@ -2095,13 +2099,18 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return is_before_battery
 
+    def _get_normalized_score_native_spans(self):
+        native_score_span_duration = 1000
+        native_score_span_battery  = 1000
+        native_score_span = native_score_span_duration * native_score_span_battery
+
+        return native_score_span_duration, native_score_span_battery, native_score_span
+
     def get_normalized_score(self, ct:LoadConstraint|None, time:datetime, score_span:int = 0) -> float:
         if self.car is None:
             return 0.0
 
-        native_score_span_duration = 1000
-        native_score_span_battery  = 1000
-        native_score_span = native_score_span_duration * native_score_span_battery
+        native_score_span_duration, native_score_span_battery, native_score_span = self._get_normalized_score_native_spans()
 
         if score_span <= 0:
             score_span = native_score_span
@@ -2675,7 +2684,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.detach_car() # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
-                    self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name, for_full_reset=False)
+                    if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name, for_full_reset=False):
+                        do_force_solve = True
 
             if not self.car:
                 # we may have some saved constraints that have been loaded already from the storage at init
@@ -2685,7 +2695,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     do_full_reset = False
                 else:
                     do_full_reset = True
-                self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=best_car.name, for_full_reset=do_full_reset)
+                if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=best_car.name, for_full_reset=do_full_reset):
+                    do_force_solve = True
                 self.attach_car(best_car, time)
 
             # we have to check if the car supports soc percent charge constraints, ie that it has at least a soc percent sensor, and a known battery capacity
@@ -2924,9 +2935,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # we found and removed a previous person based constraint, or anything not as it should be there
                     if person is not None:
 
-                        self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
+                        if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
                                                                                               load_info={"person": person.name},
-                                                                                              for_full_reset=False)
+                                                                                              for_full_reset=False):
+                            do_force_solve = True
 
                         for old_ct in self._auto_constraints_cleaned_at_user_reset:
                             if old_ct.load_param == self.car.name and old_ct.load_info is not None and old_ct.load_info.get("person") == person.name:
@@ -2945,8 +2957,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                                                 is_target_percent=is_target_percent,
                                                                 accept_bigger_tolerance=True)
 
-                        if is_car_charged is False:
+                        if is_car_charged is True:
+                            _LOGGER.info(f"check_load_activity_and_constraints: plugged car {self.car.name} is already charged enough for the next person {person.name} usage at {next_usage_time} need min target charge {person_min_target_charge}")
+                        else:
                             do_remove_all_person_constraints = False
+
+                            target_charge = person_min_target_charge
 
                             # we should check if there is not an existing person constraint and replace it by this one?
                             for ct in self._constraints:
@@ -3000,9 +3016,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     if do_remove_all_person_constraints:
                         # we should remove ALL previous person based constraints from this car
-                        self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
+                        _LOGGER.info(
+                            f"check_load_activity_and_constraints: plugged car {self.car.name} do_remove_all_person_constraints")
+
+                        if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(time, load_param=self.car.name,
                                                                                               load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
-                                                                                              for_full_reset=False)
+                                                                                              for_full_reset=False):
+                            do_force_solve = True
 
             if realized_charge_target is None or (is_target_percent and realized_charge_target < self.car.car_default_charge):
 
@@ -3394,10 +3414,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             charging_current = self.get_charging_current()
             if charging_current is None:
+                _LOGGER.info(
+                    f"is_car_stopped_asking_current: because charging_current None")
                 return None
 
             # check that in fact the car could receive something...if not it may be waiting for power but cant get it
             if charging_current < self.min_charge:
+                _LOGGER.info(
+                    f"is_car_stopped_asking_current: because charging_current {charging_current} < {self.min_charge}")
                 return None
 
             status_vals = self.get_car_stopped_asking_current_status_vals()
@@ -3559,7 +3583,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return CAR_CHARGE_TYPE_FAULTED, None
 
         if self.possible_charge_error_start_time is not None:
-            return CAR_CHARGE_ERROR, None
+            return CAR_CHARGE_NO_POWER_ERROR, None
 
         if self.car is None:
             return CAR_CHARGE_TYPE_NOT_PLUGGED, None
@@ -3871,38 +3895,34 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 if is_growing is None or is_growing is False:
                     # check power to be sure
 
-                    charger_is_zero = self.is_charging_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+                    for_duration = CHARGER_CHECK_REAL_POWER_WINDOW_S
 
-                    father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S)
+                    charger_is_zero = self.is_charging_power_zero(time=time, for_duration=for_duration)
+
+                    father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=for_duration)
 
                     # If this charger has no accurate power sensor but the group does,
                     # and no other charger in the group is expected to be charging,
                     # then the group's power reading can be attributed to this charger alone
-                    if charger_is_zero is None or (charger_is_zero != father_is_zero) and self.accurate_power_sensor is None and \
-                            self.father_device.accurate_power_sensor is not None:
-                        other_charger_charging = any(
-                            c._expected_charge_state.value is True
-                            for c in self.charger_group._chargers
-                            if c is not self
-                        )
-                        if not other_charger_charging:
-                            # We are the only charger charging in this group:
-                            # the group sensor value reflects this charger alone
-                            charger_is_zero = father_is_zero
-                            _LOGGER.info(
-                                f"update_value_callback:{self.name} {self.car.name} "
-                                f"using group power sensor as charger has no accurate sensor "
-                                f"and no other charger is charging in group: "
-                                f"father_is_zero={father_is_zero}")
 
-                    if father_is_zero is not None and father_is_zero is True:
-                        # if the group is zero ... it means no power is going to the cars at all .. so not to this one either
-                        charger_is_zero = True
-                    elif charger_is_zero is not None and charger_is_zero is True:
-                        # direct measure on the car is zero ... so we are sure
-                        charger_is_zero = True
-                    elif charger_is_zero is not None and charger_is_zero is False:
-                        charger_is_zero = False
+                    if charger_is_zero is None or (self.accurate_power_sensor is None and self.father_device.accurate_power_sensor is not None):
+
+                        # group sensor can be more trusted than the charger sensor
+                        if father_is_zero is not None and father_is_zero is True:
+                            charger_is_zero = True
+                        elif father_is_zero is not None and father_is_zero is False:
+                            other_charger_charging = any(
+                                c.is_charge_enabled(time=time, for_duration=for_duration) is True
+                                for c in self.charger_group._chargers
+                                if c is not self
+                            )
+                            if not other_charger_charging:
+                                charger_is_zero = False
+                                _LOGGER.info(
+                                    f"update_value_callback:{self.name} {self.car.name} "
+                                    f"using group power sensor as charger has no accurate sensor "
+                                    f"and no other charger is charging in group: "
+                                    f"father_is_zero={father_is_zero}")
 
 
                 if charger_is_zero is True:
@@ -3936,7 +3956,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
 
-        if is_car_stopped_asked_current:
+        if is_car_stopped_asked_current is True:
             # force met constraint: car is charged in all cases
             result = target_charge
         elif current_charge is not None:
@@ -3967,6 +3987,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if ct.is_constraint_met(time=time, current_value=current_charge):
                         # force met constraint
                         result = ct.target_value
+
+        if current_charge is None:
+            _LOGGER.info(f"is_car_charged: {self.name} current charge unknown")
+            return False, result
 
         return result == target_charge, result
 
@@ -4052,8 +4076,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         result = None
         if is_plugged and self.car is not None:
-            _LOGGER.info(f"called again compute_and_launch_new_charge_state command {command}")
-            self._probe_and_enforce_stopped_charge_command_state(time, command=command)
+            _LOGGER.info(f"probe_if_command_set: command {command} for {self.car.name}")
+            self._probe_and_enforce_stopped_charge_command_state(time, command=command, probe_only=True)
             result = await self._ensure_correct_state(time, probe_only=True)
         else:
             if command.is_off_or_idle():

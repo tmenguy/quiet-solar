@@ -239,13 +239,16 @@ class AbstractDevice(object):
 
     # for class overcharging reset
     def reset(self):
+        _LOGGER.info(f"Reset device {self.name}")
         self.command_and_constraint_reset()
         self.reset_daily_load_datas()
 
     async def user_clean_and_reset(self):
+        _LOGGER.info(f"user_clean_and_reset device {self.name}")
         self.reset()
 
     async def user_clean_constraints(self):
+        _LOGGER.info(f"user_clean_constraints device {self.name}")
         self.command_and_constraint_reset()
 
     @property
@@ -437,17 +440,6 @@ class AbstractDevice(object):
         if self._stacked_command is not None:
             return True
         return False
-
-    async def launch_qs_command_back(self, time: datetime, ctxt="NO CTXT"):
-        current = self.running_command
-        if current is None:
-            current = self.current_command
-        if current is None:
-            current = CMD_IDLE
-
-        self.current_command = None
-        self.running_command = None
-        await self.launch_command(time=time, command=current, ctxt=ctxt)
 
     async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
         if self.qs_enable_device is False:
@@ -1193,7 +1185,7 @@ class AbstractLoad(AbstractDevice):
                     return False
                 if  c.end_of_constraint == constraint.end_of_constraint or (c.as_fast_as_possible and constraint.as_fast_as_possible):
                     if c.score(time) == constraint.score(time):
-                        _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date as another one, and same score")
+                        _LOGGER.debug(f"Constraint not pushed because same end date as another one, and same score or type old: {c.name} new not added {constraint.name}")
                         c.carry_info_from_other_constraint(constraint)
                         return False
                     else:
