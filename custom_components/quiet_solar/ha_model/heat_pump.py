@@ -18,9 +18,6 @@ class QSHeatPump(HADeviceMixin, PilotedDevice):
     def get_platforms(self):
 
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
+        parent = set(parent)
         parent.update([Platform.BINARY_SENSOR])
         return list(parent)

@@ -779,13 +779,13 @@ class QSHome(QSDynamicGroup):
 
         timings = sorted(timings)
 
-        def interpolate_positions(ts1, ts2, target_time):
-            delta = abs((ts2[0] - ts1[0]).total_seconds())
-            if delta == 0:
-                return (ts1[0], ts2[1])
-            lat = ts1[1][0] + (ts2[1][0] - ts1[1][0]) * ((target_time - ts1[0]).total_seconds()) / delta
-            lon = ts1[1][1] + (ts2[1][1] - ts1[1][1]) * ((target_time - ts1[0]).total_seconds()) / delta
-            return (target_time, (lat, lon))
+        # def interpolate_positions(ts1, ts2, target_time):
+        #     delta = abs((ts2[0] - ts1[0]).total_seconds())
+        #     if delta == 0:
+        #         return (ts1[0], ts2[1])
+        #     lat = ts1[1][0] + (ts2[1][0] - ts1[1][0]) * ((target_time - ts1[0]).total_seconds()) / delta
+        #     lon = ts1[1][1] + (ts2[1][1] - ts1[1][1]) * ((target_time - ts1[0]).total_seconds()) / delta
+        #     return (target_time, (lat, lon))
 
         mapped_path = []
         for t in timings:
@@ -1177,10 +1177,7 @@ class QSHome(QSDynamicGroup):
 
     def get_platforms(self):
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
+        parent = set(parent)
         parent.update([ Platform.SENSOR, Platform.SELECT, Platform.BUTTON, Platform.SWITCH ])
         return list(parent)
 
@@ -2404,7 +2401,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
     async def init_forecasts(self, time: datetime):
 
-        if self._in_reset is False and self.home_non_controlled_consumption is None:
+        if self._in_reset is False and self.home_non_controlled_consumption is None and self.home is not None:
             self.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             await self.home_non_controlled_consumption.init(time)
 
@@ -2441,9 +2438,6 @@ class QSHomeConsumptionHistoryAndForecast:
             # compute from history all the values that are not yet computed ... from "true HA" sensors, not QS computed ones
 
             # start with home consumption
-
-            battery_charge = None
-
             strt = BEGINING_OF_TIME
             end = time + timedelta(days=1)
 
@@ -2494,7 +2488,8 @@ class QSHomeConsumptionHistoryAndForecast:
                         if is_one_bad is False and battery_charge is not None:
                             solar_production_minus_battery.values = self._combine_stored_forecast_values(solar_production_minus_battery.values, battery_charge.values, do_add=False)
 
-            values_for_debug["solar_minus_battery"] = np.copy(solar_production_minus_battery.values)
+            if solar_production_minus_battery is not None:
+                values_for_debug["solar_minus_battery"] = np.copy(solar_production_minus_battery.values)
 
             home_consumption = None
             _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
@@ -2539,7 +2534,7 @@ class QSHomeConsumptionHistoryAndForecast:
                 piloted_sets = set()
                 ha_entity_to_read = {}
 
-                for load in self._all_loads:
+                for load in self.home._all_loads:
                     if load.qs_enable_device is False:
                         continue
                     if len(load.devices_to_pilot) != 0:
@@ -2565,10 +2560,7 @@ class QSHomeConsumptionHistoryAndForecast:
                             ha_best_entity_id = device.accurate_power_sensor
                     else:
 
-                        if not isinstance(device, AbstractLoad):
-                            continue
-
-                        if device.load_is_auto_to_be_boosted:
+                        if isinstance(device, AbstractLoad) and device.load_is_auto_to_be_boosted:
                             continue
 
                         if not isinstance(device, HADeviceMixin):
@@ -2672,8 +2664,6 @@ class QSHomeConsumptionHistoryAndForecast:
                 _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
                 self.home_non_controlled_consumption = None
 
-            self._in_reset = False
-
         else:
             home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
             await home_non_controlled_consumption.init(time, for_reset=True)
@@ -2681,6 +2671,7 @@ class QSHomeConsumptionHistoryAndForecast:
             _LOGGER.info(f"Resetting home consumption LIGHT")
             self.home_non_controlled_consumption = None
 
+        self._in_reset = False
         await self.init_forecasts(time)
         return True
 
@@ -3410,7 +3401,11 @@ class QSSolarHistoryVals:
         if for_reset:
             self.values = None
         else:
-            await aiofiles.os.makedirs(self.storage_path, exist_ok=True)
+            if self.hass is not None:
+                await aiofiles.os.makedirs(self.storage_path, exist_ok=True)
+            else:
+                import os
+                os.makedirs(self.storage_path, exist_ok=True)
             self.values = await self.read_values_async()
 
         last_bad_idx = None

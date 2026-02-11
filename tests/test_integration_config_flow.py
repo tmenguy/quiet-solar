@@ -55,6 +55,13 @@ from custom_components.quiet_solar.const import (
     CONF_PERSON_PERSON_ENTITY,
     CONF_PERSON_AUTHORIZED_CARS,
     CONF_PERSON_PREFERRED_CAR,
+    CONF_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_CLIMATE_HVAC_MODE_ON,
+    CONF_DEVICE_TO_PILOT_NAME,
+    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_TYPE_NAME_QSHeatPump,
+    CONF_TYPE_NAME_QSClimateDuration,
 )
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.home import QSHome
@@ -63,6 +70,7 @@ from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.person import QSPerson
+from custom_components.quiet_solar.ha_model.heat_pump import QSHeatPump
 
 from tests.factories import create_minimal_home_model
 
@@ -595,3 +603,340 @@ async def test_options_flow_person_includes_authorized_cars(
     schema = result["data_schema"]
     assert _schema_has_key(schema, CONF_PERSON_PERSON_ENTITY)
     assert _schema_has_key(schema, CONF_PERSON_AUTHORIZED_CARS)
+
+
+# =============================================================================
+# Heat Pump Config Flow Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_flow_heat_pump_step_shows_form(hass: HomeAssistant, mock_data_handler):
+    """Test heat pump configuration step shows form with expected fields."""
+    mock_data_handler.home = create_minimal_home_model()
+    mock_data_handler.home._all_dynamic_groups = [MagicMock()]
+
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    result = await flow.async_step_heat_pump()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == QSHeatPump.conf_type_name
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_NAME)
+    assert _schema_has_key(schema, CONF_POWER)
+    assert _schema_has_key(schema, CONF_IS_3P)
+    assert _schema_has_key(schema, CONF_NUM_MAX_ON_OFF)
+
+
+@pytest.mark.asyncio
+async def test_flow_heat_pump_step_creates_entry(hass: HomeAssistant, mock_data_handler):
+    """Test heat pump configuration creates entry with correct data."""
+    mock_data_handler.home = create_minimal_home_model()
+    mock_data_handler.home._all_dynamic_groups = [MagicMock()]
+
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    user_input = {
+        CONF_NAME: "My Heat Pump",
+        CONF_POWER: 2000,
+        CONF_IS_3P: True,
+    }
+
+    with patch.object(flow, "async_set_unique_id", new_callable=AsyncMock):
+        result = await flow.async_step_heat_pump(user_input)
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NAME] == "My Heat Pump"
+    assert result["data"][CONF_POWER] == 2000
+    assert result["data"][DEVICE_TYPE] == QSHeatPump.conf_type_name
+
+
+@pytest.mark.asyncio
+async def test_options_flow_heat_pump_shows_form(hass: HomeAssistant, mock_data_handler):
+    """Test heat pump options flow shows form with existing data."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_heat_pump_opt_123",
+        data={
+            CONF_NAME: "Test Heat Pump",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSHeatPump,
+            CONF_POWER: 3000,
+            CONF_IS_3P: False,
+        },
+        title="heat_pump: Test Heat Pump",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_data_handler.home = create_minimal_home_model()
+    mock_data_handler.home._all_dynamic_groups = [MagicMock()]
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_heat_pump()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == CONF_TYPE_NAME_QSHeatPump
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_NAME)
+    assert _schema_has_key(schema, CONF_POWER)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_heat_pump_updates_entry(hass: HomeAssistant, mock_data_handler):
+    """Test heat pump options flow updates entry with new data."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_heat_pump_upd_123",
+        data={
+            CONF_NAME: "Test Heat Pump",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSHeatPump,
+            CONF_POWER: 2000,
+        },
+        title="heat_pump: Test Heat Pump",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_data_handler.home = create_minimal_home_model()
+    mock_data_handler.home._all_dynamic_groups = [MagicMock()]
+
+    flow = _init_options_flow(hass, config_entry)
+
+    user_input = {
+        CONF_NAME: "Updated Heat Pump",
+        CONF_POWER: 4000,
+        CONF_IS_3P: True,
+    }
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_heat_pump(user_input)
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert config_entry.data[CONF_NAME] == "Updated Heat Pump"
+    assert config_entry.data[CONF_POWER] == 4000
+
+
+# =============================================================================
+# Climate with Heat Pump Options Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_climate_step_with_heat_pumps_and_default(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Test climate step shows heat pump selector with default value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_climate_hp_default_123",
+        data={
+            CONF_NAME: "Test Climate",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSClimateDuration,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_DEVICE_TO_PILOT_NAME: "My Heat Pump",
+        },
+        title="climate: Test Climate",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "My Heat Pump"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["off", "heat"],
+    ):
+        result = await flow.async_step_climate()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_DEVICE_TO_PILOT_NAME)
+
+
+@pytest.mark.asyncio
+async def test_climate_step_with_heat_pumps_no_default(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Test climate step shows heat pump selector without default value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_climate_hp_nodef_123",
+        data={
+            CONF_NAME: "Test Climate",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSClimateDuration,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+        },
+        title="climate: Test Climate",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp1 = MagicMock()
+    mock_hp1.name = "Heat Pump A"
+    mock_hp2 = MagicMock()
+    mock_hp2.name = "Heat Pump B"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp1, mock_hp2]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["off", "heat"],
+    ):
+        result = await flow.async_step_climate()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_DEVICE_TO_PILOT_NAME)
+
+
+@pytest.mark.asyncio
+async def test_climate_step_without_heat_pumps(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Test climate step works when no heat pumps are available."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_climate_no_hp_123",
+        data={
+            CONF_NAME: "Test Climate",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSClimateDuration,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+        },
+        title="climate: Test Climate",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["off", "heat"],
+    ):
+        result = await flow.async_step_climate()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    # No heat pump selector should be present
+    assert not _schema_has_key(schema, CONF_DEVICE_TO_PILOT_NAME)
+
+
+@pytest.mark.asyncio
+async def test_climate_step_with_heat_pump_user_input(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Test climate step creates entry with heat pump selection."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_climate_hp_input_123",
+        data={
+            CONF_NAME: "Test Climate",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSClimateDuration,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+        },
+        title="climate: Test Climate",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "My Heat Pump"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    user_input = {
+        CONF_NAME: "Test Climate",
+        CONF_POWER: 1000,
+        CONF_CLIMATE: "climate.living_room",
+        CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        CONF_CLIMATE_HVAC_MODE_ON: "heat",
+        CONF_DEVICE_TO_PILOT_NAME: "My Heat Pump",
+    }
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_climate(user_input)
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert config_entry.data[CONF_DEVICE_TO_PILOT_NAME] == "My Heat Pump"
+
+
+# =============================================================================
+# Person notification time with existing default
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_options_flow_person_notification_time_with_default(
+    hass: HomeAssistant,
+    mock_data_handler,
+):
+    """Test person options show notification time with existing default."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_person_notif_123",
+        data={
+            CONF_NAME: "Test Person",
+            DEVICE_TYPE: QSPerson.conf_type_name,
+            CONF_PERSON_NOTIFICATION_TIME: "08:30:00",
+        },
+        title="person: Test Person",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set("person.test_person", "home", {})
+
+    mock_home = create_minimal_home_model()
+    mock_home._cars = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_person()
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_PERSON_NOTIFICATION_TIME)
+
+
+# =============================================================================
+# QSFlowHandler.is_creation_flow
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_flow_handler_is_creation_flow(hass: HomeAssistant):
+    """Test QSFlowHandler.is_creation_flow returns True."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+    assert flow.is_creation_flow() is True

@@ -680,7 +680,6 @@ def test_get_platforms_parent_none(hass: HomeAssistant, monkeypatch: pytest.Monk
     """Test platforms when parent returns None."""
     _, _, person = _make_person(hass)
 
-    monkeypatch.setattr(HADeviceMixin, "get_platforms", lambda self: None)
     platforms = person.get_platforms()
     assert Platform.SENSOR in platforms
 

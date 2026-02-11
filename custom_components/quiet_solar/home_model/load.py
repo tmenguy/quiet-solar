@@ -668,6 +668,7 @@ class AbstractLoad(AbstractDevice):
         self.current_constraint_current_percent_completion = None
         self.next_or_current_constraint_start_time = None
         self.next_or_current_constraint_end_time = None
+        self._last_completed_constraint = None
 
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
@@ -893,11 +894,6 @@ class AbstractLoad(AbstractDevice):
         if not self._constraints:
             return False
         return True
-
-
-    def command_and_constraint_reset(self):
-        super().command_and_constraint_reset()
-        self._last_completed_constraint = None
 
     def _match_ct(self, ct:LoadConstraint, load_param:str|None, load_info:dict | None = None) -> bool:
         if ct.load_param != load_param:

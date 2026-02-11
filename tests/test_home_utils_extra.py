@@ -83,3 +83,31 @@ def test_get_average_time_series_single_value() -> None:
     now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
     data = [(now, None, {})]
     assert get_average_time_series(data) == 0.0
+
+
+def test_is_amps_zero_all_zeros() -> None:
+    """Test is_amps_zero returns True when all elements are zero."""
+    assert is_amps_zero([0, 0, 0]) is True
+    assert is_amps_zero([0.0, 0.0, 0.0]) is True
+
+
+def test_min_amps_right_none() -> None:
+    """Test min_amps when only right_amps is None."""
+    result = min_amps([1.0, 2.0, 3.0], None)
+    assert result == [1.0, 2.0, 3.0]
+
+
+def test_max_amps_left_none() -> None:
+    """Test max_amps when only left_amps is None."""
+    result = max_amps(None, [4.0, 5.0, 6.0])
+    assert result == [4.0, 5.0, 6.0]
+
+
+def test_get_average_time_series_empty_after_geometric_filter() -> None:
+    """Test get_average_time_series returns 0 when geometric_mean filters all entries."""
+    data = [
+        (None, 10.0, {}),
+        (None, None, {}),
+    ]
+    result = get_average_time_series(data, geometric_mean=True)
+    assert result == 0

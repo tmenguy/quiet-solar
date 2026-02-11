@@ -143,10 +143,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
     def get_platforms(self):
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
+        parent = set(parent)
         parent.update([ Platform.SENSOR, Platform.SWITCH, Platform.SELECT, Platform.TIME, Platform.NUMBER ])
         return list(parent)
 

@@ -84,7 +84,8 @@ class TestForecast(TestCase):
 
             # nothing is here
             conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
-            await conso.init_forecasts(time)
+            conso.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso)
+            await conso.home_non_controlled_consumption.init(time)
 
             now_idx, day_idx = conso.home_non_controlled_consumption.get_index_from_time(time)
             t = conso.home_non_controlled_consumption.get_utc_time_from_index(now_idx, day_idx)
@@ -143,7 +144,8 @@ class TestForecast(TestCase):
             home = QSHome(hass=None, config_entry=None, name="test_home", **kwargs)
 
             conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
-            await conso.init_forecasts(time)
+            conso.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso)
+            await conso.home_non_controlled_consumption.init(time)
 
             conso_forecast = conso.home_non_controlled_consumption.compute_now_forecast(time_now=time, history_in_hours=24, future_needed_in_hours=FLOATING_PERIOD_S // 3600)
 

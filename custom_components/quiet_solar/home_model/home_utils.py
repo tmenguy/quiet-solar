@@ -154,15 +154,15 @@ def hungarian_algorithm(cost_matrix: np.ndarray) -> Dict[int, int]:
     original_n_cols = n_cols
 
     if n_rows != n or n_cols != n:
-        padded = np.full((n, n), cost_matrix.max() + 1e6)
+        padded = np.full((n, n), np.amax(cost_matrix) + 1e6)
         padded[:n_rows, :n_cols] = cost_matrix
         cost_matrix = padded
 
     # Step 1: Subtract row minimums
-    cost_matrix = cost_matrix - cost_matrix.min(axis=1, keepdims=True)
+    cost_matrix = cost_matrix - np.amin(cost_matrix, axis=1, keepdims=True)
 
     # Step 2: Subtract column minimums
-    cost_matrix = cost_matrix - cost_matrix.min(axis=0, keepdims=True)
+    cost_matrix = cost_matrix - np.amin(cost_matrix, axis=0, keepdims=True)
 
     # Step 3-6: Iterative covering and augmenting
     max_iterations = n * n
@@ -189,7 +189,7 @@ def hungarian_algorithm(cost_matrix: np.ndarray) -> Dict[int, int]:
             # All elements are covered, force break
             break
 
-        min_uncovered = uncovered_values.min()
+        min_uncovered = np.amin(uncovered_values)
 
         # Adjust matrix
         cost_matrix[~covered_rows[:, None] & ~covered_cols[None, :]] -= min_uncovered

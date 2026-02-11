@@ -480,10 +480,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
     def get_platforms(self):
         """Return the platforms that this device supports."""
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
+        parent = set(parent)
         parent.update([Platform.SENSOR])
         return list(parent)
 

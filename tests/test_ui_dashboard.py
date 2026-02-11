@@ -14,6 +14,8 @@ from custom_components.quiet_solar.ui.dashboard import (
     generate_dashboard_resource_qs_tag,
     generate_dashboard_resource_namespace,
     _get_resource_handler,
+    _get_resource_handler_from_hass,
+    _register_panel,
     update_resource,
     generate_dashboard_yaml,
     _async_copy_and_register_resources,
@@ -1252,3 +1254,250 @@ async def test_real_template_rendering_valid_view_structure():
         assert first_view["type"] == "sections", "View type is not 'sections'"
         assert "title" in first_view, "View doesn't have title"
         assert "sections" in first_view, "View doesn't have sections"
+
+
+# =============================================================================
+# Tests for _register_panel (lines 90-100)
+# =============================================================================
+
+
+def test_register_panel_with_sidebar_enabled():
+    """Test _register_panel calls frontend with sidebar args when show_in_sidebar is True."""
+    mock_hass = MagicMock()
+    dashboard_def = {
+        "url_path": "test-dash",
+        "require_admin": False,
+        "show_in_sidebar": True,
+        "title": "Test Dashboard",
+        "icon": "mdi:test-icon",
+    }
+    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+        _register_panel(mock_hass, dashboard_def)
+        mock_fe.async_register_built_in_panel.assert_called_once()
+        kwargs = mock_fe.async_register_built_in_panel.call_args[1]
+        assert kwargs["frontend_url_path"] == "test-dash"
+        assert kwargs["require_admin"] is False
+        assert kwargs["update"] is False
+        assert kwargs["sidebar_title"] == "Test Dashboard"
+        assert kwargs["sidebar_icon"] == "mdi:test-icon"
+
+
+def test_register_panel_without_sidebar():
+    """Test _register_panel omits sidebar args when show_in_sidebar is False."""
+    mock_hass = MagicMock()
+    dashboard_def = {
+        "url_path": "test-dash",
+        "require_admin": True,
+        "show_in_sidebar": False,
+        "title": "Hidden Dashboard",
+    }
+    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+        _register_panel(mock_hass, dashboard_def)
+        mock_fe.async_register_built_in_panel.assert_called_once()
+        kwargs = mock_fe.async_register_built_in_panel.call_args[1]
+        assert kwargs["frontend_url_path"] == "test-dash"
+        assert kwargs["require_admin"] is True
+        assert "sidebar_title" not in kwargs
+        assert "sidebar_icon" not in kwargs
+
+
+def test_register_panel_with_update_flag():
+    """Test _register_panel passes update=True when specified."""
+    mock_hass = MagicMock()
+    dashboard_def = {
+        "url_path": "test-dash",
+        "show_in_sidebar": True,
+        "title": "Test",
+        "icon": "mdi:test",
+    }
+    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+        _register_panel(mock_hass, dashboard_def, update=True)
+        kwargs = mock_fe.async_register_built_in_panel.call_args[1]
+        assert kwargs["update"] is True
+
+
+# =============================================================================
+# Tests for restore: line 171 (continue for id not in tracking)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_restore_skips_dashboard_not_in_tracking():
+    """Test restore skips dashboards whose id is not in tracking data."""
+    mock_hass, lovelace_data = create_mock_hass()
+    mock_hass.data["frontend_panels"] = {}
+
+    # Only DASHBOARD_CUSTOM in tracking — DASHBOARD_STANDARD hits 'continue' on line 171
+    tracking_data = {
+        "dashboards": [DASHBOARD_CUSTOM["id"]],
+    }
+
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+            with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
+                with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_ll:
+                    mock_ll.return_value = MagicMock()
+                    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+                        mock_fe.DATA_PANELS = "frontend_panels"
+                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                            await async_restore_dashboards_and_update_resources(mock_hass)
+
+    # Only quiet-solar should be registered, not quiet-solar-standard
+    assert "quiet-solar" in lovelace_data.dashboards
+    assert "quiet-solar-standard" not in lovelace_data.dashboards
+
+
+# =============================================================================
+# Tests for restore: lines 180-184 (panel already in DATA_PANELS)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_restore_warns_when_panel_already_exists_in_frontend():
+    """Test restore warns and skips when panel url_path already in frontend panels."""
+    mock_hass, lovelace_data = create_mock_hass()
+
+    tracking_data = {
+        "dashboards": [DASHBOARD_CUSTOM["id"], DASHBOARD_STANDARD["id"]],
+    }
+
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+            with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+                mock_fe.DATA_PANELS = "frontend_panels"
+                # quiet-solar panel already exists in frontend
+                mock_hass.data["frontend_panels"] = {"quiet-solar": MagicMock()}
+                with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+                    with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_ll:
+                        mock_ll.return_value = MagicMock()
+                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                            await async_restore_dashboards_and_update_resources(mock_hass)
+
+    # quiet-solar should NOT be in lovelace dashboards (skipped due to panel conflict)
+    assert "quiet-solar" not in lovelace_data.dashboards
+    # quiet-solar-standard should be registered normally
+    assert "quiet-solar-standard" in lovelace_data.dashboards
+
+
+# =============================================================================
+# Tests for restore: lines 194-195 (ValueError during _register_panel)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_restore_handles_register_panel_value_error():
+    """Test restore handles ValueError from _register_panel without raising."""
+    mock_hass, lovelace_data = create_mock_hass()
+    mock_hass.data["frontend_panels"] = {}
+
+    tracking_data = {
+        "dashboards": [DASHBOARD_CUSTOM["id"]],
+    }
+
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+            with patch("custom_components.quiet_solar.ui.dashboard._register_panel", side_effect=ValueError("conflict")):
+                with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_ll:
+                    mock_ll.return_value = MagicMock()
+                    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
+                        mock_fe.DATA_PANELS = "frontend_panels"
+                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                            # Should not raise
+                            await async_restore_dashboards_and_update_resources(mock_hass)
+
+    # Dashboard is added to lovelace_data before the register attempt
+    assert "quiet-solar" in lovelace_data.dashboards
+
+
+# =============================================================================
+# Tests for _async_register_or_update_dashboard: lines 277-279
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_register_dashboard_double_value_error_returns_early():
+    """Test that both register attempts failing causes early return without saving."""
+    mock_hass, lovelace_data = create_mock_hass()
+
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+            # Both calls raise ValueError
+            mock_register.side_effect = ValueError("always fails")
+            with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_store_cls:
+                mock_store = AsyncMock()
+                mock_store_cls.return_value = mock_store
+
+                await _async_register_or_update_dashboard(
+                    mock_hass, DASHBOARD_CUSTOM, {"views": []}
+                )
+
+                # Both attempts should have been made
+                assert mock_register.call_count == 2
+                # Should NOT have saved due to early return
+                mock_store.async_save.assert_not_called()
+
+
+# =============================================================================
+# Tests for _get_resource_handler_from_hass: line 310
+# =============================================================================
+
+
+def test_get_resource_handler_from_hass_lovelace_is_none():
+    """Test _get_resource_handler_from_hass returns None when lovelace data is explicitly None."""
+    mock_hass = MagicMock()
+    mock_hass.data = {"lovelace": None}
+
+    result = _get_resource_handler_from_hass(mock_hass)
+    assert result is None
+
+
+# =============================================================================
+# Tests for async_update_resources: lines 384-399
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_success_path():
+    """Test async_update_resources completes the success path."""
+    mock_hass, _ = create_mock_hass()
+
+    with patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock):
+        with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None):
+            with patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="99999"):
+                with patch("custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources", new_callable=AsyncMock) as mock_copy:
+                    await async_update_resources(mock_hass)
+                    mock_copy.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_file_not_found():
+    """Test async_update_resources handles FileNotFoundError gracefully."""
+    mock_hass, _ = create_mock_hass()
+
+    with patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock):
+        with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None):
+            with patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="99999"):
+                with patch(
+                    "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+                    new_callable=AsyncMock,
+                    side_effect=FileNotFoundError("no resources dir"),
+                ):
+                    # Should not raise
+                    await async_update_resources(mock_hass)
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_generic_exception():
+    """Test async_update_resources handles generic exceptions gracefully."""
+    mock_hass, _ = create_mock_hass()
+
+    with patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock):
+        with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None):
+            with patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="99999"):
+                with patch(
+                    "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+                    new_callable=AsyncMock,
+                    side_effect=RuntimeError("unexpected error"),
+                ):
+                    # Should not raise
+                    await async_update_resources(mock_hass)

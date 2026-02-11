@@ -254,6 +254,34 @@ class TestHungarianAlgorithm:
         assert total_cost == 3
 
 
+    def test_augmentation_path(self):
+        """Test a matrix where greedy assignment fails but augmenting paths succeed.
+
+        After row/column reduction the zero pattern is:
+            [0, -, 0]
+            [0, 0, -]
+            [-, 0, -]
+        Greedy (fewest-zeros-first) assigns Row2->col1, Row0->col0, leaving
+        Row1 unassigned. Augmentation must reassign Row0 from col0 to col2
+        so Row1 can take col0.
+        """
+        cost_matrix = np.array([
+            [2, 7, 2],
+            [3, 3, 8],
+            [10, 5, 10]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 3
+        assigned_cols = set(assignment.values())
+        assert len(assigned_cols) == 3
+
+        total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
+        # Optimal: 0->2(2) + 1->0(3) + 2->1(5) = 10
+        assert total_cost == 10
+
+
 class TestHungarianEdgeCases:
     """Test edge cases and error conditions."""
 

@@ -932,10 +932,6 @@ class QSChargerGroup(object):
             # battery_asked_charge > 0 : the battery needs to charge
             # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
-
-
-
-
         # in case of "no reset" allocation, we will try to minimize the diffs
         # this algorithm will only try to move "a bit" the chargers to reach the power budget
         # if power_budget is negative : we need to go down and find the best charger to go down
@@ -1002,30 +998,30 @@ class QSChargerGroup(object):
 
         do_stop = False
         global_diff_power = 0
-        use_dynamic_per_cs_power_check = False
+        # use_dynamic_per_cs_power_check = False
 
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
                 for charger_idx, cs in enumerate(actionable_chargers):
 
-                    if use_dynamic_per_cs_power_check:
-                        # in fact this is probably a bad idea : teh battery consumption command is global, not per charger
-                        if battery_asked_charge > 0 and cs.is_before_battery is False:
-                            # if we are AFTER battery : we shouldn't consume what the solver computed for teh battery
-                            power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                        else:
-                            if (battery_asked_charge < 0 and
-                                    cs.is_before_battery and
-                                    battery_can_discharge and
-                                    cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
-                                    cs.command.power_consign > 0
-                            ):
-                                # case where solver asked to overconsume battery power
-                                power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                            else:
-                                power_budget = full_available_home_power - diff_power_budget
-                    else:
-                        power_budget = initial_power_budget
+                    # if use_dynamic_per_cs_power_check:
+                    #     # in fact this is probably a bad idea : the battery consumption command is global, not per charger
+                    #     if battery_asked_charge > 0 and cs.is_before_battery is False:
+                    #         # if we are AFTER battery : we shouldn't consume what the solver computed for the battery
+                    #         power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                    #     else:
+                    #         if (battery_asked_charge < 0 and
+                    #                 cs.is_before_battery and
+                    #                 battery_can_discharge and
+                    #                 cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
+                    #                 cs.command.power_consign > 0
+                    #         ):
+                    #             # case where solver asked to overconsume battery power
+                    #             power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+                    #         else:
+                    #             power_budget = full_available_home_power - diff_power_budget
+                    # else:
+                    power_budget = initial_power_budget
 
                     if power_budget < 0:
                         increase = False
@@ -1466,9 +1462,9 @@ class QSChargerGroup(object):
                     # the one to be allocated for first or second phase
                     remaining_cs.append(cs)
 
-            # in remaining we have phase changes that may lead to an overhcarge of one circuit ex : a budget one phase on phase 1 with 32
+            # in remaining we have phase changes that may lead to an overcharge of one circuit ex : a budget one phase on phase 1 with 32
             # and we have another one that was on phase 2 with 27 ... that is going 3 phases to will add 9 to the phase 1 that is already in 32,
-            # so this phase change could't happen in the first one... do the one in remaining in the first phase ONLY
+            # so this phase change couldn't happen in the first one... do the one in remaining in the first phase ONLY
 
             # by construction the budgeted_num_phases and current_active_phase_number are different
             # start by adding the "reduction" part of a phase switch first, then do the increase partso we are sure all is well
@@ -3125,11 +3121,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def get_platforms(self):
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
-
+        parent = set(parent)
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH,Platform.BUTTON, Platform.TIME])
         return list(parent)
 
@@ -4558,24 +4550,24 @@ class QSChargerOCPP(QSChargerGeneric):
 
         return done
 
-    async def _ocpp_reset_charging_profiles(self):
-
-        if self.use_ocpp_custom_charging_profile is False:
-            return True
-
-        try:
-            data: dict[str, Any] = {"devid": self.devid}
-            service = "clear_profile"
-            domain = "ocpp"
-            await self.hass.services.async_call(
-                domain, service, data, blocking=False
-            )
-            done = True
-        except Exception as e:
-            _LOGGER.warning(f"_occp_reset_charging_profiles OCPP: Error {e}", exc_info=True, stack_info=True)
-            done = False
-
-        return done
+    # async def _ocpp_reset_charging_profiles(self):
+    #
+    #     if self.use_ocpp_custom_charging_profile is False:
+    #         return True
+    #
+    #     try:
+    #         data: dict[str, Any] = {"devid": self.devid}
+    #         service = "clear_profile"
+    #         domain = "ocpp"
+    #         await self.hass.services.async_call(
+    #             domain, service, data, blocking=False
+    #         )
+    #         done = True
+    #     except Exception as e:
+    #         _LOGGER.warning(f"_occp_reset_charging_profiles OCPP: Error {e}", exc_info=True, stack_info=True)
+    #         done = False
+    #
+    #     return done
 
 
     async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
@@ -4626,60 +4618,62 @@ class QSChargerOCPP(QSChargerGeneric):
         if self.use_ocpp_custom_charging_profile is False:
             return await super().low_level_set_charging_current(current, time)
 
-        _LOGGER.warning(f"low_level_set_charging_current OCPP: {current}A")
-
-        state = self.hass.states.get(self.charger_ocpp_transaction_id )
-
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
-            _LOGGER.warning(f"low_level_set_max_charging_current: OCPP transaction ID not available or in unknown state")
-            return False
-
-        try:
-
-            data: dict[str, Any] = {"conn_id": 1}
-            data["devid"] = self.devid
-            data["custom_profile"] = {
-                "transactionId": int(state.state),
-                "chargingProfileId": 1000,
-                "stackLevel": 0,
-                "chargingProfilePurpose": "TxDefaultProfile",
-                "chargingProfileKind": "Relative",
-                "chargingSchedule": {
-                    "chargingRateUnit": "A",
-                    "chargingSchedulePeriod": [
-                        {"startPeriod": 0, "limit": int(current)}
-                    ]
-                }
-            }
-
-            service = "set_charge_rate"
-            domain = "ocpp"
-
-            await self.hass.services.async_call(
-                domain, service, data, blocking=False
-            )
-            done = True
-        except Exception as e:
-            _LOGGER.warning(f"low_level_set_charging_current OCPP: Error {e}", exc_info=True, stack_info=True)
-            done = False
+        # _LOGGER.warning(f"low_level_set_charging_current OCPP: {current}A")
+        #
+        # state = self.hass.states.get(self.charger_ocpp_transaction_id )
+        #
+        # if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+        #     _LOGGER.warning(f"low_level_set_max_charging_current: OCPP transaction ID not available or in unknown state")
+        #     return False
+        #
+        # try:
+        #
+        #     data: dict[str, Any] = {"conn_id": 1}
+        #     data["devid"] = self.devid
+        #     data["custom_profile"] = {
+        #         "transactionId": int(state.state),
+        #         "chargingProfileId": 1000,
+        #         "stackLevel": 0,
+        #         "chargingProfilePurpose": "TxDefaultProfile",
+        #         "chargingProfileKind": "Relative",
+        #         "chargingSchedule": {
+        #             "chargingRateUnit": "A",
+        #             "chargingSchedulePeriod": [
+        #                 {"startPeriod": 0, "limit": int(current)}
+        #             ]
+        #         }
+        #     }
+        #
+        #     service = "set_charge_rate"
+        #     domain = "ocpp"
+        #
+        #     await self.hass.services.async_call(
+        #         domain, service, data, blocking=False
+        #     )
+        #     done = True
+        # except Exception as e:
+        #     _LOGGER.warning(f"low_level_set_charging_current OCPP: Error {e}", exc_info=True, stack_info=True)
+        #     done = False
 
         #if done is False:
         #    # fallback to the number entity if any
         #    done = await super().low_level_set_max_charging_current(current, time)
 
-        return done
+        #return done
 
-    def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> tuple[float, dict]:
+        return False
 
-        val = amps * self.voltage * self.current_num_phases
-
-        new_attr = {}
-        if attr is not None:
-            new_attr = dict(attr)
-
-        new_attr[ATTR_UNIT_OF_MEASUREMENT] = UnitOfPower.WATT
-
-        return val, new_attr
+    # def convert_ocpp_current_import_amps_to_W(self, amps: float, attr:dict) -> tuple[float, dict]:
+    #
+    #     val = amps * self.voltage * self.current_num_phases
+    #
+    #     new_attr = {}
+    #     if attr is not None:
+    #         new_attr = dict(attr)
+    #
+    #     new_attr[ATTR_UNIT_OF_MEASUREMENT] = UnitOfPower.WATT
+    #
+    #     return val, new_attr
 
     def low_level_plug_check_now(self, time: datetime) -> tuple[bool|None, datetime]:
 

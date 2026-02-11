@@ -297,12 +297,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         person = self.current_forecasted_person
         if person is None:
             return "No forecasted person"
-
-        if person is not None:
+        else:
             forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
             return f"{person.name}: {forecast_str}"
 
-        return None
 
     def get_car_persons_options(self) -> list[str]:
         options = []
@@ -605,10 +603,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def get_platforms(self):
         parent = super().get_platforms()
-        if parent is None:
-            parent = set()
-        else:
-            parent = set(parent)
+        parent = set(parent)
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
         return list(parent)
 
@@ -662,7 +657,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
                         self._efficiency_segments.append(to_be_stored_efficiency_segment)
                     else:
                         # insert it in the time ordered list
-                        idx = bisect.bisect_left(self._efficiency_segments, to_be_stored_efficiency_segment, key=itemgetter(4))
+                        # bisect key is applied only to list elements, so pass
+                        # the bare time value to compare against extracted keys
+                        idx = bisect.bisect_left(self._efficiency_segments, time, key=itemgetter(4))
                         # always insert
                         self._efficiency_segments.insert(idx, to_be_stored_efficiency_segment)
 
@@ -1134,7 +1131,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                   stack_info=True)
                     result = None
 
-
         return result
 
     def find_path(self, graph, start, end, path=None):
@@ -1237,8 +1233,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if old_val < MIN_CHARGE_POWER_W and new_val < MIN_CHARGE_POWER_W:
             return False
-
-
 
         if new_val < MIN_CHARGE_POWER_W:
             # it means we are setting to 0 for the new transition
@@ -1368,26 +1362,26 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
             do_update = True
-            if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
-
-                if self.car_is_custom_power_charge_values_3p is None:
-                    self.car_is_custom_power_charge_values_3p = for_3p
-
-                # only save what was set as conf
-                if for_3p == self.car_is_custom_power_charge_values_3p:
-
-                    self.car_use_custom_power_charge_values = True
-
-                    #ok this value can be saved ... we see above for now we force to not save it
-                    self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
-                    self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
-                    self._salvable_dampening[f"charge_{amps_val}"] = power_value_or_delta
-
-                    if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
-                        self._last_dampening_update = time
-                        data = dict(self.config_entry.data)
-                        data.update(self._salvable_dampening)
-                        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+            # if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
+            #
+            #     if self.car_is_custom_power_charge_values_3p is None:
+            #         self.car_is_custom_power_charge_values_3p = for_3p
+            #
+            #     # only save what was set as conf
+            #     if for_3p == self.car_is_custom_power_charge_values_3p:
+            #
+            #         self.car_use_custom_power_charge_values = True
+            #
+            #         #ok this value can be saved ... we see above for now we force to not save it
+            #         self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
+            #         self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
+            #         self._salvable_dampening[f"charge_{amps_val}"] = power_value_or_delta
+            #
+            #         if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
+            #             self._last_dampening_update = time
+            #             data = dict(self.config_entry.data)
+            #             data.update(self._salvable_dampening)
+            #             self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
         return do_update
 
@@ -1495,6 +1489,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.amp_to_power_1p, self.car_charger_min_charge, self.car_charger_max_charge
 
     async def user_add_default_charge_at_datetime(self, end_charge:datetime) -> bool:
+
         if self.can_add_default_charge() is False:
             return False
 
