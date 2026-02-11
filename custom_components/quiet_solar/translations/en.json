@@ -341,7 +341,7 @@
                 "name": "Clean Constraints"
             },
             "qs_home_generate_yaml_dashboard": {
-                "name": "Re-Generate YAML Dashboard"
+                "name": "Re-generate dashboard"
             },
             "qs_home_light_reset_history": {
                 "name": "Light Reset Quiet Solar History"

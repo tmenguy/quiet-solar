@@ -11,6 +11,7 @@ from .const import (
     DOMAIN,
     DEVICE_TYPE
 )
+from .ui.dashboard import async_auto_generate_if_first_install
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,6 +105,16 @@ class QSDataHandler:
                     self.hass, self.async_update_forecast_probers, timedelta(seconds=self._refresh_forecast_probers_interval)
                 )
             )
+
+            # On first install, auto-generate dashboards now that the home
+            # and all its devices are ready.  On subsequent startups this is
+            # a no-op (tracking data already exists).
+            try:
+                await async_auto_generate_if_first_install(self.home)
+            except Exception:
+                _LOGGER.warning(
+                    "Auto-generation of dashboards failed", exc_info=True
+                )
 
 
     async def async_update_loads(self, event_time: datetime) -> None:

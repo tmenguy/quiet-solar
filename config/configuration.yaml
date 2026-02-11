@@ -15,22 +15,22 @@ logger:
     aiogithubapi: debug
 
 
-lovelace:
-  mode: storage
-  # Add yaml dashboards
-  dashboards:
-    quiet-solar-yaml:
-      mode: yaml
-      title: Quiet Solar
-      icon: mdi:solar-power
-      show_in_sidebar: true
-      filename: quiet_solar/quiet_solar_dashboard.yaml
-    quiet-solar-standard-yaml:
-      mode: yaml
-      title: Quiet Std
-      icon: mdi:solar-power
-      show_in_sidebar: true
-      filename: quiet_solar/quiet_solar_dashboard_standard.yaml
+#lovelace:
+#  mode: storage
+#  # Add yaml dashboards
+#  dashboards:
+#    quiet-solar-yaml:
+#      mode: yaml
+#      title: Quiet Solar
+#      icon: mdi:solar-power
+#      show_in_sidebar: true
+#      filename: quiet_solar/quiet_solar_dashboard.yaml
+#    quiet-solar-standard-yaml:
+#      mode: yaml
+#      title: Quiet Std
+#      icon: mdi:solar-power
+#      show_in_sidebar: true
+#      filename: quiet_solar/quiet_solar_dashboard_standard.yaml
 # If you need to debug uncommment the line below (doc: https://www.home-assistant.io/integrations/debugpy/)
 #debugpy:
   #start: true

@@ -2,7 +2,7 @@
   "domain": "quiet_solar",
   "name": "Quiet Solar",
   "version": "2025.09.11",
-  "after_dependencies": [],
+  "after_dependencies": ["lovelace"],
   "codeowners": ["@tmenguy"],
   "config_flow": true,
   "dependencies": [],

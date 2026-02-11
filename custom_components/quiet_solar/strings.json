@@ -732,7 +732,7 @@
         "name": "Quiet Solar Dump for Debug"
       },
       "qs_home_generate_yaml_dashboard": {
-        "name": "Re-Generate YAML Dashboard"
+        "name": "Re-generate dashboard"
       },
       "qs_next_car_charge_force_now": {
         "name": "Force Charge Now"

@@ -8,6 +8,7 @@ from homeassistant.helpers import service
 from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
 
 from .data_handler import QSDataHandler
+from .ui.dashboard import async_restore_dashboards_and_update_resources
 
 from homeassistant.helpers import config_validation as cv
 
@@ -22,7 +23,7 @@ from .const import (
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Quiet Solar component"""
+    """Set up the Quiet Solar component."""
     hass.data[DOMAIN] = {}
     
     # Register reload service
@@ -30,6 +31,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     
     # Register OCPP notification listener
     register_ocpp_notification_listener(hass)
+
+    # Restore previously generated dashboards so they appear in the sidebar
+    # without requiring the user to press the generate button again.
+    # Also refresh JS card resources on every startup (they may have changed
+    # with a component update), but do NOT regenerate dashboard content to
+    # preserve any manual edits the user may have made.
+    await async_restore_dashboards_and_update_resources(hass)
     
     return True
 
