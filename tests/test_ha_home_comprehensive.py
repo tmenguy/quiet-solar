@@ -1391,6 +1391,147 @@ class TestOffGridAutoDetection:
         assert home._compute_off_grid_from_entity_state("OFF_GRID", "sensor.grid_status2") is True
         assert home._compute_off_grid_from_entity_state("connected", "sensor.grid_status2") is False
 
+    # -- Notification broadcast tests --
+
+    @pytest.mark.asyncio
+    async def test_on_grid_to_off_grid_triggers_notification(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Transitioning from on-grid to off-grid sends a notification to all mobile apps."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        assert home.qs_home_real_off_grid is False
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is True
+            mock_notify.assert_called_once()
+            call_args = mock_notify.call_args
+            assert "URGENT" in call_args[1]["title"] or "URGENT" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_off_grid_to_on_grid_does_not_notify(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Transitioning from off-grid back to on-grid does NOT send a notification."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        # Go off-grid first
+        hass.states.async_set("binary_sensor.grid_relay", "on")
+        await hass.async_block_till_done()
+        assert home.qs_home_real_off_grid is True
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is False
+            mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_staying_off_grid_does_not_re_notify(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Repeated off-grid states do not trigger additional notifications."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        # Go off-grid
+        hass.states.async_set("binary_sensor.grid_relay", "on")
+        await hass.async_block_till_done()
+        assert home.qs_home_real_off_grid is True
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Set to a different state then back to "on" to produce a state_changed event
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            # Second on->off->on cycle: the off->on doesn't notify, the on->off does
+            # but the first off->on cleared qs_home_real_off_grid, so on->off is a fresh transition
+            assert mock_notify.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_notify_all_mobile_apps_calls_services(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """async_notify_all_mobile_apps discovers and calls all mobile_app services."""
+        home = home_with_binary_sensor_off_grid
+
+        # Register fake mobile_app services with handlers that record calls
+        calls_phone_1 = []
+        calls_phone_2 = []
+        calls_email = []
+
+        async def handler_phone_1(call):
+            calls_phone_1.append(call)
+
+        async def handler_phone_2(call):
+            calls_phone_2.append(call)
+
+        async def handler_email(call):
+            calls_email.append(call)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_phone_1", handler_phone_1)
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_phone_2", handler_phone_2)
+        hass.services.async_register(Platform.NOTIFY, "email_service", handler_email)
+
+        await home.async_notify_all_mobile_apps(
+            title="Test alert",
+            message="Test message",
+        )
+        await hass.async_block_till_done()
+
+        # Should call only the 2 mobile_app services, not email_service
+        assert len(calls_phone_1) == 1
+        assert len(calls_phone_2) == 1
+        assert len(calls_email) == 0
+
+    @pytest.mark.asyncio
+    async def test_notify_all_mobile_apps_no_services(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """async_notify_all_mobile_apps does nothing when no mobile_app services exist."""
+        home = home_with_binary_sensor_off_grid
+
+        # No mobile_app services registered -- should not raise
+        await home.async_notify_all_mobile_apps(
+            title="Test alert",
+            message="Test message",
+        )
+
+    @pytest.mark.asyncio
+    async def test_notify_all_mobile_apps_includes_critical_push_data(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Notification payload includes critical/urgent push metadata."""
+        home = home_with_binary_sensor_off_grid
+
+        received_calls = []
+
+        async def handler(call):
+            received_calls.append(call)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_phone", handler)
+
+        await home.async_notify_all_mobile_apps(
+            title="Alert",
+            message="Grid lost",
+        )
+        await hass.async_block_till_done()
+
+        assert len(received_calls) == 1
+        call_data = received_calls[0].data
+        assert call_data["title"] == "Alert"
+        assert call_data["message"] == "Grid lost"
+        assert call_data["data"]["priority"] == "high"
+        assert call_data["data"]["push"]["interruption-level"] == "critical"
+        assert call_data["data"]["push"]["sound"]["critical"] == 1
+
     # -- Cleanup tests --
 
     def test_unregister_cleans_up(self, home_with_binary_sensor_off_grid):

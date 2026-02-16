@@ -956,6 +956,47 @@ class QSHome(QSDynamicGroup):
         self.off_grid_mode = option
         await self._compute_and_apply_off_grid_state(for_init)
 
+    async def async_notify_all_mobile_apps(self, title: str, message: str) -> None:
+        """Send an urgent notification to every mobile_app service registered in HA."""
+        if self.hass is None:
+            return
+        mobile_apps: list[str] = [
+            service_name
+            for service_name in self.hass.services.async_services_for_domain(Platform.NOTIFY)
+            if "mobile" in service_name
+        ]
+        if not mobile_apps:
+            _LOGGER.debug("No mobile_app notification services found, skipping broadcast")
+            return
+        data = {
+            "title": title,
+            "message": message,
+            "data": {
+                "push": {
+                    "sound": {
+                        "name": "default",
+                        "critical": 1,
+                        "volume": 1.0,
+                    },
+                    "interruption-level": "critical",
+                },
+                "ttl": 0,
+                "priority": "high",
+                "channel": "alarm_stream",
+                "importance": "high",
+            },
+        }
+        for app in mobile_apps:
+            _LOGGER.info("Broadcasting off-grid alert to %s", app)
+            try:
+                await self.hass.services.async_call(
+                    domain=Platform.NOTIFY,
+                    service=app,
+                    service_data=data,
+                )
+            except Exception:
+                _LOGGER.error("Failed to send off-grid alert to %s", app, exc_info=True)
+
     def _register_off_grid_entity_listener(self) -> None:
         """Register a state change listener for the external off-grid entity."""
         if self._off_grid_entity is None or self.hass is None:
@@ -966,8 +1007,17 @@ class QSHome(QSDynamicGroup):
             new_state = event.data["new_state"]
             if new_state is None:
                 return
+            previous_real_off_grid = self.qs_home_real_off_grid
             computed = self._compute_off_grid_from_entity_state(new_state.state, self._off_grid_entity)
             self.qs_home_real_off_grid = computed
+
+            # Notify all devices only on the on-grid -> off-grid transition
+            if computed and not previous_real_off_grid:
+                await self.async_notify_all_mobile_apps(
+                    title="\u26a0\ufe0f URGENT: Power grid lost!",
+                    message="Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
+                )
+
             await self._compute_and_apply_off_grid_state(for_init=False)
 
         self._off_grid_unsub = async_track_state_change_event(
