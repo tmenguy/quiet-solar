@@ -893,13 +893,18 @@ class QSHome(QSDynamicGroup):
                 for load in self._all_loads:
                     if load.qs_enable_device is False:
                         continue
+
+                    # to force an override reset
+                    load.reset_override_state_and_set_reset_ask_time(time)
+
                     # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
                     await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
 
                 if self.battery is not None:
                     await self.battery.launch_command(time=time, command=CMD_GREEN_CHARGE_AND_DISCHARGE, ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode")
 
-                # here we should wait for each load to be idle
+                # here we should wait for each load to be idle, nothing will happen before all the loads are idle
+                # or ... 3 minutes
                 self._switch_to_off_grid_launched = time
 
             # force solve
