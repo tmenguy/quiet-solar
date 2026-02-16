@@ -18,7 +18,7 @@ from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.home import QSHome, QSHomeMode
 
 from .home_model.load import AbstractDevice
-from .const import DOMAIN
+from .const import DOMAIN, SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,6 +133,15 @@ def create_ha_select_for_QSHome(device: QSHome):
         qs_default_option=str(QSHomeMode.HOME_MODE_SENSORS_ONLY.value)
     )
     entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
+
+    off_grid_mode_description = QSSelectEntityDescription(
+        key=SELECT_OFF_GRID_MODE,
+        translation_key=SELECT_OFF_GRID_MODE,
+        options=[OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID],
+        qs_default_option=OFF_GRID_MODE_AUTO,
+        async_set_current_option_fn=lambda device, key, option, for_init: device.async_set_off_grid_mode_option(option, for_init),
+    )
+    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=off_grid_mode_description))
 
     return entities
 

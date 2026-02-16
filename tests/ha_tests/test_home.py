@@ -91,12 +91,12 @@ async def test_home_select_entities(hass: HomeAssistant, home_config_entry: Conf
 
 
 async def test_home_switch_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
-    """Test home switch entities are created."""
+    """Test home has no switch entities (off-grid switch was replaced by select)."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
     entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
-    assert len(switch_entries) >= 1
+    assert len(switch_entries) == 0
 
 
 async def test_home_button_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
@@ -143,13 +143,13 @@ async def test_home_mode_selection(hass: HomeAssistant, home_config_entry: Confi
     assert state.state == "home_mode_sensors_only"
 
 
-async def test_home_off_grid_switch(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
-    """Test home off-grid switch entity."""
+async def test_home_off_grid_mode_select(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
+    """Test home off-grid mode select entity exists with default auto option."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
-    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
+    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
     assert state is not None
-    assert state.state == "off"
+    assert state.state == "off_grid_mode_auto"
 
 
 async def test_home_reset_button(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:

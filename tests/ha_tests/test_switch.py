@@ -18,7 +18,7 @@ async def test_home_switch_entities_created(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    """Test home switch entities are created."""
+    """Test home has no switch entities (off-grid switch was replaced by select)."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -27,43 +27,43 @@ async def test_home_switch_entities_created(
     )
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
 
-    assert len(switch_entries) >= 1
+    assert len(switch_entries) == 0
 
 
-async def test_home_off_grid_switch_toggle(
+async def test_home_off_grid_mode_select(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Test home off-grid switch can be toggled."""
+    """Test home off-grid mode select can be changed."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Find off-grid switch
-    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
+    # Find off-grid mode select
+    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
     assert state is not None
-    assert state.state == "off"
+    assert state.state == "off_grid_mode_auto"
 
-    # Turn on
+    # Switch to force off-grid
     await hass.services.async_call(
-        "switch", "turn_on",
-        {"entity_id": "switch.qs_test_home_home_qs_home_switch_off_grid"},
+        "select", "select_option",
+        {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_off_grid"},
         blocking=True
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
-    assert state.state == "on"
+    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
+    assert state.state == "off_grid_mode_force_off_grid"
 
-    # Turn off
+    # Switch to force on-grid
     await hass.services.async_call(
-        "switch", "turn_off",
-        {"entity_id": "switch.qs_test_home_home_qs_home_switch_off_grid"},
+        "select", "select_option",
+        {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_on_grid"},
         blocking=True
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("switch.qs_test_home_home_qs_home_switch_off_grid")
-    assert state.state == "off"
+    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
+    assert state.state == "off_grid_mode_force_on_grid"
 
 
 async def test_car_switch_entities_created(

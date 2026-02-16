@@ -233,6 +233,9 @@
                     "home_start_off_peak_range_2": "Start of the second off-peak range",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
+                    "off_grid_entity": "Off-grid detection entity (sensor, binary sensor, or switch) (optional)",
+                    "off_grid_inverted": "Invert off-grid entity? (for binary sensor/switch: check if off or false when off-grid)",
+                    "off_grid_state_value": "Off-grid state value (for sensor entity, the string value indicating off-grid)",
                     "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
                     "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, for 3 phased home only)",
                     "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, for 3 phased home only)"
@@ -328,6 +331,9 @@
             },
             "qs_home_is_off_grid": {
                 "name": "Is Off-Grid"
+            },
+            "qs_home_real_off_grid": {
+                "name": "Real off-grid state"
             },
             "qs_piloted_device_activated": {
                 "name": "Piloted Device Activated"
@@ -426,6 +432,14 @@
                     "home_mode_on": "Full Quiet Solar",
                     "home_mode_reset_sensors": "WARN: reset sensors from HA history",
                     "home_mode_sensors_only": "Only run sensors"
+                }
+            },
+            "off_grid_mode": {
+                "name": "Off-grid mode",
+                "state": {
+                    "off_grid_mode_auto": "Auto (follow entity)",
+                    "off_grid_mode_force_off_grid": "Force off-grid",
+                    "off_grid_mode_force_on_grid": "Force on-grid"
                 }
             },
             "on_off_mode": {
@@ -551,9 +565,6 @@
             },
             "qs_enable_device": {
                 "name": "Enabled for quiet solar"
-            },
-            "qs_home_switch_off_grid": {
-                "name": "Set Off-Grid"
             },
             "qs_next_car_charge_full": {
                 "name": "Force next charge to 100%"
@@ -791,6 +802,9 @@
                     "home_start_off_peak_range_2": "Start of the second off-peak range",
                     "home_voltage": "voltage of your home (V)",
                     "name": "Name",
+                    "off_grid_entity": "Off-grid detection entity (sensor, binary sensor, or switch) (optional)",
+                    "off_grid_inverted": "Invert off-grid entity? (for binary sensor/switch: check if off or false when off-grid)",
+                    "off_grid_state_value": "Off-grid state value (for sensor entity, the string value indicating off-grid)",
                     "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
                     "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, for 3 phased home only)",
                     "phase_3_amps_sensor": "Global Home Phase 3 Amps sensor (A) (optional, for 3 phased home only)"

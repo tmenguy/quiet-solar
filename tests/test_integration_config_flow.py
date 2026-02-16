@@ -62,6 +62,9 @@ from custom_components.quiet_solar.const import (
     CONF_PERSON_NOTIFICATION_TIME,
     CONF_TYPE_NAME_QSHeatPump,
     CONF_TYPE_NAME_QSClimateDuration,
+    CONF_OFF_GRID_ENTITY,
+    CONF_OFF_GRID_STATE_VALUE,
+    CONF_OFF_GRID_INVERTED,
 )
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.home import QSHome
@@ -279,6 +282,63 @@ async def test_flow_home_step_creates_entry(hass):
     assert result["data"][CONF_NAME] == "My Home"
     assert result["data"][CONF_HOME_VOLTAGE] == 230
     assert result["data"][DEVICE_TYPE] == QSHome.conf_type_name
+
+
+@pytest.mark.asyncio
+async def test_flow_home_step_schema_includes_off_grid_fields(hass):
+    """Test home configuration schema includes off-grid detection fields."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    result = await flow.async_step_home()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_OFF_GRID_ENTITY)
+    assert _schema_has_key(schema, CONF_OFF_GRID_STATE_VALUE)
+    assert _schema_has_key(schema, CONF_OFF_GRID_INVERTED)
+
+
+@pytest.mark.asyncio
+async def test_flow_home_step_creates_entry_with_off_grid_entity(hass):
+    """Test home configuration stores off-grid entity data."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    user_input = {
+        CONF_NAME: "My Home",
+        CONF_HOME_VOLTAGE: 230,
+        CONF_IS_3P: True,
+        CONF_OFF_GRID_ENTITY: "binary_sensor.grid_relay",
+        CONF_OFF_GRID_STATE_VALUE: "",
+        CONF_OFF_GRID_INVERTED: True,
+    }
+
+    with patch.object(flow, 'async_set_unique_id', new_callable=AsyncMock):
+        result = await flow.async_step_home(user_input)
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_OFF_GRID_ENTITY] == "binary_sensor.grid_relay"
+    assert result["data"][CONF_OFF_GRID_INVERTED] is True
+
+
+@pytest.mark.asyncio
+async def test_flow_home_step_creates_entry_without_off_grid_entity(hass):
+    """Test home configuration works without off-grid entity (optional)."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    user_input = {
+        CONF_NAME: "My Home",
+        CONF_HOME_VOLTAGE: 230,
+        CONF_IS_3P: True,
+    }
+
+    with patch.object(flow, 'async_set_unique_id', new_callable=AsyncMock):
+        result = await flow.async_step_home(user_input)
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_OFF_GRID_ENTITY not in result["data"]
 
 
 @pytest.mark.asyncio

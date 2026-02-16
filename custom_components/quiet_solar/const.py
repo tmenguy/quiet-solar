@@ -211,6 +211,7 @@ SENSOR_BISTATE_CURRENT_ON_H= "qs_bistate_current_on_h"
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"
 BINARY_SENSOR_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
+BINARY_SENSOR_HOME_REAL_OFF_GRID = "qs_home_real_off_grid"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
@@ -228,6 +229,10 @@ QSForecastSolarSensors = {
     "qs_solar_forecast_3h": 3*60*60,
     "qs_solar_forecast_6h": 6*60*60
 }
+
+CONF_OFF_GRID_ENTITY = "off_grid_entity"
+CONF_OFF_GRID_STATE_VALUE = "off_grid_state_value"
+CONF_OFF_GRID_INVERTED = "off_grid_inverted"
 
 CONF_HOME_START_OFF_PEAK_RANGE_1 = "home_start_off_peak_range_1"
 CONF_HOME_END_OFF_PEAK_RANGE_1 = "home_end_off_peak_range_1"
@@ -257,7 +262,11 @@ BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS = "qs_device_clean_command_and_const
 
 SWITCH_BEST_EFFORT_GREEN_ONLY = "qs_best_effort_green_only"
 SWITCH_ENABLE_DEVICE = "qs_enable_device"
-SWITCH_HOME_IS_OFF_GRID = "qs_home_switch_off_grid"
+
+SELECT_OFF_GRID_MODE = "off_grid_mode"
+OFF_GRID_MODE_AUTO = "off_grid_mode_auto"
+OFF_GRID_MODE_FORCE_OFF_GRID = "off_grid_mode_force_off_grid"
+OFF_GRID_MODE_FORCE_ON_GRID = "off_grid_mode_force_on_grid"
 
 HA_CONSTRAINT_SENSOR_HISTORY = "qs_stored_constraints"
 HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT = "qs_last_executed_constraint"

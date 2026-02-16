@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED, BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS, \
-    BINARY_SENSOR_HOME_IS_OFF_GRID
+    BINARY_SENSOR_HOME_IS_OFF_GRID, BINARY_SENSOR_HOME_REAL_OFF_GRID
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.home import QSHome
@@ -35,11 +35,17 @@ def create_ha_binary_sensor_for_QSHome(device: QSHome):
     """Create binary sensors for a QSHome."""
     entities = []
 
-    piloted_activated = QSBinarySensorEntityDescription(
+    qs_off_grid = QSBinarySensorEntityDescription(
         key=BINARY_SENSOR_HOME_IS_OFF_GRID,
         translation_key=BINARY_SENSOR_HOME_IS_OFF_GRID
     )
-    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=qs_off_grid))
+
+    real_off_grid = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_HOME_REAL_OFF_GRID,
+        translation_key=BINARY_SENSOR_HOME_REAL_OFF_GRID,
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=real_off_grid))
 
     return entities
 

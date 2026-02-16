@@ -64,7 +64,8 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     DASHBOARD_DEFAULT_SECTIONS, CONF_DEVICE_DASHBOARD_SECTION, DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY, \
     DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED, CONF_CAR_ODOMETER_SENSOR, \
     CONF_CAR_ESTIMATED_RANGE_SENSOR, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
-    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, CONF_PERSON_TRACKER
+    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, CONF_PERSON_TRACKER, \
+    CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -633,6 +634,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     cv.boolean,
             }
             )
+
+        self.add_entity_selector(sc_dict, CONF_OFF_GRID_ENTITY, False, domain=[SENSOR_DOMAIN, BINARY_SENSOR_DOMAIN, SWITCH_DOMAIN])
+
+        sc_dict.update({
+            vol.Optional(CONF_OFF_GRID_STATE_VALUE,
+                         description={"suggested_value": self.config_entry.data.get(CONF_OFF_GRID_STATE_VALUE, "")}): cv.string,
+            vol.Optional(CONF_OFF_GRID_INVERTED, default=self.config_entry.data.get(CONF_OFF_GRID_INVERTED, False)):
+                cv.boolean,
+        })
 
         sc_dict.update({
             vol.Required(CONF_HOME_PEAK_PRICE,

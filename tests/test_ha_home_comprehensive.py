@@ -46,6 +46,12 @@ from custom_components.quiet_solar.const import (
     CONF_HOME_OFF_PEAK_PRICE,
     CONF_HOME_START_OFF_PEAK_RANGE_1,
     CONF_HOME_END_OFF_PEAK_RANGE_1,
+    CONF_OFF_GRID_ENTITY,
+    CONF_OFF_GRID_STATE_VALUE,
+    CONF_OFF_GRID_INVERTED,
+    OFF_GRID_MODE_AUTO,
+    OFF_GRID_MODE_FORCE_OFF_GRID,
+    OFF_GRID_MODE_FORCE_ON_GRID,
 )
 
 from homeassistant.core import HomeAssistant
@@ -1014,3 +1020,382 @@ class TestQSHomeMoreExtendedCoverage:
 
         assert min_p >= 0
         assert max_p >= min_p
+
+
+# ============================================================================
+# Tests for automatic off-grid detection
+# ============================================================================
+
+
+class TestOffGridAutoDetection:
+    """Test automatic off-grid mode detection via external HA entities."""
+
+    @pytest.fixture
+    async def home_with_binary_sensor_off_grid(
+        self, hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None
+    ):
+        """QSHome with a binary_sensor off-grid entity."""
+        hass.states.async_set("binary_sensor.grid_relay", "off")
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+            return QSHome(
+                hass=hass,
+                config_entry=home_config_entry,
+                **{
+                    CONF_NAME: "Test Home",
+                    CONF_HOME_VOLTAGE: 230,
+                    CONF_OFF_GRID_ENTITY: "binary_sensor.grid_relay",
+                    CONF_OFF_GRID_INVERTED: False,
+                },
+            )
+
+    @pytest.fixture
+    async def home_with_sensor_off_grid(
+        self, hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None
+    ):
+        """QSHome with a sensor off-grid entity using state value matching."""
+        hass.states.async_set("sensor.grid_status", "connected")
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+            return QSHome(
+                hass=hass,
+                config_entry=home_config_entry,
+                **{
+                    CONF_NAME: "Test Home",
+                    CONF_HOME_VOLTAGE: 230,
+                    CONF_OFF_GRID_ENTITY: "sensor.grid_status",
+                    CONF_OFF_GRID_STATE_VALUE: "disconnected",
+                    CONF_OFF_GRID_INVERTED: False,
+                },
+            )
+
+    @pytest.fixture
+    async def home_with_switch_inverted(
+        self, hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None
+    ):
+        """QSHome with a switch off-grid entity (inverted)."""
+        hass.states.async_set("switch.grid_connection", "on")
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+            return QSHome(
+                hass=hass,
+                config_entry=home_config_entry,
+                **{
+                    CONF_NAME: "Test Home",
+                    CONF_HOME_VOLTAGE: 230,
+                    CONF_OFF_GRID_ENTITY: "switch.grid_connection",
+                    CONF_OFF_GRID_INVERTED: True,
+                },
+            )
+
+    @pytest.fixture
+    async def home_no_off_grid_entity(
+        self, hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None
+    ):
+        """QSHome with no off-grid entity configured."""
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+            return QSHome(
+                hass=hass,
+                config_entry=home_config_entry,
+                **{
+                    CONF_NAME: "Test Home",
+                    CONF_HOME_VOLTAGE: 230,
+                },
+            )
+
+    # -- _compute_off_grid_from_entity_state tests --
+
+    def test_compute_from_binary_sensor_on(self, home_with_binary_sensor_off_grid):
+        """Binary sensor 'on' means off-grid when not inverted."""
+        home = home_with_binary_sensor_off_grid
+        result = home._compute_off_grid_from_entity_state("on", "binary_sensor.grid_relay")
+        assert result is True
+
+    def test_compute_from_binary_sensor_off(self, home_with_binary_sensor_off_grid):
+        """Binary sensor 'off' means on-grid when not inverted."""
+        home = home_with_binary_sensor_off_grid
+        result = home._compute_off_grid_from_entity_state("off", "binary_sensor.grid_relay")
+        assert result is False
+
+    def test_compute_from_sensor_matching(self, home_with_sensor_off_grid):
+        """Sensor state matches off_grid_state_value means off-grid."""
+        home = home_with_sensor_off_grid
+        result = home._compute_off_grid_from_entity_state("disconnected", "sensor.grid_status")
+        assert result is True
+
+    def test_compute_from_sensor_not_matching(self, home_with_sensor_off_grid):
+        """Sensor state not matching off_grid_state_value means on-grid."""
+        home = home_with_sensor_off_grid
+        result = home._compute_off_grid_from_entity_state("connected", "sensor.grid_status")
+        assert result is False
+
+    def test_compute_from_switch_inverted_off(self, home_with_switch_inverted):
+        """Switch 'off' means off-grid when inverted."""
+        home = home_with_switch_inverted
+        result = home._compute_off_grid_from_entity_state("off", "switch.grid_connection")
+        assert result is True
+
+    def test_compute_from_switch_inverted_on(self, home_with_switch_inverted):
+        """Switch 'on' means on-grid when inverted."""
+        home = home_with_switch_inverted
+        result = home._compute_off_grid_from_entity_state("on", "switch.grid_connection")
+        assert result is False
+
+    def test_compute_from_unavailable(self, home_with_binary_sensor_off_grid):
+        """Unavailable entity state is treated as on-grid."""
+        home = home_with_binary_sensor_off_grid
+        assert home._compute_off_grid_from_entity_state(STATE_UNAVAILABLE, "binary_sensor.grid_relay") is False
+        assert home._compute_off_grid_from_entity_state(STATE_UNKNOWN, "binary_sensor.grid_relay") is False
+
+    # -- _compute_and_apply_off_grid_state tests --
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_follows_real_state(self, home_with_binary_sensor_off_grid):
+        """Auto mode applies qs_home_real_off_grid value."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        home.qs_home_real_off_grid = True
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            await home._compute_and_apply_off_grid_state(for_init=False)
+            mock_set.assert_called_once_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_restores_on_grid(self, home_with_binary_sensor_off_grid):
+        """Auto mode restores on-grid when real state goes False."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        home.qs_home_real_off_grid = False
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            await home._compute_and_apply_off_grid_state(for_init=False)
+            mock_set.assert_called_once_with(False, False)
+
+    @pytest.mark.asyncio
+    async def test_force_off_grid_mode(self, home_with_binary_sensor_off_grid):
+        """Force off-grid always calls async_set_off_grid_mode(True)."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_OFF_GRID
+        home.qs_home_real_off_grid = False
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            await home._compute_and_apply_off_grid_state(for_init=False)
+            mock_set.assert_called_once_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_force_on_grid_mode(self, home_with_binary_sensor_off_grid):
+        """Force on-grid always calls async_set_off_grid_mode(False)."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
+        home.qs_home_real_off_grid = True
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            await home._compute_and_apply_off_grid_state(for_init=False)
+            mock_set.assert_called_once_with(False, False)
+
+    # -- async_set_off_grid_mode_option tests --
+
+    @pytest.mark.asyncio
+    async def test_set_off_grid_mode_option_sets_mode(self, home_with_binary_sensor_off_grid):
+        """async_set_off_grid_mode_option sets the mode and recomputes."""
+        home = home_with_binary_sensor_off_grid
+        with patch.object(home, "_compute_and_apply_off_grid_state", new_callable=AsyncMock) as mock_compute:
+            await home.async_set_off_grid_mode_option(OFF_GRID_MODE_FORCE_OFF_GRID, for_init=False)
+            assert home.off_grid_mode == OFF_GRID_MODE_FORCE_OFF_GRID
+            mock_compute.assert_called_once_with(False)
+
+    # -- Initial state reading tests --
+
+    def test_initial_state_binary_sensor_off(self, home_with_binary_sensor_off_grid):
+        """Binary sensor initial state 'off' means qs_home_real_off_grid is False."""
+        home = home_with_binary_sensor_off_grid
+        assert home.qs_home_real_off_grid is False
+
+    def test_initial_state_sensor_connected(self, home_with_sensor_off_grid):
+        """Sensor initial state 'connected' != 'disconnected' means on-grid."""
+        home = home_with_sensor_off_grid
+        assert home.qs_home_real_off_grid is False
+
+    def test_initial_state_switch_on_inverted(self, home_with_switch_inverted):
+        """Switch initial state 'on' with inverted means on-grid."""
+        home = home_with_switch_inverted
+        assert home.qs_home_real_off_grid is False
+
+    # -- No entity configured --
+
+    def test_no_entity_no_listener(self, home_no_off_grid_entity):
+        """No off-grid entity means no listener registered."""
+        home = home_no_off_grid_entity
+        assert home._off_grid_unsub is None
+        assert home.qs_home_real_off_grid is False
+
+    def test_entity_configured_has_listener(self, home_with_binary_sensor_off_grid):
+        """Off-grid entity configured means listener is registered."""
+        home = home_with_binary_sensor_off_grid
+        assert home._off_grid_unsub is not None
+
+    # -- State change event tests --
+
+    @pytest.mark.asyncio
+    async def test_binary_sensor_state_change_to_on_triggers_off_grid(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Binary sensor changing to 'on' sets qs_home_real_off_grid=True and triggers mode computation."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is True
+            mock_set.assert_called_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_binary_sensor_state_change_to_off_restores_on_grid(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Binary sensor changing from 'on' to 'off' restores on-grid."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        # First transition to "on" so HA records the state
+        hass.states.async_set("binary_sensor.grid_relay", "on")
+        await hass.async_block_till_done()
+        assert home.qs_home_real_off_grid is True
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is False
+            mock_set.assert_called_with(False, False)
+
+    @pytest.mark.asyncio
+    async def test_sensor_state_change_matches_triggers_off_grid(
+        self, hass: HomeAssistant, home_with_sensor_off_grid
+    ):
+        """Sensor changing to match value triggers off-grid."""
+        home = home_with_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("sensor.grid_status", "disconnected")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is True
+            mock_set.assert_called_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_sensor_state_change_no_match_restores_on_grid(
+        self, hass: HomeAssistant, home_with_sensor_off_grid
+    ):
+        """Sensor changing from matching to non-matching value restores on-grid."""
+        home = home_with_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        # First set to matching value so HA records the state change
+        hass.states.async_set("sensor.grid_status", "disconnected")
+        await hass.async_block_till_done()
+        assert home.qs_home_real_off_grid is True
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("sensor.grid_status", "connected")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is False
+            mock_set.assert_called_with(False, False)
+
+    @pytest.mark.asyncio
+    async def test_switch_inverted_state_change(
+        self, hass: HomeAssistant, home_with_switch_inverted
+    ):
+        """Switch inverted: 'off' triggers off-grid, 'on' restores on-grid."""
+        home = home_with_switch_inverted
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("switch.grid_connection", "off")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is True
+            mock_set.assert_called_with(True, False)
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("switch.grid_connection", "on")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is False
+            mock_set.assert_called_with(False, False)
+
+    @pytest.mark.asyncio
+    async def test_force_mode_overrides_entity_state(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Force off-grid mode ignores entity state."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
+
+        with patch.object(home, "async_set_off_grid_mode", new_callable=AsyncMock) as mock_set:
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert home.qs_home_real_off_grid is True
+            mock_set.assert_called_with(False, False)
+
+    # -- Normalization tests --
+
+    def test_normalize_off_grid_value(self, home_with_sensor_off_grid):
+        """Normalize strips case, spaces, dashes, underscores."""
+        normalize = QSHome._normalize_off_grid_value
+        assert normalize("Off Grid") == "offgrid"
+        assert normalize("OFF-GRID") == "offgrid"
+        assert normalize("off_grid") == "offgrid"
+        assert normalize("  Off_Grid  ") == "offgrid"
+        assert normalize(None) is None
+
+    def test_sensor_comparison_is_normalized(self, home_with_sensor_off_grid):
+        """Sensor state comparison is normalized (case, dashes, underscores stripped)."""
+        home = home_with_sensor_off_grid
+        # All of these normalize to "disconnected" which matches the config value
+        assert home._compute_off_grid_from_entity_state("Disconnected", "sensor.grid_status") is True
+        assert home._compute_off_grid_from_entity_state("DISCONNECTED", "sensor.grid_status") is True
+        assert home._compute_off_grid_from_entity_state("dis-connected", "sensor.grid_status") is True
+        assert home._compute_off_grid_from_entity_state("dis_connected", "sensor.grid_status") is True
+        # These do NOT normalize to "disconnected"
+        assert home._compute_off_grid_from_entity_state("connected", "sensor.grid_status") is False
+        assert home._compute_off_grid_from_entity_state("online", "sensor.grid_status") is False
+
+    @pytest.fixture
+    async def home_with_sensor_off_grid_fancy_value(
+        self, hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zone_state: None
+    ):
+        """QSHome with a sensor off-grid entity using a value with mixed case/separators."""
+        hass.states.async_set("sensor.grid_status2", "connected")
+        with patch("custom_components.quiet_solar.ha_model.home.QSHome.add_device"):
+            return QSHome(
+                hass=hass,
+                config_entry=home_config_entry,
+                **{
+                    CONF_NAME: "Test Home",
+                    CONF_HOME_VOLTAGE: 230,
+                    CONF_OFF_GRID_ENTITY: "sensor.grid_status2",
+                    CONF_OFF_GRID_STATE_VALUE: "Off_Grid",
+                    CONF_OFF_GRID_INVERTED: False,
+                },
+            )
+
+    def test_normalized_config_value_matches_ha_state(self, home_with_sensor_off_grid_fancy_value):
+        """Config value 'Off_Grid' matches HA state 'offgrid' after normalization."""
+        home = home_with_sensor_off_grid_fancy_value
+        assert home._off_grid_state_value == "offgrid"
+        assert home._compute_off_grid_from_entity_state("offgrid", "sensor.grid_status2") is True
+        assert home._compute_off_grid_from_entity_state("Off Grid", "sensor.grid_status2") is True
+        assert home._compute_off_grid_from_entity_state("OFF_GRID", "sensor.grid_status2") is True
+        assert home._compute_off_grid_from_entity_state("connected", "sensor.grid_status2") is False
+
+    # -- Cleanup tests --
+
+    def test_unregister_cleans_up(self, home_with_binary_sensor_off_grid):
+        """Unregistering the listener sets _off_grid_unsub to None."""
+        home = home_with_binary_sensor_off_grid
+        assert home._off_grid_unsub is not None
+        home._unregister_off_grid_entity_listener()
+        assert home._off_grid_unsub is None

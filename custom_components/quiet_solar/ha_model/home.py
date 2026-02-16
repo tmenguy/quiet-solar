@@ -16,6 +16,10 @@ from homeassistant.components.recorder.models import LazyState
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 
 from .dynamic_group import QSDynamicGroup
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.core import Event, callback as ha_callback
+from homeassistant.helpers.event import EventStateChangedData
+
 from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
     HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
     FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
@@ -24,7 +28,9 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
     MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    PERSON_NOTIFY_REASON_CHANGED_CAR
+    PERSON_NOTIFY_REASON_CHANGED_CAR, \
+    CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, \
+    SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -254,10 +260,18 @@ class QSHome(QSDynamicGroup):
         self.grid_active_power_sensor_inverted: bool = False
 
         self.qs_home_is_off_grid = False
+        self.qs_home_real_off_grid = False
+        self.off_grid_mode: str = OFF_GRID_MODE_AUTO
+        self._off_grid_unsub = None
 
         self._voltage = kwargs.pop(CONF_HOME_VOLTAGE, 230)
         self.grid_active_power_sensor = kwargs.pop(CONF_GRID_POWER_SENSOR, None)
         self.grid_active_power_sensor_inverted = kwargs.pop(CONF_GRID_POWER_SENSOR_INVERTED, False)
+
+        self._off_grid_entity: str | None = kwargs.pop(CONF_OFF_GRID_ENTITY, None)
+        raw_state_value: str | None = kwargs.pop(CONF_OFF_GRID_STATE_VALUE, None)
+        self._off_grid_state_value: str | None = self._normalize_off_grid_value(raw_state_value)
+        self._off_grid_inverted: bool = kwargs.pop(CONF_OFF_GRID_INVERTED, False)
 
         self.tariff_start_1 = kwargs.pop(CONF_HOME_START_OFF_PEAK_RANGE_1, None)
         self.tariff_end_1  = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_1, None)
@@ -355,6 +369,8 @@ class QSHome(QSDynamicGroup):
         self._last_forecast_probe_time  : datetime | None = None
 
         self.add_device(self)
+
+        self._register_off_grid_entity_listener()
 
         self._init_completed = False
 
@@ -893,7 +909,80 @@ class QSHome(QSDynamicGroup):
             # await self.force_update_all()
 
     def is_off_grid(self) -> bool:
+        """Return whether the home is currently in off-grid mode."""
         return self.qs_home_is_off_grid
+
+    @staticmethod
+    def _normalize_off_grid_value(value: str | None) -> str | None:
+        """Normalize a string for off-grid state comparison.
+
+        Lowercases, strips whitespace, and removes dashes, underscores, and spaces
+        so that user-entered values like 'Off Grid', 'off_grid', 'OFF-GRID' all
+        match an HA state like 'offgrid'.
+        """
+        if value is None:
+            return None
+        return value.lower().replace(" ", "").replace("_", "").replace("-", "")
+
+    def _compute_off_grid_from_entity_state(self, state_str: str, entity_id: str) -> bool:
+        """Determine off-grid boolean from a raw HA entity state string."""
+        if state_str in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return False
+        if entity_id.startswith("sensor."):
+            normalized = self._normalize_off_grid_value(state_str)
+            return normalized == self._off_grid_state_value
+        # binary_sensor or switch
+        if self._off_grid_inverted:
+            return state_str == "off"
+        return state_str == "on"
+
+    async def _compute_and_apply_off_grid_state(self, for_init: bool) -> None:
+        """Compute the effective off-grid state from mode + real state, then apply it."""
+        if self.off_grid_mode == OFF_GRID_MODE_FORCE_OFF_GRID:
+            effective = True
+        elif self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
+            effective = False
+        else:
+            effective = self.qs_home_real_off_grid
+        await self.async_set_off_grid_mode(effective, for_init)
+
+    async def async_set_off_grid_mode_option(self, option: str, for_init: bool) -> None:
+        """Handle off-grid mode select change."""
+        self.off_grid_mode = option
+        await self._compute_and_apply_off_grid_state(for_init)
+
+    def _register_off_grid_entity_listener(self) -> None:
+        """Register a state change listener for the external off-grid entity."""
+        if self._off_grid_entity is None or self.hass is None:
+            return
+
+        async def _off_grid_entity_state_changed(event: Event[EventStateChangedData]) -> None:
+            """Handle state changes of the external off-grid entity."""
+            new_state = event.data["new_state"]
+            if new_state is None:
+                return
+            computed = self._compute_off_grid_from_entity_state(new_state.state, self._off_grid_entity)
+            self.qs_home_real_off_grid = computed
+            await self._compute_and_apply_off_grid_state(for_init=False)
+
+        self._off_grid_unsub = async_track_state_change_event(
+            self.hass,
+            [self._off_grid_entity],
+            _off_grid_entity_state_changed,
+        )
+
+        # Read initial state
+        current_state = self.hass.states.get(self._off_grid_entity)
+        if current_state is not None:
+            self.qs_home_real_off_grid = self._compute_off_grid_from_entity_state(
+                current_state.state, self._off_grid_entity
+            )
+
+    def _unregister_off_grid_entity_listener(self) -> None:
+        """Unsubscribe the off-grid entity state listener."""
+        if self._off_grid_unsub is not None:
+            self._off_grid_unsub()
+            self._off_grid_unsub = None
 
     @property
     def voltage(self) -> float:
@@ -1538,7 +1627,7 @@ class QSHome(QSDynamicGroup):
     def remove_device(self, device):
 
         if device == self:
-            # we can't remove home....
+            self._unregister_off_grid_entity_listener()
             return
 
         device.home = self

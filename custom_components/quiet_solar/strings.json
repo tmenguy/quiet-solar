@@ -35,6 +35,9 @@
           "home_voltage": "voltage of your home (V)",
           "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
           "grid_active_power_sensor_inverted": "Is your grid power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
+          "off_grid_entity": "Off-grid detection entity (sensor, binary sensor, or switch) (optional)",
+          "off_grid_state_value": "Off-grid state value (for sensor entity, the string value indicating off-grid)",
+          "off_grid_inverted": "Invert off-grid entity? (for binary sensor/switch: check if off or false when off-grid)",
           "accurate_power_sensor": "Global Home accurate power sensor (W, kW) (optional, to improve the home power measurement)",
           "phase_1_amps_sensor": "Global Home Phase 1 Amps sensor (A) (optional)",
           "phase_2_amps_sensor": "Global Home Phase 2 Amps sensor (A) (optional, for 3 phased home only)",
@@ -340,6 +343,9 @@
           "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
           "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
           "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]",
+          "off_grid_entity": "[%key:component::quiet_solar::config::step::home::data::off_grid_entity%]",
+          "off_grid_state_value": "[%key:component::quiet_solar::config::step::home::data::off_grid_state_value%]",
+          "off_grid_inverted": "[%key:component::quiet_solar::config::step::home::data::off_grid_inverted%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::home::data::accurate_power_sensor%]",
           "phase_1_amps_sensor": "[%key:component::quiet_solar::config::step::home::data::phase_1_amps_sensor%]",
           "phase_2_amps_sensor": "[%key:component::quiet_solar::config::step::home::data::phase_2_amps_sensor%]",
@@ -626,6 +632,9 @@
       },
       "qs_home_is_off_grid": {
         "name": "Is Off-Grid"
+      },
+      "qs_home_real_off_grid": {
+        "name": "Real off-grid state"
       }
     },
 
@@ -756,12 +765,17 @@
       },
       "qs_enable_device": {
         "name": "Enabled for quiet solar"
-      },
-      "qs_home_switch_off_grid": {
-        "name": "Set Off-Grid"
       }
     },
     "select": {
+      "off_grid_mode": {
+        "name": "Off-grid mode",
+        "state": {
+          "off_grid_mode_auto": "Auto (follow entity)",
+          "off_grid_mode_force_off_grid": "Force off-grid",
+          "off_grid_mode_force_on_grid": "Force on-grid"
+        }
+      },
       "selected_car_for_charger": {
         "name": "Selected Car:"
       },

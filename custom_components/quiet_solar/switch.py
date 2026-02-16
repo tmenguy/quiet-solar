@@ -11,7 +11,7 @@ from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
 
 from . import DOMAIN
 from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
-    SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY, SWITCH_HOME_IS_OFF_GRID
+    SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
@@ -19,7 +19,6 @@ from .entity import QSDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-from .ha_model.home import QSHome
 from .ha_model.pool import QSPool
 from .home_model.load import AbstractDevice, AbstractLoad
 
@@ -33,20 +32,6 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     )
 
     entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
-
-    return entities
-
-
-def create_ha_switch_for_QSHome(device: QSHome):
-    entities = []
-
-    qs_bump_solar_priority = QSSwitchEntityDescription(
-        key=SWITCH_HOME_IS_OFF_GRID,
-        translation_key=SWITCH_HOME_IS_OFF_GRID,
-        async_switch=lambda s, val, for_init: s.async_set_off_grid_mode(val, for_init),
-    )
-
-    entities.append(QSSwitchEntityWithRestore(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
 
     return entities
 
@@ -97,9 +82,6 @@ def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
 def create_ha_switch(device: AbstractDevice):
 
     ret = []
-    if isinstance(device, QSHome):
-        ret.extend(create_ha_switch_for_QSHome(device))
-
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_switch_for_QSCharger(device))
 
