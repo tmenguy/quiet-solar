@@ -1055,14 +1055,8 @@ class QSHome(QSDynamicGroup):
 
         return static_amp
 
+    def get_home_max_available_production_power(self):
 
-    def get_home_max_phase_amps(self) -> float | int:
-
-        static_amp = self.dyn_group_max_phase_current_conf
-        if not self.is_off_grid():
-            return static_amp
-
-        # ok we are in off grid mode, we need to limit the current to the max phase current of the home
         available_production_w = 0
         if self.solar_plant is not None:
             available_production_w = self.solar_plant.solar_production
@@ -1074,6 +1068,18 @@ class QSHome(QSDynamicGroup):
 
         if self.solar_plant and self.solar_plant.solar_max_output_power_value:
             available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
+
+        return available_production_w
+
+
+    def get_home_max_phase_amps(self) -> float | int:
+
+        static_amp = self.dyn_group_max_phase_current_conf
+        if not self.is_off_grid():
+            return static_amp
+
+        # ok we are in off grid mode, we need to limit the current to the max phase current of the home
+        available_production_w = self.get_home_max_available_production_power()
 
         if self.physical_3p:
             available_production_amp = (available_production_w / 3.0) / (self.voltage)

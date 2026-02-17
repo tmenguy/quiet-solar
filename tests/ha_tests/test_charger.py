@@ -2786,7 +2786,7 @@ async def test_charger_group_prepare_and_shave_budgets() -> None:
 
 
 async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
-    """Test budgeting algorithm decision flow."""
+    """Test budgeting algorithm decision flow with battery discharge capping."""
     from tests.factories import (
         create_minimal_home_model,
         create_test_car_double,
@@ -2794,12 +2794,31 @@ async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
         create_test_dynamic_group_double,
     )
 
-    # Create mock home with required methods
+    now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+
+    # Create mock home with battery discharge scenario so the
+    # get_device_power_values capping path in budgeting_algorithm_minimize_diffs
+    # is exercised when CMD_AUTO_GREEN_CONSIGN is active.
     home = create_minimal_home_model()
-    home.battery = None
-    home.battery_can_discharge = MagicMock(return_value=False)
+    battery = MagicMock()
+    battery.get_current_battery_asked_change_for_outside_production_system = MagicMock(
+        return_value=-600.0
+    )
+    home.battery = battery
+    home.battery_can_discharge = MagicMock(return_value=True)
     home.get_best_tariff = MagicMock(return_value=0.25)
     home.get_tariff = MagicMock(return_value=0.05)
+
+    # Provide realistic home load power values for budget capping logic.
+    # home_load_power=400W, max_production=2500W → cap = 2500 - 400 = 2100W
+    # Without capping the budget would be 2000-(-600)-300=2300W, so the cap
+    # actively limits the budget to 2100W.
+    home.get_device_power_values = MagicMock(return_value=[
+        (now - timedelta(seconds=30), 400.0, {}),
+        (now - timedelta(seconds=15), 400.0, {}),
+        (now, 400.0, {}),
+    ])
+    home.get_home_max_available_production_power = MagicMock(return_value=2500.0)
 
     dynamic_group = create_test_dynamic_group_double(name="Group G", home=home)
     dynamic_group.is_current_acceptable = MagicMock(return_value=True)
@@ -2860,12 +2879,16 @@ async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
         full_available_home_power=2000.0,
         grid_available_home_power=1500.0,
         allow_budget_reset=True,
-        time=datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC),
+        time=now,
     )
 
     assert success is True
     assert should_reset is True
     assert did_reset is True
+
+    # Verify the capping path was exercised: get_device_power_values was called
+    home.get_device_power_values.assert_called_once()
+    home.get_home_max_available_production_power.assert_called_once()
 
 
 async def test_charger_group_dyn_handle_flow() -> None:

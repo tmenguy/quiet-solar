@@ -89,7 +89,8 @@ def _make_hass() -> MagicMock:
     return hass
 
 
-def _make_home(battery=None, voltage=230.0):
+def _make_home(battery=None, voltage=230.0, home_load_power=500.0,
+               max_production_power=3000.0):
     """Create a mock home.  Home has no simple real constructor so we mock it."""
     home = MagicMock()
     home.name = "TestHome"
@@ -111,6 +112,19 @@ def _make_home(battery=None, voltage=230.0):
     home.dashboard_sections = None
     home.get_best_persons_cars_allocations = AsyncMock()
     home.get_preferred_person_for_car = MagicMock(return_value=None)
+
+    # Provide realistic power values for budget capping in
+    # budgeting_algorithm_minimize_diffs when battery discharge is involved.
+    _now = datetime.now(pytz.UTC)
+    home.get_device_power_values = MagicMock(return_value=[
+        (_now - timedelta(seconds=30), home_load_power, {}),
+        (_now - timedelta(seconds=15), home_load_power, {}),
+        (_now, home_load_power, {}),
+    ])
+    home.get_home_max_available_production_power = MagicMock(
+        return_value=max_production_power
+    )
+
     return home
 
 

@@ -589,6 +589,14 @@ class QSChargerGroup(object):
         return diff_power, new_sum_amps, current_amps
 
 
+    def _extracts_power_value_from_data(self, power_values, time:datetime):
+        last_p_mean = get_average_time_series(power_values[-len(power_values) // 2:], last_timing=time)
+        all_p_mean = get_average_time_series(power_values, last_timing=time)
+        last_p_median = get_median_sensor(power_values[-len(power_values) // 2:], last_timing=time)
+        all_p_median = get_median_sensor(power_values, last_timing=time)
+
+        return  min(last_p_mean, all_p_mean, last_p_median,
+                                        all_p_median)  # if positive we are exporting solar and/or to battery , negative we are importing from the grid
 
     async def dyn_handle(self, time: datetime):
 
@@ -629,21 +637,10 @@ class QSChargerGroup(object):
                 grid_available_home_power = None
 
                 if grid_available_power:
-                    last_p_mean = get_average_time_series(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
-                    all_p_mean = get_average_time_series(grid_available_power, last_timing=time)
-                    last_p_median = get_median_sensor(grid_available_power[-len(grid_available_power) // 2:], last_timing=time)
-                    all_p_median = get_median_sensor(grid_available_power, last_timing=time)
-
-                    grid_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar , negative we are importing from the grid
+                    grid_available_home_power = self._extracts_power_value_from_data(grid_available_power, time) #if positive we are exporting solar , negative we are importing from the grid
 
                 if available_power:
-
-                    last_p_mean = get_average_time_series(available_power[-len(available_power) // 2:], last_timing=time)
-                    all_p_mean = get_average_time_series(available_power, last_timing=time)
-                    last_p_median = get_median_sensor(available_power[-len(available_power) // 2:], last_timing=time)
-                    all_p_median = get_median_sensor(available_power, last_timing=time)
-
-                    full_available_home_power = min(last_p_mean, all_p_mean, last_p_median, all_p_median) #if positive we are exporting solar and/or to battery , negative we are importing from the grid
+                    full_available_home_power = self._extracts_power_value_from_data(available_power, time) #if positive we are exporting solar and/or to battery , negative we are importing from the grid
 
 
                 if full_available_home_power is None:
@@ -962,8 +959,25 @@ class QSChargerGroup(object):
                         cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
                         cs.command.power_consign > 0
                 ):
-                    # case where solver asked to overconsume battery power
+                    # case where solver asked to overconsume battery power, battery_asked_charge ngative so we add that to budget
+                    # the issue is that in that case if we go over the inverter clamping (because of this budget) we will consume from
+                    # the grid instead of the battery, so we need to take that into account in the budget to try to avoid that
                     initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
+
+                    # check self.home.get_home_max_available_production_power() : we cannot go over that one,
+                    # otherwise we will consume from the grid instead of the battery,
+                    # so we need to take that into account in the budget to try to avoid that
+
+                    home_load_powers = self.home.get_device_power_values(CHARGER_ADAPTATION_WINDOW_S, time, use_fallback_command=False)
+                    if home_load_powers is not None and len(home_load_powers) > 0:
+                        home_load_power_value = self._extracts_power_value_from_data(home_load_powers, time)
+                        home_max_available_production_power = self.home.get_home_max_available_production_power()
+                        if home_max_available_production_power is not None:
+                            if initial_power_budget > home_max_available_production_power - home_load_power_value:
+                                initial_power_budget = home_max_available_production_power - home_load_power_value
+                                _LOGGER.info(
+                                    f"budgeting_algorithm_minimize_diffs: adjust initial_power_budget to {initial_power_budget}W to avoid overproduction and consuming from the grid instead of the battery, because of battery_asked_charge {battery_asked_charge}W, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W")
+
                     break
 
 
