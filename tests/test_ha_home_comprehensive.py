@@ -1412,10 +1412,10 @@ class TestOffGridAutoDetection:
             assert "URGENT" in call_args[1]["title"] or "URGENT" in call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_off_grid_to_on_grid_does_not_notify(
+    async def test_off_grid_to_on_grid_notifies_restored(
         self, hass: HomeAssistant, home_with_binary_sensor_off_grid
     ):
-        """Transitioning from off-grid back to on-grid does NOT send a notification."""
+        """Transitioning from off-grid back to on-grid sends a restoration notification."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
 
@@ -1429,31 +1429,59 @@ class TestOffGridAutoDetection:
             await hass.async_block_till_done()
 
             assert home.qs_home_real_off_grid is False
-            mock_notify.assert_not_called()
+            mock_notify.assert_called_once()
+            call_args = mock_notify.call_args
+            assert "restored" in call_args[1]["title"].lower() or "restored" in call_args[0][0].lower()
 
     @pytest.mark.asyncio
-    async def test_staying_off_grid_does_not_re_notify(
+    async def test_full_cycle_notifies_both_transitions(
         self, hass: HomeAssistant, home_with_binary_sensor_off_grid
     ):
-        """Repeated off-grid states do not trigger additional notifications."""
+        """A full on->off->on grid cycle produces exactly 2 notifications (one per transition)."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
 
-        # Go off-grid
-        hass.states.async_set("binary_sensor.grid_relay", "on")
-        await hass.async_block_till_done()
-        assert home.qs_home_real_off_grid is True
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # on-grid -> off-grid
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+            assert home.qs_home_real_off_grid is True
+
+            # off-grid -> on-grid
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+            assert home.qs_home_real_off_grid is False
+
+            assert mock_notify.call_count == 2
+            # First call: off-grid alert
+            assert "URGENT" in mock_notify.call_args_list[0][1]["title"] or "URGENT" in mock_notify.call_args_list[0][0][0]
+            # Second call: restoration
+            assert "restored" in mock_notify.call_args_list[1][1]["title"].lower() or "restored" in mock_notify.call_args_list[1][0][0].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_notification_when_state_unchanged(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """No notification when real off-grid state does not actually change."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        # Initial state is off (on-grid), set it to off again via a different intermediate
+        # The fixture sets binary_sensor.grid_relay to "off", so qs_home_real_off_grid is False
+        assert home.qs_home_real_off_grid is False
 
         with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
-            # Set to a different state then back to "on" to produce a state_changed event
+            # Go off-grid then back twice: should get exactly 1 off-grid + 1 restored per cycle
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
             hass.states.async_set("binary_sensor.grid_relay", "off")
             await hass.async_block_till_done()
             hass.states.async_set("binary_sensor.grid_relay", "on")
             await hass.async_block_till_done()
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
 
-            # Second on->off->on cycle: the off->on doesn't notify, the on->off does
-            # but the first off->on cleared qs_home_real_off_grid, so on->off is a fresh transition
-            assert mock_notify.call_count == 1
+            # 2 cycles = 4 notifications (off-grid, restored, off-grid, restored)
+            assert mock_notify.call_count == 4
 
     @pytest.mark.asyncio
     async def test_notify_all_mobile_apps_calls_services(

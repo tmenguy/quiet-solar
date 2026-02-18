@@ -346,6 +346,7 @@ class AbstractDevice(object):
 
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         data_to_update["num_on_off"] = self.num_on_off
+        data_to_update["current_command"] = self.current_command.to_dict() if self.current_command is not None else None
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         self.num_on_off = stored_load_info.get("num_on_off", 0)
@@ -358,12 +359,16 @@ class AbstractDevice(object):
             if self.num_max_on_off - self.num_on_off <= 2:
                 self.num_on_off = self.num_max_on_off - 2
 
+        cmd_dict = stored_load_info.get("current_command", None)
+        if cmd_dict is not None:
+            self.current_command = LoadCommand(**cmd_dict)
+
 
     def reset_daily_load_datas(self, time:datetime | None = None):
         self.num_on_off = 0
 
 
-    def get_min_max_power(self) -> (float, float):
+    def get_min_max_power(self) -> tuple[float, float]:
         return 0.0, 0.0
 
 
@@ -382,7 +387,7 @@ class AbstractDevice(object):
         if is_3p:
             return [p, p, p]
         else:
-            ret = [0, 0, 0]
+            ret = [0.0, 0.0, 0.0]
             ret[self.mono_phase_index] = p
             return ret
 

@@ -1008,14 +1008,18 @@ class QSHome(QSDynamicGroup):
             if new_state is None:
                 return
             previous_real_off_grid = self.qs_home_real_off_grid
-            computed = self._compute_off_grid_from_entity_state(new_state.state, self._off_grid_entity)
-            self.qs_home_real_off_grid = computed
+            self.qs_home_real_off_grid = self._compute_off_grid_from_entity_state(new_state.state, self._off_grid_entity)
 
             # Notify all devices only on the on-grid -> off-grid transition
-            if computed and not previous_real_off_grid:
+            if self.qs_home_real_off_grid and not previous_real_off_grid:
                 await self.async_notify_all_mobile_apps(
                     title="\u26a0\ufe0f URGENT: Power grid lost!",
                     message="Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
+                )
+            elif not self.qs_home_real_off_grid and previous_real_off_grid:
+                await self.async_notify_all_mobile_apps(
+                    title="\u2705 Power grid restored",
+                    message="Your home is back on-grid. Quiet Solar is switching back to normal mode.",
                 )
 
             await self._compute_and_apply_off_grid_state(for_init=False)
