@@ -261,7 +261,7 @@ def create_ha_sensor_for_Device(device: AbstractDevice):
         key="load_current_command",
         translation_key=SENSOR_LOAD_CURRENT_COMMAND,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda device, key: "NO CMD" if device.current_command is None else device.current_command.command,
+        value_fn=lambda device, key: "NO CMD" if device.effective_command is None else device.effective_command.command,
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 

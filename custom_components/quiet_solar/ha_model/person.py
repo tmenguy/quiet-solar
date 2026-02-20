@@ -489,9 +489,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         """Sort string for dashboard display."""
         return "AAA"
 
-    def reset(self):
+    def reset(self, keep_commands=False):
         """Reset the device state."""
-        super().reset()
+        super().reset(keep_commands=keep_commands)
 
 
 

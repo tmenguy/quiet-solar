@@ -783,8 +783,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # no clamping per user request
         self._km_per_kwh = eff
 
-    def reset(self):
-        super().reset()
+    def reset(self, keep_commands=False):
+        super().reset(keep_commands=keep_commands)
         self.interpolate_power_steps(do_recompute_min_charge=True, use_conf_values=True)
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
@@ -1828,7 +1828,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.user_attached_charger_name = None
         self.user_selected_person_name_for_car = None  # asked full reset, reset the user selected person,will trigger person allocation
 
-        self.reset()  # will detach the car
+        self.reset(keep_commands=True)  # will detach the car
         self._reset_charge_targets()
         await self.setup_car_charge_target_if_needed()
 

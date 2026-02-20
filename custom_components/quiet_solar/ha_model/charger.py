@@ -2196,9 +2196,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_constraints = []
         self._boot_last_completed_constraint = None
 
-    def reset(self):
+    def reset(self, keep_commands=False):
         _LOGGER.info(f"Charger reset {self.name}")
-        super().reset()
+        super().reset(keep_commands=keep_commands)
         self.detach_car()
         self._reset_state_machine()
         self._asked_for_reboot_at_time = None
@@ -2606,8 +2606,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._constraints = []
 
 
-    def command_and_constraint_reset(self):
-        super().command_and_constraint_reset()
+    def command_and_constraint_reset(self, keep_commands=False):
+        super().command_and_constraint_reset(keep_commands=keep_commands)
         # reset the next charge force state
         if self.car:
             self.car.do_force_next_charge = False
@@ -2655,7 +2655,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car:
                 _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
                 self.car.user_selected_person_name_for_car = None # physical unplug, reset the user selected person, may trigger a person allocation
-                self.reset() # will detach the car
+                self.reset(keep_commands=True) # will detach the car
                 self.user_attached_car_name = None # physical unplug, reset the user selected car for charger
                 do_force_solve = True
 
@@ -2683,7 +2683,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # user forced a "deconnection"
             if best_car is None:
                 _LOGGER.info("check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option")
-                self.reset()
+                self.reset(keep_commands=True)
                 return True
 
             elif self.car:
@@ -2774,7 +2774,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car.do_force_next_charge is True:
 
                 do_force_solve = True
-                self.command_and_constraint_reset() # cleanup any previous constraints to force this one!
+                self.command_and_constraint_reset(keep_commands=True) # cleanup any previous constraints to force this one!
 
                 if car_initial_value >= target_charge:
                     _LOGGER.info(
@@ -2832,7 +2832,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # the constraint will be launched and the start time was the one pushed here : reset it
                     do_force_solve = True
                     local_end_of_constraint = self.car.do_next_charge_time
-                    self.command_and_constraint_reset() # cleanup any previous constraints to force this one!
+                    self.command_and_constraint_reset(keep_commands=True) # cleanup any previous constraints to force this one!
 
                     user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,
@@ -3156,7 +3156,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.car = car
 
         # reset dampening to conf values, and some states
-        car.reset()
+        car.reset(keep_commands=True)
 
         if car.calendar is None:
             car.calendar = self.calendar
