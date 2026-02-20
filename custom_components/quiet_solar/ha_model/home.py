@@ -1070,7 +1070,7 @@ class QSHome(QSDynamicGroup):
             if max_discharge_power is not None:
                 available_production_w += self.battery.get_max_discharging_power()  # self.battery.max_discharge_number
 
-        if self.solar_plant and self.solar_plant.solar_max_output_power_value:
+        if self.solar_plant:
             available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
 
         return available_production_w
@@ -1388,49 +1388,59 @@ class QSHome(QSDynamicGroup):
         # Non controlled consumption : Home real consumption - controlled consumption
 
         # get solar production
-        solar_production_minus_battery = None
-        solar_production = None
+        solar_production_not_clamped = None
+        inverter_output_clamped = None
 
-        battery_charge = None
+        battery_charge_clamped = None
+        is_battery_dc_coupled = False
         if self.battery is not None:
-            battery_charge = self.battery.get_sensor_latest_possible_valid_value(self.battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+            is_battery_dc_coupled = self.battery.is_dc_coupled
+            battery_charge_clamped = self.battery.get_sensor_latest_possible_valid_value(self.battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
+        if self.solar_plant is None:
+            is_battery_dc_coupled = False
 
         if self.solar_plant is not None:
             self.solar_plant.solar_production = 0.0
-            solar_production = None
+            solar_production_not_clamped = None
             if self.solar_plant.solar_inverter_active_power:
-                # this one has the battery inside!
-                solar_production_minus_battery = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+                # this one has the battery inside! ... in case of dc coupled battery: but it is clamped to the max power of the inverter
+                # the system can't ask more than the clamping of the inverter.
+                inverter_output_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
-            if solar_production_minus_battery is None and self.solar_plant.solar_inverter_input_active_power:
-                solar_production = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+            if self.solar_plant.solar_inverter_input_active_power:
+                # this one is the TRUE solar production, unclamped. If there is an hybrid charging battery : a part of the battery charge will actually be
+                # because of this excess solar production that will go, not matter what inside the battery.
+                solar_production_not_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
 
-            if solar_production_minus_battery is not None and solar_production is not None and battery_charge is None:
-                battery_charge = solar_production - solar_production_minus_battery
+            if is_battery_dc_coupled and inverter_output_clamped is not None and solar_production_not_clamped is not None and battery_charge_clamped is None:
+                # comparing clamped and not clamped ... but no other way to get battery charge here
+                battery_charge_clamped = self.battery.clamp_charge_power(solar_production_not_clamped - inverter_output_clamped)
 
-            if solar_production_minus_battery is None:
-                if solar_production is not None and battery_charge is not None:
-                    solar_production_minus_battery = solar_production - battery_charge
-                elif solar_production is not None:
-                    solar_production_minus_battery = solar_production
+            if inverter_output_clamped is None:
+                if is_battery_dc_coupled and solar_production_not_clamped is not None and battery_charge_clamped is not None:
+                    inverter_output_clamped = min(self.solar_plant.solar_max_output_power_value, solar_production_not_clamped - battery_charge_clamped)
+                elif solar_production_not_clamped is not None:
+                    inverter_output_clamped = min(solar_production_not_clamped, self.solar_plant.solar_max_output_power_value)
 
-            if solar_production is not None:
-                self.solar_plant.solar_production = solar_production
-            elif solar_production_minus_battery is not None:
-                if battery_charge is not None:
-                    self.solar_plant.solar_production = solar_production_minus_battery + battery_charge
+            if solar_production_not_clamped is not None:
+                self.solar_plant.solar_production = solar_production_not_clamped
+            elif inverter_output_clamped is not None:
+                if battery_charge_clamped is not None:
+                    solar_production_not_clamped = inverter_output_clamped + battery_charge_clamped
                 else:
-                    self.solar_plant.solar_production = solar_production_minus_battery
+                    solar_production_not_clamped = inverter_output_clamped
+                self.solar_plant.solar_production = solar_production_not_clamped
 
-        elif battery_charge is not None:
-            solar_production_minus_battery = 0 - battery_charge
+        elif battery_charge_clamped is not None:
+            inverter_output_clamped = 0
+            solar_production_not_clamped = 0
 
-        if solar_production_minus_battery is None:
-            solar_production_minus_battery = 0
+        if inverter_output_clamped is None:
+            inverter_output_clamped = 0
 
         if self.solar_plant is not None:
-            self.solar_plant.solar_production_minus_battery = solar_production_minus_battery
+            self.solar_plant.inverter_output_power = inverter_output_clamped
 
         # get grid consumption
         grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
@@ -1441,16 +1451,32 @@ class QSHome(QSDynamicGroup):
                                                                            tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
                                                                            time=time)
             if home_consumption is not None and grid_consumption is None:
-                if solar_production_minus_battery is not None:
-                    grid_consumption = solar_production_minus_battery - home_consumption
+                if is_battery_dc_coupled:
+                    if inverter_output_clamped is not None:
+                        grid_consumption = inverter_output_clamped - home_consumption
+                    else:
+                        grid_consumption = 0 - home_consumption
                 else:
-                    grid_consumption = 0 - home_consumption
+                    if battery_charge_clamped is not None and inverter_output_clamped is not None:
+                        grid_consumption = inverter_output_clamped - home_consumption - battery_charge_clamped
+                    elif battery_charge_clamped is not None:
+                        grid_consumption = 0 - home_consumption - battery_charge_clamped
+                    elif inverter_output_clamped is not None:
+                        grid_consumption = inverter_output_clamped - home_consumption
 
         if home_consumption is None and grid_consumption is not None:
-            if solar_production_minus_battery is not None:
-                home_consumption = solar_production_minus_battery - grid_consumption
+            if is_battery_dc_coupled:
+                if inverter_output_clamped is not None:
+                    home_consumption = inverter_output_clamped - grid_consumption
+                else:
+                    home_consumption = 0 - grid_consumption
             else:
-                home_consumption = 0 - grid_consumption
+                if battery_charge_clamped is not None and inverter_output_clamped is not None:
+                    home_consumption = inverter_output_clamped - grid_consumption - battery_charge_clamped
+                elif battery_charge_clamped is not None:
+                    home_consumption = 0 - grid_consumption - battery_charge_clamped
+                elif inverter_output_clamped is not None:
+                    home_consumption = inverter_output_clamped - grid_consumption
 
         if grid_consumption is None or home_consumption is None:
             self.home_non_controlled_consumption = None
@@ -1486,30 +1512,39 @@ class QSHome(QSDynamicGroup):
             self.grid_consumption_power = grid_consumption
             self.home_non_controlled_consumption = home_consumption - controlled_consumption
             self.home_consumption = home_consumption
-            if battery_charge is not None:
-                self.home_available_power = grid_consumption + battery_charge
+            if battery_charge_clamped is not None:
+                self.home_available_power = grid_consumption + battery_charge_clamped
             else:
                 self.home_available_power = grid_consumption
 
-            # clamp the available power to what could be really available
+            # clamp the available power to what could be really available, to not get from the grid
             if self.home_available_power > 0:
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
-                maximum_production_output = self.get_current_maximum_production_output_power()
 
-                if self.home_available_power > (1.05*maximum_production_output): # 5% tolerance
-
-                    if self.battery is not None:
-                        max_battery_discharge = self.battery.battery_get_current_possible_max_discharge_power()
+                max_available_home_power = MAX_POWER_INFINITE
+                if self.battery is None or is_battery_dc_coupled:
+                    if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
+                        if inverter_output_clamped >= self.solar_plant.solar_max_output_power_value:
+                            max_available_home_power = 0
+                        else:
+                            max_available_home_power = max(0,
+                                                           self.solar_plant.solar_max_output_power_value - inverter_output_clamped)
+                        max_available_home_power = min(max_available_home_power,
+                                                       self.solar_plant.solar_max_output_power_value)
                     else:
-                        max_battery_discharge = 0
+                        max_available_home_power = MAX_POWER_INFINITE
+                else:
+                    max_battery_discharge = self.battery.battery_get_current_possible_max_discharge_power()
+                    if self.solar_plant is None:
+                        max_available_home_power = max_battery_discharge
+                    elif self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
+                        # the inverter and the battery are un coupled so the max available power
+                        # will be the sum of the max battery discharge
+                        max_available_home_power = max(0, max_battery_discharge + self.solar_plant.solar_max_output_power_value - inverter_output_clamped)
 
-                    if self.solar_plant is not None:
-                        solar_production = self.solar_plant.solar_production
-                    else:
-                        solar_production = -1
-
-                    _LOGGER.warning("Home available_power CLAMPED: from %.2f to  %.2f, (solar_production_minus_battery:%.2f, maximum_production_output:%.2f) (solar_production:%.2f) (max_battery_discharge:%.2f)", self.home_available_power, max(0.0, 1.05*maximum_production_output), solar_production_minus_battery, maximum_production_output, solar_production, max_battery_discharge )
-                    self.home_available_power = max(0.0, 1.05*(maximum_production_output))
+                if self.home_available_power > (1.05*max_available_home_power): # 5% tolerance
+                     _LOGGER.warning("Home available_power CLAMPED to max available home power: from %.2f to  %.2f, (inverter_output_clamped:%.2f, max_available_home_power:%.2f)", self.home_available_power, max(0.0, 1.05*max_available_home_power), inverter_output_clamped, max_available_home_power )
+                     self.home_available_power = max(0.0, 1.05*max_available_home_power)
 
         val = self.home_non_controlled_consumption
 
@@ -1527,14 +1562,11 @@ class QSHome(QSDynamicGroup):
         if self.solar_plant is None:
             return 0.0
 
-        if self.solar_plant.solar_production > self.solar_plant.solar_max_output_power_value:
-            return self.solar_plant.solar_production - self.solar_plant.solar_max_output_power_value
-
-        return 0.0
+        return self.solar_plant.get_current_over_clamp_production_power()
 
     def get_current_maximum_production_output_power(self) -> float:
 
-        if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value:
+        if self.solar_plant is not None:
             # we need to check if what is available will "really" be available to consume by any dynamic load ...
             maximum_solar_production_output = float(self.solar_plant.solar_max_output_power_value)
         else:
@@ -1551,7 +1583,7 @@ class QSHome(QSDynamicGroup):
         # with the current production of the solar plant + battery discharge
         if is_dc_coupled and maximum_solar_production_output > 0.0:
             if self.solar_plant is not None and float(self.solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output:
-               maximum_production_output = float(self.solar_plant.solar_production) + max_battery_discharge
+               maximum_production_output = min(maximum_solar_production_output, float(self.solar_plant.solar_production) + max_battery_discharge)
             else:
                 maximum_production_output = maximum_solar_production_output
         else:
@@ -2392,7 +2424,7 @@ class QSHome(QSDynamicGroup):
             pv_forecast = self.get_solar_from_current_forecast(time, time + self._period)
 
             max_inverter_dc_to_ac_power = None
-            if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value is not None:
+            if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
                 max_inverter_dc_to_ac_power = self.solar_plant.solar_max_output_power_value
 
             end_time = time + self._period
@@ -2613,14 +2645,14 @@ class QSHomeConsumptionHistoryAndForecast:
             values_for_debug = {}
 
 
-            solar_production_minus_battery = None
+            inverter_output_power = None
             _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
             if is_one_bad is False:
                 if self.home.solar_plant is not None:
                     if self.home.solar_plant.solar_inverter_active_power:
                         # this one has the battery inside!
-                        solar_production_minus_battery =  QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self)
-                        s, e = await solar_production_minus_battery.init(time, for_reset=True)
+                        inverter_output_power =  QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self)
+                        s, e = await inverter_output_power.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True
                         else:
@@ -2629,8 +2661,9 @@ class QSHomeConsumptionHistoryAndForecast:
                             if e < end:
                                 end = e
                     elif self.home.solar_plant.solar_inverter_input_active_power:
-                        solar_production_minus_battery = QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self)
-                        s, e = await solar_production_minus_battery.init(time, for_reset=True)
+                        # in fact it is input power ... but will reuse it in place
+                        inverter_output_power = QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self)
+                        s, e = await inverter_output_power.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True
                         else:
@@ -2639,11 +2672,13 @@ class QSHomeConsumptionHistoryAndForecast:
                             if e < end:
                                 end = e
 
-                        if is_one_bad is False and battery_charge is not None:
-                            solar_production_minus_battery.values = self._combine_stored_forecast_values(solar_production_minus_battery.values, battery_charge.values, do_add=False)
+                        if is_one_bad is False and battery_charge is not None and self.home.battery.is_dc_coupled:
+                            inverter_output_power.values = self._combine_stored_forecast_values(inverter_output_power.values, battery_charge.values, do_add=False)
+                        if self.home.solar_plant.solar_max_output_power_value < 2000000000 : #int 32 limit
+                            inverter_output_power.values[0] = np.minimum(inverter_output_power.values[0], int(self.home.solar_plant.solar_max_output_power_value))
 
-            if solar_production_minus_battery is not None:
-                values_for_debug["solar_minus_battery"] = np.copy(solar_production_minus_battery.values)
+            if inverter_output_power is not None:
+                values_for_debug["inverter_output_power"] = np.copy(inverter_output_power.values)
 
             home_consumption = None
             _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
@@ -2658,20 +2693,20 @@ class QSHomeConsumptionHistoryAndForecast:
                             strt = s
                         if e < end:
                             end = e
-                        if solar_production_minus_battery is None:
+                        if inverter_output_power is None:
                             if self.home.grid_active_power_sensor_inverted is False:
                                 home_consumption.values[0] = (-1)*home_consumption.values[0]
                             # else do nothing, it is already in the right format
                         else:
                             # if self.home.grid_active_power_sensor_inverted is False:
-                            #    home_consumption.values[0] = solar_production_minus_battery.values[0] - home_consumption.values[0]
+                            #    home_consumption.values[0] = inverter_output_power.values[0] - home_consumption.values[0]
                             # else:
-                            #    home_consumption.values[0] = solar_production_minus_battery.values[0] + home_consumption.values[0]
+                            #    home_consumption.values[0] = inverter_output_power.values[0] + home_consumption.values[0]
 
                             # when not inverted it means grid consumption is negative : when the house consume from teh grid is it negative : so we need to remove it from solar production
                             # if "inverted, simply add it to solar production
                             values_for_debug["grid"] = np.copy(home_consumption.values)
-                            home_consumption.values = self._combine_stored_forecast_values(solar_production_minus_battery.values, home_consumption.values, do_add=self.home.grid_active_power_sensor_inverted)
+                            home_consumption.values = self._combine_stored_forecast_values(inverter_output_power.values, home_consumption.values, do_add=self.home.grid_active_power_sensor_inverted)
 
 
             _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")

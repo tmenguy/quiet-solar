@@ -145,6 +145,7 @@ def create_test_battery(
     max_soc_percent: float = 90.0,
     max_charge_power: float = 3000.0,
     max_discharge_power: float = 3000.0,
+    is_dc_coupled: bool = True,
     name: str = "test_battery"
 ) -> Battery:
     """
@@ -169,6 +170,7 @@ def create_test_battery(
     battery._current_charge_value = capacity_wh * initial_soc_percent / 100.0
     battery.min_charge_SOC_percent = min_soc_percent
     battery.max_charge_SOC_percent = max_soc_percent
+    battery.is_dc_coupled = is_dc_coupled
     return battery
 
 

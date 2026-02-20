@@ -15,6 +15,7 @@ class Battery(AbstractDevice):
         self.max_charging_power =  kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500)
         self.min_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0)
         self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
+        self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
 
 
         super().__init__(**kwargs)

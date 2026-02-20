@@ -361,10 +361,11 @@ async def test_forecast_reset_with_input_active_power(
     home = hass.data[DOMAIN][DATA_HANDLER].home
     home.home_mode = QSHomeMode.HOME_MODE_ON.value
 
-    home.physical_battery = SimpleNamespace(charge_discharge_sensor="sensor.battery_power")
+    home.physical_battery = SimpleNamespace(charge_discharge_sensor="sensor.battery_power", is_dc_coupled=True)
     home.physical_solar_plant = SimpleNamespace(
         solar_inverter_active_power=None,
         solar_inverter_input_active_power="sensor.solar_input_power",
+        solar_max_output_power_value=1000.0,
     )
     home.grid_active_power_sensor = "sensor.grid_power"
     home.grid_active_power_sensor_inverted = False

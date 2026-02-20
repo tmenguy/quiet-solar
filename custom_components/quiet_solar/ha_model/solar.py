@@ -64,7 +64,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 self.solar_forecast_provider_handler = QSSolarProviderOpenWeather(self)
 
         self.solar_production = 0
-        self.solar_production_minus_battery = 0
+        self.inverter_output_power = 0
 
     def get_current_over_clamp_production_power(self) -> float:
 

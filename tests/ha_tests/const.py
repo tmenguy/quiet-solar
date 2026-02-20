@@ -50,6 +50,7 @@ from custom_components.quiet_solar.const import (
     CONF_CLIMATE_HVAC_MODE_ON,
     CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_POWER,
+    CONF_BATTERY_IS_DC_COUPLED,
 )
 
 # Mock Home configuration
@@ -109,6 +110,7 @@ MOCK_BATTERY_CONFIG = {
     CONF_BATTERY_CAPACITY: 10000,  # 10 kWh in Wh
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+    CONF_BATTERY_IS_DC_COUPLED: True
 }
 
 # Mock Solar configuration

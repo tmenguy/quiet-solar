@@ -345,7 +345,7 @@ class PeriodSolver(object):
 
                 if for_production_clamping:
                     # if available power negative : we do have some production/solar available power
-                    if max_inverter_dc_to_ac_power is not None and  0.0-available_power_list[i] > max_inverter_dc_to_ac_power:
+                    if max_inverter_dc_to_ac_power is not None and  0.0-available_power_list[i] > max_inverter_dc_to_ac_power and self._battery.is_dc_coupled:
                         # what is above the inverter limit will be overcharged in the battery if it is an hybrid + battery setup
                         available_power = available_power_list[i] + max_inverter_dc_to_ac_power
                     else:

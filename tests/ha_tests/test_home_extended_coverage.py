@@ -46,6 +46,7 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_DAYS,
     POWER_ALIGNMENT_TOLERANCE_S,
 )
+from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE, LoadCommand
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 
@@ -618,10 +619,10 @@ class TestHomeProductionConsumption:
     ):
         """Solar production exceeds max output. Covers lines 1379-1382."""
         home = await _get_home(hass, home_config_entry)
-        home.physical_solar_plant = MagicMock(
-            solar_production=6000.0,
-            solar_max_output_power_value=5000.0,
-        )
+        home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="test_solar_production")
+        home.physical_solar_plant.solar_production = 6000.0
+        home.physical_solar_plant.solar_max_output_power_value = 5000.0
+
         result = home.get_current_over_clamp_production_power()
         assert result == 1000.0
 
@@ -631,10 +632,10 @@ class TestHomeProductionConsumption:
     ):
         """Solar production under max output returns 0. Covers line 1382."""
         home = await _get_home(hass, home_config_entry)
-        home.physical_solar_plant = MagicMock(
-            solar_production=3000.0,
-            solar_max_output_power_value=5000.0,
-        )
+        home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="test_solar_production")
+        home.physical_solar_plant.solar_production = 3000.0
+        home.physical_solar_plant.solar_max_output_power_value = 5000.
+
         result = home.get_current_over_clamp_production_power()
         assert result == 0.0
 
@@ -2305,8 +2306,6 @@ class TestNonControlledConsumptionBranches:
 
         result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
         assert result is not None
-        # solar_prod_minus_bat = 0 - (-500) = 500
-        # home_consumption = 500 - 200 = 300
         assert home.home_consumption == 300.0
         # available_power = grid + battery = 200 + (-500) = -300
         assert home.home_available_power == -300.0
@@ -2620,18 +2619,21 @@ class TestNonControlledConsumptionBranches:
         home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
-        # Solar producing 3000, but max output is very low
+
         home.solar_plant.solar_max_output_power_value = 1000.0
-        _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 3000.0)
-        # grid exporting a lot → high available power
-        _inject_sensor_value(home, home.grid_active_power_sensor, now, 2500.0)
+        _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 300.0)
+        _inject_sensor_value(home, home.grid_active_power_sensor, now, 250.0)
 
         result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
         assert result is not None
-        # available_power = grid = 2500
-        # max_production_output = 1000 (capped by solar_max_output)
-        # 2500 > 1.05 * 1000 → clamped to 1.05 * 1000 = 1050
-        assert home.home_available_power == pytest.approx(1050.0, rel=0.01)
+        assert home.home_available_power == 250
+
+        _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 800.0)
+        _inject_sensor_value(home, home.grid_active_power_sensor, now, 250.0)
+        result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
+        assert result is not None
+        assert home.home_available_power == pytest.approx(210.0, rel=0.01)
+
 
     @pytest.mark.asyncio
     async def test_available_power_clamped_with_battery(

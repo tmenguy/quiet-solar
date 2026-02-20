@@ -28,7 +28,7 @@ class QSBattery(HADeviceMixin, Battery):
         self.max_charge_number = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_NUMBER, None)
         self.charge_percent_sensor = kwargs.pop(CONF_BATTERY_CHARGE_PERCENT_SENSOR, None)
         self.charge_from_grid_switch = kwargs.pop(CONF_BATTERY_CHARGE_FROM_GRID_SWITCH, None)
-        self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
+
 
         super().__init__(**kwargs)
 
@@ -189,6 +189,19 @@ class QSBattery(HADeviceMixin, Battery):
                     _LOGGER.warning(f"get_max_discharging_power: battery NONE {self.max_discharge_number}")
 
         return res
+
+    def clamp_charge_power(self, power: float) -> float:
+
+        if power >= 0:
+            max_charge_power = self.get_max_charging_power()
+            if max_charge_power is not None:
+                return min(power, max_charge_power)
+            return power
+        else:
+            max_discharge_power = self.get_max_discharging_power()
+            if max_discharge_power is not None:
+                return max(power, -max_discharge_power)
+            return power
 
     def get_max_charging_power(self):
 

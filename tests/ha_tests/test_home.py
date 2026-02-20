@@ -21,6 +21,7 @@ from custom_components.quiet_solar.const import (
     CONF_GRID_POWER_SENSOR,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
+from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE
 from custom_components.quiet_solar.home_model.load import AbstractDevice
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
@@ -1158,7 +1159,7 @@ async def test_home_non_controlled_consumption_calculation(
     )
 
     assert result is not None
-    assert result[1] == 300.0
+    assert result[1] == 200.0
     assert home.home_available_power == 300.0
     assert home.grid_consumption_power == 200.0
 
@@ -1950,11 +1951,10 @@ async def test_home_power_helpers(
     home = data_handler.home
     home.home_mode = QSHomeMode.HOME_MODE_ON.value
 
-    solar = SimpleNamespace(
-        solar_production=1500.0,
-        solar_max_output_power_value=1000.0,
-    )
-    home.physical_solar_plant = solar
+    home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="test_solar_production")
+    home.physical_solar_plant.solar_production = 1500.0
+    home.physical_solar_plant.solar_max_output_power_value = 1000
+
     assert home.get_current_over_clamp_production_power() == 500.0
 
     battery = SimpleNamespace(
@@ -1962,8 +1962,8 @@ async def test_home_power_helpers(
         battery_get_current_possible_max_discharge_power=MagicMock(return_value=200.0),
     )
     home.physical_battery = battery
-    solar.solar_production = 300.0
-    solar.solar_max_output_power_value = 2000.0
+    home.physical_solar_plant.solar_production = 300.0
+    home.physical_solar_plant.solar_max_output_power_value = 2000.0
     assert home.get_current_maximum_production_output_power() == 500.0
 
 
