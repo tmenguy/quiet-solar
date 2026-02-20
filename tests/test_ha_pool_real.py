@@ -342,12 +342,12 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         """Test that non-auto/winter modes call parent implementation."""
         pool_device.bistate_mode = "on_off_mode_off"
         pool_device.is_load_command_set = MagicMock(return_value=False)
-        pool_device.command_and_constraint_reset = MagicMock()
+        pool_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
 
         time = datetime.datetime.now(pytz.UTC)
         result = await pool_device.check_load_activity_and_constraints(time)
 
-        pool_device.command_and_constraint_reset.assert_called()
+        pool_device.constraint_reset_and_reset_commands_if_needed.assert_called()
 
     @pytest.mark.asyncio
     async def test_check_load_no_end_schedule_returns_false(self, pool_device):

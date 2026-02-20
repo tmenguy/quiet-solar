@@ -355,7 +355,7 @@ class TestCheckLoadActivityAndConstraints:
              patch.object(charger, 'is_plugged', return_value=True), \
              patch.object(charger, 'get_best_car', return_value=mock_car), \
              patch.object(charger, 'clean_constraints_for_load_param_and_if_same_key_same_value_info'), \
-             patch.object(charger, 'command_and_constraint_reset') as mock_reset, \
+             patch.object(charger, 'constraint_reset_and_reset_commands_if_needed') as mock_reset, \
              patch.object(charger, 'push_live_constraint', return_value=True) as mock_push, \
              patch.object(charger, 'is_car_charged', return_value=(False, 30.0)), \
              patch.object(charger, 'is_off_grid', return_value=False), \

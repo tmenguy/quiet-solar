@@ -232,7 +232,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.reset_override_state_and_set_reset_ask_time(time)
                 do_force_next_solve = True
                 self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None # a proper constraint re-evaluation for the load will be done "normally"
-                self.command_and_constraint_reset(keep_commands=True) #remove any constraint if any we will add it back if needed below
+                self.constraint_reset_and_reset_commands_if_needed(keep_commands=True) #remove any constraint if any we will add it back if needed below
             else:
 
                 if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
@@ -240,7 +240,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     has_a_running_override = False
                     do_force_next_solve = True
                     self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
-                    self.command_and_constraint_reset(keep_commands=True)  # remove any constraint if any we will add it back if needed below
+                    self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # remove any constraint if any we will add it back if needed below
                 else:
 
                     for i, ct in enumerate(self._constraints):
@@ -312,7 +312,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self.external_user_initiated_state_time = time
 
                         # remove any overridden constraint if any
-                        self.command_and_constraint_reset(keep_commands=True)  # remove any constraint if any we will add it back if needed below
+                        self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # remove any constraint if any we will add it back if needed below
 
                         # we will create a constraint if the asked state is not idle ...
                         if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
@@ -376,11 +376,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     else:
                         if len(self._constraints) > 0:
                             do_force_next_solve = True
-                        self.command_and_constraint_reset(keep_commands=True)
+                        self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
             else:
                 if len(self._constraints) > 0:
                     do_force_next_solve = True
-                self.command_and_constraint_reset(keep_commands=True)
+                self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
 
             _LOGGER.debug(
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")

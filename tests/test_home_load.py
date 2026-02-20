@@ -337,7 +337,7 @@ class TestAbstractLoadReset:
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
         load._constraints = [MagicMock()]
 
-        load.command_and_constraint_reset()
+        load.constraint_reset_and_reset_commands_if_needed()
 
         assert load._constraints == []
 

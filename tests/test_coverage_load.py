@@ -1104,7 +1104,7 @@ class TestAbstractLoadCommandAndConstraintReset:
         ct = create_constraint(load=load, time=_t(0), end_of_constraint=_t(1), target_value=100)
         load._last_completed_constraint = ct
 
-        load.command_and_constraint_reset()
+        load.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
 
         assert load._last_completed_constraint is None
         assert load._constraints == []

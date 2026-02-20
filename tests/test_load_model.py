@@ -746,7 +746,7 @@ class TestAbstractDeviceCommands:
         device.prev_command = MagicMock()
         device.running_command = MagicMock()
 
-        device.command_and_constraint_reset()
+        device.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
 
         assert device._constraints == []
         assert device.current_command is None

@@ -2606,8 +2606,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._constraints = []
 
 
-    def command_and_constraint_reset(self, keep_commands=False):
-        super().command_and_constraint_reset(keep_commands=keep_commands)
+    def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
+        super().constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         # reset the next charge force state
         if self.car:
             self.car.do_force_next_charge = False
@@ -2774,7 +2774,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if self.car.do_force_next_charge is True:
 
                 do_force_solve = True
-                self.command_and_constraint_reset(keep_commands=True) # cleanup any previous constraints to force this one!
+                self.constraint_reset_and_reset_commands_if_needed(keep_commands=True) # cleanup any previous constraints to force this one!
 
                 if car_initial_value >= target_charge:
                     _LOGGER.info(
@@ -2832,7 +2832,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # the constraint will be launched and the start time was the one pushed here : reset it
                     do_force_solve = True
                     local_end_of_constraint = self.car.do_next_charge_time
-                    self.command_and_constraint_reset(keep_commands=True) # cleanup any previous constraints to force this one!
+                    self.constraint_reset_and_reset_commands_if_needed(keep_commands=True) # cleanup any previous constraints to force this one!
 
                     user_timed_constraint = ConstraintClass(
                         total_capacity_wh=self.car.car_battery_capacity,

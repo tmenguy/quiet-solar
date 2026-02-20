@@ -1337,7 +1337,7 @@ async def test_charger_check_load_activity_force_constraint(
     charger_device.get_best_car = MagicMock(return_value=car_device)
     charger_device.clean_constraints_for_load_param_and_if_same_key_same_value_info = MagicMock()
     charger_device.push_live_constraint = MagicMock(return_value=True)
-    charger_device.command_and_constraint_reset = MagicMock()
+    charger_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
     car_device.can_use_charge_percent_constraints = MagicMock(return_value=True)
     car_device.setup_car_charge_target_if_needed = AsyncMock(return_value=80.0)
     car_device.get_car_charge_percent = MagicMock(return_value=30.0)
@@ -1996,7 +1996,7 @@ async def test_charger_check_load_activity_agenda_person_constraints(
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.push_agenda_constraints = MagicMock(return_value=True)
     charger_device.set_live_constraints = MagicMock()
-    charger_device.command_and_constraint_reset = MagicMock()
+    charger_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
     charger_device.is_car_charged = MagicMock(return_value=(False, None))
     charger_device.is_off_grid = MagicMock(return_value=False)
     charger_device.qs_bump_solar_charge_priority = False
@@ -2108,7 +2108,7 @@ async def test_charger_check_load_activity_energy_constraints(
     charger_device.attach_car = MagicMock(side_effect=lambda car, time: setattr(charger_device, "car", car))
     charger_device.push_live_constraint = MagicMock(return_value=True)
     charger_device.set_live_constraints = MagicMock()
-    charger_device.command_and_constraint_reset = MagicMock()
+    charger_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
     charger_device._constraints = []
     charger_device._power_steps = [copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1000)]
 
@@ -4236,7 +4236,7 @@ async def test_charger_best_car_assignment_loop(
     charger_device.car = car_a
     car_a.do_force_next_charge = True
     car_a.do_next_charge_time = datetime(2026, 1, 15, 10, 0, tzinfo=pytz.UTC)
-    charger_device.command_and_constraint_reset()
+    charger_device.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
     assert car_a.do_force_next_charge is False
     assert car_a.do_next_charge_time is None
 

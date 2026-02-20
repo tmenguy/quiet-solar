@@ -619,7 +619,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         mock_car = MagicMock()
         charger.car = mock_car
         
-        charger.command_and_constraint_reset()
+        charger.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         
         # Car should still be attached after command_and_constraint_reset
         self.assertEqual(charger.car, mock_car)

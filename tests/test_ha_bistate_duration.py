@@ -203,7 +203,7 @@ def bistate_check_load_device(
     )
     device.load_is_auto_to_be_boosted = False
     device._constraints = []
-    device.command_and_constraint_reset = MagicMock()
+    device.constraint_reset_and_reset_commands_if_needed = MagicMock()
     device.power_use = 1000.0
     return device
 
@@ -676,7 +676,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         )
 
         assert result is True  # Should force next solve
-        bistate_check_load_device.command_and_constraint_reset.assert_called_once()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mode_off_no_constraints(
@@ -696,7 +696,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         )
 
         # No force solve needed if no constraints
-        bistate_check_load_device.command_and_constraint_reset.assert_called_once()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mode_off_keeps_only_override_constraint(
@@ -982,7 +982,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         bistate_check_load_device.push_live_constraint = MagicMock(
             return_value=True
         )
-        bistate_check_load_device.command_and_constraint_reset = MagicMock()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
         bistate_check_load_device.get_next_scheduled_event = AsyncMock(
             return_value=(None, None)
         )
@@ -1019,7 +1019,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         bistate_check_load_device.push_live_constraint = MagicMock(
             return_value=True
         )
-        bistate_check_load_device.command_and_constraint_reset = MagicMock()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
         bistate_check_load_device.get_next_scheduled_event = AsyncMock(
             return_value=(None, None)
         )
@@ -1030,7 +1030,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
             time
         )
 
-        bistate_check_load_device.command_and_constraint_reset.assert_called_once()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_user_override_expired_resets_state(
@@ -1059,7 +1059,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         bistate_check_load_device.reset_override_state_and_set_reset_ask_time = MagicMock(
             wraps=bistate_check_load_device.reset_override_state_and_set_reset_ask_time
         )
-        bistate_check_load_device.command_and_constraint_reset = MagicMock()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
 
         result = await bistate_check_load_device.check_load_activity_and_constraints(
             time
@@ -1067,7 +1067,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
 
         assert result is True
         bistate_check_load_device.reset_override_state_and_set_reset_ask_time.assert_called_once()
-        bistate_check_load_device.command_and_constraint_reset.assert_called_once()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
         assert (
             bistate_check_load_device.external_user_initiated_state is None
         )
@@ -1131,14 +1131,14 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
             time - datetime.timedelta(seconds=5)
         )
-        bistate_check_load_device.command_and_constraint_reset = MagicMock()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
 
         result = await bistate_check_load_device.check_load_activity_and_constraints(
             time
         )
 
         assert result is True
-        bistate_check_load_device.command_and_constraint_reset.assert_called_once()
+        bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
         assert (
             bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done
             is None

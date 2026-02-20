@@ -111,7 +111,7 @@ class AbstractDevice(object):
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
-        self.command_and_constraint_reset()
+        self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         self.reset_daily_load_datas()
 
         self._ack_command(None, None)
@@ -223,7 +223,7 @@ class AbstractDevice(object):
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
 
-    def command_and_constraint_reset(self, keep_commands=False):
+    def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
         _LOGGER.info(f"Constraint Reset device {self.name}")
         self._constraints: list[LoadConstraint | None] = []
         if keep_commands is False:
@@ -241,7 +241,7 @@ class AbstractDevice(object):
     # for class overcharging reset
     def reset(self, keep_commands=False):
         _LOGGER.info(f"Reset device {self.name}")
-        self.command_and_constraint_reset(keep_commands=keep_commands)
+        self.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         self.reset_daily_load_datas()
 
     async def user_clean_and_reset(self):
@@ -250,7 +250,7 @@ class AbstractDevice(object):
 
     async def user_clean_constraints(self):
         _LOGGER.info(f"user_clean_constraints device {self.name}")
-        self.command_and_constraint_reset(keep_commands=True)
+        self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
 
     @property
     def qs_enable_device(self) -> bool:
@@ -671,8 +671,8 @@ class AbstractLoad(AbstractDevice):
 
         self.is_load_time_sensitive = False
 
-    def command_and_constraint_reset(self, keep_commands=False):
-        super().command_and_constraint_reset(keep_commands=keep_commands)
+    def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
+        super().constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
 
         self.current_constraint_current_value = None
         self.current_constraint_current_energy = None
@@ -860,7 +860,7 @@ class AbstractLoad(AbstractDevice):
 
     async def async_load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
 
-        self.command_and_constraint_reset()
+        self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
 
         for c_dict in constraints_dicts:
             cs_load = LoadConstraint.new_from_saved_dict(time, self, c_dict)
@@ -959,7 +959,7 @@ class AbstractLoad(AbstractDevice):
         if for_full_reset:
             self.reset(keep_commands=True)
         else:
-            self.command_and_constraint_reset(keep_commands=True)
+            self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
 
         # if not full reset : do not remember the last completed constraint .... (ex: a plugged car, when plugging in, forget any previously stored constraint)
         if for_full_reset is False:
