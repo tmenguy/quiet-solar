@@ -979,6 +979,12 @@ class AbstractLoad(AbstractDevice):
     async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
         if self.qs_enable_device is False:
             return
+
+        if constraint is not None and constraint.load_info is not None and constraint.load_info.get("originator",None) == "user_override":
+            # it is a user override based constraint ... we should reset the override state.
+            _LOGGER.info(f"Ack completed constraint {constraint.name} for load {self.name} with user override origin, reset override state and set reset ask time")
+            self.reset_override_state_and_set_reset_ask_time(time=time)
+
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
 

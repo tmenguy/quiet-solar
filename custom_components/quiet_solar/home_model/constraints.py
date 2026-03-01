@@ -406,6 +406,9 @@ class LoadConstraint(object):
             target_string = f"{int(target_value / 1000)} kWh"
         return target_string
 
+    def get_unit_string(self) -> str:
+        return "Wh"
+
     def get_readable_name_for_load(self) -> str:
         target_date = self.get_readable_next_target_date_string()
         target_string = self._get_readable_target_value_string()
@@ -1290,7 +1293,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             if has_reclaimed:
                                 # cool we do have successfully reclaimed some energy for a met constraint...
                                 delta_budget_quantity -= (d_budget_quantity - budget_quantity_to_be_reclaimed)
-                                _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {budget_quantity_to_be_reclaimed}Wh or s from the future")
+                                _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {budget_quantity_to_be_reclaimed} {self.get_unit_string()} from the future")
                             else:
                                 # the constraint was met and we can't reduce the futur: stop here
                                 start_solved_frontier = i
@@ -1490,7 +1493,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 start_reduction = self.end_of_constraint - timedelta(seconds=int(best_s) + 1)
 
                 _LOGGER.info(
-                    f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} {self.end_of_constraint} to {start_reduction}")
+                    f"compute_best_period_repartition: reduce slots for time sensitive constraint {self.load.name} to {self.end_of_constraint} from {start_reduction}")
 
                 new_first_slots = bisect_left(time_slots, start_reduction)
                 first_slot = max(first_slot, new_first_slots)
@@ -1834,7 +1837,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         added_quantity = initial_quantity_to_be_added - quantity_to_be_added
         out_constraint = self.shallow_copy_for_budget_delta_quantity(added_quantity)
 
-        _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_quantity}Wh or s {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
+        _LOGGER.info(f"compute_best_period_repartition: {self.load.name} {added_quantity} {self.get_unit_string()} {self.get_readable_name_for_load()} use_available_only: {do_use_available_power_only} allocated is fulfilled: {final_ret}")
 
         if min_idx_with_energy_impact > max_idx_with_energy_impact or max_idx_with_energy_impact < 0 or min_idx_with_energy_impact >= len(power_available_power):
             min_idx_with_energy_impact = max_idx_with_energy_impact = -1
@@ -1860,6 +1863,9 @@ class MultiStepsPowerLoadConstraintChargePercent(MultiStepsPowerLoadConstraint):
     def _get_readable_target_value_string(self) -> str:
         target_string = f"{int(round(self._get_target_value_for_readable()))} %"
         return target_string
+
+    def get_unit_string(self) -> str:
+        return "%"
 
     def convert_target_value_to_energy(self, value: float) -> float:
         return self.load.efficiency_factor*(value * self.total_capacity_wh) / 100.0
@@ -1926,6 +1932,9 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
         elif target_value >= 60:
             target_string = f"{int(target_value / 60)}mn"
         return target_string
+
+    def get_unit_string(self) -> str:
+        return "s"
 
     def best_duration_extension_to_push_constraint(self, time: datetime, end_constraint_min_tolerancy: timedelta) -> timedelta:
         return self.best_duration_to_meet()

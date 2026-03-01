@@ -174,7 +174,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         """ check the states of the switch to see if the command is set """
         state = self.hass.states.get(self.bistate_entity)
 
-        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+        if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE] or state.state is None:
             return None
         else:
             return state.state == self.expected_state_from_command_or_user(command)
@@ -215,7 +215,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
-        if self.is_load_command_set(time) and self.support_user_override():
+        if self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -236,13 +236,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             else:
 
                 if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-                    # do nothing below, just ask for a proper constraint evaluation to kill the current override::
+                    # do nothing below, just ask for a proper constraint evaluation to kill the current override:
                     has_a_running_override = False
                     do_force_next_solve = True
                     self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
                     self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # remove any constraint if any we will add it back if needed below
-                else:
 
+                else:
                     for i, ct in enumerate(self._constraints):
                         if ct.load_param is not None and ct.load_info is not None and ct.load_info.get("originator","") == "user_override":
                             # we do have already a constraint for this override state
@@ -255,7 +255,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     expected_state_running = "UNKNOWN"
                     current_state = None
 
-                    if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                    if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE] and state.state is not None:
                         current_state = state.state
 
                     if current_state is not None:
