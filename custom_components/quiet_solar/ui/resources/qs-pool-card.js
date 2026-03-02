@@ -110,17 +110,17 @@ class QsPoolCard extends HTMLElement {
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 8px; width:260px; margin-left:auto; margin-right:auto; }
-      .below .pill { width:100%; justify-content:center; }
+      .below .pill { width:100%; }
       .below-line { width:260px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
       .below-line.full > button { width: 100%; justify-content: center; position: relative; }
       .pill { display:flex; align-items:center; gap:8px; border-radius: 28px; height:40px; min-height:40px; padding:0 12px; border:1px solid var(--divider-color);
-              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; }
+              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; cursor: pointer; touch-action: manipulation; }
       .pill .dot { width:12px; height:12px; border-radius:50%; background: var(--divider-color); box-shadow: 0 0 8px rgba(0,0,0,.25) inset; }
       .pill.on { background: rgba(56,142,60,0.15); border-color: rgba(56,142,60,.35); }
       .pill.on .dot { background: #2ecc71; box-shadow: 0 0 12px #2ecc71aa; }
       .pill { position: relative; }
-      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; flex:1; width:auto; text-align:center; text-align-last:center; padding-left: 8px; }
+      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; position: absolute; left:0; top:0; width:100%; height:100%; text-align:center; text-align-last:center; padding: 0 12px 0 40px; border-radius: 28px; cursor: pointer; z-index:1; box-sizing: border-box; }
 
       .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
@@ -166,12 +166,12 @@ class QsPoolCard extends HTMLElement {
       .danger.outline { color: var(--error-color) !important; border-color: var(--error-color) !important; }
       
       #target_handle { touch-action: none; }
-      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; }
+      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; touch-action: manipulation; }
       .dialog { background: var(--card-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); border-radius: 16px; padding: 16px; width: min(92%, 360px); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
       .dialog h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight:800; text-align:left; }
       .dialog p { margin: 0 0 14px; line-height:1.4; color: var(--secondary-text-color); white-space: pre-line; }
       .dialog .actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 6px; }
-      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; }
+      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; touch-action: manipulation; min-height: 44px; -webkit-tap-highlight-color: transparent; }
       .btn.secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
       .btn.danger { background: var(--error-color); color:#fff; }
     `;
@@ -368,6 +368,13 @@ class QsPoolCard extends HTMLElement {
                   this._render();
               }, 300);
           });
+          const modePill = modeSel?.closest('.pill');
+          if (modePill && modeSel) {
+              modePill.addEventListener('click', (ev) => {
+                  if (ev.target.tagName === 'SELECT') return;
+                  try { modeSel.showPicker(); } catch (_) { modeSel.focus(); }
+              });
+          }
       }
 
       // Green-only toggle button
@@ -447,11 +454,19 @@ class QsPoolCard extends HTMLElement {
               const el = document.createElement('button');
               el.className = `btn ${b.variant || 'secondary'}`;
               el.textContent = b.text;
-              el.addEventListener('click', () => {
+              let activated = false;
+              const activate = () => {
+                  if (activated) return;
+                  activated = true;
                   if (b.onClick) b.onClick();
                   wrap.remove();
                   this._modalOpen = false;
                   this._render();
+              };
+              el.addEventListener('click', activate);
+              el.addEventListener('touchend', (ev) => {
+                  ev.preventDefault();
+                  activate();
               });
               actions.appendChild(el);
           });
@@ -464,11 +479,9 @@ class QsPoolCard extends HTMLElement {
       const handle = this._root.getElementById('target_handle');
       if (svg && handle) {
           const pt = svg.createSVGPoint();
-          const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-          
-          // Allowed hours (snap points) - 1 hour increments from 0 to 24
-          const allowedHours = Array.from({length: 25}, (_, i) => i); // [0, 1, 2, 3, ..., 24]
-          
+
+          const allowedHours = Array.from({length: 25}, (_, i) => i);
+
           const onMove = (ev) => {
               ev.stopPropagation();
               ev.preventDefault();
@@ -484,10 +497,9 @@ class QsPoolCard extends HTMLElement {
               if (a > endDeg) a = endDeg;
               const rawPct = ((a - startDeg) / rangeDeg) * 100;
               const rawHours = pctToHours(rawPct);
-              
-              // Snap to nearest allowed hour
-              const snapHours = allowedHours.reduce((best, v) => 
-                  Math.abs(v - rawHours) < Math.abs(best - rawHours) ? v : best, 
+
+              const snapHours = allowedHours.reduce((best, v) =>
+                  Math.abs(v - rawHours) < Math.abs(best - rawHours) ? v : best,
                   allowedHours[0]
               );
 
@@ -508,82 +520,84 @@ class QsPoolCard extends HTMLElement {
               }
               const tv = this._root.querySelector('.target-value');
               if (tv) {
-                  // Get current run hours from entity
                   const currentRunHours = Number(sCurrentDailyRunDuration?.state || 0);
                   tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(currentRunHours, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: var(--primary-color);">${this._fmt(snapHours)}h</span>`;
               }
           };
-          
+
           const onUp = async (ev) => {
+              if (this._upInProgress) return;
+              this._upInProgress = true;
+
               if (ev) {
                   ev.stopPropagation();
                   ev.preventDefault();
               }
-              document.removeEventListener('mousemove', onMove);
-              document.removeEventListener('touchmove', onMove);
-              document.removeEventListener('mouseup', onUp);
-              document.removeEventListener('touchend', onUp);
-              
-              // When handle is dragged, switch to "Use Default" mode and update default_on_duration
-              if (this._targetDragValue != null && e.default_on_duration && e.pool_mode) {
-                  // First, select "bistate_mode_default" in the pool mode
+
+              // Capture drag values before any async work so they survive concurrent calls
+              const dragPct = this._targetDragPct;
+              const dragValue = this._targetDragValue;
+
+              if (dragValue != null && e.default_on_duration && e.pool_mode) {
                   await this._select(e.pool_mode, 'bistate_mode_default');
-                  // Then set the new default duration
-                  await this._setNumber(e.default_on_duration, this._targetDragValue);
-                  // Keep local state optimistic until HA updates
-                  this._localTargetPct = this._targetDragPct;
+                  await this._setNumber(e.default_on_duration, dragValue);
+                  this._localTargetPct = dragPct;
                   this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
                   this._pendingClearLocalTarget = setTimeout(() => {
                       this._localTargetPct = null;
                       this._pendingClearLocalTarget = null;
                       this._render();
-                  }, 2000);
+                  }, 5000);
               }
               this._targetDragPct = null;
               this._targetDragValue = null;
               this._isInteractingTarget = false;
+              this._upInProgress = false;
               handle.style.cursor = 'grab';
           };
-          
-          const onDown = (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
-              this._isInteractingTarget = true;
-              document.addEventListener('mousemove', onMove);
-              document.addEventListener('touchmove', onMove, {passive: false});
-              document.addEventListener('mouseup', onUp);
-              document.addEventListener('touchend', onUp);
-              handle.style.cursor = 'grabbing';
-          };
-          
-          handle.addEventListener('mousedown', onDown);
-          handle.addEventListener('touchstart', onDown, {passive: false});
 
-          // Pointer Events for more reliable drag
           if (window.PointerEvent) {
+              // Prefer PointerEvent: captures all input types and supports pointer capture
               const onPointerMove = (ev) => onMove(ev);
               const onPointerUp = async (ev) => {
-                  try {
-                      handle.releasePointerCapture(ev.pointerId);
-                  } catch (_) {}
-                  await onUp(ev);
+                  try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
                   handle.removeEventListener('pointermove', onPointerMove);
                   handle.removeEventListener('pointerup', onPointerUp);
                   handle.removeEventListener('pointercancel', onPointerUp);
+                  await onUp(ev);
               };
               const onPointerDown = (ev) => {
                   ev.stopPropagation();
                   ev.preventDefault();
                   this._isInteractingTarget = true;
-                  try {
-                      handle.setPointerCapture(ev.pointerId);
-                  } catch (_) {}
+                  try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
                   handle.addEventListener('pointermove', onPointerMove);
                   handle.addEventListener('pointerup', onPointerUp);
                   handle.addEventListener('pointercancel', onPointerUp);
                   handle.style.cursor = 'grabbing';
               };
               handle.addEventListener('pointerdown', onPointerDown);
+          } else {
+              // Fallback for browsers without PointerEvent
+              const onDown = (ev) => {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  this._isInteractingTarget = true;
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('touchmove', onMove, {passive: false});
+                  document.addEventListener('mouseup', onUpLegacy);
+                  document.addEventListener('touchend', onUpLegacy);
+                  handle.style.cursor = 'grabbing';
+              };
+              const onUpLegacy = async (ev) => {
+                  document.removeEventListener('mousemove', onMove);
+                  document.removeEventListener('touchmove', onMove);
+                  document.removeEventListener('mouseup', onUpLegacy);
+                  document.removeEventListener('touchend', onUpLegacy);
+                  await onUp(ev);
+              };
+              handle.addEventListener('mousedown', onDown);
+              handle.addEventListener('touchstart', onDown, {passive: false});
           }
       }
   }

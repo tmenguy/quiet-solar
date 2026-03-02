@@ -152,17 +152,17 @@ class QsOnOffDurationCard extends HTMLElement {
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 8px; width:260px; margin-left:auto; margin-right:auto; }
-      .below .pill { width:100%; justify-content:center; }
+      .below .pill { width:100%; }
       .below-line { width:260px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
       .below-line.full { display:block; }
       .below-line.full > button { width: 100%; justify-content: center; position: relative; }
       .pill { display:flex; align-items:center; gap:8px; border-radius: 28px; height:40px; min-height:40px; padding:0 12px; border:1px solid var(--divider-color);
-              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; }
+              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; cursor: pointer; touch-action: manipulation; }
       .pill .dot { width:12px; height:12px; border-radius:50%; background: var(--divider-color); box-shadow: 0 0 8px rgba(0,0,0,.25) inset; }
       .pill.on { background: rgba(56,142,60,0.15); border-color: rgba(56,142,60,.35); }
       .pill.on .dot { background: #2ecc71; box-shadow: 0 0 12px #2ecc71aa; }
       .pill { position: relative; }
-      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; flex:1; width:auto; text-align:center; text-align-last:center; padding-left: 8px; }
+      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; position: absolute; left:0; top:0; width:100%; height:100%; text-align:center; text-align-last:center; padding: 0 12px 0 40px; border-radius: 28px; cursor: pointer; z-index:1; box-sizing: border-box; }
 
       .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; gap: 12px; }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
@@ -221,7 +221,7 @@ class QsOnOffDurationCard extends HTMLElement {
       .danger.outline { color: var(--error-color) !important; border-color: var(--error-color) !important; }
       
       #target_handle { touch-action: none; }
-      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; }
+      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; touch-action: manipulation; }
       .dialog { background: var(--card-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); border-radius: 16px; padding: 16px; width: min(92%, 360px); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
       .dialog h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight:800; text-align:left; }
       .dialog p { margin: 0 0 14px; line-height:1.4; color: var(--secondary-text-color); white-space: pre-line; }
@@ -229,7 +229,7 @@ class QsOnOffDurationCard extends HTMLElement {
       .dialog .time-picker select { width: auto; min-width: 64px; height: 40px; text-align: center; text-align-last: center; }
       .dialog .time-picker span { font-weight:700; font-size: 1.2rem; }
       .dialog .actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 6px; }
-      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; }
+      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; touch-action: manipulation; min-height: 44px; -webkit-tap-highlight-color: transparent; }
       .btn.secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
       .btn.primary { background: var(--primary-color); color:#fff; }
       .btn.danger { background: var(--error-color); color:#fff; }
@@ -330,10 +330,10 @@ class QsOnOffDurationCard extends HTMLElement {
       let overrideBtnClickable = false;
       if (isResettingOverride) {
         overrideBtnClass += ' resetting disabled';
-        overrideBtnIcon = isOverrideOff ? 'mdi:power-off' : 'mdi:hand-back-right';
+        overrideBtnIcon = isOverrideOff ? 'mdi:hand-back-right-off' : 'mdi:hand-back-right';
       } else if (isOverridden) {
         overrideBtnClass += ' active';
-        overrideBtnIcon = isOverrideOff ? 'mdi:power-off' : 'mdi:hand-back-right';
+        overrideBtnIcon = isOverrideOff ? 'mdi:hand-back-right-off' : 'mdi:hand-back-right';
         overrideBtnClickable = true;
       }
 
@@ -484,11 +484,19 @@ class QsOnOffDurationCard extends HTMLElement {
               const el = document.createElement('button');
               el.className = `btn ${b.variant || 'secondary'}`;
               el.textContent = b.text;
-              el.addEventListener('click', () => {
+              let activated = false;
+              const activate = () => {
+                  if (activated) return;
+                  activated = true;
                   if (b.onClick) b.onClick();
                   wrap.remove();
                   this._modalOpen = false;
                   this._render();
+              };
+              el.addEventListener('click', activate);
+              el.addEventListener('touchend', (ev) => {
+                  ev.preventDefault();
+                  activate();
               });
               actions.appendChild(el);
           });
@@ -527,6 +535,13 @@ class QsOnOffDurationCard extends HTMLElement {
                   this._render();
               }, 300);
           });
+          const modePill = modeSel?.closest('.pill');
+          if (modePill && modeSel) {
+              modePill.addEventListener('click', (ev) => {
+                  if (ev.target.tagName === 'SELECT') return;
+                  try { modeSel.showPicker(); } catch (_) { modeSel.focus(); }
+              });
+          }
       }
 
       // Green-only toggle button
@@ -730,72 +745,74 @@ class QsOnOffDurationCard extends HTMLElement {
               };
               
               const onUp = async (ev) => {
+                  if (this._upInProgress) return;
+                  this._upInProgress = true;
+
                   if (ev) {
                       ev.stopPropagation();
                       ev.preventDefault();
                   }
-                  document.removeEventListener('mousemove', onMove);
-                  document.removeEventListener('touchmove', onMove);
-                  document.removeEventListener('mouseup', onUp);
-                  document.removeEventListener('touchend', onUp);
-                  
-                  // Update default duration
-                  if (this._targetDragValue != null && e.default_on_duration) {
-                      await this._setNumber(e.default_on_duration, this._targetDragValue);
-                      // Keep local state optimistic until HA updates
-                      this._localTargetPct = this._targetDragPct;
+
+                  const dragPct = this._targetDragPct;
+                  const dragValue = this._targetDragValue;
+
+                  if (dragValue != null && e.default_on_duration) {
+                      await this._setNumber(e.default_on_duration, dragValue);
+                      this._localTargetPct = dragPct;
                       this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
                       this._pendingClearLocalTarget = setTimeout(() => {
                           this._localTargetPct = null;
                           this._pendingClearLocalTarget = null;
                           this._render();
-                      }, 2000);
+                      }, 5000);
                   }
                   this._targetDragPct = null;
                   this._targetDragValue = null;
                   this._isInteractingTarget = false;
+                  this._upInProgress = false;
                   handle.style.cursor = 'grab';
               };
-              
-              const onDown = (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  this._isInteractingTarget = true;
-                  document.addEventListener('mousemove', onMove);
-                  document.addEventListener('touchmove', onMove, {passive: false});
-                  document.addEventListener('mouseup', onUp);
-                  document.addEventListener('touchend', onUp);
-                  handle.style.cursor = 'grabbing';
-              };
-              
-              handle.addEventListener('mousedown', onDown);
-              handle.addEventListener('touchstart', onDown, {passive: false});
 
-              // Pointer Events for more reliable drag
               if (window.PointerEvent) {
                   const onPointerMove = (ev) => onMove(ev);
                   const onPointerUp = async (ev) => {
-                      try {
-                          handle.releasePointerCapture(ev.pointerId);
-                      } catch (_) {}
-                      await onUp(ev);
+                      try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
                       handle.removeEventListener('pointermove', onPointerMove);
                       handle.removeEventListener('pointerup', onPointerUp);
                       handle.removeEventListener('pointercancel', onPointerUp);
+                      await onUp(ev);
                   };
                   const onPointerDown = (ev) => {
                       ev.stopPropagation();
                       ev.preventDefault();
                       this._isInteractingTarget = true;
-                      try {
-                          handle.setPointerCapture(ev.pointerId);
-                      } catch (_) {}
+                      try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
                       handle.addEventListener('pointermove', onPointerMove);
                       handle.addEventListener('pointerup', onPointerUp);
                       handle.addEventListener('pointercancel', onPointerUp);
                       handle.style.cursor = 'grabbing';
                   };
                   handle.addEventListener('pointerdown', onPointerDown);
+              } else {
+                  const onDown = (ev) => {
+                      ev.stopPropagation();
+                      ev.preventDefault();
+                      this._isInteractingTarget = true;
+                      document.addEventListener('mousemove', onMove);
+                      document.addEventListener('touchmove', onMove, {passive: false});
+                      document.addEventListener('mouseup', onUpLegacy);
+                      document.addEventListener('touchend', onUpLegacy);
+                      handle.style.cursor = 'grabbing';
+                  };
+                  const onUpLegacy = async (ev) => {
+                      document.removeEventListener('mousemove', onMove);
+                      document.removeEventListener('touchmove', onMove);
+                      document.removeEventListener('mouseup', onUpLegacy);
+                      document.removeEventListener('touchend', onUpLegacy);
+                      await onUp(ev);
+                  };
+                  handle.addEventListener('mousedown', onDown);
+                  handle.addEventListener('touchstart', onDown, {passive: false});
               }
           }
       }
