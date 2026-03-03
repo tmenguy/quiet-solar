@@ -29,9 +29,12 @@ from custom_components.quiet_solar.const import (
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
     CONF_BATTERY_CHARGE_PERCENT_SENSOR,
     CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
+    CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR,
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
     DEVICE_TYPE,
     CONF_TYPE_NAME_QSHome,
@@ -113,11 +116,33 @@ MOCK_BATTERY_CONFIG = {
     CONF_BATTERY_IS_DC_COUPLED: True
 }
 
+# Mock Battery configuration with number entities for max charge/discharge control
+MOCK_BATTERY_WITH_NUMBERS_CONFIG = {
+    CONF_NAME: "Test Battery Numbers",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSBattery,
+    CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.battery_power",
+    CONF_BATTERY_CHARGE_PERCENT_SENSOR: "sensor.battery_soc",
+    CONF_BATTERY_CAPACITY: 10000,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+    CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.battery_max_discharge",
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.battery_max_charge",
+    CONF_BATTERY_IS_DC_COUPLED: True,
+}
+
 # Mock Solar configuration
 MOCK_SOLAR_CONFIG = {
     CONF_NAME: "Test Solar",
     DEVICE_TYPE: CONF_TYPE_NAME_QSSolar,
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_power",
+}
+
+# Mock Solar configuration with both inverter output and input power sensors
+MOCK_SOLAR_WITH_INPUT_CONFIG = {
+    CONF_NAME: "Test Solar Input",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSSolar,
+    CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.solar_inverter_output",
+    CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR: "sensor.solar_inverter_input",
 }
 
 # Mock Dynamic Group configuration
@@ -161,6 +186,8 @@ MOCK_BATTERY_ENTRY_ID = "battery_entry_123"
 MOCK_SOLAR_ENTRY_ID = "solar_entry_123"
 MOCK_DYNAMIC_GROUP_ENTRY_ID = "dynamic_group_entry_123"
 MOCK_HEAT_PUMP_ENTRY_ID = "heat_pump_entry_123"
+MOCK_BATTERY_WITH_NUMBERS_ENTRY_ID = "battery_numbers_entry_123"
+MOCK_SOLAR_WITH_INPUT_ENTRY_ID = "solar_input_entry_123"
 MOCK_ON_OFF_DURATION_ENTRY_ID = "on_off_duration_entry_123"
 MOCK_CLIMATE_DURATION_ENTRY_ID = "climate_duration_entry_123"
 
@@ -180,6 +207,12 @@ MOCK_SENSOR_STATES = {
     "switch.test_charger_pause_resume": {"state": "on", "attributes": {}},
     "sensor.test_charger_status": {"state": "Charging", "attributes": {}},
     "binary_sensor.test_charger_plugged": {"state": "on", "attributes": {}},
+    # Battery number entities (max charge/discharge power)
+    "number.battery_max_discharge": {"state": "5000", "attributes": {"unit_of_measurement": "W"}},
+    "number.battery_max_charge": {"state": "5000", "attributes": {"unit_of_measurement": "W"}},
+    # Solar inverter input/output sensors
+    "sensor.solar_inverter_output": {"state": "3000", "attributes": {"unit_of_measurement": "W"}},
+    "sensor.solar_inverter_input": {"state": "4000", "attributes": {"unit_of_measurement": "W"}},
     # OnOffDuration entities
     "switch.test_on_off_device": {"state": "off", "attributes": {}},
     # ClimateDuration entities

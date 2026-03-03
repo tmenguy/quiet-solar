@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
-    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, \
+    CONSTRAINT_TYPE_MANDATORY_END_TIME, \
     CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool, CONSTRAINT_TYPE_FILLER_AUTO
 from ..ha_model.on_off_duration import QSOnOffDuration
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MIN_UTC

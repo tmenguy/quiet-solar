@@ -1,7 +1,10 @@
 """Tests for Hungarian algorithm implementation in home_utils.py"""
 import pytest
 import numpy as np
-from custom_components.quiet_solar.home_model.home_utils import hungarian_algorithm
+from custom_components.quiet_solar.home_model.home_utils import (
+    hungarian_algorithm,
+    _greedy_assignment,
+)
 
 
 class TestHungarianAlgorithm:
@@ -282,6 +285,98 @@ class TestHungarianAlgorithm:
         assert total_cost == 10
 
 
+    def test_iterative_adjustment_required(self):
+        """Test a matrix where row/col reduction produces insufficient zeros.
+
+        After reduction the zero graph has no perfect matching (rows 0 and 1
+        both only have a zero in column 0), so the algorithm must enter the
+        iterative covering / adjustment loop (lines 192-196 of home_utils)
+        and the BFS in _find_minimum_cover must follow alternating paths
+        through assigned rows (lines 325-329).
+        """
+        cost_matrix = np.array([
+            [1, 5, 9, 13],
+            [2, 6, 10, 14],
+            [7, 3, 3, 11],
+            [8, 12, 4, 4]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 4
+        assert len(set(assignment.values())) == 4
+
+        total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
+        assert total_cost == 14
+
+    def test_multiple_adjustment_iterations(self):
+        """Test a 6x6 matrix that needs 5 adjustment iterations to converge.
+
+        This exercises the iterative loop repeatedly and forces the minimum
+        cover BFS to traverse deep alternating paths on each round.
+        """
+        cost_matrix = np.array([
+            [13, 9, 10, 9, 15, 15],
+            [2, 15, 14, 19, 3, 1],
+            [18, 17, 14, 12, 12, 3],
+            [11, 13, 16, 13, 5, 3],
+            [2, 14, 13, 4, 13, 5],
+            [11, 16, 14, 10, 6, 13]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 6
+        assert len(set(assignment.values())) == 6
+
+        total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
+        assert total_cost == 37
+
+    def test_deep_alternating_path_in_cover(self):
+        """Test a 6x6 matrix whose BFS in _find_minimum_cover follows a chain
+        of 4 assigned rows (deep alternating path).
+
+        This specifically targets the code in _find_minimum_cover that marks
+        assigned rows reachable from unassigned rows via zero-column links.
+        """
+        cost_matrix = np.array([
+            [17, 16, 18, 14, 16, 7],
+            [3, 13, 7, 19, 16, 5],
+            [8, 15, 9, 18, 4, 13],
+            [12, 2, 6, 6, 3, 17],
+            [13, 16, 2, 16, 8, 7],
+            [6, 12, 14, 15, 3, 9]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 6
+        assert len(set(assignment.values())) == 6
+
+        total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
+        assert total_cost == 33
+
+    def test_3x3_previously_incorrect(self):
+        """Test a 3x3 matrix that gave wrong results before the fix.
+
+        Before fixing _find_minimum_cover the algorithm would fall through
+        to the greedy heuristic and return cost 114 instead of optimal 106.
+        """
+        cost_matrix = np.array([
+            [15, 43, 29],
+            [36, 13, 32],
+            [71, 59, 86]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 3
+        assert len(set(assignment.values())) == 3
+
+        total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
+        assert total_cost == 106
+
+
 class TestHungarianEdgeCases:
     """Test edge cases and error conditions."""
 
@@ -314,6 +409,141 @@ class TestHungarianEdgeCases:
         # Want most negative: 0->0(-5) + 1->1(-4) + 2->2(-5) = -14
         total_cost = sum(cost_matrix[row, col] for row, col in assignment.items())
         assert total_cost <= -12  # Should be quite negative
+
+
+class TestHungarianCorrectnessAgainstScipy:
+    """Compare results against scipy.optimize.linear_sum_assignment."""
+
+    @pytest.mark.parametrize("seed,size", [
+        (0, 3), (1, 3), (2, 4), (3, 4), (4, 5),
+        (5, 5), (6, 6), (7, 6), (8, 3), (9, 4),
+        (10, 5), (11, 6), (12, 3), (13, 4), (14, 5),
+        (15, 6), (16, 3), (17, 4), (18, 5), (19, 6),
+    ])
+    def test_random_square_matrix(self, seed, size):
+        """Verify optimal cost matches scipy on a random square matrix."""
+        from scipy.optimize import linear_sum_assignment
+
+        rng = np.random.default_rng(seed)
+        cost_matrix = rng.integers(1, 100, size=(size, size)).astype(np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == size
+        assert len(set(assignment.values())) == size
+
+        our_cost = sum(cost_matrix[r, c] for r, c in assignment.items())
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        scipy_cost = cost_matrix[row_ind, col_ind].sum()
+
+        assert abs(our_cost - scipy_cost) < 1e-6
+
+    @pytest.mark.parametrize("seed,rows,cols", [
+        (100, 2, 5), (101, 3, 6), (102, 5, 3), (103, 4, 2), (104, 3, 4),
+    ])
+    def test_random_rectangular_matrix(self, seed, rows, cols):
+        """Verify optimal cost matches scipy on a random rectangular matrix."""
+        from scipy.optimize import linear_sum_assignment
+
+        rng = np.random.default_rng(seed)
+        cost_matrix = rng.integers(1, 100, size=(rows, cols)).astype(np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        expected_count = min(rows, cols)
+        assert len(assignment) == expected_count
+        assert len(set(assignment.values())) == expected_count
+
+        our_cost = sum(cost_matrix[r, c] for r, c in assignment.items())
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        scipy_cost = cost_matrix[row_ind, col_ind].sum()
+
+        assert abs(our_cost - scipy_cost) < 1e-6
+
+
+class TestGreedyAssignment:
+    """Test the _greedy_assignment fallback function directly."""
+
+    def test_simple_3x3(self):
+        """Test greedy picks the minimum in each row, respecting prior assignments."""
+        cost_matrix = np.array([
+            [5, 1, 9],
+            [2, 8, 3],
+            [7, 4, 6]
+        ], dtype=np.float64)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert len(result) == 3
+        assert len(set(result.values())) == 3
+        # Row 0 picks col 1 (cost 1), row 1 picks col 0 (cost 2), row 2 picks col 2 (cost 6)
+        assert result == {0: 1, 1: 0, 2: 2}
+
+    def test_diagonal_preference(self):
+        """Test when diagonal has the lowest costs."""
+        cost_matrix = np.array([
+            [1, 99, 99],
+            [99, 1, 99],
+            [99, 99, 1]
+        ], dtype=np.float64)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert result == {0: 0, 1: 1, 2: 2}
+
+    def test_greedy_is_not_optimal(self):
+        """Test a case where greedy gives a suboptimal result.
+
+        Greedy processes rows in order, so row 0 grabs col 0 (cost 1),
+        forcing row 1 to take col 1 (cost 10). The optimal would be
+        row 0->col1 (2), row 1->col0 (3) = 5, but greedy yields 11.
+        """
+        cost_matrix = np.array([
+            [1, 2],
+            [3, 10]
+        ], dtype=np.float64)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert result == {0: 0, 1: 1}
+        total = sum(cost_matrix[r, c] for r, c in result.items())
+        assert total == 11  # greedy: 1 + 10
+
+    def test_single_element(self):
+        """Test 1x1 matrix."""
+        cost_matrix = np.array([[42.0]], dtype=np.float64)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert result == {0: 0}
+
+    def test_4x4_with_conflicts(self):
+        """Test greedy row-by-row selection on a larger matrix."""
+        cost_matrix = np.array([
+            [3, 8, 2, 7],
+            [1, 5, 9, 4],
+            [6, 2, 8, 3],
+            [7, 4, 1, 6]
+        ], dtype=np.float64)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert len(result) == 4
+        assert len(set(result.values())) == 4
+        # Row 0: min is col 2 (cost 2)
+        # Row 1: col 2 taken, min of {0,1,3} is col 0 (cost 1)
+        # Row 2: cols 0,2 taken, min of {1,3} is col 1 (cost 2)... wait, col 3 cost 3
+        # Actually: available {1,3}, costs [2, 3], min is col 1 (cost 2)
+        # Row 3: available {3}, col 3 (cost 6)
+        assert result == {0: 2, 1: 0, 2: 1, 3: 3}
+
+    def test_uniform_costs(self):
+        """Test when all costs are equal -- assigns columns in order."""
+        cost_matrix = np.full((3, 3), 5.0)
+
+        result = _greedy_assignment(cost_matrix)
+
+        assert result == {0: 0, 1: 1, 2: 2}
 
 
 if __name__ == "__main__":

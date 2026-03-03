@@ -1071,15 +1071,15 @@ class TestPersonsCarForecast:
                     assert is_person_covered
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:30:00+00:00")
                 elif "twingo" in car.name.lower():
-                    assert "magali" in person.name.lower(), f"Expected magali for Twingo, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 58
-                    assert is_person_covered is False
-                    assert next_usage_time == datetime.fromisoformat("2025-11-15 09:00:00+00:00")
-                elif "zoe" in car.name.lower():
-                    assert "thomas" in person.name.lower(), f"Expected thomas for Zoe, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 48
+                    assert "thomas" in person.name.lower(), f"Expected thomas for Twingo, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 73
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
+                elif "zoe" in car.name.lower():
+                    assert "magali" in person.name.lower(), f"Expected magali for Zoe, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 41
+                    assert is_person_covered is False
+                    assert next_usage_time == datetime.fromisoformat("2025-11-15 09:00:00+00:00")
                 elif "buz" in car.name.lower():
                     assert "brice" in person.name.lower(), f"Expected brice for ID.buzz, got {person.name if person else None}"
                     assert person_min_target_charge is None

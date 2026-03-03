@@ -1,3 +1,6 @@
 homeassistant==2026.2.1
 haversine==2.9.0
 aiofiles
+# Core dependencies (if needed)
+pytz>=2023.3
+numpy>=1.24.0

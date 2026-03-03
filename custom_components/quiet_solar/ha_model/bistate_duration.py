@@ -8,8 +8,8 @@ import pytz
 
 from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, SOLVER_STEP_S
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_ON, CMD_OFF, CMD_IDLE
-from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
+from ..home_model.commands import LoadCommand, CMD_IDLE
+from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC
 from ..home_model.load import AbstractLoad
 from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
 

@@ -93,11 +93,11 @@ class QSOCPPv16v201ChargePointStatus(StrEnum):
 from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE_RESUME_SWITCH, \
     CONF_CHARGER_PLUGGED, CONF_CHARGER_MAX_CHARGE, CONF_CHARGER_MIN_CHARGE, \
     CONF_CHARGER_DEVICE_OCPP, CONF_CHARGER_DEVICE_WALLBOX, CONF_CHARGER_CONSUMPTION, CONF_CAR_CHARGER_MIN_CHARGE, \
-    CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CAR_BATTERY_CAPACITY, CONF_CALENDAR, \
+    CONF_CAR_CHARGER_MAX_CHARGE, CONF_CHARGER_STATUS_SENSOR, CONF_CALENDAR, \
     CHARGER_NO_CAR_CONNECTED, CONSTRAINT_TYPE_MANDATORY_END_TIME, \
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     SENSOR_CONSTRAINT_SENSOR_CHARGE, CONF_DEVICE_EFFICIENCY, \
-    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, \
+    CONF_CHARGER_LONGITUDE, CONF_CHARGER_LATITUDE, CONF_CAR_IS_INVITED, \
     CONSTRAINT_TYPE_FILLER, CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH, CONF_CHARGER_REBOOT_BUTTON, \
     FORCE_CAR_NO_CHARGER_CONNECTED, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONF_TYPE_NAME_QSChargerGeneric, \
     CONF_TYPE_NAME_QSChargerOCPP, CONF_TYPE_NAME_QSChargerWallbox, CONSTRAINT_TYPE_FILLER_AUTO, \
@@ -107,7 +107,7 @@ from ..const import CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, CONF_CHARGER_PAUSE
     CAR_HARD_WIRED_CHARGER, CAR_CHARGE_TYPE_PERSON_AUTOMATED, DEVICE_STATUS_CHANGE_ERROR, \
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, CAR_CHARGE_NO_POWER_ERROR
 from ..home_model.constraints import LoadConstraint, MultiStepsPowerLoadConstraintChargePercent, \
-    MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC, get_readable_date_string
+    MultiStepsPowerLoadConstraint, DATETIME_MAX_UTC
 from ..ha_model.car import QSCar
 from ..ha_model.device import HADeviceMixin, get_median_sensor
 from ..home_model.commands import LoadCommand, CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command, \
@@ -3042,7 +3042,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 artificial_step_to_final_value = None
 
                 if is_target_percent is False:
-                    type = CONSTRAINT_TYPE_FILLER_AUTO
+                    type = CONSTRAINT_TYPE_FILLER
                     if self.qs_bump_solar_charge_priority:
                         type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
                 else:
@@ -3073,7 +3073,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     elif realized_charge_target + 1.5 >= target_charge and target_charge < max_target_charge:
                         # after the desired target ... do as if it was not really bump priority anymore
                         # and be after battery, lowest priority
-                        type = CONSTRAINT_TYPE_FILLER_AUTO
+                        type = CONSTRAINT_TYPE_FILLER
                         target_charge = max_target_charge
 
                 if type is not None:

@@ -272,13 +272,35 @@ def _augment(row: int, cost_matrix: np.ndarray, assignment: np.ndarray,
 
 
 def _find_minimum_cover(cost_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Find minimum line cover of zeros using König's theorem."""
+    """Find minimum line cover of zeros using König's theorem.
+
+    Builds a maximum partial matching from zeros (greedy + augmentation)
+    and then applies König's theorem via BFS from unassigned rows.
+    Unlike _try_assign, partial results are kept even when a perfect
+    matching does not exist, which is required for the cover to be correct.
+    """
     n = len(cost_matrix)
 
-    # Build matching from zeros
-    assignment = _try_assign(cost_matrix)
-    if assignment is None:
-        assignment = np.full(n, -1, dtype=int)
+    zero_positions = np.argwhere(cost_matrix == 0)
+    assignment = np.full(n, -1, dtype=int)
+    assigned_cols: set[int] = set()
+
+    if len(zero_positions) > 0:
+        row_zero_counts = np.bincount(zero_positions[:, 0], minlength=n)
+        sorted_rows = np.argsort(row_zero_counts)
+
+        for row in sorted_rows:
+            if row_zero_counts[row] == 0:
+                continue
+            available_cols = zero_positions[zero_positions[:, 0] == row, 1]
+            available_cols = available_cols[~np.isin(available_cols, list(assigned_cols))]
+            if len(available_cols) > 0:
+                assignment[row] = available_cols[0]
+                assigned_cols.add(int(available_cols[0]))
+
+        for row in range(n):
+            if assignment[row] == -1:
+                _augment(row, cost_matrix, assignment, assigned_cols)
 
     # Find unassigned rows
     unassigned_rows = np.where(assignment == -1)[0]
