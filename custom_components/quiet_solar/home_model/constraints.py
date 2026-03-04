@@ -946,7 +946,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return budgeting_quantity_to_be_added
 
-    def adapt_power_steps_budgeting_low_level(self, slot_idx: int | None=None, existing_amps: list[float|int]| None=None , additional_command_piloted_power : float = 0.0) -> list[LoadCommand]:
+    def adapt_power_steps_budgeting_low_level(self,
+                                              slot_idx: int | None=None,
+                                              existing_amps: list[float|int]| None=None ,
+                                              additional_command_piloted_power : float = 0.0,
+                                              use_production_limits=False) -> list[LoadCommand]:
 
         out_sorted_commands = []
 
@@ -954,7 +958,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             return self._power_sorted_cmds
 
         # first compute the minium available amps on the slots
-        smaller_budget = self.load.father_device.available_amps_for_group[slot_idx]
+        if use_production_limits:
+            # if we are using production limits, we want to use the production limits as the available amps, not the consumption limits
+            smaller_budget = self.load.father_device.available_amps_production_for_group[slot_idx]
+        else:
+            smaller_budget = self.load.father_device.available_amps_for_group[slot_idx]
 
         if existing_amps is not None and not is_amps_zero(existing_amps):
             smaller_budget = add_amps(smaller_budget, existing_amps)
@@ -982,10 +990,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return out_sorted_commands
 
-    def adapt_power_steps_budgeting(self, slot_idx: int | None = None, commands: list[LoadCommand | None] | None =None,  for_add=True):
+    def adapt_power_steps_budgeting(self, slot_idx: int | None = None, commands: list[LoadCommand | None] | None =None,  for_add=True, use_production_limits=False):
 
         if slot_idx is None:
-            return self.adapt_power_steps_budgeting_low_level(), 0.0, 0.0
+            return self.adapt_power_steps_budgeting_low_level(use_production_limits=use_production_limits), 0.0, 0.0
 
         existing_cmd_amps = None
         is_current_slot_empty = False
@@ -1012,7 +1020,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             power_sorted_cmds = []
             power_piloted_delta = 0.0
         else:
-            power_sorted_cmds = self.adapt_power_steps_budgeting_low_level(slot_idx=slot_idx, existing_amps=existing_cmd_amps, additional_command_piloted_power=power_piloted_delta)
+            power_sorted_cmds = self.adapt_power_steps_budgeting_low_level(slot_idx=slot_idx,
+                                                                           existing_amps=existing_cmd_amps,
+                                                                           additional_command_piloted_power=power_piloted_delta,
+                                                                           use_production_limits=use_production_limits)
         
         return power_sorted_cmds, is_current_slot_empty, power_piloted_delta
 
@@ -1031,6 +1042,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
 
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
+
+        use_production_limits = False
+
         if energy_delta >= 0.0:
             _LOGGER.info(
                 f"adapt_repartition: for {self.name} consume more energy {energy_delta}Wh for {log_msg}")
@@ -1098,7 +1112,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 j = None
 
-                power_sorted_cmds, is_current_empty_command, possible_power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=existing_commands, for_add=(init_energy_delta >= 0.0))
+                power_sorted_cmds, is_current_empty_command, possible_power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i,
+                                                                                                                             commands=existing_commands,
+                                                                                                                             for_add=(init_energy_delta >= 0.0),
+                                                                                                                             use_production_limits=use_production_limits)
 
                 if init_energy_delta >= 0.0:
 
@@ -1569,8 +1586,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     i = i_sorted + first_slot
                     available_power = float(power_available_power[i])
 
+                    # in this case of "available" energy only : WE NEED ALSO TO CHECK HOME POWER PRODUCTION MAX, as if we go above
+                    # it will take from the grid whatever we do, and it is not what we want, as we want to consume the available power, not more
+                    # as we clamp the available current here with adapt_power_steps_budgeting, we need to also check
+                    # for global production
+
                     # we will add a command from 0 command so by construction power_piloted_delta will happen
-                    power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
+                    power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i,
+                                                                                                                        commands=None,
+                                                                                                                        for_add=True,
+                                                                                                                        use_production_limits=True)
 
                     if len(power_sorted_cmds) == 0:
                         continue

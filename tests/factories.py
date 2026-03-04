@@ -331,6 +331,7 @@ def create_minimal_home_model(
     home._chargers = []
     home._loads = []
     home.available_amps_for_group = [[max_phase_amps] * 3]
+    home.available_amps_production_for_group= [[max_phase_amps] * 3]
 
     def get_car_by_name(car_name: str):
         for car in home._cars:
@@ -547,6 +548,7 @@ def create_charger_group(
     dyn_group.home = home
     dyn_group._childrens = chargers
     dyn_group.available_amps_for_group = [max_amps]
+    dyn_group.available_amps_production_for_group = [max_amps]
 
     return QSChargerGroup(dyn_group)
 
@@ -787,7 +789,10 @@ class TestChargerDouble:
 
 
 class TestDynamicGroupDouble:
-    """Test double for QSDynamicGroup that provides minimal required interface."""
+    """Test double for QSDynamicGroup that provides minimal required interface.
+
+    Supports multi-slot budgets and separate production limits.
+    """
 
     def __init__(
         self,
@@ -795,15 +800,57 @@ class TestDynamicGroupDouble:
         home: Any = None,
         chargers: list | None = None,
         max_amps: list[float] | None = None,
+        max_production_amps: list[float] | None = None,
+        num_slots: int = 1,
+        is_3p: bool = True,
         **kwargs,
     ):
         self.name = name
         self.home = home or MinimalTestHome()
         self._childrens = chargers or []
-        self.available_amps_for_group = [max_amps or [32.0, 32.0, 32.0]]
+        self.father_device = None
+        self._is_3p = is_3p
+        self.charger_group = None
+
+        consumption = max_amps or [32.0, 32.0, 32.0]
+        production = max_production_amps or list(consumption)
+        self.available_amps_for_group = [list(consumption) for _ in range(num_slots)]
+        self.available_amps_production_for_group = [list(production) for _ in range(num_slots)]
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    @property
+    def physical_3p(self) -> bool:
+        """Return whether this group is three-phase."""
+        return self._is_3p
+
+    @property
+    def physical_num_phases(self) -> int:
+        """Return number of phases."""
+        return 3 if self._is_3p else 1
+
+    @property
+    def mono_phase_index(self) -> int:
+        """Return mono-phase index (0 by default)."""
+        return 0
+
+    def update_available_amps_for_group(
+        self, idx: int, amps: list[float | int], add: bool,
+    ) -> None:
+        """Update both consumption and production budgets."""
+        from custom_components.quiet_solar.home_model.home_utils import add_amps, diff_amps
+
+        if self.available_amps_for_group is not None and idx < len(self.available_amps_for_group):
+            op = add_amps if add else diff_amps
+            self.available_amps_for_group[idx] = op(self.available_amps_for_group[idx], amps)
+
+        if self.available_amps_production_for_group is not None and idx < len(self.available_amps_production_for_group):
+            op = add_amps if add else diff_amps
+            self.available_amps_production_for_group[idx] = op(self.available_amps_production_for_group[idx], amps)
+
+        if self.father_device is not None and self.father_device != self:
+            return self.father_device.update_available_amps_for_group(idx, amps, add)
 
     def is_current_acceptable(self, amps: list[float]) -> bool:
         """Check if current is within limits."""

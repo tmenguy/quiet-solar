@@ -26,6 +26,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER,
     SOLVER_STEP_S,
 )
+from tests.factories import TestDynamicGroupDouble
 
 
 class _FakeLoad:
@@ -701,10 +702,7 @@ def test_adapt_commands_empty_inner_segments_filled():
     load = _FakeLoad()
     load.num_max_on_off = 2
     load.num_on_off = 0
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0] for _ in range(5)
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=5)
 
     cmd_low = LoadCommand(command="on", power_consign=500)
     cmd_high = LoadCommand(command="on", power_consign=1000)
@@ -770,8 +768,7 @@ def test_adapt_power_steps_budgeting_low_level_limits_commands():
     """Test command filtering with available amps."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [[6.0, 6.0, 6.0]]
+    load.father_device = TestDynamicGroupDouble(max_amps=[6.0, 6.0, 6.0])
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -791,8 +788,7 @@ def test_adapt_power_steps_budgeting_empty_and_existing():
     """Test adapt_power_steps_budgeting for empty and existing commands."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0])
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -827,8 +823,7 @@ def test_adapt_repartition_add_energy_support_auto():
     """Test adapt_repartition adds energy with support_auto."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * 3
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=3)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -898,12 +893,7 @@ def test_adapt_repartition_add_energy_multi_step():
     """Add energy with multi-step: out_delta_power has correct sign; sum matches energy_delta."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0],
-        [20.0, 20.0, 20.0],
-        [20.0, 20.0, 20.0],
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=3)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -946,11 +936,7 @@ def test_adapt_repartition_reduce_energy_step_down():
     """Reduce energy, step down: out_delta_power negative where changed; total matches reduction."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0],
-        [20.0, 20.0, 20.0],
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -992,11 +978,7 @@ def test_adapt_repartition_piloted_delta_when_slot_empty():
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
     load.get_possible_delta_power_from_piloted_devices_for_budget = lambda slot_idx, add: 100.0 if add else 50.0
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0],
-        [20.0, 20.0, 20.0],
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -1032,11 +1014,7 @@ def test_adapt_repartition_allow_change_state_false_no_add():
     """allow_change_state=False: slot with current_command_power==0 is not turned on."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0],
-        [20.0, 20.0, 20.0],
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
@@ -1294,11 +1272,7 @@ def test_compute_best_period_repartition_as_fast_as_possible_solar_only():
     prices_ordered_values = [0.2]
 
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    # Separate list per slot so in-place amp updates don't affect other slots
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0] for _ in range(num_slots)
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # Quantity to add: 1 kWh in 3 slots at 2 kW => need 0.5h * 2kW = 1 kWh, so target ~1000 Wh
     constraint = MultiStepsPowerLoadConstraint(
@@ -1362,10 +1336,7 @@ def test_compute_best_period_repartition_as_fast_with_battery_depletion():
     prices_ordered_values = [0.2]
 
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0] for _ in range(num_slots)
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time_base,
@@ -1418,10 +1389,7 @@ def test_compute_best_period_repartition_end_time_slot_range():
     prices_ordered_values = [0.2]
 
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [
-        [20.0, 20.0, 20.0] for _ in range(num_slots)
-    ]
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # End constraint at slot 3 (index 3 inclusive): end_at = start of slot 4
     end_at = time_slots[4]
@@ -1475,8 +1443,7 @@ def test_compute_best_period_repartition_price_based_cheapest_first():
     prices_ordered_values = [0.1, 0.3]
 
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * num_slots
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time_base,
@@ -1532,8 +1499,7 @@ def test_compute_best_period_repartition_mandatory_solar_only_forced():
     prices_ordered_values = [0.2]
 
     load = _FakeLoad()
-    load.father_device = MagicMock()
-    load.father_device.available_amps_for_group = [[20.0, 20.0, 20.0]] * num_slots
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # Mandatory: do_use_available_power_only can stay False when we pass False
     constraint_mandatory = MultiStepsPowerLoadConstraint(
@@ -1565,3 +1531,209 @@ def test_compute_best_period_repartition_mandatory_solar_only_forced():
         time_slots=time_slots,
     )
     assert np.any(out_power_mandatory > 0)
+
+
+# =============================================================================
+# Test production clamping via use_production_limits
+# =============================================================================
+
+
+def test_adapt_power_steps_budgeting_low_level_production_limits():
+    """With use_production_limits=True, commands are filtered by production budget.
+
+    _FakeLoad puts power/230 on each of 3 phases, so:
+      1000W -> 4.35A, 3000W -> 13.0A, 5000W -> 21.7A
+    Consumption limit 32A allows all three; production limit 10A allows only 1000W and 2000W.
+    """
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[32.0, 32.0, 32.0],
+        max_production_amps=[10.0, 10.0, 10.0],
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=1000),   # 4.35A per phase
+            LoadCommand(command="on", power_consign=2000),   # 8.70A per phase
+            LoadCommand(command="on", power_consign=5000),   # 21.7A per phase
+        ],
+    )
+
+    cmds_consumption = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, use_production_limits=False,
+    )
+    assert len(cmds_consumption) == 3
+
+    cmds_production = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, use_production_limits=True,
+    )
+    assert len(cmds_production) < len(cmds_consumption)
+    assert len(cmds_production) == 2
+    assert cmds_production[0].power_consign == 1000
+    assert cmds_production[1].power_consign == 2000
+
+
+def test_adapt_power_steps_budgeting_production_tighter_than_consumption():
+    """Production limit 15A vs consumption 32A: only low-power commands pass.
+
+    _FakeLoad puts power/230 on each phase. Under 32A: up to 7360W.
+    Under 15A: up to 3450W. So 1000W, 2000W, 3000W pass both;
+    5000W passes consumption but not production; 7000W passes consumption
+    but not production.
+    """
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[32.0, 32.0, 32.0],
+        max_production_amps=[15.0, 15.0, 15.0],
+        num_slots=4,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=1000),   # 4.35A
+            LoadCommand(command="on", power_consign=2000),   # 8.70A
+            LoadCommand(command="on", power_consign=3000),   # 13.0A
+            LoadCommand(command="on", power_consign=5000),   # 21.7A
+            LoadCommand(command="on", power_consign=7000),   # 30.4A
+        ],
+    )
+
+    for slot_idx in range(4):
+        cmds_prod = constraint.adapt_power_steps_budgeting_low_level(
+            slot_idx=slot_idx, use_production_limits=True,
+        )
+        cmds_cons = constraint.adapt_power_steps_budgeting_low_level(
+            slot_idx=slot_idx, use_production_limits=False,
+        )
+        assert len(cmds_cons) == 5, "All commands fit under 32A consumption limit"
+        assert len(cmds_prod) == 3, (
+            f"Production limit 15A should allow 3 commands in slot {slot_idx}"
+        )
+        for cmd in cmds_prod:
+            amps_per_phase = cmd.power_consign / 230.0
+            assert amps_per_phase <= 15.0 + 0.1, (
+                f"Command {cmd.power_consign}W exceeds 15A production limit"
+            )
+
+
+def test_compute_best_period_solar_only_clamped_by_production():
+    """End-to-end: solar-only allocation respects production amps budget."""
+    time_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time_base + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+    power_slots_duration_s = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    power_available_power = np.array([5000.0, 5000.0, 5000.0, 5000.0], dtype=np.float64)
+    prices = np.array([0.2] * num_slots, dtype=np.float64)
+    prices_ordered_values = [0.2]
+
+    load = _FakeLoad()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[32.0, 32.0, 32.0],
+        max_production_amps=[8.0, 8.0, 8.0],
+        num_slots=num_slots,
+    )
+
+    max_production_power = 8.0 * 230.0 * 3  # 5520W
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time_base,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=1000.0),
+            LoadCommand(command="on", power_consign=3000.0),
+            LoadCommand(command="on", power_consign=5000.0),
+            LoadCommand(command="on", power_consign=10000.0),
+        ],
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        support_auto=True,
+        current_value=0.0,
+        target_value=5000.0,
+        end_of_constraint=DATETIME_MAX_UTC,
+    )
+
+    (
+        _,
+        _,
+        out_commands,
+        out_power,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = constraint.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_available_power,
+        power_slots_duration_s=power_slots_duration_s,
+        prices=prices,
+        prices_ordered_values=prices_ordered_values,
+        time_slots=time_slots,
+    )
+
+    for i in range(num_slots):
+        if out_commands[i] is not None:
+            assert out_power[i] <= max_production_power + 200, (
+                f"Slot {i}: power {out_power[i]:.0f}W exceeds production cap "
+                f"{max_production_power:.0f}W"
+            )
+
+
+def test_adapt_power_steps_budgeting_production_limits_with_existing_amps():
+    """Production limits correctly account for existing command amps."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[32.0, 32.0, 32.0],
+        max_production_amps=[10.0, 10.0, 10.0],
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2300),
+            LoadCommand(command="on", power_consign=5000),
+        ],
+    )
+
+    cmds_no_existing = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, existing_amps=None, use_production_limits=True,
+    )
+    cmds_with_existing = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, existing_amps=[5.0, 5.0, 5.0], use_production_limits=True,
+    )
+
+    assert len(cmds_with_existing) >= len(cmds_no_existing), (
+        "Existing amps should be added back to budget, allowing at least as many commands"
+    )
+
+
+def test_production_limits_guard_when_consumption_budget_none():
+    """When available_amps_for_group is None, fall back to all commands."""
+    time = datetime.now(tz=pytz.UTC)
+    load = _FakeLoad()
+    load.father_device = TestDynamicGroupDouble(max_amps=[32.0, 32.0, 32.0])
+    load.father_device.available_amps_for_group = None
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=5000),
+        ],
+    )
+
+    cmds = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, use_production_limits=True,
+    )
+    assert len(cmds) == 2, (
+        "Guard condition: when available_amps_for_group is None, return all commands"
+    )

@@ -29,6 +29,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self._childrens : list[AbstractDevice] = []
         self.charger_group = None
         self.available_amps_for_group: list[list[float|int]| None] | None = None
+        self.available_amps_production_for_group: list[list[float|int]| None] | None = None
 
         if self.physical_3p:
             self._dyn_group_max_phase_current_for_budget = [self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf, self.dyn_group_max_phase_current_conf]
@@ -43,6 +44,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 self.available_amps_for_group[idx] = add_amps(self.available_amps_for_group[idx], amps)
             else:
                 self.available_amps_for_group[idx] = diff_amps(self.available_amps_for_group[idx], amps)
+
+        if self.available_amps_production_for_group is not None and idx < len(self.available_amps_production_for_group):
+            if add:
+                self.available_amps_production_for_group[idx] = add_amps(self.available_amps_production_for_group[idx], amps)
+            else:
+                self.available_amps_production_for_group[idx] = diff_amps(self.available_amps_production_for_group[idx], amps)
+
 
         if self.father_device is not None and self.father_device != self:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
@@ -63,6 +71,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
     @property
     def dyn_group_max_phase_current_for_budget(self) -> list[float | int]:
+        return self._dyn_group_max_phase_current_for_budget
+
+    @property
+    def dyn_group_max_production_phase_current_for_budget(self) -> list[float | int]:
         return self._dyn_group_max_phase_current_for_budget
 
     def is_delta_current_acceptable(self, delta_amps: list[float|int], time:datetime, new_amps_consumption: list[float|int] | None = None) -> tuple[bool, list[float|int]]:
@@ -171,8 +183,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
 
 
     # the idea is that if we have a 3p home we allocate as if phases were balanced for loads that are not 3p
-    def prepare_slots_for_amps_budget(self, time: datetime, num_slots: int,
-                                      from_father_budget: list[float | int] | None = None):
+    def prepare_slots_for_amps_budget(self, time: datetime,
+                                      num_slots: int,
+                                      from_father_budget: list[float | int] | None = None,
+                                      from_father_production_budget: list[float | int] | None = None):
 
         init_from_father_budget = from_father_budget
         if from_father_budget is None:
@@ -183,14 +197,24 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         if from_father_budget is None:
             from_father_budget = [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE] # a lot of amps :)
 
+        init_from_father_production_budget = from_father_production_budget
+        if from_father_production_budget is None:
+            from_father_production_budget = self.dyn_group_max_production_phase_current_for_budget
+        else:
+            from_father_production_budget = min_amps(from_father_production_budget, self.dyn_group_max_production_phase_current_for_budget)
+
+        if from_father_production_budget is None:
+            from_father_production_budget = [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE] # a lot of amps :)
+
         self.available_amps_for_group = [copy.copy(from_father_budget) for _ in range(num_slots)]
+        self.available_amps_production_for_group = [copy.copy(from_father_production_budget) for _ in range(num_slots)]
 
         _LOGGER.debug(
-            f"prepare_slots_for_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget}")
+            f"prepare_slots_for_amps_budget for a group: {self.name} father budget {init_from_father_budget} => {from_father_budget} {init_from_father_production_budget} => {from_father_production_budget}")
 
         for device in self._childrens:
             # we need to prepare the slots for the device
-            device.prepare_slots_for_amps_budget(time, num_slots, from_father_budget)
+            device.prepare_slots_for_amps_budget(time, num_slots, from_father_budget, from_father_production_budget)
 
     # def  _shave_phase_amps_clusters(self, cluster_list_to_shave, current_budget_spend:list[float|int], from_father_budget:list[float|int]) -> list[float|int]:
     #

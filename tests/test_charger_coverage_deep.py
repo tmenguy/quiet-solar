@@ -101,6 +101,7 @@ def _make_home(battery=None, voltage=230.0, home_load_power=500.0,
     home._loads = []
     home._persons = []
     home.available_amps_for_group = [[32.0, 32.0, 32.0]]
+    home.available_amps_production_for_group = [[32.0, 32.0, 32.0]]
     home.battery = battery
     home.get_car_by_name = lambda n: next((c for c in home._cars if c.name == n), None)
     home.get_available_power_values = MagicMock(return_value=None)
@@ -169,6 +170,7 @@ def _make_charger_group(home, chargers, max_amps=None):
     dg.home = home
     dg._childrens = chargers
     dg.available_amps_for_group = [max_amps]
+    dg.available_amps_production_for_group = [max_amps]
     dg.dyn_group_max_phase_current = max(max_amps)
     dg.is_current_acceptable = MagicMock(return_value=True)
     dg.is_current_acceptable_and_diff = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))

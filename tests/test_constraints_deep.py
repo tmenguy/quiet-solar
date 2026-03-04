@@ -37,6 +37,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER,
     SOLVER_STEP_S,
 )
+from tests.factories import TestDynamicGroupDouble
 
 
 class TestConstraintEnergyConversion:
@@ -267,10 +268,7 @@ class TestConstraintAdaptRepartition:
         time = datetime.now(pytz.UTC)
         load = TestLoad(name="test")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(4)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=4)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=500.0),
@@ -379,10 +377,7 @@ class TestConstraintAdaptRepartition:
         time = datetime.now(pytz.UTC)
         load = TestLoad(name="test")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(4)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=4)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=500.0),
@@ -471,10 +466,7 @@ class TestConstraintAdaptRepartition:
         time = datetime.now(pytz.UTC)
         load = TestLoad(name="test")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(4)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=4)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=500.0),
@@ -580,10 +572,7 @@ class TestConstraintComputeBestPeriod:
         
         load = TestLoad(name="asap_load")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(num_slots)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=num_slots)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=1000.0),
@@ -709,10 +698,7 @@ class TestConstraintComputeBestPeriod:
         
         load = TestLoad(name="price_sensitive")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(num_slots)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=num_slots)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=2000.0),
@@ -843,10 +829,7 @@ class TestConstraintAutoCommands:
         
         car = TestLoad(name="car")
         car.efficiency = 100.0 / 0.95  # efficiency_factor = 0.95
-        car.father_device = MagicMock()
-        car.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(num_slots)
-        ]
+        car.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=num_slots)
         
         # Car power steps: 7A to 32A (1.6kW to 7.4kW)
         power_steps = [
@@ -961,10 +944,7 @@ class TestConstraintAutoCommands:
         time = datetime.now(pytz.UTC)
         load = TestLoad(name="car")
         load.efficiency = 100.0  # efficiency_factor = 1.0
-        load.father_device = MagicMock()
-        load.father_device.available_amps_for_group = [
-            [50.0, 50.0, 50.0] for _ in range(4)
-        ]
+        load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=4)
         
         power_steps = [
             LoadCommand(command="ON", power_consign=2000.0),

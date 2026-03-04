@@ -1097,7 +1097,6 @@ class QSHome(QSDynamicGroup):
 
         return min(static_amp, available_production_amp)
 
-
     @property
     def dyn_group_max_phase_current(self) -> list[float|int]:
 
@@ -1123,10 +1122,16 @@ class QSHome(QSDynamicGroup):
     @property
     def dyn_group_max_phase_current_for_budget(self) -> list[float|int]:
 
-        static_amps = super().dyn_group_max_phase_current_for_budget
+        if self.is_off_grid():
+            return self.dyn_group_max_production_phase_current_for_budget
 
-        if not self.is_off_grid():
-            return static_amps
+        return super().dyn_group_max_phase_current_for_budget
+
+
+    @property
+    def dyn_group_max_production_phase_current_for_budget(self) -> list[float | int]:
+
+        static_amps = super().dyn_group_max_phase_current_for_budget
 
         prod_max_amps = self.get_home_max_static_phase_amps()
 

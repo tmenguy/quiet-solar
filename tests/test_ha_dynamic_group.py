@@ -195,27 +195,33 @@ class TestQSDynamicGroupAvailableAmps:
         """Test updating available amps by adding."""
         dyn_group_device.father_device = None
         dyn_group_device.available_amps_for_group = [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]]
+        dyn_group_device.available_amps_production_for_group = [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]]
 
         dyn_group_device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
 
         assert dyn_group_device.available_amps_for_group[0] == [15.0, 15.0, 15.0]
+        assert dyn_group_device.available_amps_production_for_group[0] == [15.0, 15.0, 15.0]
 
     def test_update_available_amps_subtract(self, dyn_group_device):
         """Test updating available amps by subtracting."""
         dyn_group_device.father_device = None
         dyn_group_device.available_amps_for_group = [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]]
+        dyn_group_device.available_amps_production_for_group = [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]]
 
         dyn_group_device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=False)
 
         assert dyn_group_device.available_amps_for_group[0] == [5.0, 5.0, 5.0]
+        assert dyn_group_device.available_amps_production_for_group[0] == [5.0, 5.0, 5.0]
 
     def test_update_available_amps_none_budget(self, dyn_group_device):
         """Test updating when budget is None."""
         dyn_group_device.father_device = None
         dyn_group_device.available_amps_for_group = None
+        dyn_group_device.available_amps_production_for_group = None
 
         dyn_group_device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
         assert dyn_group_device.available_amps_for_group is None
+        assert dyn_group_device.available_amps_production_for_group is None
 
 
 class TestQSDynamicGroupCurrentAcceptable:
@@ -722,6 +728,9 @@ class TestQSDynamicGroupCoverageExtensions:
         assert device.available_amps_for_group is not None
         assert len(device.available_amps_for_group) == 4
         assert device.available_amps_for_group[0] == [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE]
+        assert device.available_amps_production_for_group is not None
+        assert len(device.available_amps_production_for_group) == 4
+        assert device.available_amps_production_for_group[0] == [MAX_AMP_INFINITE, MAX_AMP_INFINITE, MAX_AMP_INFINITE]
 
     def test_update_available_amps_with_father_device(
         self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
@@ -741,8 +750,9 @@ class TestQSDynamicGroupCoverageExtensions:
         father.update_available_amps_for_group = MagicMock()
         device.father_device = father
         device.available_amps_for_group = [[10.0, 10.0, 10.0]]
+        device.available_amps_production_for_group = [[10.0, 10.0, 10.0]]
 
         device.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
 
-        # Should also call father's method
+        assert device.available_amps_production_for_group[0] == [15.0, 15.0, 15.0]
         father.update_available_amps_for_group.assert_called_once_with(0, [5.0, 5.0, 5.0], True)

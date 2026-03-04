@@ -35,7 +35,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraintChargePercent,
     TimeBasedSimplePowerLoadConstraint,
 )
-from tests.factories import MinimalTestLoad, create_constraint, create_charge_percent_constraint
+from tests.factories import MinimalTestLoad, TestDynamicGroupDouble, create_constraint, create_charge_percent_constraint
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +376,7 @@ def test_compute_best_period_filler_auto_green_cap():
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * num_slots})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=now,
@@ -419,7 +419,7 @@ def test_adapt_repartition_reduce_no_auto_idle_cmd():
     """Cover line 1169: reduction with j < 0, not support_auto -> CMD_IDLE."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 2})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=now,
@@ -464,7 +464,7 @@ def test_adapt_repartition_reduce_no_state_change():
     """Cover lines 1139, 1147-1153, 1157: reduction with allow_change_state=False."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 3})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=3)
 
     # Single power step -> _get_lower_consign_idx returns 0 -> j=0 -> at min
     # allow_change_state=False -> cannot go below min -> continue (line 1139)
@@ -508,7 +508,7 @@ def test_adapt_repartition_delta_power_zero_skipped():
     """Cover line 1188: delta_power == 0.0 -> continue (no change)."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 2})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     # Two power steps; existing command already at step 0 power
     # When we try to add energy, j would be 0 (lowest step matching current power)
@@ -557,7 +557,7 @@ def test_adapt_repartition_add_from_zero_slot():
     """Cover lines 1114, 1122-1125: adding energy from a slot with 0 power."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 2})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
 
     # Two steps with same min power - when current_command_power = 0,
     # j starts at 0; if power_sorted_cmds[j].power_consign <= 0 ... but it's 500
@@ -603,7 +603,7 @@ def test_adapt_repartition_reclaim_non_mandatory():
     """Cover line 1260: reclaim from future for a non-mandatory met constraint."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 6})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=6)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=now,
@@ -648,7 +648,7 @@ def test_adapt_repartition_auto_existing_from_consign():
     """Cover line 1324: auto support where existing command is in do_not_touch list."""
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * 3})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=3)
 
     constraint = MultiStepsPowerLoadConstraint(
         time=now,
@@ -699,7 +699,7 @@ def test_compute_best_period_end_beyond_slots():
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * num_slots})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # End of constraint is way beyond the last time slot
     constraint = MultiStepsPowerLoadConstraint(
@@ -747,8 +747,7 @@ def test_compute_best_period_asap_no_power_commands():
     num_slots = 3
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
-    # Load with father_device that allows only very low amps -> all commands filtered out
-    fd = type("D", (), {"available_amps_for_group": [[0.1, 0.1, 0.1]] * num_slots})()
+    fd = TestDynamicGroupDouble(max_amps=[0.1, 0.1, 0.1], num_slots=num_slots)
     load = _FakeLoadForCoverage(father_device=fd)
 
     constraint = MultiStepsPowerLoadConstraint(
@@ -789,7 +788,7 @@ def test_compute_best_period_non_asap_no_power_commands():
     num_slots = 3
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
-    fd = type("D", (), {"available_amps_for_group": [[0.1, 0.1, 0.1]] * num_slots})()
+    fd = TestDynamicGroupDouble(max_amps=[0.1, 0.1, 0.1], num_slots=num_slots)
     load = _FakeLoadForCoverage(father_device=fd)
 
     constraint = MultiStepsPowerLoadConstraint(
@@ -831,7 +830,7 @@ def test_compute_best_period_asap_j_none_fallback():
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
     load = _FakeLoadForCoverage()
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * num_slots})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # Power steps with high minimum -> _get_lower_consign_idx returns None
     # when additional_available_power - power_piloted_delta < min step
@@ -900,7 +899,7 @@ def test_compute_best_period_first_slot_adjusted():
     time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
 
     load = _FakeLoadForCoverage(time_sensitive=True)
-    load.father_device = type("D", (), {"available_amps_for_group": [[20.0, 20.0, 20.0]] * num_slots})()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=num_slots)
 
     # Set start in the middle of slots to trigger first_slot adjustment
     start_time = now + timedelta(seconds=SOLVER_STEP_S * 1.5)

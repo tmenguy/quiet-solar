@@ -277,7 +277,12 @@ class AbstractDevice(object):
                     ha_object.async_update_callback(time)
 
 
-    def prepare_slots_for_amps_budget(self, time:datetime, num_slots:int, from_father_budget: list[float | int] | None):
+    def prepare_slots_for_amps_budget(self,
+                                      time:datetime,
+                                      num_slots:int,
+                                      from_father_budget: list[float | int] | None,
+                                      from_father_production_budget: list[float | int] | None = None):
+
         _LOGGER.debug(f"prepare_slots_for_amps_budget for load {self.name} from_father_budget {from_father_budget}")
 
     @property

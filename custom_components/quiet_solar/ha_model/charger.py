@@ -896,6 +896,15 @@ class QSChargerGroup(object):
                             f"budgeting_algorithm_minimize_diffs: DO RESET ALLOCATION, best charger {actionable_chargers[0].name} is not charging, while {cs_to_stop_can_now.name} is")
                         do_reset_allocation = True
 
+
+
+
+        # we should also take inot account IF NEEDED the fact that with the new need we go grid for nothing:
+        # check self.home.get_home_max_available_production_power() : we cannot go over that one,
+        # except obviously when we have to (for big charges, etc), to really take from the grid if needed
+        # otherwise we will consume from the grid instead of the battery,
+        # See below on how we try to enforce that if the budget is already above this and we have room to go down.
+
         _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
                                                                                  do_reset_allocation, time)
 
@@ -915,7 +924,7 @@ class QSChargerGroup(object):
             return False, should_do_reset_allocation, False
 
         # ok we do have the "best" possible base for the chargers
-        diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
+        diff_power_budget, allotted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
         battery_asked_charge = 0.0
         battery_can_discharge = True
@@ -959,26 +968,67 @@ class QSChargerGroup(object):
                         cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
                         cs.command.power_consign > 0
                 ):
-                    # case where solver asked to overconsume battery power, battery_asked_charge ngative so we add that to budget
+                    # case where solver asked to overconsume battery power, battery_asked_charge negative so we add that to budget
                     # the issue is that in that case if we go over the inverter clamping (because of this budget) we will consume from
                     # the grid instead of the battery, so we need to take that into account in the budget to try to avoid that
                     initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-
-                    # check self.home.get_home_max_available_production_power() : we cannot go over that one,
-                    # otherwise we will consume from the grid instead of the battery,
-                    # so we need to take that into account in the budget to try to avoid that
-
-                    home_load_powers = self.home.get_device_power_values(CHARGER_ADAPTATION_WINDOW_S, time, use_fallback_command=False)
-                    if home_load_powers is not None and len(home_load_powers) > 0:
-                        home_load_power_value = self._extracts_power_value_from_data(home_load_powers, time)
-                        home_max_available_production_power = self.home.get_home_max_available_production_power()
-                        if home_max_available_production_power is not None:
-                            if initial_power_budget > home_max_available_production_power - home_load_power_value:
-                                initial_power_budget = home_max_available_production_power - home_load_power_value
-                                _LOGGER.info(
-                                    f"budgeting_algorithm_minimize_diffs: adjust initial_power_budget to {initial_power_budget}W to avoid overproduction and consuming from the grid instead of the battery, because of battery_asked_charge {battery_asked_charge}W, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W")
-
                     break
+
+
+        # check if we are already over power budget (for the inverter and battery capabililties)
+        home_load_power_value = None
+        home_max_available_production_power = None
+
+        home_load_powers = self.home.get_device_power_values(CHARGER_ADAPTATION_WINDOW_S, time,
+                                                             use_fallback_command=False)
+
+        if home_load_powers is not None and len(home_load_powers) > 0:
+            home_load_power_value = self._extracts_power_value_from_data(home_load_powers, time)
+            home_max_available_production_power = self.home.get_home_max_available_production_power()
+
+        if home_load_power_value is not None and home_max_available_production_power is not None:
+            # we can do something to go as low as possible for our power budget
+
+            # We will check if with the current budget we are already over the max available production power,
+            # we may consume from the grid for nothing instead of consuming from the battery,
+            # so it is better to try to reduce the budget to go under the max available production power if we are already over it,
+
+            new_home_power_consumption = home_load_power_value + diff_power_budget + initial_power_budget
+
+            if new_home_power_consumption >= home_max_available_production_power:
+
+                initial_effective_available_budget_with_no_diff_budget = initial_power_budget + diff_power_budget
+
+                if do_reset_allocation is False and allow_budget_reset is True:
+
+                    # we are already over the max available production power, so we can try to reduce the budget to go under it
+                    _LOGGER.info(
+                        f"budgeting_algorithm_minimize_diffs: we are already over the max available production power with the current budget, try budget reset, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W")
+
+                    do_reset_allocation = True
+                    should_do_reset_allocation = True
+
+                    _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(actionable_chargers,
+                                                                                                do_reset_allocation,
+                                                                                                time)
+                    # ok we do have the "best" possible base for the chargers
+
+                    diff_power_budget, allotted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
+                    initial_power_budget = initial_effective_available_budget_with_no_diff_budget - diff_power_budget
+                    new_home_power_consumption = home_load_power_value + diff_power_budget + initial_power_budget
+
+                    if new_home_power_consumption >= home_max_available_production_power:
+                        _LOGGER.info(
+                            f"budgeting_algorithm_minimize_diffs: we are still over the max available production power after reset, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W")
+
+                if new_home_power_consumption >= home_max_available_production_power:
+                    _LOGGER.warning(
+                        f"budgeting_algorithm_minimize_diffs: we are over the max available production power, try to reduce budget if possible, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W")
+
+                    # new_h_p = home_load_power_value + diff_power_budget + initial_power_budget
+                    # if new_h_p == home_max_available_production_power
+                    initial_power_budget = min(initial_power_budget, home_max_available_production_power - home_load_power_value - diff_power_budget)
+
 
 
         if do_reset_allocation:
@@ -1007,34 +1057,16 @@ class QSChargerGroup(object):
             check_phase_change = [False]
 
         _LOGGER.info(
-            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget} battery_asked_charge {battery_asked_charge}, increase {initial_increase}, budget_alloted_amps {alloted_amps} do_reset_allocation {do_reset_allocation}")
+            f"budgeting_algorithm_minimize_diffs: {[cs.name for cs in actionable_chargers]} full_available_home_power {full_available_home_power} grid_available_home_power {grid_available_home_power} diff_power_budget {diff_power_budget} power_budget {initial_power_budget} battery_asked_charge {battery_asked_charge}, increase {initial_increase}, budget_allotted_amps {allotted_amps} do_reset_allocation {do_reset_allocation}")
 
 
         do_stop = False
         global_diff_power = 0
-        # use_dynamic_per_cs_power_check = False
 
         for allow_state_change in allow_state_changes:
             for allow_phase_change in check_phase_change:
                 for charger_idx, cs in enumerate(actionable_chargers):
 
-                    # if use_dynamic_per_cs_power_check:
-                    #     # in fact this is probably a bad idea : the battery consumption command is global, not per charger
-                    #     if battery_asked_charge > 0 and cs.is_before_battery is False:
-                    #         # if we are AFTER battery : we shouldn't consume what the solver computed for the battery
-                    #         power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                    #     else:
-                    #         if (battery_asked_charge < 0 and
-                    #                 cs.is_before_battery and
-                    #                 battery_can_discharge and
-                    #                 cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and
-                    #                 cs.command.power_consign > 0
-                    #         ):
-                    #             # case where solver asked to overconsume battery power
-                    #             power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
-                    #         else:
-                    #             power_budget = full_available_home_power - diff_power_budget
-                    # else:
                     power_budget = initial_power_budget
 
                     if power_budget < 0:
@@ -1073,7 +1105,7 @@ class QSChargerGroup(object):
                                 _LOGGER.info(
                                     f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): forbid change because of diff_power None power_budget {power_budget - global_diff_power} diff_power {diff_power} increase {increase} from {cs.get_budget_amps()} to next_possible_budgeted_amp {next_possible_budgeted_amp} next_possible_num_phases {next_possible_num_phases}")
                             else:
-                                new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
+                                new_alloted_amps = diff_amps(allotted_amps, cs.get_budget_amps())
                                 new_alloted_amps = add_amps(new_alloted_amps, cs.get_amps_from_values(next_possible_budgeted_amp, next_possible_num_phases))
 
                                 if increase:
@@ -1099,10 +1131,10 @@ class QSChargerGroup(object):
                                 if next_possible_budgeted_amp is not None:
 
                                     global_diff_power += diff_power
-                                    alloted_amps = new_alloted_amps
+                                    allotted_amps = new_alloted_amps
 
                                     _LOGGER.info(
-                                        f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget - global_diff_power}, diff_power {diff_power} battery_asked_charge {battery_asked_charge}, increase {increase}, new alloted_amps {alloted_amps}")
+                                        f"budgeting_algorithm_minimize_diffs ({cs.name} {cs.command}): allowing change from {cs.budgeted_amp}A to {next_possible_budgeted_amp}A, new power_budget {power_budget - global_diff_power}, diff_power {diff_power} battery_asked_charge {battery_asked_charge}, increase {increase}, new allotted_amps {allotted_amps}")
                                     cs.budgeted_amp = next_possible_budgeted_amp
                                     cs.budgeted_num_phases = next_possible_num_phases
 
@@ -1151,14 +1183,14 @@ class QSChargerGroup(object):
 
             if do_price_check and self.home.battery_can_discharge() is False:
 
-                diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
+                diff_power_budget, allotted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
 
                 # we will compute here if the price to take "more" power is better than the best
                 # electricity rate we may have
 
                 # check we have room to expand, and allocate amps
                 if self.dynamic_group.is_current_acceptable(
-                        new_amps=add_amps(alloted_amps, [1,1,1]),
+                        new_amps=add_amps(allotted_amps, [1,1,1]),
                         estimated_current_amps=current_amps,
                         time=time
                 ):
@@ -1195,7 +1227,7 @@ class QSChargerGroup(object):
                             diff_power = cs.get_diff_power(cs.budgeted_amp, cs.budgeted_num_phases,
                                                            next_budgeted_amp, next_budgeted_num_phases)
 
-                            new_alloted_amps = diff_amps(alloted_amps, cs.get_budget_amps())
+                            new_alloted_amps = diff_amps(allotted_amps, cs.get_budget_amps())
                             new_alloted_amps = add_amps(new_alloted_amps,
                                                                            cs.get_amps_from_values(
                                                                                next_budgeted_amp,
@@ -1250,7 +1282,7 @@ class QSChargerGroup(object):
         for cs in actionable_chargers:
 
             if do_reset_allocation:
-                # put the minmum values for the amps
+                # put the minimum values for the amps
                 cs.budgeted_amp = cs.possible_amps[0]
                 cs.budgeted_num_phases = min(cs.possible_num_phases)
             else:
