@@ -2350,14 +2350,14 @@ class QSHome(QSDynamicGroup):
                 wait_time, command_acked_or_good = await load.check_commands(time=time)
                 if command_acked_or_good is False:
                     all_ok = False
-                if wait_time > timedelta(seconds=45):
-                    if load.running_command_num_relaunch < 3:
+                if wait_time > timedelta(seconds=50*(load.running_command_num_relaunch + 1)):
+                    if load.running_command_num_relaunch < 6:
                         await load.force_relaunch_command(time)
                     else:
                         # we have an issue with this command ....
-                        pass
+                        _LOGGER.error(f"check_loads_commands: Command for load {load.name} has been relaunched {load.running_command_num_relaunch} times and is still not acked or good, there may be an issue with the device or the command, please check it. Last command was {load.current_command} and wait time is {wait_time}")
             except Exception as err:
-                _LOGGER.error(f"Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
+                _LOGGER.error(f"check_loads_commands: Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
 
         return all_ok
 

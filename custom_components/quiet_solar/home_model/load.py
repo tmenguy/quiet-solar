@@ -23,7 +23,7 @@ import slugify
 if TYPE_CHECKING:
     import QSDynamicGroup
 
-NUM_MAX_INVALID_PROBES_COMMANDS = 3
+NUM_MAX_INVALID_PROBES_COMMANDS = 10
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -465,8 +465,13 @@ class AbstractDevice(object):
 
         if self.running_command is not None:
             # another command has been launched, stack this one (we replace the previous stacked one)
-            self._stacked_command = command
-            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt}")
+            if self.running_command == command:
+                self.running_command = command
+                self._stacked_command = None
+            else:
+                self._stacked_command = command
+
+            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt} running {self.running_command}, stacked {self._stacked_command}")
             return
 
         # there is no running : whatever we will not execute the stacked one but only the last one
@@ -542,6 +547,7 @@ class AbstractDevice(object):
 
         if self.running_command is None and self._stacked_command is not None:
             await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
+            res = timedelta(seconds=0)
             command_acked_or_good = False
 
         return res, command_acked_or_good
@@ -720,18 +726,18 @@ class AbstractLoad(AbstractDevice):
 
     def get_override_state(self):
 
-        overriden_state = self.external_user_initiated_state
-        if overriden_state is None:
+        overridden_state = self.external_user_initiated_state
+        if overridden_state is None:
             ct = self.get_current_active_constraint()
             if ct is not None:
                 if ct.load_info is not None and ct.load_info.get("originator",None) == "user_override":
-                    overriden_state = ct.load_param
+                    overridden_state = ct.load_param
 
         if self.asked_for_reset_user_initiated_state_time is not None:
             return "ASKED FOR RESET OVERRIDE"
-        if overriden_state is None:
+        if overridden_state is None:
             return "NO OVERRIDE"
-        return f"Override: {overriden_state}"
+        return f"Override: {overridden_state}"
 
     def is_time_sensitive(self):
 

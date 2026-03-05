@@ -215,7 +215,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
-        if self.support_user_override():
+        if self.is_load_command_set(time) and self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -275,15 +275,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             else:
                                 if self.current_command is not None:
                                     expected_state = self.expected_state_from_command(self.current_command)
+                                else:
+                                    expected_state = self.expected_state_from_command(CMD_IDLE)
 
                                 if self.running_command is not None:
                                     expected_state_running = self.expected_state_from_command(self.running_command)
-
-                                if expected_state is None:
-                                    expected_state = expected_state_running
-
-                                if expected_state_running is None:
-                                    expected_state_running = expected_state
 
                             if (expected_state is not None and current_state == expected_state) or (
                                     expected_state_running is not None and current_state == expected_state_running):
