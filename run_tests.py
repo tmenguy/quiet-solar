@@ -6,21 +6,21 @@ import os
 from pathlib import Path
 import subprocess
 
-# Check if running in venv313
-if 'venv313' not in sys.executable:
-    print("⚠️  Not running in venv313, attempting to activate...")
+# Check if running in venv314
+if 'venv314' not in sys.executable:
+    print("⚠️  Not running in venv314, attempting to activate...")
     project_root = Path(__file__).parent
-    venv_python = project_root / 'venv313' / 'bin' / 'python'
+    venv_python = project_root / 'venv314' / 'bin' / 'python'
     
     if venv_python.exists():
-        print(f"✓ Found venv313, re-running with: {venv_python}")
+        print(f"✓ Found venv314, re-running with: {venv_python}")
         # Re-run this script with the venv python
         result = subprocess.run([str(venv_python), __file__] + sys.argv[1:])
         sys.exit(result.returncode)
     else:
-        print(f"❌ Could not find venv313 at {venv_python}")
-        print("Please activate venv313 manually:")
-        print("  source venv313/bin/activate")
+        print(f"❌ Could not find venv314 at {venv_python}")
+        print("Please activate venv314 manually:")
+        print("  source venv314/bin/activate")
         sys.exit(1)
 
 # Add project root to Python path
