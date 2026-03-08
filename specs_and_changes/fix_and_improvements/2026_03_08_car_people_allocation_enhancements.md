@@ -20,8 +20,7 @@ dominated the cost function.
 
 ## Problem 2: unplugged-at-home cars treated the same as plugged cars
 
-A car that is at home but not connected to any charger (`car.charger is None`,
-`car.is_car_home(time) == True`) entered the Hungarian allocation with a
+A car that is not connected to any charger (`car.charger is None`) entered the Hungarian allocation with a
 `diff_energy` cost as if it could be charged. In reality, no energy can be
 delivered to that car, so assigning a person who needs charging to an
 unplugged car wastes the allocation -- the person's trip won't be covered.

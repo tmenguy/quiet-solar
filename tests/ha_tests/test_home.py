@@ -622,6 +622,7 @@ async def test_home_best_persons_cars_allocations_basic(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
@@ -631,6 +632,7 @@ async def test_home_best_persons_cars_allocations_basic(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(True, 90.0, 60.0, 0.0)
         ),
@@ -1543,24 +1545,28 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
         current_forecasted_person=None,
         user_selected_person_name_for_car="Person Selected",
         car_is_invited=False,
+        charger=object(),
     )
     car_force_none = SimpleNamespace(
         name="Car Force None",
         current_forecasted_person=person_preferred,
         user_selected_person_name_for_car=FORCE_CAR_NO_PERSON_ATTACHED,
         car_is_invited=False,
+        charger=object(),
     )
     car_preferred = SimpleNamespace(
         name="Car Preferred",
         current_forecasted_person=person_selected,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
     )
     car_authorized = SimpleNamespace(
         name="Car Authorized",
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
     )
 
     home._cars = [car_selected, car_force_none, car_preferred, car_authorized]
@@ -1750,6 +1756,7 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
@@ -1759,6 +1766,7 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
@@ -1869,12 +1877,14 @@ async def test_home_best_persons_cars_allocations_skip_cases(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=True,
+        charger=object(),
     )
     preset_car = SimpleNamespace(
         name="Preset",
         current_forecasted_person=SimpleNamespace(name="PresetPerson"),
         user_selected_person_name_for_car=None,
         car_is_invited=False,
+        charger=object(),
     )
     home._cars = [invited_car, preset_car]
     home._persons = []

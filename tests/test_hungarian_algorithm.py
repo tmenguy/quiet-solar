@@ -835,9 +835,6 @@ class _FakeCar:
         self.car_is_invited = is_invited
         self._coverage = coverage_map or {}
 
-    def is_car_home(self, time):
-        return self._is_home
-
     def get_adapt_target_percent_soc_to_reach_range_km(self, mileage, time):
         return self._coverage.get(mileage, (None, None, None, None))
 
@@ -938,26 +935,6 @@ class TestPreAllocateUnpluggedHomeCars:
         now = datetime.now(timezone.utc)
 
         car = _FakeCar("CarA", is_home=True, has_charger=True, coverage_map={
-            50.0: (True, 80.0, 60.0, 5.0),
-        })
-        person = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
-
-        home = _make_home([car], [person])
-        forecasts = {"Alice": (now, 50.0)}
-        covered_cars: set[str] = set()
-        covered_persons: set[str] = set()
-
-        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
-
-        assert len(home._last_persons_car_allocation) == 0
-
-    def test_car_not_home_skipped(self):
-        """A car that is not home should not be pre-allocated."""
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc)
-
-        car = _FakeCar("CarA", is_home=False, has_charger=False, coverage_map={
             50.0: (True, 80.0, 60.0, 5.0),
         })
         person = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])

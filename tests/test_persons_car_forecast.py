@@ -1062,25 +1062,29 @@ class TestPersonsCarForecast:
                 print(f"Person {person.name} next need at {check_time}: leave at {leave_time} for {mileage}km")
 
 
+            car_results = {}
             for car in mock_home._cars:
-                is_person_covered, next_usage_time, person_min_target_charge, person =  await car.get_best_person_next_need(check_time)
+                is_person_covered, next_usage_time, person_min_target_charge, person = await car.get_best_person_next_need(check_time)
                 print(f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}")
-                if "tesla" in car.name.lower():
+                car_results[car.name.lower()] = (is_person_covered, next_usage_time, person_min_target_charge, person)
+
+            for car_key, (is_person_covered, next_usage_time, person_min_target_charge, person) in car_results.items():
+                if "tesla" in car_key:
                     assert "arthur" in person.name.lower(), f"Expected arthur for Tesla, got {person.name if person else None}"
                     assert int(person_min_target_charge) == 47
                     assert is_person_covered
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:30:00+00:00")
-                elif "twingo" in car.name.lower():
-                    assert "thomas" in person.name.lower(), f"Expected thomas for Twingo, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 73
-                    assert is_person_covered is False
-                    assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
-                elif "zoe" in car.name.lower():
-                    assert "magali" in person.name.lower(), f"Expected magali for Zoe, got {person.name if person else None}"
-                    assert int(person_min_target_charge) == 41
+                elif "twingo" in car_key:
+                    assert "magali" in person.name.lower(), f"Expected magali for Twingo, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 58
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 09:00:00+00:00")
-                elif "buz" in car.name.lower():
+                elif "zoe" in car_key:
+                    assert "thomas" in person.name.lower(), f"Expected thomas for Zoe, got {person.name if person else None}"
+                    assert int(person_min_target_charge) == 48
+                    assert is_person_covered is False
+                    assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
+                elif "buz" in car_key:
                     assert "brice" in person.name.lower(), f"Expected brice for ID.buzz, got {person.name if person else None}"
                     assert person_min_target_charge is None
 

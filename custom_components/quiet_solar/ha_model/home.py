@@ -2086,9 +2086,6 @@ class QSHome(QSDynamicGroup):
             if car.car_is_invited:
                 continue
 
-            is_home = car.is_car_home(time)
-            if is_home is not True:
-                continue
             if car.charger is not None:
                 continue
 
