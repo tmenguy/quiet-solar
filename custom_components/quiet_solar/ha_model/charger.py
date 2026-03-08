@@ -3443,6 +3443,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def is_charge_disabled(self, time: datetime, for_duration: float | None = None) -> bool | None:
         return self.check_charge_state(time, for_duration, check_for_val=False)
 
+    def _secondary_power_transform(self, value: float, state_attr: dict) -> tuple[float, dict]:
+        """Zero out reported power when the charger is not actually charging."""
+        if self.is_charge_enabled(datetime.now(tz=pytz.UTC)) is False:
+            return 0.0, state_attr
+        return value, state_attr
+
     def is_car_stopped_asking_current(self, time: datetime) -> bool | None:
 
         result = False
@@ -4466,7 +4472,7 @@ class QSChargerOCPP(QSChargerGeneric):
 
         self.secondary_power_sensor = self.charger_ocpp_power_active_import # it is one phase (so need 3x for 3 phases sum)
         #self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_ocpp_current_import_amps_to_W)
-        self.attach_power_to_probe(self.secondary_power_sensor)
+        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self._secondary_power_transform)
 
     async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
         """Handle notifications from the OCPP integration and take automated actions."""
@@ -4798,7 +4804,7 @@ class QSChargerWallbox(QSChargerGeneric):
         super().__init__(**kwargs)
 
         self.secondary_power_sensor = self.charger_wallbox_charging_power
-        self.attach_power_to_probe(self.secondary_power_sensor)
+        self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self._secondary_power_transform)
 
         # the wallbox are starting charging right away
         self.initial_num_in_out_immediate = 2
