@@ -238,15 +238,19 @@ class QSStateCmd():
         self.on_success_action_cb = None
         self.on_success_action_cb_kwargs = None
 
+    def can_launch(self) -> bool:
+        """Whether retries are not yet exhausted."""
+        return self._num_launched <= STATE_CMD_RETRY_NUMBER
+
     def is_ok_to_launch(self, value, time: datetime):
 
         self.set(value, time)
 
+        if not self.can_launch():
+            return False
+
         if self._num_launched == 0:
             return True
-
-        if self._num_launched > STATE_CMD_RETRY_NUMBER:
-            return False
 
         if self.last_time_set is None:
             return True
@@ -3496,6 +3500,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     async def set_max_charging_current(self, current, time: datetime, for_default_when_unplugged=False, force=False, blocking=False) -> bool:
 
+        if not self.can_set_amps_when_not_charging():
+            is_charging = self.is_charge_enabled(time)
+            if not is_charging:
+                _LOGGER.info(
+                    f"set_max_charging_current: BLOCKED {current}A "
+                    f"(charger not actively charging, can_set_amps_when_not_charging=False)")
+                return False
+
         has_done_change = False
         if for_default_when_unplugged is False:
             self._expected_amperage.register_launch(value=current, time=time)
@@ -3508,6 +3520,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
 
     async def set_charging_current(self, current, time: datetime,  force=False, blocking=False) -> bool:
+
+        if not self.can_set_amps_when_not_charging():
+            is_charging = self.is_charge_enabled(time)
+            if not is_charging:
+                _LOGGER.info(
+                    f"set_charging_current: BLOCKED {current}A "
+                    f"(charger not actively charging, can_set_amps_when_not_charging=False)")
+                return False
+
         has_done_change = False
 
         if force or self.get_charging_current() != current:
@@ -3729,7 +3750,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 await self._expected_num_active_phases.success(time=time)
 
 
-        #if we expect a charge stop, if it is stopped the amps is not a mandatory check should only be done if we expect a charge start
         if one_bad is False:
 
             is_charge_enabled = self.is_charge_enabled(time)
@@ -3740,63 +3760,94 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if is_charge_disabled is None:
                 _LOGGER.info(f"Ensure State:{self.name} is_charge_disabled state unknown")
 
-            amps_bad_set = True
-            if self._expected_charge_state.value is False and is_charge_disabled:
-                # ok we are in a good stopped state: even if the amperage is not set, we can say that the result will be good
-                amps_bad_set = False
-
             charging_current_amp = self.get_charging_current()
-            if charging_current_amp == self._expected_amperage.value:
-                await self._expected_amperage.success(time=time)
+            want_charge = self._expected_charge_state.value is True
+            currently_charging = is_charge_enabled is True
 
-                duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S * 2
-                if self._expected_amperage.last_ping_time_success == self._expected_amperage.first_time_success:
-                    duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S
+            if currently_charging and not want_charge:
+                # === TRANSITION: charging -> want to stop ===
+                # Set amps to min first, only stop once amps are confirmed
+                amps_confirmed = (charging_current_amp == self._expected_amperage.value)
+                amps_retries_exhausted = not self._expected_amperage.can_launch()
+                one_bad = True # because of the charge state
 
-                if (time - self._expected_amperage.last_ping_time_success).total_seconds() > (duration_check_s - 3.0):
-                    await self.update_data_request(time=time)
+                if amps_confirmed or amps_retries_exhausted:
+                    if amps_confirmed:
+                        await self._expected_amperage.success(time=time)
 
-                if probe_only is False:
-                    if (time - self._expected_amperage.last_ping_time_success).total_seconds() > duration_check_s:
-                        if is_charge_disabled is False or is_charge_enabled:
-                            _LOGGER.debug(f"Ensure State:{self.name} set amperage already set to {charging_current_amp}A ... but reset it")
-                            await self.set_charging_current(current=self._expected_amperage.value, time=time, force=True)
-                        self._expected_amperage.last_ping_time_success = time
-            else:
-                one_bad = amps_bad_set
-
-                _LOGGER.info(
-                    f"Ensure State:{self.name} current {charging_current_amp}A expected {self._expected_amperage.value}A")
-                if probe_only is False:
-                    if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
-                        if is_charge_disabled is False or is_charge_enabled:
-                            _LOGGER.info(f"Ensure State:{self.name} set amperage {charging_current_amp}A expected {self._expected_amperage.value}A LAUNCH set_charging_current")
-                            await self.set_charging_current(current=self._expected_amperage.value, time=time)
-                    else:
-                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH current {charging_current_amp}A expected {self._expected_amperage.value}A")
-
-                await self.update_data_request(time=time)
-
-            if not ((self._expected_charge_state.value is True and is_charge_enabled) or (
-                self._expected_charge_state.value is False and is_charge_disabled)):
-                one_bad = True
-                _LOGGER.info(
-                    f"Ensure State:{self.name} expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
-                if probe_only is False:
-                    # if amperage is ok check if charge state is ok
-                    if self._expected_charge_state.is_ok_to_launch(value=self._expected_charge_state.value, time=time):
-                        if self._expected_charge_state.value:
-                            _LOGGER.info(f"Ensure State:{self.name} start_charge")
-                            await self.start_charge(time=time)
-                        else:
+                    if probe_only is False:
+                        if self._expected_charge_state.is_ok_to_launch(value=False, time=time):
+                            if amps_retries_exhausted and not amps_confirmed:
+                                _LOGGER.warning(
+                                    f"Ensure State:{self.name} stopping despite amps not confirmed "
+                                    f"({charging_current_amp}A vs {self._expected_amperage.value}A) "
+                                    f"after {self._expected_amperage._num_launched} retries")
                             _LOGGER.info(f"Ensure State:{self.name} stop_charge")
                             await self.stop_charge(time=time)
+                        else:
+                            _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH stop")
+
+                else:
+                    # amps not yet at target: send amps command, delay stop
+                    _LOGGER.info(
+                        f"Ensure State:{self.name} current {charging_current_amp}A expected {self._expected_amperage.value}A "
+                        f"(delaying stop until amps confirmed)")
+                    if probe_only is False:
+                        if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
+                            _LOGGER.info(f"Ensure State:{self.name} set amperage to {self._expected_amperage.value}A before stop")
+                            await self.set_charging_current(current=self._expected_amperage.value, time=time)
+
+                    await self.update_data_request(time=time)
+
+            elif not currently_charging and want_charge:
+                # === TRANSITION: not charging -> want to start ===
+                # Just start charge, amps will be set once charge is confirmed
+                one_bad = True # because of the charge state
+                _LOGGER.info(
+                    f"Ensure State:{self.name} expected charge=True, is_charge_enabled={is_charge_enabled}")
+                if probe_only is False:
+                    if self._expected_charge_state.is_ok_to_launch(value=True, time=time):
+                        _LOGGER.info(f"Ensure State:{self.name} start_charge")
+                        await self.start_charge(time=time)
                     else:
-                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH expected {self._expected_charge_state.value} is_charge_enabled {is_charge_enabled} is_charge_disabled {is_charge_disabled}")
+                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH start")
 
                 await self.update_data_request(time=time)
 
+            elif currently_charging and want_charge:
+                # === STEADY STATE: charging and want to charge -> adapt amps ===
+                await self._expected_charge_state.success(time=time)
+
+                if charging_current_amp == self._expected_amperage.value:
+                    await self._expected_amperage.success(time=time)
+
+                    duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S * 2
+                    if self._expected_amperage.last_ping_time_success == self._expected_amperage.first_time_success:
+                        duration_check_s = STATE_CMD_TIME_BETWEEN_RETRY_S
+
+                    if (time - self._expected_amperage.last_ping_time_success).total_seconds() > (duration_check_s - 3.0):
+                        await self.update_data_request(time=time)
+
+                    if probe_only is False:
+                        if (time - self._expected_amperage.last_ping_time_success).total_seconds() > duration_check_s:
+                            _LOGGER.debug(f"Ensure State:{self.name} set amperage already set to {charging_current_amp}A ... but reset it")
+                            await self.set_charging_current(current=self._expected_amperage.value, time=time, force=True)
+                            self._expected_amperage.last_ping_time_success = time
+                else:
+                    one_bad = True
+                    _LOGGER.info(
+                        f"Ensure State:{self.name} current {charging_current_amp}A expected {self._expected_amperage.value}A")
+                    if probe_only is False:
+                        if self._expected_amperage.is_ok_to_launch(value=self._expected_amperage.value, time=time):
+                            _LOGGER.info(f"Ensure State:{self.name} set amperage {charging_current_amp}A -> {self._expected_amperage.value}A LAUNCH set_charging_current")
+                            await self.set_charging_current(current=self._expected_amperage.value, time=time)
+                        else:
+                            _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH amps {charging_current_amp}A -> {self._expected_amperage.value}A")
+
+                    await self.update_data_request(time=time)
+
             else:
+                # === STEADY STATE: not charging and don't want to charge -> do nothing ===
                 await self._expected_charge_state.success(time=time)
 
         if one_bad is False:
@@ -4415,6 +4466,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_car_status_rebooting_vals(self) -> list[str]:
         return []
 
+    def can_set_amps_when_not_charging(self) -> bool:
+        """Whether this charger accepts amp commands while not actively charging.
+
+        Some chargers (e.g. OCPP) reset their internal amps to max
+        when receiving an amp command while idle, causing a current spike
+        on the next charge start.
+        """
+        return True
+
 
 # for OCPP charger : OCPP integration , do no use automatic measurehands ... and select the power active import one at minimum
 class QSChargerOCPP(QSChargerGeneric):
@@ -4473,6 +4533,10 @@ class QSChargerOCPP(QSChargerGeneric):
         self.secondary_power_sensor = self.charger_ocpp_power_active_import # it is one phase (so need 3x for 3 phases sum)
         #self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_ocpp_current_import_amps_to_W)
         self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self._secondary_power_transform)
+
+    def can_set_amps_when_not_charging(self) -> bool:
+        """OCPP chargers reset to max amps when receiving amp commands while idle."""
+        return False
 
     async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
         """Handle notifications from the OCPP integration and take automated actions."""

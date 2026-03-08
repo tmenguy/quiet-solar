@@ -3054,6 +3054,7 @@ class TestEnsureCorrectStateGroup:
 # =============================================================================
 
 from custom_components.quiet_solar.ha_model.charger import (
+    STATE_CMD_RETRY_NUMBER,
     STATE_CMD_TIME_BETWEEN_RETRY_S,
 )
 
@@ -3495,3 +3496,227 @@ class TestConstraintUpdateValueCallback:
         ch.charger_group.dyn_handle = AsyncMock()
         await ch.constraint_update_value_callback_percent_soc(ct, now)
         assert ch.possible_charge_error_start_time is None
+
+
+# =============================================================================
+# Amp safety: can_set_amps_when_not_charging guard and stop-gate
+# =============================================================================
+
+
+class TestCanSetAmpsWhenNotCharging:
+    """Verify that OCPP/Wallbox chargers never send amps when not actively charging,
+    and that generic chargers still can."""
+
+    def test_generic_charger_allows_amps_when_idle(self):
+        hass = _make_hass(); home = _make_home()
+        ch = _create_charger(hass, home, name="GenericCh")
+        assert ch.can_set_amps_when_not_charging() is True
+
+    def test_ocpp_charger_blocks_amps_when_idle(self):
+        hass = _make_hass(); home = _make_home()
+        ch = _create_ocpp_charger(hass, home, name="OcppCh")
+        assert ch.can_set_amps_when_not_charging() is False
+
+    def test_wallbox_charger_allows_amps_when_idle(self):
+        hass = _make_hass(); home = _make_home()
+        ch = _create_wallbox_charger(hass, home, name="WbCh")
+        assert ch.can_set_amps_when_not_charging() is True
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_current_blocked_for_ocpp_when_not_charging(self):
+        """set_max_charging_current must not call low_level when OCPP is idle."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_ocpp_charger(hass, home, name="OcppGuard")
+        ch.is_charge_enabled = MagicMock(return_value=False)
+        ch.low_level_set_max_charging_current = AsyncMock()
+        now = datetime.now(pytz.UTC)
+        result = await ch.set_max_charging_current(current=16, time=now)
+        assert result is False
+        ch.low_level_set_max_charging_current.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_current_allowed_for_ocpp_when_charging(self):
+        """set_max_charging_current must call low_level when OCPP is actively charging."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_ocpp_charger(hass, home, name="OcppAllow")
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.low_level_set_max_charging_current = AsyncMock(return_value=True)
+        ch.get_max_charging_amp_per_phase = MagicMock(return_value=6)
+        now = datetime.now(pytz.UTC)
+        result = await ch.set_max_charging_current(current=16, time=now)
+        assert result is True
+        ch.low_level_set_max_charging_current.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_charging_current_allowed_for_wallbox_when_not_charging(self):
+        """Wallbox supports setting amps when idle, so low_level must be called."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_wallbox_charger(hass, home, name="WbGuard")
+        ch.is_charge_enabled = MagicMock(return_value=False)
+        ch.low_level_set_charging_current = AsyncMock(return_value=True)
+        ch.get_charging_current = MagicMock(return_value=6)
+        now = datetime.now(pytz.UTC)
+        result = await ch.set_charging_current(current=16, time=now)
+        assert result is True
+        ch.low_level_set_charging_current.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_charging_current_allowed_for_wallbox_when_charging(self):
+        """set_charging_current must call low_level when Wallbox is actively charging."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_wallbox_charger(hass, home, name="WbAllow")
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.low_level_set_charging_current = AsyncMock(return_value=True)
+        ch.get_charging_current = MagicMock(return_value=6)
+        now = datetime.now(pytz.UTC)
+        result = await ch.set_charging_current(current=16, time=now)
+        assert result is True
+        ch.low_level_set_charging_current.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_current_allowed_for_generic_when_not_charging(self):
+        """Generic charger should still allow amps when not charging."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_charger(hass, home, name="GenAllow")
+        ch.is_charge_enabled = MagicMock(return_value=False)
+        ch.low_level_set_max_charging_current = AsyncMock(return_value=True)
+        ch.get_max_charging_amp_per_phase = MagicMock(return_value=6)
+        now = datetime.now(pytz.UTC)
+        result = await ch.set_max_charging_current(current=16, time=now)
+        assert result is True
+        ch.low_level_set_max_charging_current.assert_called_once()
+
+
+class TestStopChargeGatedBehindAmps:
+    """Verify that _ensure_correct_state delays stop_charge until amps are confirmed,
+    and proceeds with stop once amps match or retries are exhausted."""
+
+    def _setup(self):
+        hass = _make_hass(); home = _make_home()
+        ch = _create_ocpp_charger(hass, home, name="StopGateCh")
+        car = _make_real_car(hass, home, name="StopGateCar")
+        now = datetime.now(pytz.UTC)
+        _init_charger_states(ch, charge_state=False, amperage=6, num_phases=1)
+        _plug_car(ch, car, now - timedelta(hours=1))
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.running_command = None
+        ch.is_car_stopped_asking_current = MagicMock(return_value=False)
+        ch.update_data_request = AsyncMock()
+        ch.set_charging_current = AsyncMock()
+        ch.set_charging_num_phases = AsyncMock()
+        ch.start_charge = AsyncMock()
+        ch.stop_charge = AsyncMock()
+        return hass, home, ch, car, now
+
+    @pytest.mark.asyncio
+    async def test_stop_delayed_when_amps_not_confirmed(self):
+        """stop_charge must not be called when amps haven't converged to min yet."""
+        _, _, ch, _, now = self._setup()
+        ch._expected_charge_state.value = False
+        ch._expected_amperage.value = 6
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_charging_current = MagicMock(return_value=16)
+        await ch._ensure_correct_state(now)
+        ch.stop_charge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_proceeds_when_amps_confirmed(self):
+        """stop_charge must be called once amps sensor confirms min_charge."""
+        _, _, ch, _, now = self._setup()
+        ch._expected_charge_state.value = False
+        ch._expected_amperage.value = 6
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_charging_current = MagicMock(return_value=6)
+        await ch._ensure_correct_state(now)
+        ch.stop_charge.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_proceeds_when_retries_exhausted(self):
+        """stop_charge must be called as fallback when amps retries are exhausted."""
+        _, _, ch, _, now = self._setup()
+        ch._expected_charge_state.value = False
+        ch._expected_amperage.value = 6
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_charging_current = MagicMock(return_value=16)
+        ch._expected_amperage._num_launched = STATE_CMD_RETRY_NUMBER + 1
+        await ch._ensure_correct_state(now)
+        ch.stop_charge.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_still_works_for_generic_charger_without_gate(self):
+        """Generic chargers should also gate stop behind amps confirmation."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_charger(hass, home, name="GenStopCh")
+        car = _make_real_car(hass, home, name="GenStopCar")
+        now = datetime.now(pytz.UTC)
+        _init_charger_states(ch, charge_state=False, amperage=6, num_phases=1)
+        _plug_car(ch, car, now - timedelta(hours=1))
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.running_command = None
+        ch.is_car_stopped_asking_current = MagicMock(return_value=False)
+        ch.update_data_request = AsyncMock()
+        ch.set_charging_current = AsyncMock()
+        ch.set_charging_num_phases = AsyncMock()
+        ch.start_charge = AsyncMock()
+        ch.stop_charge = AsyncMock()
+        ch._expected_charge_state.value = False
+        ch._expected_amperage.value = 6
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_charging_current = MagicMock(return_value=6)
+        await ch._ensure_correct_state(now)
+        ch.stop_charge.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_low_level_never_called_for_ocpp_during_full_stop_start_cycle(self):
+        """Full cycle: stop (with gate) -> start -> verify low_level amps never called while idle."""
+        hass = _make_hass(); home = _make_home()
+        ch = _create_ocpp_charger(hass, home, name="FullCycleCh")
+        car = _make_real_car(hass, home, name="FullCycleCar")
+        now = datetime.now(pytz.UTC)
+        _init_charger_states(ch, charge_state=True, amperage=16, num_phases=1)
+        _plug_car(ch, car, now - timedelta(hours=1))
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.running_command = None
+        ch.is_car_stopped_asking_current = MagicMock(return_value=False)
+        ch.update_data_request = AsyncMock()
+
+        hass.services.async_call.reset_mock()
+
+        # Phase 1: Request stop with amps at 6 -- charger currently at 16A, enabled
+        ch._expected_charge_state.value = False
+        ch._expected_amperage.value = 6
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_charging_current = MagicMock(return_value=16)
+
+        await ch._ensure_correct_state(now)
+        # set_charging_current should have been attempted (charger is enabled)
+        # but stop_charge should NOT have been called yet (amps not confirmed)
+        stop_calls = [c for c in hass.services.async_call.call_args_list
+                      if len(c[0]) >= 2 and "turn_off" in str(c)]
+        # There should be an amps call but no stop (turn_off on switch)
+        assert all("turn_off" not in str(c) or "switch" not in str(c[0][0])
+                    for c in hass.services.async_call.call_args_list)
+
+        # Phase 2: Charger is now stopped (simulate external stop or amps confirmed + stop)
+        hass.services.async_call.reset_mock()
+        ch.is_charge_enabled = MagicMock(return_value=False)
+        ch.is_charge_disabled = MagicMock(return_value=True)
+        ch.get_charging_current = MagicMock(return_value=6)
+
+        # Now any set_max_charging_current or set_charging_current should be blocked
+        result = await ch.set_max_charging_current(current=32, time=now)
+        assert result is False
+        result = await ch.set_charging_current(current=32, time=now)
+        assert result is False
+        hass.services.async_call.assert_not_called()
