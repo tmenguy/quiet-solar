@@ -2316,7 +2316,7 @@ class QSHome(QSDynamicGroup):
 
                 if total_energy_preferred - total_energy_optimal <= PREFERRED_CAR_ENERGY_THRESHOLD_KWH:
                     assignment = assignment_preferred
-                    _LOGGER.debug(
+                    _LOGGER.info(
                         "get_best_persons_cars_allocations: using preferred-car assignment "
                         "(energy diff %.2f kWh <= threshold %.2f kWh)",
                         total_energy_preferred - total_energy_optimal,
@@ -2324,7 +2324,7 @@ class QSHome(QSDynamicGroup):
                     )
                 else:
                     assignment = assignment_energy
-                    _LOGGER.debug(
+                    _LOGGER.info(
                         "get_best_persons_cars_allocations: using energy-optimal assignment "
                         "(energy diff %.2f kWh > threshold %.2f kWh)",
                         total_energy_preferred - total_energy_optimal,
