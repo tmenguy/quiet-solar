@@ -2064,6 +2064,87 @@ class QSHome(QSDynamicGroup):
                                               leave_time=persons_mileage[person][1])
 
 
+    def _pre_allocate_unplugged_home_cars(
+        self,
+        time: datetime,
+        person_forecasts: dict[str, tuple[datetime | None, float | None]],
+        covered_cars: set[str],
+        covered_persons: set[str],
+    ) -> None:
+        """Assign unplugged-at-home cars to persons whose trips are already covered.
+
+        For each car that is at home but not connected to a charger:
+        1. If a person whose preferred car is this car has a covered trip,
+           assign them (preferred car takes priority).
+        2. Otherwise, pick the authorized person with the smallest energy
+           margin (closest fit), to leave cars with more spare charge
+           available for others.
+        """
+        for car in self._cars:
+            if car.name in covered_cars:
+                continue
+            if car.car_is_invited:
+                continue
+
+            is_home = car.is_car_home(time)
+            if is_home is not True:
+                continue
+            if car.charger is not None:
+                continue
+
+            preferred_person = None
+            preferred_margin = None
+            best_person = None
+            best_margin = None
+
+            for person in self._persons:
+                if person.name in covered_persons:
+                    continue
+                forecast = person_forecasts.get(person.name)
+                if forecast is None:
+                    continue
+
+                p_leave_time, p_mileage = forecast
+                if p_leave_time is None:
+                    continue
+
+                authorized_car_names = [c.name for c in person.get_authorized_cars()]
+                if car.name not in authorized_car_names:
+                    continue
+
+                is_covered, current_soc, needed_soc, diff_energy = (
+                    car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                )
+
+                if is_covered is not True:
+                    continue
+
+                margin = diff_energy if diff_energy is not None else 0.0
+
+                if person.preferred_car == car.name:
+                    if preferred_margin is None or margin < preferred_margin:
+                        preferred_margin = margin
+                        preferred_person = person
+                else:
+                    if best_margin is None or margin < best_margin:
+                        best_margin = margin
+                        best_person = person
+
+            chosen = preferred_person or best_person
+            chosen_margin = preferred_margin if preferred_person is not None else best_margin
+
+            if chosen is not None:
+                covered_cars.add(car.name)
+                covered_persons.add(chosen.name)
+                self._last_persons_car_allocation[car.name] = chosen
+                _LOGGER.info(
+                    "Pre-allocated unplugged home car %s to %s "
+                    "(trip covered, preferred=%s, margin %.2f kWh)",
+                    car.name, chosen.name,
+                    chosen == preferred_person,
+                    chosen_margin or 0.0,
+                )
+
     @staticmethod
     def _build_raw_energy_matrix(
         p_s: list[tuple],
@@ -2190,17 +2271,26 @@ class QSHome(QSDynamicGroup):
                     covered_persons.add(p_per.name)
                     covered_cars.add(car.name)
 
-            p_s = []
+            person_forecasts: dict[str, tuple[datetime | None, float | None]] = {}
             for person in self._persons:
                 if person.name in covered_persons:
                     continue
                 p_leave_time, p_mileage = person.update_person_forecast(time, force_update=True)
+                if p_mileage is not None:
+                    person_forecasts[person.name] = (p_leave_time, p_mileage)
 
-                if p_mileage is None:
+            self._pre_allocate_unplugged_home_cars(
+                time, person_forecasts, covered_cars, covered_persons,
+            )
+
+            p_s = []
+            for person in self._persons:
+                if person.name in covered_persons:
                     continue
-
-                p_s.append((person, p_leave_time, p_mileage))
-
+                forecast = person_forecasts.get(person.name)
+                if forecast is None:
+                    continue
+                p_s.append((person, forecast[0], forecast[1]))
 
             c_s = []
             c_name_to_index = {}

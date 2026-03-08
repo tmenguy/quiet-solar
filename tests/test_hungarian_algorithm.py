@@ -787,6 +787,202 @@ class TestTwoPassAllocation:
         assert e_opt == pytest.approx(1.0)
 
 
+class _FakeCar:
+    """Minimal car stub for pre-allocation tests."""
+
+    def __init__(self, name, is_home, has_charger, is_invited=False,
+                 coverage_map=None):
+        """coverage_map: dict of mileage -> (is_covered, current_soc, needed_soc, diff_energy)."""
+        self.name = name
+        self._is_home = is_home
+        self.charger = object() if has_charger else None
+        self.car_is_invited = is_invited
+        self._coverage = coverage_map or {}
+
+    def is_car_home(self, time):
+        return self._is_home
+
+    def get_adapt_target_percent_soc_to_reach_range_km(self, mileage, time):
+        return self._coverage.get(mileage, (None, None, None, None))
+
+
+class _FakePerson:
+    """Minimal person stub for pre-allocation tests."""
+
+    def __init__(self, name, preferred_car, authorized_car_names):
+        self.name = name
+        self.preferred_car = preferred_car
+        self._authorized_car_names = authorized_car_names
+        self._authorized_cars = []
+
+    def set_car_objects(self, cars_by_name):
+        self._authorized_cars = [
+            cars_by_name[n] for n in self._authorized_car_names if n in cars_by_name
+        ]
+
+    def get_authorized_cars(self):
+        return self._authorized_cars
+
+
+class _FakeHome:
+    """Minimal home stub that only has _pre_allocate_unplugged_home_cars."""
+
+    def __init__(self, cars, persons):
+        self._cars = cars
+        self._persons = persons
+        self._last_persons_car_allocation = {}
+
+    _pre_allocate_unplugged_home_cars = (
+        __import__(
+            "custom_components.quiet_solar.ha_model.home", fromlist=["QSHome"]
+        ).QSHome._pre_allocate_unplugged_home_cars
+    )
+
+
+def _make_home(cars, persons):
+    cars_by_name = {c.name: c for c in cars}
+    for p in persons:
+        p.set_car_objects(cars_by_name)
+    return _FakeHome(cars, persons)
+
+
+class TestPreAllocateUnpluggedHomeCars:
+    """Test the preferred-car-priority pre-allocation of unplugged home cars."""
+
+    def test_preferred_person_gets_priority(self):
+        """When two persons' trips are covered, the one who prefers this car wins."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=True, has_charger=False, coverage_map={
+            50.0: (True, 80.0, 60.0, 5.0),
+            30.0: (True, 80.0, 40.0, 2.0),
+        })
+        person_pref = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
+        person_other = _FakePerson("Bob", preferred_car="CarB", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person_pref, person_other])
+        forecasts = {"Alice": (now, 50.0), "Bob": (now, 30.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert home._last_persons_car_allocation["CarA"].name == "Alice"
+        assert "CarA" in covered_cars
+        assert "Alice" in covered_persons
+
+    def test_fallback_to_closest_margin_when_no_preferred(self):
+        """No person prefers this car -- pick the one with the smallest margin."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=True, has_charger=False, coverage_map={
+            80.0: (True, 90.0, 70.0, 10.0),
+            40.0: (True, 90.0, 50.0, 3.0),
+        })
+        person_far = _FakePerson("Alice", preferred_car="CarX", authorized_car_names=["CarA"])
+        person_close = _FakePerson("Bob", preferred_car="CarY", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person_far, person_close])
+        forecasts = {"Alice": (now, 80.0), "Bob": (now, 40.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert home._last_persons_car_allocation["CarA"].name == "Bob"
+
+    def test_plugged_car_skipped(self):
+        """A car connected to a charger should not be pre-allocated."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=True, has_charger=True, coverage_map={
+            50.0: (True, 80.0, 60.0, 5.0),
+        })
+        person = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person])
+        forecasts = {"Alice": (now, 50.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert len(home._last_persons_car_allocation) == 0
+
+    def test_car_not_home_skipped(self):
+        """A car that is not home should not be pre-allocated."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=False, has_charger=False, coverage_map={
+            50.0: (True, 80.0, 60.0, 5.0),
+        })
+        person = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person])
+        forecasts = {"Alice": (now, 50.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert len(home._last_persons_car_allocation) == 0
+
+    def test_trip_not_covered_skipped(self):
+        """If the car's current charge doesn't cover the trip, no pre-allocation."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=True, has_charger=False, coverage_map={
+            200.0: (False, 30.0, 80.0, 25.0),
+        })
+        person = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person])
+        forecasts = {"Alice": (now, 200.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert len(home._last_persons_car_allocation) == 0
+
+    def test_preferred_wins_over_closer_margin(self):
+        """Preferred person wins even if another person has a smaller margin.
+
+        Alice prefers CarA, margin 8.0 kWh.
+        Bob does not prefer CarA, margin 1.0 kWh.
+        Alice should be assigned because preferred car takes priority.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("CarA", is_home=True, has_charger=False, coverage_map={
+            100.0: (True, 90.0, 70.0, 8.0),
+            20.0: (True, 90.0, 30.0, 1.0),
+        })
+        person_pref = _FakePerson("Alice", preferred_car="CarA", authorized_car_names=["CarA"])
+        person_close = _FakePerson("Bob", preferred_car="CarZ", authorized_car_names=["CarA"])
+
+        home = _make_home([car], [person_pref, person_close])
+        forecasts = {"Alice": (now, 100.0), "Bob": (now, 20.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert home._last_persons_car_allocation["CarA"].name == "Alice"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
