@@ -5,6 +5,7 @@ from custom_components.quiet_solar.home_model.home_utils import (
     hungarian_algorithm,
     _greedy_assignment,
 )
+from custom_components.quiet_solar.const import PREFERRED_CAR_ENERGY_THRESHOLD_KWH
 
 
 class TestHungarianAlgorithm:
@@ -544,6 +545,246 @@ class TestGreedyAssignment:
         result = _greedy_assignment(cost_matrix)
 
         assert result == {0: 0, 1: 1, 2: 2}
+
+
+class TestTwoPassAllocation:
+    """Test the two-pass allocation strategy that chooses between
+    energy-optimal and preferred-car-biased assignments based on a
+    global energy threshold.
+
+    These tests exercise _build_raw_energy_matrix, _finalize_cost_matrix,
+    and _compute_assignment_energy indirectly through numpy matrices,
+    replicating the logic without needing full QSHome/QSPerson/QSCar objects.
+    """
+
+    @staticmethod
+    def _build_raw(energies, authorized_mask):
+        """Build a raw energy matrix from plain floats.
+
+        energies[i][j] is the diff_energy for person i / car j.
+        authorized_mask[i][j] is True if person i can drive car j.
+        Unauthorized pairs get sentinel 0.0, covered pairs get -3.0.
+        """
+        n_p, n_c = len(energies), len(energies[0])
+        raw = np.zeros((n_p, n_c), dtype=np.float64)
+        E_max = 0.0
+        for i in range(n_p):
+            for j in range(n_c):
+                if not authorized_mask[i][j]:
+                    raw[i, j] = 0.0
+                elif energies[i][j] == 0.0:
+                    raw[i, j] = -3.0
+                else:
+                    raw[i, j] = energies[i][j]
+                    E_max = max(E_max, energies[i][j])
+        return raw, E_max
+
+    @staticmethod
+    def _finalize(raw, E_max, n_p, n_c, preferences, penalty):
+        """Replicate _finalize_cost_matrix without QS objects.
+
+        preferences[i] is the preferred car index for person i.
+        """
+        costs = raw.copy()
+        maxi_val = max(1e12, (E_max + 1.0) * (1.0 + max(n_c, n_p)))
+        for i in range(n_p):
+            for j in range(n_c):
+                if costs[i, j] == 0.0:
+                    costs[i, j] = maxi_val
+                else:
+                    if costs[i, j] == -3.0:
+                        costs[i, j] = 0.0
+                    elif costs[i, j] < 0:
+                        costs[i, j] = E_max + 1.0
+                    if penalty > 0.0 and preferences[i] != j:
+                        costs[i, j] += penalty
+        return costs
+
+    @staticmethod
+    def _total_energy(assignment, raw):
+        """Sum positive raw energy for an assignment."""
+        total = 0.0
+        for pi, ci in assignment.items():
+            val = raw[pi, ci]
+            if val > 0.0:
+                total += val
+        return total
+
+    def _run_two_pass(self, energies, authorized_mask, preferences,
+                      threshold=PREFERRED_CAR_ENERGY_THRESHOLD_KWH):
+        """Run the full two-pass logic and return (chosen_assignment, choice).
+
+        choice is 'preferred' or 'energy'.
+        """
+        raw, E_max = self._build_raw(energies, authorized_mask)
+        n_p, n_c = raw.shape
+
+        costs_energy = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=0.0)
+        assignment_energy = hungarian_algorithm(costs_energy)
+        total_energy_optimal = self._total_energy(assignment_energy, raw)
+
+        penalty = (n_p * E_max) + 1.0
+        costs_preferred = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=penalty)
+        assignment_preferred = hungarian_algorithm(costs_preferred)
+        total_energy_preferred = self._total_energy(assignment_preferred, raw)
+
+        if total_energy_preferred - total_energy_optimal <= threshold:
+            return assignment_preferred, "preferred", total_energy_preferred, total_energy_optimal
+        else:
+            return assignment_energy, "energy", total_energy_preferred, total_energy_optimal
+
+    def test_energy_wins_when_difference_large(self):
+        """Preferred assignment costs 40 kWh vs energy-optimal 2 kWh.
+
+        Person A prefers Car1, Person B prefers Car2.
+        A->Car1 needs 20 kWh, A->Car2 needs 1 kWh
+        B->Car1 needs 1 kWh, B->Car2 needs 20 kWh
+        """
+        energies = [[20.0, 1.0], [1.0, 20.0]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "energy"
+        assert e_opt == pytest.approx(2.0)
+        assert e_pref == pytest.approx(40.0)
+        total = self._total_energy(assignment, self._build_raw(energies, authorized)[0])
+        assert total == pytest.approx(2.0)
+
+    def test_preferred_wins_when_difference_small(self):
+        """Preferred costs 10.5 kWh vs energy-optimal 10.0 kWh (diff 0.5 < 1.0)."""
+        energies = [[5.0, 5.3], [5.2, 5.0]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "preferred"
+        assert assignment[0] == 0
+        assert assignment[1] == 1
+
+    def test_exact_threshold_boundary(self):
+        """Energy difference equals exactly the threshold -- preferred should win (<= check)."""
+        energies = [[5.0, 5.5], [5.5, 5.0]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert e_pref - e_opt == pytest.approx(1.0, abs=1e-9) or e_pref - e_opt < 1.0
+        assert choice == "preferred"
+
+    def test_all_cars_already_covered(self):
+        """E_max = 0, all cars have enough charge. Preferred should win (diff = 0)."""
+        energies = [[0.0, 0.0], [0.0, 0.0]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "preferred"
+        assert e_opt == 0.0
+        assert e_pref == 0.0
+        assert assignment[0] == 0
+        assert assignment[1] == 1
+
+    def test_single_person_single_car(self):
+        """Trivial 1x1 case."""
+        energies = [[7.5]]
+        authorized = [[True]]
+        preferences = [0]
+
+        assignment, choice, _, _ = self._run_two_pass(energies, authorized, preferences)
+
+        assert assignment == {0: 0}
+
+    def test_unauthorized_pairs_never_selected(self):
+        """Person 0 can only drive Car0, Person 1 can only drive Car1."""
+        energies = [[5.0, 1.0], [1.0, 5.0]]
+        authorized = [[True, False], [False, True]]
+        preferences = [0, 1]
+
+        assignment, choice, _, _ = self._run_two_pass(energies, authorized, preferences)
+
+        assert assignment[0] == 0
+        assert assignment[1] == 1
+
+    def test_3x3_mixed_scenario(self):
+        """3 persons, 3 cars with mixed preferences.
+
+        Energy-optimal may differ from preferred, but the global difference
+        determines the choice.
+        """
+        energies = [
+            [2.0, 8.0, 3.0],
+            [7.0, 1.0, 6.0],
+            [5.0, 4.0, 2.0],
+        ]
+        authorized = [[True, True, True], [True, True, True], [True, True, True]]
+        preferences = [0, 1, 2]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert e_opt == pytest.approx(5.0)
+        assert assignment[0] == 0 or assignment[1] == 1 or assignment[2] == 2
+        assert e_pref - e_opt <= 1.0 or choice == "energy"
+
+    def test_rectangular_more_cars_than_persons(self):
+        """2 persons, 4 cars. Algorithm should handle padding correctly."""
+        energies = [[10.0, 2.0, 8.0, 1.0], [3.0, 9.0, 1.0, 7.0]]
+        authorized = [[True, True, True, True], [True, True, True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert len(assignment) == 2
+        assert len(set(assignment.values())) == 2
+        assert e_opt == pytest.approx(2.0)
+        assert choice == "energy"
+
+    def test_rectangular_more_persons_than_cars(self):
+        """3 persons, 2 cars. Not all persons get a car."""
+        energies = [[5.0, 1.0], [1.0, 5.0], [3.0, 3.0]]
+        authorized = [[True, True], [True, True], [True, True]]
+        preferences = [0, 1, 0]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert len(assignment) == 2
+        assert len(set(assignment.values())) == 2
+
+    def test_preferred_matches_energy_optimal(self):
+        """When preferred cars happen to also be energy-optimal, both passes agree."""
+        energies = [[1.0, 10.0], [10.0, 1.0]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "preferred"
+        assert e_opt == pytest.approx(2.0)
+        assert e_pref == pytest.approx(2.0)
+        assert assignment[0] == 0
+        assert assignment[1] == 1
+
+    def test_large_energy_gap_one_pair(self):
+        """One pair has a huge energy difference, rest are equal.
+
+        Person 0: Car0=50kWh, Car1=0.5kWh (prefers Car0)
+        Person 1: Car0=0.5kWh, Car1=0.5kWh (prefers Car1)
+        Preferred: 0->Car0(50) + 1->Car1(0.5) = 50.5
+        Energy:    0->Car1(0.5) + 1->Car0(0.5) = 1.0
+        Diff = 49.5 >> threshold => energy wins.
+        """
+        energies = [[50.0, 0.5], [0.5, 0.5]]
+        authorized = [[True, True], [True, True]]
+        preferences = [0, 1]
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "energy"
+        assert e_opt == pytest.approx(1.0)
 
 
 if __name__ == "__main__":

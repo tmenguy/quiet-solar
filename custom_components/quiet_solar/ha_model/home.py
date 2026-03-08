@@ -28,7 +28,7 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
     MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    PERSON_NOTIFY_REASON_CHANGED_CAR, \
+    PERSON_NOTIFY_REASON_CHANGED_CAR, PREFERRED_CAR_ENERGY_THRESHOLD_KWH, \
     CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, \
     SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID
 from ..ha_model.battery import QSBattery
@@ -2064,6 +2064,97 @@ class QSHome(QSDynamicGroup):
                                               leave_time=persons_mileage[person][1])
 
 
+    @staticmethod
+    def _build_raw_energy_matrix(
+        p_s: list[tuple],
+        c_s: list,
+        c_name_to_index: dict[str, int],
+        time: datetime,
+    ) -> tuple[np.ndarray, float]:
+        """Build a raw energy matrix with sentinel values and track E_max.
+
+        Sentinel values in the returned matrix:
+          0.0  = unauthorized pair (person cannot drive car)
+         -1.0  = no departure forecast
+         -2.0  = car data error
+         -3.0  = already covered (no charging needed)
+         >0    = diff_energy in kWh
+        """
+        costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
+        E_max = 0.0
+
+        for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
+            for p_car in person.get_authorized_cars():
+                car_index = c_name_to_index.get(p_car.name, None)
+                if car_index is None:
+                    continue
+
+                if p_leave_time is None:
+                    score = -1.0
+                else:
+                    is_covered, current_soc, needed_soc, diff_energy = (
+                        p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                    )
+                    if is_covered is None:
+                        score = -2.0
+                    elif is_covered is True:
+                        score = -3.0
+                    else:
+                        E_max = max(E_max, diff_energy)
+                        score = diff_energy
+
+                costs[person_index, car_index] = score
+
+        return costs, E_max
+
+    @staticmethod
+    def _finalize_cost_matrix(
+        raw_energy: np.ndarray,
+        E_max: float,
+        p_s: list[tuple],
+        c_s: list,
+        preferred_car_penalty: float,
+    ) -> np.ndarray:
+        """Convert raw sentinel-based energy matrix into a cost matrix for the Hungarian algorithm."""
+        costs = raw_energy.copy()
+        maxi_val = max(1e12, (E_max + 1.0) * (1.0 + max(len(c_s), len(p_s))))
+
+        for person_index in range(len(p_s)):
+            for car_index in range(len(c_s)):
+                if costs[person_index, car_index] == 0.0:
+                    costs[person_index, car_index] = maxi_val
+                else:
+                    if costs[person_index, car_index] == -1.0:
+                        costs[person_index, car_index] = E_max + 1.0
+                    elif costs[person_index, car_index] == -2.0:
+                        costs[person_index, car_index] = E_max + 1.0
+                    elif costs[person_index, car_index] == -3.0:
+                        costs[person_index, car_index] = 0.0
+
+                    if preferred_car_penalty > 0.0:
+                        person = p_s[person_index][0]
+                        if person.preferred_car != c_s[car_index].name:
+                            costs[person_index, car_index] += preferred_car_penalty
+
+        return costs
+
+    @staticmethod
+    def _compute_assignment_energy(
+        assignment: dict[int, int],
+        raw_energy: np.ndarray,
+    ) -> float:
+        """Compute total real charging energy for an assignment using raw energy values.
+
+        Only counts positive diff_energy values (actual charging needed).
+        Sentinels (-1, -2, -3) and unauthorized (0) are treated as zero energy.
+        """
+        total = 0.0
+        for person_index, car_index in assignment.items():
+            val = raw_energy[person_index, car_index]
+            if val > 0.0:
+                total += val
+        return total
+
     async def get_best_persons_cars_allocations(self, time:datetime | None=None, force_update=False, do_notify=True) -> dict[str,QSPerson]:
 
         if time is None:
@@ -2120,60 +2211,35 @@ class QSHome(QSDynamicGroup):
                 c_s.append(car)
 
             if len(p_s) == 0 or len(c_s) == 0:
-                # nothing to do
-                 _LOGGER.info("get_best_persons_cars_allocations: No persons or cars to allocate")
+                _LOGGER.info("get_best_persons_cars_allocations: No persons or cars to allocate")
             else:
-                costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
+                raw_energy, E_max = self._build_raw_energy_matrix(p_s, c_s, c_name_to_index, time)
 
-                E_max = 0.0
+                costs_energy = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=0.0)
+                assignment_energy = hungarian_algorithm(costs_energy)
+                total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 
-                for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
+                penalty = (len(p_s) * E_max) + 1.0
+                costs_preferred = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=penalty)
+                assignment_preferred = hungarian_algorithm(costs_preferred)
+                total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)
 
-                    p_cars = person.get_authorized_cars()
-
-                    for p_car in p_cars:
-
-                        car_index = c_name_to_index.get(p_car.name, None)
-
-                        if car_index is None:
-                            continue
-
-                        if p_leave_time is None:
-                            score = -1.0
-                        else:
-                            is_covered, current_soc, needed_soc, diff_energy = p_car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
-
-                            if is_covered is None:
-                                score = -2.0
-                            elif is_covered is True:
-                                score = -3.0
-                            else:
-                                E_max = max(E_max, diff_energy)
-                                score = diff_energy
-
-                        costs[person_index, car_index] = score
-
-                penalty_not_preferred_car = (len(p_s) * E_max) + 1.0
-                maxi_val = max(1e12, (E_max + 1.0)*(1.0 + max(len(c_s), len(p_s))))
-
-                for person_index in range(len(p_s)):
-                    for car_index in range(len(c_s)):
-                        if costs[person_index, car_index] == 0.0:
-                            costs[person_index, car_index] = maxi_val
-                        else:
-                            if costs[person_index, car_index] == -1.0:
-                                costs[person_index, car_index] = E_max + 1.0
-                            elif costs[person_index, car_index] == -2.0:
-                                costs[person_index, car_index] = E_max + 1.0
-                            elif costs[person_index, car_index] == -3.0:
-                                costs[person_index, car_index] = 0.0
-
-                            person, p_leave_time, p_mileage = p_s[person_index]
-                            if person.preferred_car != c_s[car_index].name:
-                                costs[person_index, car_index] += penalty_not_preferred_car
-
-
-                assignment = hungarian_algorithm(costs)
+                if total_energy_preferred - total_energy_optimal <= PREFERRED_CAR_ENERGY_THRESHOLD_KWH:
+                    assignment = assignment_preferred
+                    _LOGGER.debug(
+                        "get_best_persons_cars_allocations: using preferred-car assignment "
+                        "(energy diff %.2f kWh <= threshold %.2f kWh)",
+                        total_energy_preferred - total_energy_optimal,
+                        PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+                    )
+                else:
+                    assignment = assignment_energy
+                    _LOGGER.debug(
+                        "get_best_persons_cars_allocations: using energy-optimal assignment "
+                        "(energy diff %.2f kWh > threshold %.2f kWh)",
+                        total_energy_preferred - total_energy_optimal,
+                        PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+                    )
 
                 result_energy = {}
                 for person_index, car_index in assignment.items():
