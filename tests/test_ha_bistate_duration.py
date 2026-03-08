@@ -22,7 +22,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.quiet_solar.ha_model.bistate_duration import (
     QSBiStateDuration,
     bistate_modes,
-    MAX_USER_OVERRIDE_DURATION_S,
+    DEFAULT_USER_OVERRIDE_DURATION_S,
     USER_OVERRIDE_STATE_BACK_DURATION_S,
 )
 from custom_components.quiet_solar.home_model.commands import (
@@ -130,7 +130,7 @@ class TestQSBiStateDurationInit:
         assert device.bistate_mode == "bistate_mode_auto"
         assert device.default_on_duration == 1.0
         assert device.default_on_finish_time == dt_time(hour=0, minute=0, second=0)
-        assert device.override_duration == MAX_USER_OVERRIDE_DURATION_S // 3600
+        assert device.override_duration == DEFAULT_USER_OVERRIDE_DURATION_S // 3600
         assert device._state_on == "on"
         assert device._state_off == "off"
         assert device._bistate_mode_on == "bistate_mode_on"

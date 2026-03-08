@@ -21,7 +21,7 @@ bistate_modes = [
 "bistate_mode_default",
 ]
 
-MAX_USER_OVERRIDE_DURATION_S = 8*3600
+DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
 USER_OVERRIDE_STATE_BACK_DURATION_S = 60
 
 ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push"], defaults=(None, None, 0.0, False, False))
@@ -36,7 +36,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.default_on_duration: float | None = 1.0
         self.default_on_finish_time: dt_time | None = dt_time(hour=0, minute=0, second=0)
 
-        self.override_duration: float | None  = MAX_USER_OVERRIDE_DURATION_S // 3600
+        self.override_duration: float | None  = DEFAULT_USER_OVERRIDE_DURATION_S // 3600
 
         # to be overcharged by the child class
         self._state_on = "on"
@@ -325,7 +325,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 load_param=self.external_user_initiated_state,
                                 load_info={"originator":"user_override"},
                                 from_user=True,
-                                start_time=time,
+                                start_of_constraint=time,
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,
                                 initial_value=0,

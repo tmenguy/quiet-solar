@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
 )
 
 from awesomeversion import AwesomeVersion
-from homeassistant.const import __version__ as HAVERSION, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import __version__ as HAVERSION
 
 from homeassistant.const import CONF_NAME, ATTR_UNIT_OF_MEASUREMENT, UnitOfPower, UnitOfElectricCurrent, \
     UnitOfTemperature, UnitOfEnergy, UnitOfElectricPotential, PERCENTAGE, UnitOfTime, UnitOfLength

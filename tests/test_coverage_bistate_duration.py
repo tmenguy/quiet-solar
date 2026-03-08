@@ -20,7 +20,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.quiet_solar.ha_model.bistate_duration import (
     QSBiStateDuration,
     bistate_modes,
-    MAX_USER_OVERRIDE_DURATION_S,
+    DEFAULT_USER_OVERRIDE_DURATION_S,
     USER_OVERRIDE_STATE_BACK_DURATION_S,
 )
 from custom_components.quiet_solar.home_model.commands import (
