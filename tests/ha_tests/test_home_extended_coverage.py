@@ -968,7 +968,7 @@ class TestCheckLoadsCommands:
 
         load = MagicMock()
         load.name = "stale_load"
-        load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
+        load.check_commands = AsyncMock(return_value=(timedelta(seconds=110), False))
         load.running_command_num_relaunch = 1
         load.force_relaunch_command = AsyncMock()
         home._all_loads = [load]
