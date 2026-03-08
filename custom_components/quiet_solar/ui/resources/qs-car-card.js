@@ -253,15 +253,22 @@ class QsCarCard extends HTMLElement {
       .disabled .ring .mini-range-target { color: var(--secondary-text-color); }
       .ring .mini-range:empty, .ring .mini-range-now:empty, .ring .mini-range-target:empty { display:none; }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
-      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; }
+      /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
+         browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
+         elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
+      .ring svg { touch-action: none; }
+      /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
+         browsers impose for double-tap detection, making button taps register immediately.
+         Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
+      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .sun-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
       .ring .sun-btn.on { border-color: rgba(255,202,40,.45); background: rgba(255,202,40,.14); box-shadow: 0 0 0 3px rgba(255,202,40,.20), 0 0 16px #FFCA28; }
       .ring .sun-btn.on ha-icon { color: #FFCA28; }
-      .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; }
+      .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .rabbit-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
       .ring .rabbit-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .rabbit-btn.on ha-icon { color: #2196F3; }
-      .ring .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; }
+      .ring .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .time-btn:hover { border-color: var(--primary-color); background: rgba(255,255,255,.08); }
       .ring .time-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .time-btn.on { color: #2196F3; }
@@ -446,7 +453,7 @@ class QsCarCard extends HTMLElement {
 
         <div class="hero">
           <div class="ring" title="${soc}%">
-            <svg viewBox="0 0 320 320" width="300" height="300" aria-hidden="true">
+            <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="#00bcd4"/>
@@ -659,6 +666,12 @@ class QsCarCard extends HTMLElement {
           minSel?.addEventListener('change', update);
       }
 
+      // Mobile touch fix: every button below uses a dual click + touchend pattern.
+      // On mobile, the browser synthesizes "click" from touchstart/touchend with up to a
+      // 300ms delay. If a hass re-render (innerHTML replacement) occurs in that window, the
+      // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
+      // touchend handler fires immediately, calls preventDefault() to suppress the delayed
+      // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
       if (swPriority) {
           const togglePriority = async () => {
               const btn = ids('sun_btn');
@@ -679,6 +692,7 @@ class QsCarCard extends HTMLElement {
           if (sbtn) {
               sbtn.style.pointerEvents = 'auto';
               sbtn.addEventListener('click', togglePriority);
+              sbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePriority(); });
           }
       }
 
@@ -687,16 +701,13 @@ class QsCarCard extends HTMLElement {
           const rbtn = ids('rabbit_btn');
           if (rbtn) {
               rbtn.style.pointerEvents = 'auto';
-              rbtn.addEventListener('click', async (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
+              const rbtnAction = async () => {
                   if (this._root?.querySelector('.disabled')) return;
 
                   // Check if already in "As Fast As Possible" mode
                   const isAlreadyForcing = sChargeType?.state === 'As Fast As Possible';
 
                   if (isAlreadyForcing && e.clean_constraints) {
-                      // Show reset dialog
                       showDialog({
                           title: 'Stop Force Charging',
                           message: 'This will stop the current charge.\nOk to proceed?',
@@ -710,7 +721,6 @@ class QsCarCard extends HTMLElement {
                           ]
                       });
                   } else {
-                      // Show force charge dialog
                       showDialog({
                           title: 'Force charge now',
                           message: 'Start full-speed charge immediately?\nThis will use maximum available power.',
@@ -724,7 +734,9 @@ class QsCarCard extends HTMLElement {
                           ]
                       });
                   }
-              });
+              };
+              rbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); rbtnAction(); });
+              rbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); rbtnAction(); });
           }
       }
 
@@ -733,18 +745,14 @@ class QsCarCard extends HTMLElement {
           const tbtn = ids('time_btn');
           if (tbtn) {
               tbtn.style.pointerEvents = 'auto';
-              tbtn.addEventListener('click', async (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
+              const tbtnAction = async () => {
                   if (this._root?.querySelector('.disabled')) return;
 
-                  // Use chargeTime if it's valid (not "--:--"), otherwise fall back to nextTimeMins
                   let defaultHour, defaultMin;
                   if (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':')) {
                       const chargeMins = parseTimeToMinutes(chargeTime);
                       defaultHour = Math.floor(chargeMins / 60);
                       defaultMin = chargeMins % 60;
-                      // Round up to the next 5-minute multiple
                       defaultMin = Math.ceil(defaultMin / 5) * 5;
                       if (defaultMin === 60) {
                           defaultMin = 0;
@@ -753,7 +761,6 @@ class QsCarCard extends HTMLElement {
                   } else {
                       defaultHour = Math.floor(nextTimeMins / 60);
                       defaultMin = nextTimeMins % 60;
-                      // Round up to the next 5-minute multiple
                       defaultMin = Math.ceil(defaultMin / 5) * 5;
                       if (defaultMin === 60) {
                           defaultMin = 0;
@@ -805,7 +812,9 @@ class QsCarCard extends HTMLElement {
                           },
                       ]
                   });
-              });
+              };
+              tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); tbtnAction(); });
+              tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); tbtnAction(); });
           }
       }
       const showDialog = (opts) => {
@@ -841,9 +850,8 @@ class QsCarCard extends HTMLElement {
       };
 
       if (e.force_now) {
-          ids('force')?.addEventListener('click', async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
+          const forceBtn = ids('force');
+          const forceAction = async () => {
               if (this._root?.querySelector('.disabled')) return;
               showDialog({
                   title: 'Force charge now',
@@ -857,13 +865,14 @@ class QsCarCard extends HTMLElement {
                       },
                   ]
               });
-          });
+          };
+          forceBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); forceAction(); });
+          forceBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); forceAction(); });
       }
 
       if (e.schedule) {
-          ids('schedule_inline')?.addEventListener('click', async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
+          const schedBtn = ids('schedule_inline');
+          const schedAction = async () => {
               if (this._root?.querySelector('.disabled')) return;
               const limit = selLimit?.state || '';
               const time = tNext?.state || '';
@@ -879,13 +888,14 @@ class QsCarCard extends HTMLElement {
                       },
                   ]
               });
-          });
+          };
+          schedBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); schedAction(); });
+          schedBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); schedAction(); });
       }
 
       if (e.reset) {
-          ids('reset')?.addEventListener('click', async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
+          const resetBtn = ids('reset');
+          const resetAction = async () => {
               showDialog({
                   title: 'Reset car state',
                   message: 'This will reset internal state for this car and cannot be undone.\nProceed?',
@@ -898,7 +908,9 @@ class QsCarCard extends HTMLElement {
                       },
                   ]
               });
-          });
+          };
+          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
+          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
       }
 
       // Quick percent chips
@@ -973,7 +985,7 @@ class QsCarCard extends HTMLElement {
               const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
               const dx = cursor.x - center.cx;
               const dy = cursor.y - center.cy;
-              // Convert to [0,360)
+              // Convert to [0,360]
               // -dy because svg y are downward
               let ang = rad2deg(Math.atan2(-dy, dx));
               // Map to arc domain [startDeg, endDeg] allowing values > 360

@@ -166,11 +166,18 @@ class QsOnOffDurationCard extends HTMLElement {
 
       .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; gap: 12px; }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
-      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; }
+      /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
+         browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
+         elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
+      .ring svg { touch-action: none; }
+      /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
+         browsers impose for double-tap detection, making button taps register immediately.
+         Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
+      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .green-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .green-btn.on { border-color: rgba(56,142,60,.45); background: rgba(46,204,113,.14); box-shadow: 0 0 0 3px rgba(46,204,113,.20), 0 0 16px #4CAF50; }
       .ring .green-btn.on ha-icon { color: #4CAF50; }
-      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; }
+      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .power-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .power-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .power-btn.on ha-icon { color: #2196F3; }
@@ -186,14 +193,14 @@ class QsOnOffDurationCard extends HTMLElement {
       .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
       .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
-      .ring .override-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); }
+      .ring .override-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .override-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .override-btn.disabled { cursor: not-allowed; opacity: 0.6; }
       .ring .override-btn.active { border-color: rgba(255,152,0,.45); background: rgba(255,152,0,.14); box-shadow: 0 0 0 3px rgba(255,152,0,.20), 0 0 16px #FF9800; }
       .ring .override-btn.active ha-icon { color: #FF9800; }
       .ring .override-btn.resetting { border-color: rgba(76,175,80,.45); background: rgba(76,175,80,.14); }
       .ring .override-btn.resetting ha-icon { color: #4CAF50; }
-      .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; line-height: 1; margin-top: 6px; }
+      .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; line-height: 1; margin-top: 6px; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .time-btn:hover { border-color: ${colors.primary}; background: rgba(255,255,255,.08); }
       .time-btn { color: ${colors.primary}; }
       .time-btn.on { border-color: ${colors.primary}; background: color-mix(in srgb, ${colors.primary} 14%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, ${colors.primary} 20%, transparent), 0 0 16px ${colors.primary}; color: ${colors.primary}; }
@@ -377,7 +384,7 @@ class QsOnOffDurationCard extends HTMLElement {
         <div class="hero">
           <div class="ring">
             ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
-            <svg viewBox="0 0 320 320" width="300" height="300" aria-hidden="true">
+            <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="${colors.gradStart}"/>
@@ -544,6 +551,13 @@ class QsOnOffDurationCard extends HTMLElement {
           }
       }
 
+      // Mobile touch fix: every button below uses a dual click + touchend pattern.
+      // On mobile, the browser synthesizes "click" from touchstart/touchend with up to a
+      // 300ms delay. If a hass re-render (innerHTML replacement) occurs in that window, the
+      // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
+      // touchend handler fires immediately, calls preventDefault() to suppress the delayed
+      // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
+
       // Green-only toggle button
       if (swGreenOnly) {
           const toggleGreen = async () => {
@@ -564,6 +578,7 @@ class QsOnOffDurationCard extends HTMLElement {
           if (gbtn) {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
+              gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
           }
       }
 
@@ -587,6 +602,7 @@ class QsOnOffDurationCard extends HTMLElement {
           if (pbtn) {
               pbtn.style.pointerEvents = 'auto';
               pbtn.addEventListener('click', togglePower);
+              pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
           }
       }
 
@@ -595,9 +611,7 @@ class QsOnOffDurationCard extends HTMLElement {
           const obtn = ids('override_btn');
           if (obtn) {
               obtn.style.pointerEvents = 'auto';
-              obtn.addEventListener('click', async (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
+              const obtnAction = async () => {
                   showDialog({
                       title: 'Reset override',
                       message: 'This will reset the manual override and return to automatic mode.\nProceed?',
@@ -610,16 +624,15 @@ class QsOnOffDurationCard extends HTMLElement {
                           },
                       ]
                   });
-              });
+              };
+              obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
+              obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
           }
       }
 
       // Time button for finish time (default mode only)
       if (isDefaultMode && sDefaultOnFinishTime) {
-          const timeHandler = async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
-
+          const timeAction = async () => {
               const defaultHour = Math.floor(finishTimeMins / 60);
               const defaultMin = finishTimeMins % 60;
 
@@ -664,15 +677,15 @@ class QsOnOffDurationCard extends HTMLElement {
           const tbtn = ids('time_btn');
           if (tbtn) {
               tbtn.style.pointerEvents = 'auto';
-              tbtn.addEventListener('click', timeHandler);
+              tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
+              tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
           }
       }
 
       // Reset button
       if (e.reset) {
-          ids('reset')?.addEventListener('click', async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
+          const resetBtn = ids('reset');
+          const resetAction = async () => {
               showDialog({
                   title: 'Reset device state',
                   message: 'This will reset internal state for the device and cannot be undone.\nProceed?',
@@ -685,7 +698,9 @@ class QsOnOffDurationCard extends HTMLElement {
                       },
                   ]
               });
-          });
+          };
+          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
+          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
       }
 
       // Drag target handle on ring (only in default mode)

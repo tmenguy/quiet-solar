@@ -124,11 +124,18 @@ class QsPoolCard extends HTMLElement {
 
       .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; }
       .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
-      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; }
+      /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
+         browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
+         elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
+      .ring svg { touch-action: none; }
+      /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
+         browsers impose for double-tap detection, making button taps register immediately.
+         Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
+      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .green-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .green-btn.on { border-color: rgba(56,142,60,.45); background: rgba(46,204,113,.14); box-shadow: 0 0 0 3px rgba(46,204,113,.20), 0 0 16px #4CAF50; }
       .ring .green-btn.on ha-icon { color: #4CAF50; }
-      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; }
+      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .power-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .power-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .power-btn.on ha-icon { color: #2196F3; }
@@ -262,7 +269,7 @@ class QsPoolCard extends HTMLElement {
         <div class="hero">
           <div class="ring">
             ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
-            <svg viewBox="0 0 320 320" width="300" height="300" aria-hidden="true">
+            <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="#00bcd4"/>
@@ -377,6 +384,13 @@ class QsPoolCard extends HTMLElement {
           }
       }
 
+      // Mobile touch fix: every button below uses a dual click + touchend pattern.
+      // On mobile, the browser synthesizes "click" from touchstart/touchend with up to a
+      // 300ms delay. If a hass re-render (innerHTML replacement) occurs in that window, the
+      // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
+      // touchend handler fires immediately, calls preventDefault() to suppress the delayed
+      // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
+
       // Green-only toggle button
       if (swGreenOnly) {
           const toggleGreen = async () => {
@@ -397,6 +411,7 @@ class QsPoolCard extends HTMLElement {
           if (gbtn) {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
+              gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
           }
       }
 
@@ -420,14 +435,14 @@ class QsPoolCard extends HTMLElement {
           if (pbtn) {
               pbtn.style.pointerEvents = 'auto';
               pbtn.addEventListener('click', togglePower);
+              pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
           }
       }
 
       // Reset button
       if (e.reset) {
-          ids('reset')?.addEventListener('click', async (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
+          const resetBtn = ids('reset');
+          const resetAction = async () => {
               showDialog({
                   title: 'Reset pool state',
                   message: 'This will reset internal state for the pool and cannot be undone.\nProceed?',
@@ -440,7 +455,9 @@ class QsPoolCard extends HTMLElement {
                       },
                   ]
               });
-          });
+          };
+          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
+          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
       }
 
       const showDialog = (opts) => {
