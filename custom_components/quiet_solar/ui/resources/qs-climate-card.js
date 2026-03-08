@@ -488,7 +488,7 @@ class QsClimateCard extends HTMLElement {
               <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${colors.primary}" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${this._fmt(pctToHours(handlePct))}</text>
               ` : ''}
             </svg>
-            <div class="center">
+            <div class="center" style="${e.override_reset ? 'padding-bottom: 65px;' : ''}">
               <div class="stack">
                 <div class="target-block">
                   <div class="target-label">Actual / Target Hours</div>
