@@ -81,19 +81,6 @@ def solar_mock(hass: HomeAssistant):
     return mock
 
 
-class _FilterProvider(QSSolarProvider):
-    """Provider with filterable orchestrators."""
-
-    def __init__(self, solar, domain: str) -> None:
-        super().__init__(solar=solar, domain=domain)
-
-    def is_orchestrator(self, entity_id, orchestrator) -> bool:
-        return getattr(orchestrator, "enabled", False)
-
-    async def get_power_series_from_orchestrator(self, orchestrator, start_time, end_time):
-        return []
-
-
 class _SeriesProvider(QSSolarProvider):
     """Provider that returns stored power series from orchestrators."""
 
@@ -522,14 +509,6 @@ class TestQSSolarProviderBase:
         # Result depends on get_value_from_time_series implementation
         assert result_time is not None or result_value is not None or (result_time is None and result_value is None)
 
-    def test_is_orchestrator_default(self, solar_mock):
-        """Test default is_orchestrator returns True."""
-        provider = QSSolarProvider(solar=solar_mock, domain="test")
-
-        result = provider.is_orchestrator("entity_id", MagicMock())
-
-        assert result is True
-
     @pytest.mark.asyncio
     async def test_update_fills_orchestrators(self, solar_mock):
         """Test update fills orchestrators and extracts forecast."""
@@ -551,27 +530,25 @@ class TestQSSolarProviderBaseExtended:
     """Test additional QSSolarProvider base behaviors."""
 
     @pytest.mark.asyncio
-    async def test_fill_orchestrators_filters_entries(
+    async def test_fill_orchestrators_collects_non_none_entries(
         self, hass: HomeAssistant, solar_mock
     ):
-        """Test fill_orchestrators filters by is_orchestrator."""
-        provider = _FilterProvider(solar=solar_mock, domain="test_domain")
+        """Test fill_orchestrators collects all non-None entries."""
+        provider = _SeriesProvider(solar=solar_mock, domain="test_domain")
 
-        # Mock domain entries with enabled/disabled items
-        valid_entry = MagicMock()
-        valid_entry.enabled = True
-        invalid_entry = MagicMock()
-        invalid_entry.enabled = False
+        entry_a = MagicMock()
+        entry_b = MagicMock()
         hass.data["test_domain"] = {
-            "valid": valid_entry,
-            "invalid": invalid_entry,
+            "a": entry_a,
+            "b": entry_b,
             "none": None,
         }
 
         await provider.fill_orchestrators()
 
-        assert len(provider.orchestrators) == 1
-        assert provider.orchestrators[0].enabled is True
+        assert len(provider.orchestrators) == 2
+        assert entry_a in provider.orchestrators
+        assert entry_b in provider.orchestrators
 
     @pytest.mark.asyncio
     async def test_extract_solar_forecast_aggregates_orchestrators(
@@ -686,10 +663,7 @@ class TestQSSolarProviderSolcast:
         """Test fill_orchestrators with valid config entry."""
         provider = QSSolarProviderSolcast(solar=solar_mock)
 
-        # Create a mock config entry with the expected structure
         mock_coordinator = MagicMock()
-        mock_coordinator.solcast._data_forecasts = []
-
         mock_entry = MagicMock()
         mock_entry.runtime_data.coordinator = mock_coordinator
 
@@ -707,13 +681,9 @@ class TestQSSolarProviderSolcast:
         """Test fill_orchestrators ignores entries without coordinators."""
         provider = QSSolarProviderSolcast(solar=solar_mock)
 
-        # Mock coordinator with nested structure
         good_coordinator = MagicMock()
-        good_coordinator.solcast._data_forecasts = []
-        # Mock good entry with runtime_data and coordinator
         good_entry = MagicMock()
         good_entry.runtime_data.coordinator = good_coordinator
-        # Mock bad entry with no runtime_data
         bad_entry = MagicMock()
         bad_entry.runtime_data = None
 
@@ -732,7 +702,7 @@ class TestQSSolarProviderSolcast:
 
         # Create mock orchestrator with forecast data
         mock_orchestrator = MagicMock()
-        mock_orchestrator.solcast._data_forecasts = [
+        mock_orchestrator.solcast.data_forecasts = [
             {'period_start': time, 'pv_estimate': 1.0},
             {'period_start': time + timedelta(hours=1), 'pv_estimate': 1.5},
             {'period_start': time + timedelta(hours=2), 'pv_estimate': 2.0},
@@ -762,7 +732,7 @@ class TestQSSolarProviderSolcast:
 
         # Mock orchestrator with solcast data
         orchestrator = MagicMock()
-        orchestrator.solcast._data_forecasts = data
+        orchestrator.solcast.data_forecasts = data
         result = await provider.get_power_series_from_orchestrator(orchestrator, start, end)
 
         assert result[0][0].astimezone(pytz.UTC).hour == 10
@@ -778,7 +748,7 @@ class TestQSSolarProviderSolcast:
         time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
 
         mock_orchestrator = MagicMock()
-        mock_orchestrator.solcast._data_forecasts = None
+        mock_orchestrator.solcast.data_forecasts = None
 
         result = await provider.get_power_series_from_orchestrator(
             mock_orchestrator, time, time + timedelta(hours=3)
@@ -796,29 +766,6 @@ class TestQSSolarProviderOpenWeather:
 
         assert provider.domain == OPEN_METEO_SOLAR_DOMAIN
         assert provider.solar == solar_mock
-
-    def test_is_orchestrator_valid(self, solar_mock):
-        """Test is_orchestrator with valid orchestrator."""
-        provider = QSSolarProviderOpenWeather(solar=solar_mock)
-
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.data.watts = {}
-
-        result = provider.is_orchestrator("entity_id", mock_orchestrator)
-
-        assert result is True
-
-    def test_is_orchestrator_invalid(self, solar_mock):
-        """Test is_orchestrator with invalid orchestrator."""
-        provider = QSSolarProviderOpenWeather(solar=solar_mock)
-
-        # Create orchestrator without data.watts
-        mock_orchestrator = MagicMock()
-        del mock_orchestrator.data.watts
-
-        result = provider.is_orchestrator("entity_id", mock_orchestrator)
-
-        assert result is False
 
     @pytest.mark.asyncio
     async def test_get_power_series_from_orchestrator(self, solar_mock):
@@ -879,6 +826,168 @@ class TestQSSolarProviderOpenWeather:
             mock_orchestrator, time, time + timedelta(hours=3)
         )
 
+        assert result == []
+
+
+class TestOrchestratorValidation:
+    """Test the validation pass in update() that prunes invalid orchestrators."""
+
+    @pytest.mark.asyncio
+    async def test_update_prunes_invalid_solcast_orchestrators(self, solar_mock):
+        """Test that update() removes orchestrators that raise on validation."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        good_orchestrator = MagicMock()
+        good_orchestrator.solcast.data_forecasts = []
+
+        bad_orchestrator = MagicMock()
+        del bad_orchestrator.solcast
+
+        provider.fill_orchestrators = AsyncMock()
+        provider.orchestrators = [good_orchestrator, bad_orchestrator]
+
+        async def fake_fill():
+            provider.orchestrators = [good_orchestrator, bad_orchestrator]
+
+        provider.fill_orchestrators = fake_fill
+
+        time = datetime.datetime.now(pytz.UTC)
+        await provider.update(time)
+
+        assert provider.orchestrators == [good_orchestrator]
+
+    @pytest.mark.asyncio
+    async def test_update_prunes_invalid_openweather_orchestrators(self, solar_mock):
+        """Test that update() removes orchestrators that raise on validation."""
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
+
+        good_orchestrator = MagicMock()
+        good_orchestrator.data.watts = {}
+
+        bad_orchestrator = MagicMock()
+        del bad_orchestrator.data.watts
+
+        async def fake_fill():
+            provider.orchestrators = [good_orchestrator, bad_orchestrator]
+
+        provider.fill_orchestrators = fake_fill
+
+        time = datetime.datetime.now(pytz.UTC)
+        await provider.update(time)
+
+        assert provider.orchestrators == [good_orchestrator]
+
+    @pytest.mark.asyncio
+    async def test_update_logs_error_when_all_orchestrators_invalid(
+        self, solar_mock, caplog
+    ):
+        """Test that update() logs error when no orchestrators survive validation."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        bad_orchestrator = MagicMock()
+        del bad_orchestrator.solcast
+
+        async def fake_fill():
+            provider.orchestrators = [bad_orchestrator]
+
+        provider.fill_orchestrators = fake_fill
+
+        time = datetime.datetime.now(pytz.UTC)
+        with caplog.at_level(logging.ERROR):
+            await provider.update(time)
+
+        assert "No solar orchestrator found" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_solcast_raises_when_no_solcast_attr(self, solar_mock):
+        """Test raises AttributeError when orchestrator has no .solcast."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        bad_orchestrator = MagicMock()
+        del bad_orchestrator.solcast
+
+        with pytest.raises(AttributeError):
+            await provider.get_power_series_from_orchestrator(bad_orchestrator, None, None)
+
+    @pytest.mark.asyncio
+    async def test_solcast_raises_when_neither_forecast_attr(self, solar_mock):
+        """Test raises when solcast API has neither data_forecasts nor _data_forecasts."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        bad_orchestrator = MagicMock()
+        bad_orchestrator.solcast = MagicMock(spec=[])
+
+        with pytest.raises(AttributeError, match="data_forecasts"):
+            await provider.get_power_series_from_orchestrator(bad_orchestrator, None, None)
+
+    @pytest.mark.asyncio
+    async def test_openweather_raises_on_bad_orchestrator(self, solar_mock):
+        """Test raises AttributeError when orchestrator has no .data.watts."""
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
+
+        bad_orchestrator = MagicMock()
+        del bad_orchestrator.data.watts
+
+        with pytest.raises(AttributeError):
+            await provider.get_power_series_from_orchestrator(bad_orchestrator, None, None)
+
+    @pytest.mark.asyncio
+    async def test_solcast_validation_probe_returns_empty(self, solar_mock):
+        """Test that validation probe (None, None) returns [] for valid orchestrator."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        good_orchestrator = MagicMock()
+        good_orchestrator.solcast.data_forecasts = []
+
+        result = await provider.get_power_series_from_orchestrator(good_orchestrator, None, None)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_solcast_old_api_backward_compat(self, solar_mock):
+        """Test backward compat: old _data_forecasts attribute is used as fallback."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+        tz = pytz.UTC
+
+        time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=tz)
+        old_api = MagicMock(spec=[])
+        old_api._data_forecasts = [
+            {"period_start": time, "pv_estimate": 1.0},
+            {"period_start": time + timedelta(hours=1), "pv_estimate": 2.0},
+        ]
+
+        orchestrator = MagicMock()
+        orchestrator.solcast = old_api
+
+        result = await provider.get_power_series_from_orchestrator(
+            orchestrator, time, time + timedelta(hours=2)
+        )
+        assert len(result) == 2
+        assert result[0] == (time, 1000.0)
+        assert result[1] == (time + timedelta(hours=1), 2000.0)
+
+    @pytest.mark.asyncio
+    async def test_solcast_old_api_validation_probe(self, solar_mock):
+        """Test that validation probe passes with old _data_forecasts attribute."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+
+        old_api = MagicMock(spec=[])
+        old_api._data_forecasts = []
+
+        orchestrator = MagicMock()
+        orchestrator.solcast = old_api
+
+        result = await provider.get_power_series_from_orchestrator(orchestrator, None, None)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_openweather_validation_probe_returns_empty(self, solar_mock):
+        """Test that validation probe (None, None) returns [] for valid orchestrator."""
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
+
+        good_orchestrator = MagicMock()
+        good_orchestrator.data.watts = {}
+
+        result = await provider.get_power_series_from_orchestrator(good_orchestrator, None, None)
         assert result == []
 
 
