@@ -422,7 +422,7 @@ class QsOnOffDurationCard extends HTMLElement {
               <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${colors.primary}" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${this._fmt(pctToHours(handlePct))}</text>
               ` : ''}
             </svg>
-            <div class="center" style="${e.override_reset ? 'padding-bottom: 65px;' : ''}">
+            <div class="center">
               <div class="stack">
                 <div class="target-block">
                   <div class="target-label">Actual / Target Hours</div>
@@ -436,15 +436,15 @@ class QsOnOffDurationCard extends HTMLElement {
                 <div class="from-to-row">
                   <div class="from-to-item">
                     <div class="from-to-label">From:</div>
-                    <div class="from-to-value">${isDefaultMode ? '--:--' : formatTime(startTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? '--:--' : formatTime(startTime)}</div>
                   </div>
                   <div class="from-to-item">
                     <div class="from-to-label">To:</div>
-                    <div class="from-to-value">${isDefaultMode ? (sDefaultOnFinishTime ? formatTime(finishTimeStr) : '--:--') : formatTime(endTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? (sDefaultOnFinishTime ? formatTime(finishTimeStr) : '--:--') : formatTime(endTime)}</div>
                   </div>
                 </div>
                 ` : ''}
-                ${isDefaultMode && sDefaultOnFinishTime ? `
+                ${isDefaultMode && !isOverridden && sDefaultOnFinishTime ? `
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div style="color: var(--secondary-text-color); font-weight:700; font-size: .75rem;">Change Finish Time</div>
                   <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${formatTime(finishTimeStr)}</div>
@@ -630,8 +630,8 @@ class QsOnOffDurationCard extends HTMLElement {
           }
       }
 
-      // Time button for finish time (default mode only)
-      if (isDefaultMode && sDefaultOnFinishTime) {
+      // Time button for finish time (default mode only, hidden during override)
+      if (isDefaultMode && !isOverridden && sDefaultOnFinishTime) {
           const timeAction = async () => {
               const defaultHour = Math.floor(finishTimeMins / 60);
               const defaultMin = finishTimeMins % 60;
