@@ -786,6 +786,42 @@ class TestTwoPassAllocation:
         assert choice == "energy"
         assert e_opt == pytest.approx(1.0)
 
+    def test_real_scenario_twingo_zoe_arthur_magali(self):
+        """Reproduce real-world bug: preferred car forces unnecessary charging.
+
+        After pre-allocation removes Tesla (unplugged) -> Thomas, the
+        remaining pool is:
+
+        Cars (columns):  IDBuzz(0)  Twingo(1)  Zoe(2)
+        Arthur (row 0):  unauth     5.0 kWh    0.0 (covered)
+        Magali (row 1):  0.0        0.0        0.0 (all covered)
+
+        Arthur prefers Twingo (col 1), Magali prefers Zoe (col 2).
+
+        Old algorithm: Arthur->Twingo (5 kWh, preferred), Magali->Zoe (0 kWh)
+                       = 5 kWh total. Preferred penalty dominated.
+
+        Correct:       Arthur->Zoe (0 kWh), Magali->Twingo or IDBuzz (0 kWh)
+                       = 0 kWh total. Energy-optimal.
+        """
+        energies = [
+            [99.0, 5.0, 0.0],   # Arthur: IDBuzz=unauth, Twingo=5kWh, Zoe=covered
+            [0.0,  0.0, 0.0],   # Magali: all covered
+        ]
+        authorized = [
+            [False, True, True],   # Arthur can drive Twingo, Zoe (not IDBuzz)
+            [True,  True, True],   # Magali can drive all three
+        ]
+        preferences = [1, 2]  # Arthur prefers Twingo (1), Magali prefers Zoe (2)
+
+        assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
+
+        assert choice == "energy"
+        assert e_opt == pytest.approx(0.0)
+        assert e_pref == pytest.approx(5.0)
+        assert assignment[0] == 2  # Arthur -> Zoe
+        assert assignment[1] in (0, 1)  # Magali -> IDBuzz or Twingo
+
 
 class _FakeCar:
     """Minimal car stub for pre-allocation tests."""
@@ -981,6 +1017,94 @@ class TestPreAllocateUnpluggedHomeCars:
         home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
 
         assert home._last_persons_car_allocation["CarA"].name == "Alice"
+
+    def test_real_scenario_tesla_unplugged_preallocation(self):
+        """Full real-world scenario: Tesla unplugged at home, 3 other cars connected.
+
+        Cars:
+          Tesla  : 174km, at home, NOT connected
+          IDBuzz : 253km, at home, connected
+          Twingo : 125km, at home, connected
+          Zoe    : 182km, at home, connected
+
+        Persons:
+          Thomas: 32km trip, prefers Tesla, auth [Tesla, Zoe, Twingo, IDBuzz]
+          Arthur: 104km trip, prefers Twingo, auth [Zoe, Twingo]
+          Magali: 75km trip, prefers Zoe, auth [Tesla, Zoe, Twingo, IDBuzz]
+
+        Coverage (car range vs trip + margin):
+          Tesla covers Thomas (174 > 32)   -> True
+          Tesla covers Magali (174 > 75)   -> True
+          Twingo covers Thomas (125 > 32)  -> True
+          Twingo covers Magali (125 > 75)  -> True
+          Twingo does NOT cover Arthur     -> False, diff_energy=5.0
+          Zoe covers everyone              -> True
+          IDBuzz covers everyone           -> True
+
+        Pre-allocation: Tesla is unplugged+home. Thomas prefers Tesla and
+        trip is covered -> Tesla pre-allocated to Thomas.
+
+        After pre-allocation the remaining pool has Arthur and Magali
+        competing for Twingo/Zoe/IDBuzz. Energy-optimal assigns Arthur->Zoe
+        (0 kWh) instead of his preferred Twingo (5 kWh charge).
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        tesla = _FakeCar("Tesla", is_home=True, has_charger=False, coverage_map={
+            32.0: (True, 62.0, 20.0, 2.0),
+            75.0: (True, 62.0, 45.0, 5.0),
+        })
+        idbuzz = _FakeCar("IDBuzz", is_home=True, has_charger=True, coverage_map={
+            32.0: (True, 62.0, 15.0, 1.0),
+            75.0: (True, 62.0, 35.0, 3.0),
+            104.0: (True, 62.0, 50.0, 5.0),
+        })
+        twingo = _FakeCar("Twingo", is_home=True, has_charger=True, coverage_map={
+            32.0: (True, 75.0, 30.0, 1.5),
+            75.0: (True, 75.0, 60.0, 3.0),
+            104.0: (False, 75.0, 100.0, 5.0),
+        })
+        zoe = _FakeCar("Zoe", is_home=True, has_charger=True, coverage_map={
+            32.0: (True, 53.0, 20.0, 2.0),
+            75.0: (True, 53.0, 40.0, 4.0),
+            104.0: (True, 53.0, 50.0, 6.0),
+        })
+
+        thomas = _FakePerson("Thomas", preferred_car="Tesla",
+                             authorized_car_names=["Tesla", "Zoe", "Twingo", "IDBuzz"])
+        arthur = _FakePerson("Arthur", preferred_car="Twingo",
+                             authorized_car_names=["Zoe", "Twingo"])
+        magali = _FakePerson("Magali", preferred_car="Zoe",
+                             authorized_car_names=["Tesla", "Zoe", "Twingo", "IDBuzz"])
+
+        cars = [tesla, idbuzz, twingo, zoe]
+        persons = [thomas, arthur, magali]
+        home = _make_home(cars, persons)
+
+        forecasts = {
+            "Thomas": (now, 32.0),
+            "Arthur": (now, 104.0),
+            "Magali": (now, 75.0),
+        }
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        # Step 1: pre-allocate unplugged cars
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        # Tesla (unplugged, at home) -> Thomas (prefers Tesla, trip covered)
+        assert "Tesla" in covered_cars
+        assert "Thomas" in covered_persons
+        assert home._last_persons_car_allocation["Tesla"].name == "Thomas"
+
+        # Step 2: verify remaining pool excludes Tesla/Thomas
+        assert "IDBuzz" not in covered_cars
+        assert "Twingo" not in covered_cars
+        assert "Zoe" not in covered_cars
+        assert "Arthur" not in covered_persons
+        assert "Magali" not in covered_persons
 
 
 if __name__ == "__main__":
