@@ -1326,9 +1326,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                                                                             power_value_or_delta) is False:
                 return False
 
-            do_recompute_min_charge = False # can_be_saved
+            do_recompute_min_charge = False
 
             car_percent = self.get_car_charge_percent(time)
+
+            is_value_strong_enough = False
+            if car_percent is not None and car_percent > 10 and car_percent < 70:
+                is_value_strong_enough = True
 
             if power_value_or_delta >= MIN_CHARGE_POWER_W:
                 if for_3p:
@@ -1340,19 +1344,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if amps_val % 3 == 0 and amps_val//3 >= self.car_charger_min_charge and amps_val//3 <= self.car_charger_max_charge:
                         self.customized_amp_to_power_3p[amps_val//3] = float(power_value_or_delta)
             elif amps_val <= self._conf_car_charger_min_charge + 2:
-                power_value_or_delta = 0.0
-                # limite the possibility to have amps 0
-                for i in range(0, amps_val+1):
-                    # no need to do per phase for 0: the car won't take current on amps values only
-                    self.customized_amp_to_power_3p[i] = 0.0
-                    self.customized_amp_to_power_1p[i] = 0.0
+                if is_value_strong_enough:
+                    power_value_or_delta = 0.0
+                    # limit the possibility to have amps 0
+                    for i in range(0, amps_val+1):
+                        # no need to do per phase for 0: the car won't take current on amps values only
+                        self.customized_amp_to_power_3p[i] = 0.0
+                        self.customized_amp_to_power_1p[i] = 0.0
 
-                if car_percent is None or car_percent < 90.0:
-                    do_recompute_min_charge = True
+                    if car_percent is None or car_percent < 90.0:
+                        do_recompute_min_charge = True
 
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
             do_update = True
-            if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
+            if can_be_saved and self.config_entry and is_value_strong_enough:
 
                  if self.car_is_custom_power_charge_values_3p is None:
                      self.car_is_custom_power_charge_values_3p = for_3p
@@ -1361,6 +1366,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                  if for_3p == self.car_is_custom_power_charge_values_3p:
 
                      # for now just store the measured one
+                     self._salvable_dampening[f"measured_{CONF_CAR_CUSTOM_POWER_CHARGE_VALUES}"] = self.car_use_custom_power_charge_values
+                     self._salvable_dampening[f"measured_{CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P}"] = self.car_is_custom_power_charge_values_3p
                      self._salvable_dampening[f"measured_charge_{amps_val}"] = power_value_or_delta
 
                      if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:

@@ -1,5 +1,6 @@
 import unittest
 import datetime
+from unittest.mock import patch
 
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome
@@ -44,6 +45,12 @@ class TestCars(unittest.TestCase):
 
         car.update_dampening_value(amperage=(7,3), amperage_transition=None, power_value_or_delta=20,
                                    time=datetime.datetime.now(), can_be_saved=False)
+        assert car.car_charger_min_charge == 7 # no dampening as car percent is None so we don't know teh state of teh car enpugh
+
+
+        with patch.object(car, "get_car_charge_percent", return_value=50.0):
+            car.update_dampening_value(amperage=(7,3), amperage_transition=None, power_value_or_delta=20,
+                                       time=datetime.datetime.now(), can_be_saved=False)
         assert car.car_charger_min_charge == 8
 
 
