@@ -1326,9 +1326,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                                                                             power_value_or_delta) is False:
                 return False
 
-            can_be_saved = False
-
-            do_recompute_min_charge = can_be_saved
+            do_recompute_min_charge = False # can_be_saved
 
             car_percent = self.get_car_charge_percent(time)
 
@@ -1354,26 +1352,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
             do_update = True
-            # if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
-            #
-            #     if self.car_is_custom_power_charge_values_3p is None:
-            #         self.car_is_custom_power_charge_values_3p = for_3p
-            #
-            #     # only save what was set as conf
-            #     if for_3p == self.car_is_custom_power_charge_values_3p:
-            #
-            #         self.car_use_custom_power_charge_values = True
-            #
-            #         #ok this value can be saved ... we see above for now we force to not save it
-            #         self._salvable_dampening[CONF_CAR_CUSTOM_POWER_CHARGE_VALUES] = self.car_use_custom_power_charge_values
-            #         self._salvable_dampening[CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P] = self.car_is_custom_power_charge_values_3p
-            #         self._salvable_dampening[f"charge_{amps_val}"] = power_value_or_delta
-            #
-            #         if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
-            #             self._last_dampening_update = time
-            #             data = dict(self.config_entry.data)
-            #             data.update(self._salvable_dampening)
-            #             self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+            if can_be_saved and self.config_entry and car_percent is not None and car_percent > 10 and car_percent < 70:
+
+                 if self.car_is_custom_power_charge_values_3p is None:
+                     self.car_is_custom_power_charge_values_3p = for_3p
+
+                 # only save what was set as conf
+                 if for_3p == self.car_is_custom_power_charge_values_3p:
+
+                     # for now just store the measured one
+                     self._salvable_dampening[f"measured_charge_{amps_val}"] = power_value_or_delta
+
+                     if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
+                         self._last_dampening_update = time
+                         data = dict(self.config_entry.data)
+                         data.update(self._salvable_dampening)
+                         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
         return do_update
 

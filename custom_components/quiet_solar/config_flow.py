@@ -65,7 +65,7 @@ from .const import DOMAIN, DEVICE_TYPE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_
     DASHBOARD_NO_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, CONF_BATTERY_IS_DC_COUPLED, CONF_CAR_ODOMETER_SENSOR, \
     CONF_CAR_ESTIMATED_RANGE_SENSOR, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
     CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, CONF_PERSON_TRACKER, \
-    CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED
+    CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, CONF_TYPE_NAME_QSHome
 from .ha_model.climate_controller import get_hvac_modes, QSClimateDuration
 from .home_model.load import map_section_selected_name_in_section_list
 from .ha_model.dynamic_group import QSDynamicGroup
@@ -1109,9 +1109,30 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         schema = vol.Schema(sc_dict)
 
+        home_voltage = 230
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.data.get(DEVICE_TYPE) == CONF_TYPE_NAME_QSHome:
+                home_voltage = entry.data.get(CONF_HOME_VOLTAGE, 230)
+                break
+
+        is_3p = self.config_entry.data.get(CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, False)
+        phase_mult = 3 if is_3p else 1
+
+        placeholders = {}
+        for a in range(1, 33):
+            theoretical = int(home_voltage * a * phase_mult)
+            placeholders[f"theoretical_charge_{a}"] = f"{theoretical} W"
+
+            measured = self.config_entry.data.get(f"measured_charge_{a}")
+            if measured is not None:
+                placeholders[f"measured_charge_{a}"] = f"{int(measured)} W"
+            else:
+                placeholders[f"measured_charge_{a}"] = "-- W"
+
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders,
         )
 
     async def async_step_person(self, user_input=None):

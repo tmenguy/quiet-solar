@@ -70,6 +70,7 @@ from custom_components.quiet_solar.const import (
     CONF_OFF_GRID_ENTITY,
     CONF_OFF_GRID_STATE_VALUE,
     CONF_OFF_GRID_INVERTED,
+    CONF_TYPE_NAME_QSHome,
     CONF_MOBILE_APP,
     CONF_MOBILE_APP_URL,
     CONF_CHARGER_LATITUDE,
@@ -1612,3 +1613,92 @@ async def test_legacy_options_flow_sets_config_entry(hass: HomeAssistant):
         assert flow._compat_config_entry is config_entry
     finally:
         OptionsFlow.config_entry = original_prop
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_dampening_placeholders_with_home_and_measured(
+    hass: HomeAssistant,
+):
+    """Test car dampening form includes theoretical (from home voltage) and measured placeholders."""
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_home_volt_123",
+        data={
+            CONF_NAME: "Test Home",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSHome,
+            CONF_HOME_VOLTAGE: 240,
+        },
+        title="home: Test Home",
+    )
+    home_entry.add_to_hass(hass)
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_plc_123",
+        data={
+            CONF_NAME: "Test Car",
+            DEVICE_TYPE: QSCar.conf_type_name,
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 8,
+            CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
+            "measured_charge_6": 4100.0,
+            "measured_charge_7": 4850.0,
+        },
+        title="car: Test Car",
+    )
+    car_entry.add_to_hass(hass)
+
+    flow = _init_options_flow(hass, car_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _hass, entities: entities,
+    ):
+        result = await flow.async_step_car({"force_dampening": True})
+
+    assert result["type"] == FlowResultType.FORM
+    placeholders = result.get("description_placeholders", {})
+
+    assert placeholders["theoretical_charge_6"] == f"{int(240 * 6 * 3)} W"
+    assert placeholders["theoretical_charge_7"] == f"{int(240 * 7 * 3)} W"
+
+    assert placeholders["measured_charge_6"] == "4100 W"
+    assert placeholders["measured_charge_7"] == "4850 W"
+    assert placeholders["measured_charge_8"] == "-- W"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_dampening_placeholders_no_home_entry(
+    hass: HomeAssistant,
+):
+    """Test car dampening placeholders fall back to 230V when no home entry exists."""
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_nohome_123",
+        data={
+            CONF_NAME: "Test Car",
+            DEVICE_TYPE: QSCar.conf_type_name,
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 8,
+            CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: False,
+        },
+        title="car: Test Car",
+    )
+    car_entry.add_to_hass(hass)
+
+    flow = _init_options_flow(hass, car_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _hass, entities: entities,
+    ):
+        result = await flow.async_step_car({"force_dampening": True})
+
+    assert result["type"] == FlowResultType.FORM
+    placeholders = result.get("description_placeholders", {})
+
+    assert placeholders["theoretical_charge_6"] == f"{int(230 * 6 * 1)} W"
+    assert placeholders["theoretical_charge_10"] == f"{int(230 * 10 * 1)} W"
+    assert placeholders["measured_charge_6"] == "-- W"
