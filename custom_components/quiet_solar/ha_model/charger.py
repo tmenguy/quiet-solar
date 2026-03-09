@@ -1080,11 +1080,8 @@ class QSChargerGroup(object):
                     if do_reset_allocation or cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                         stop_on_first_change = False
 
-                    if increase is False and power_budget - global_diff_power >= 0:
-                        # we are back on track for solar or we reduced enough
-                        continue
-                    elif increase is True and power_budget - global_diff_power <= 0:
-                        # we are back on track for solar or we increased enough
+                    if (increase is False and power_budget - global_diff_power >= 0) or (increase is True and power_budget - global_diff_power <= 0):
+                        # we are back on track for solar or we reduced/increased enough
                         continue
 
                     num_changes = 0

@@ -1621,3 +1621,208 @@ class TestAckCompletedConstraintUserOverride:
 
         await load.ack_completed_constraint(_t(1), ct)
         assert load._last_completed_constraint is None
+
+
+# =========================================================================
+# FINAL COVERAGE: Lines 1087, 1100, 1173, 1212-1214, 1295
+# =========================================================================
+
+
+class TestSetLiveConstraintsLine1087:
+    """Cover line 1087: multiple infinite constraints where a non-met one has higher score."""
+
+    def test_infinite_higher_score_non_met_replaces_keep(self):
+        """Line 1087: iterate infinite constraints, second non-met has higher score.
+
+        Constraints are sorted stably by end_of_constraint (all DATETIME_MAX_UTC).
+        Pop removes from the end, so the last in the sorted list becomes
+        removed_infinits[0] = keep.  We need keep to have the LOWER score so
+        that a later entry triggers ``keep = k``.
+
+        Passing [ct_high, ct_low] keeps stable order → ct_low is last → popped
+        first → becomes keep.  Then ct_high has higher score → line 1087 fires.
+        """
+        load = MinimalTestLoad(name="TestLoad")
+        t = _t(0)
+        ct_low = create_constraint(
+            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        ct_high = create_constraint(
+            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        ct_high.from_user = True
+        assert ct_high.score(t) > ct_low.score(t)
+        # Pass ct_high first so stable sort keeps [ct_high, ct_low].
+        # Pop removes ct_low first → removed_infinits[0] = ct_low (low score).
+        # Then k=ct_high has higher score → keep = k (line 1087).
+        load.set_live_constraints(t, [ct_high, ct_low])
+        infinites = [c for c in load._constraints if c.end_of_constraint == DATETIME_MAX_UTC]
+        assert len(infinites) == 1
+        assert infinites[0].score(t) == ct_high.score(t)
+
+
+class TestSetLiveConstraintsLine1100:
+    """Cover line 1100: non-ASAP constraints before first ASAP are dropped."""
+
+    def test_constraints_before_first_asap_dropped(self):
+        """Line 1100: constraints at indices < first ASAP index get skipped."""
+        load = MinimalTestLoad(name="TestLoad", power=1000.0)
+        t = _t(0)
+        ct_asap = create_constraint(
+            load=load, time=t,
+            target_value=5000,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+            power=1000.0,
+        )
+        ct_early = create_constraint(
+            load=load, time=t,
+            end_of_constraint=t + timedelta(minutes=1),
+            target_value=100,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        ct_after = create_constraint(
+            load=load, time=t,
+            end_of_constraint=ct_asap.end_of_constraint + timedelta(hours=10),
+            target_value=300,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        assert ct_early.end_of_constraint < ct_asap.end_of_constraint
+        load.set_live_constraints(t, [ct_early, ct_asap, ct_after])
+        assert load._constraints[0].as_fast_as_possible is True
+        found_early = any(c is ct_early for c in load._constraints)
+        assert not found_early
+
+
+class TestSetLiveConstraintsLine1173:
+    """Cover line 1173: constraint start >= end after recomputing is dropped."""
+
+    def test_constraint_start_ge_end_after_recompute(self):
+        """Line 1173: second constraint's adjusted start >= its end → dropped.
+
+        After sort by end_of_constraint the order is [ct_doomed(end=8), ct_normal(end=20)].
+        In the recompute loop:
+          ct_doomed: current_start = max(DATETIME_MIN, _t(0)) = _t(0) < _t(8) → kept.
+                     current_start becomes _t(8).
+          ct_late:   current_start = max(_t(8), _t(10)) = _t(10) >= _t(8+eps) → line 1173.
+
+        We give ct_late a start *after* its own end so the accumulated
+        current_start pushes it past its end.
+        """
+        load = MinimalTestLoad(name="TestLoad")
+        t = _t(0)
+        ct_normal = create_constraint(
+            load=load, time=t,
+            start_of_constraint=_t(0),
+            end_of_constraint=_t(8),
+            target_value=100,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        # ct_late has start=_t(10), end=_t(9).  After sort it follows ct_normal
+        # (end=9 > end=8).  Its adjusted start = max(_t(8), _t(10)) = _t(10) >= _t(9).
+        ct_late = create_constraint(
+            load=load, time=t,
+            start_of_constraint=_t(10),
+            end_of_constraint=_t(9),
+            target_value=200,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        load.set_live_constraints(t, [ct_normal, ct_late])
+        # ct_late should have been dropped by line 1173
+        for c in load._constraints:
+            assert c.current_start_of_constraint < c.end_of_constraint
+        assert ct_late not in load._constraints
+
+
+class TestPushLiveConstraintLines1212_1214:
+    """Cover lines 1212-1214: push constraint with same end and same score."""
+
+    def test_same_end_same_score_not_pushed(self):
+        """Lines 1212-1214: same end, same score -> carry_info, return False."""
+        load = MinimalTestLoad(name="TestLoad")
+        t = _t(0)
+        ct1 = create_constraint(
+            load=load, time=t,
+            end_of_constraint=_t(2),
+            target_value=100, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        load._constraints = [ct1]
+        ct2 = create_constraint(
+            load=load, time=t,
+            end_of_constraint=_t(2),
+            target_value=100, initial_value=10,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        assert ct1.score(t) == ct2.score(t)
+        assert not ct1.eq_no_current(ct2)
+        result = load.push_live_constraint(t, ct2)
+        assert result is False
+        assert len(load._constraints) == 1
+
+
+class TestUpdateLiveConstraintsLine1295:
+    """Cover line 1295: nc.skip=True in inner loop of update_live_constraints.
+
+    For ``nc.skip`` to be True inside the inner ``for j`` loop, the constraint
+    must have been marked skip=True by a *previous outer* ``for i`` iteration's
+    inner loop.  This requires TWO mandatory-expired constraints whose inner
+    loops both visit the same later constraint.
+
+    Scenario (constraints in order):
+      ct0  – mandatory, expired, not met  →  enters inner loop
+             inner j=1: nc=ct1, ct1.end < time  →  ``c.skip = True`` (ct0, not ct1)
+             inner j=2: nc=ct2, ct2 is met       →  ct2.skip = True  (line 1306)
+             inner j=3: nc=ct3, ct3.end >= push  →  break
+             ct0 gets pushed (handled_constraint_force=False, pushed_count ok).
+
+      ct1  – mandatory, expired, not met  →  enters inner loop
+             inner j=2: nc=ct2, ct2.skip is True →  **line 1295 fires** (continue)
+             inner j=3: nc=ct3                   →  processed normally
+    """
+
+    @pytest.mark.asyncio
+    async def test_nc_skip_true_in_inner_loop(self):
+        """Line 1295: inner loop encounters nc with skip=True set by earlier outer i.
+
+        ct0 is mandatory expired with pushed_count > 4, so it gets skipped
+        without breaking the outer loop. Its inner loop marks ct2 as skip=True
+        (met constraint, line 1306). Then outer i=1 (ct1) enters its inner loop
+        and encounters ct2 with nc.skip=True -> line 1295 fires.
+        """
+        load = MinimalTestLoad(name="TestLoad")
+        t = _t(1)
+        ct0 = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=t - timedelta(seconds=2),
+            target_value=10000, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        ct0.always_end_at_end_of_constraint = False
+        ct0.pushed_count = 5
+        ct1 = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=t - timedelta(seconds=1),
+            target_value=10000, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        )
+        ct1.always_end_at_end_of_constraint = False
+        ct2 = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=t + timedelta(minutes=2),
+            target_value=100, initial_value=100,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        ct3 = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=t + timedelta(hours=50),
+            target_value=100, initial_value=0,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        )
+        load._constraints = [ct0, ct1, ct2, ct3]
+        load._last_constraint_update = t
+        result = await load.update_live_constraints(t, timedelta(hours=24))
+        assert result is True

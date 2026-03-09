@@ -1216,3 +1216,49 @@ def test_get_state_history_data_ret_none_fallback_line1296_v2():
 
     result = dev.get_state_history_data(entity_id, 5, base + timedelta(seconds=3))
     assert isinstance(result, list)
+
+
+# ==========================================================================
+# 40. Line 771: get_sensor_latest_possible_valid_time_value_attr
+#     time < last_valid[0] fallback to history
+# ==========================================================================
+
+
+def test_sensor_valid_time_value_attr_time_before_last_valid_line771():
+    """Cover line 771: time < last_valid triggers else branch returning history."""
+    dev = _make_load_device()
+    entity_id = "sensor.test771"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    now = datetime.now(tz=pytz.UTC)
+    past = now - timedelta(minutes=10)
+    future = now + timedelta(minutes=10)
+
+    dev._entity_probed_state[entity_id] = [
+        (past, 42.0, {}),
+        (now, 99.0, {}),
+    ]
+    dev._entity_probed_last_valid_state[entity_id] = (future, 123.0, {})
+
+    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(
+        entity_id, tolerance_seconds=1200, time=now
+    )
+    assert v == 99.0
+    assert t == now
+
+
+# ==========================================================================
+# 41. Line 857: get_median_sensor empty history returns None
+# ==========================================================================
+
+
+def test_get_median_sensor_empty_history_line857():
+    """Cover line 857: get_median_sensor returns None when history is empty."""
+    dev = _make_load_device()
+    entity_id = "sensor.median_empty"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+    dev._entity_probed_state[entity_id] = []
+
+    now = datetime.now(tz=pytz.UTC)
+    result = dev.get_median_sensor(entity_id, num_seconds=60, time=now)
+    assert result is None

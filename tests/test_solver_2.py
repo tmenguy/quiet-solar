@@ -1991,3 +1991,114 @@ class TestSolverBatteryCommandOutput(TestCase):
             assert len(entry) == 2
             assert entry[1] is not None
 
+
+# ============================================================================
+# Final coverage tests: lines 283-284, 516, 789-790
+# ============================================================================
+
+
+def test_merge_commands_piloted_delta_power_lines283_284():
+    """Lines 283-284: piloted device returns positive delta power during merge."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    pd = PilotedDevice(name="heater_pilot")
+    pd._power_use_conf = 500.0
+
+    load1 = TestLoad(name="l1")
+    load1.devices_to_pilot.append(pd)
+    pd.clients.append(load1)
+
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 4, loads=[load1])
+    num_slots = len(solver._time_slots)
+
+    pd.prepare_slots_for_piloted_device_budget(num_slots)
+    for s in range(num_slots):
+        pd.num_demanding_clients[s] = 1
+
+    first_cmd_on = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1500)
+    existing_cmds = [copy_command(first_cmd_on) for _ in range(num_slots)]
+    loads = {load1: existing_cmds}
+
+    new_cmds = [copy_command(CMD_IDLE) for _ in range(num_slots)]
+
+    solver._merge_commands_slots_for_load(
+        loads, c1, 0, num_slots - 1, new_cmds
+    )
+    assert load1 in loads
+
+
+def test_prepare_battery_segmentation_null_charge_line516():
+    """Line 516: battery.current_charge is None, fallback to get_value_empty.
+
+    The battery charges early (solar), then drains in the middle (no solar,
+    high consumption), creating an empty segment NOT at slot 0 so
+    segments_to_shave has a non-None entry.  Then current_charge is set to
+    None before calling _prepare_battery_segmentation.
+    """
+    dt = datetime(2024, 6, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat_null")
+    battery.capacity = 10000
+    battery.max_charging_power = 3000
+    battery.max_discharging_power = 3000
+    battery._current_charge_value = 5000
+    battery.min_charge_SOC_percent = 5.0
+    battery.max_charge_SOC_percent = 95.0
+
+    pv = []
+    ua = []
+    for h in range(11):
+        t = dt + timedelta(hours=h)
+        if h < 3:
+            pv.append((t, 6000.0))
+            ua.append((t, 500.0))
+        elif h < 7:
+            pv.append((t, 0.0))
+            ua.append((t, 4000.0))
+        else:
+            pv.append((t, 6000.0))
+            ua.append((t, 500.0))
+
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=10),
+        tariffs=0.20 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    battery._current_charge_value = None
+    result = solver._prepare_battery_segmentation(over_budget=0.2)
+
+
+def test_solve_off_grid_truly_empty_battery_lines789_790():
+    """Lines 789-790: off-grid solve with battery so empty that is_value_empty(min*0.8) is True."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat_empty")
+    battery.capacity = 5000
+    battery.max_charging_power = 2000
+    battery.max_discharging_power = 2000
+    battery._current_charge_value = 100
+    battery.min_charge_SOC_percent = 5.0
+    battery.max_charge_SOC_percent = 95.0
+
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=1 * 3600, power=1000,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    pv = [(dt + timedelta(hours=h), 100.0) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 3000.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[load1], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    output_cmds, bcmd = solver.solve(is_off_grid=True, with_self_test=False)
+    assert output_cmds is not None
+

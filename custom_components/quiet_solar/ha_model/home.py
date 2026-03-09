@@ -611,9 +611,6 @@ class QSHome(QSDynamicGroup):
 
                 seg_start, seg_end, p_res, treated = v
 
-                if seg_start is None or seg_end is None:
-                    continue
-
                 if len(p_res) == 0:
                     car_unassigned_list = unassigned_segment_per_car.setdefault(car, [])
                     car_unassigned_list.append((seg_start, seg_end))
@@ -1447,6 +1444,9 @@ class QSHome(QSDynamicGroup):
         if inverter_output_clamped is None:
             inverter_output_clamped = 0
 
+        if battery_charge_clamped is None:
+            battery_charge_clamped = 0
+
         if self.solar_plant is not None:
             self.solar_plant.inverter_output_power = inverter_output_clamped
 
@@ -1460,31 +1460,15 @@ class QSHome(QSDynamicGroup):
                                                                            time=time)
             if home_consumption is not None and grid_consumption is None:
                 if is_battery_dc_coupled:
-                    if inverter_output_clamped is not None:
-                        grid_consumption = inverter_output_clamped - home_consumption
-                    else:
-                        grid_consumption = 0 - home_consumption
+                    grid_consumption = inverter_output_clamped - home_consumption
                 else:
-                    if battery_charge_clamped is not None and inverter_output_clamped is not None:
-                        grid_consumption = inverter_output_clamped - home_consumption - battery_charge_clamped
-                    elif battery_charge_clamped is not None:
-                        grid_consumption = 0 - home_consumption - battery_charge_clamped
-                    elif inverter_output_clamped is not None:
-                        grid_consumption = inverter_output_clamped - home_consumption
+                    grid_consumption = inverter_output_clamped - home_consumption - battery_charge_clamped
 
         if home_consumption is None and grid_consumption is not None:
             if is_battery_dc_coupled:
-                if inverter_output_clamped is not None:
-                    home_consumption = inverter_output_clamped - grid_consumption
-                else:
-                    home_consumption = 0 - grid_consumption
+                home_consumption = inverter_output_clamped - grid_consumption
             else:
-                if battery_charge_clamped is not None and inverter_output_clamped is not None:
-                    home_consumption = inverter_output_clamped - grid_consumption - battery_charge_clamped
-                elif battery_charge_clamped is not None:
-                    home_consumption = 0 - grid_consumption - battery_charge_clamped
-                elif inverter_output_clamped is not None:
-                    home_consumption = inverter_output_clamped - grid_consumption
+                home_consumption = inverter_output_clamped - grid_consumption - battery_charge_clamped
 
         if grid_consumption is None or home_consumption is None:
             self.home_non_controlled_consumption = None
@@ -1520,10 +1504,7 @@ class QSHome(QSDynamicGroup):
             self.grid_consumption_power = grid_consumption
             self.home_non_controlled_consumption = home_consumption - controlled_consumption
             self.home_consumption = home_consumption
-            if battery_charge_clamped is not None:
-                self.home_available_power = grid_consumption + battery_charge_clamped
-            else:
-                self.home_available_power = grid_consumption
+            self.home_available_power = grid_consumption + battery_charge_clamped
 
             # clamp the available power to what could be really available, to not get from the grid
             if self.home_available_power > 0:
