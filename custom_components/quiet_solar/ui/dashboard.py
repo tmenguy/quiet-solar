@@ -21,10 +21,8 @@ from homeassistant.components.lovelace.const import (
 )
 
 # LOVELACE_DATA was introduced as a HassKey in HA 2025.2+; fall back to string
-try:
-    from homeassistant.components.lovelace.const import LOVELACE_DATA
-except ImportError:
-    LOVELACE_DATA = "lovelace"  # type: ignore[assignment]
+from homeassistant.components.lovelace.const import LOVELACE_DATA
+
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.const import CONF_MODE, __version__ as HAVERSION
 from homeassistant.core import HomeAssistant

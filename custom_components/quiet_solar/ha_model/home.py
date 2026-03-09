@@ -720,7 +720,7 @@ class QSHome(QSDynamicGroup):
                         time = end
 
                     if state.state == STATE_UNKNOWN or state.state == STATE_UNAVAILABLE:
-                        if last_unknown_start is not None:
+                        if last_unknown_start is None:
                             last_unknown_start = time
                         continue
 
@@ -760,9 +760,12 @@ class QSHome(QSDynamicGroup):
                             path_not_home.append((current_not_home_segment[0], current_not_home_segment[1]))
                             current_not_home_segment = [None, None]
 
+                    last_unknown_start = None
+
                 except (ValueError, TypeError, KeyError):
                     _LOGGER.error(f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}", exc_info=True, stack_info=True)
-                last_unknown_start = None
+
+
 
 
             if current_not_home_segment[0] is not None and end is not None:

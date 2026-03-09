@@ -1234,13 +1234,16 @@ class HADeviceMixin:
                 val_array[-1] = to_add
             else:
                 insert_idx = bisect_left(val_array, state_time, key=itemgetter(0))
-                if insert_idx == len(val_array):
-                    val_array.append(to_add)
+                # is entered only when state_time < val_array[-1][0].
+                # Given state_time < val_array[-1][0], bisect_left will always find an insertion point before the last element,
+                # so insert_idx can never equal len(val_array).
+                #if insert_idx == len(val_array):
+                #    val_array.append(to_add)
+                #else:
+                if val_array[insert_idx][0] == state_time:
+                    val_array[insert_idx] = to_add
                 else:
-                    if val_array[insert_idx][0] == state_time:
-                        val_array[insert_idx] = to_add
-                    else:
-                        val_array.insert(insert_idx, to_add)
+                    val_array.insert(insert_idx, to_add)
 
         while len(val_array) > 1 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
             val_array.pop(0)
@@ -1285,9 +1288,13 @@ class HADeviceMixin:
             else:
                 out_s = bisect_right(hist_f, to_ts, key=itemgetter(0))
 
-            if in_s == out_s:
-                if out_s == len(hist_f):
-                    ret = hist_f[-1:]
+            # Outer guards already handle from_ts >= hist_f[-1][0] (returns last)
+            # So in the else branch: from_ts < hist_f[-1][0]
+            # This means bisect_left can return at most len(hist_f)-1
+            # And out_s == len(hist_f) implies in_s < out_s (never equal)
+            # if in_s == out_s:
+            #     if out_s == len(hist_f):
+            #         ret = hist_f[-1:]
 
             if ret is None:
                 ret = hist_f[in_s:out_s]
