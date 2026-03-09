@@ -301,9 +301,6 @@ class HADeviceMixin:
         self._computed_dashboard_section = None
 
 
-
-
-
     async def _async_bootstrap_from_history(self, entity_id:str, time: datetime):
 
         end_time = time
