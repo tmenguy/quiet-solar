@@ -1479,3 +1479,145 @@ class TestTestLoadInit:
         assert tl.max_p == 1500
         assert tl.min_a == 7
         assert tl.max_a == 7
+
+
+# =========================================================================
+# Coverage: line 370 - use_saved_extra_device_info clamp + current_command
+# =========================================================================
+
+
+class TestUseSavedExtraDeviceInfo:
+    """Test use_saved_extra_device_info clamping and command restore."""
+
+    def test_clamp_num_on_off_near_limit(self):
+        """Line 365-366: num_max_on_off - num_on_off <= 2 -> clamp."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 10
+        stored = {"num_on_off": 9, "current_command": None}
+        load.use_saved_extra_device_info(stored)
+        assert load.num_on_off == 8  # clamped to num_max_on_off - 2
+
+    def test_clamp_num_on_off_at_exact_limit(self):
+        """Line 365-366: difference is exactly 2 -> clamp."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 10
+        stored = {"num_on_off": 8, "current_command": None}
+        load.use_saved_extra_device_info(stored)
+        assert load.num_on_off == 8
+
+    def test_restore_current_command_from_dict(self):
+        """Line 369-370: restore current_command from stored dict."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        cmd_dict = {"command": "on", "power_consign": 1500.0}
+        stored = {"num_on_off": 0, "current_command": cmd_dict}
+        load.use_saved_extra_device_info(stored)
+        assert load.current_command is not None
+        assert load.current_command.command == "on"
+        assert load.current_command.power_consign == 1500.0
+
+    def test_odd_num_on_off_decremented(self):
+        """Line 360-362: odd num_on_off gets decremented by 1."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        stored = {"num_on_off": 5, "current_command": None}
+        load.use_saved_extra_device_info(stored)
+        assert load.num_on_off == 4
+
+
+# =========================================================================
+# Coverage: lines 469-470 - launch_command stacking
+# =========================================================================
+
+
+class TestLaunchCommandStacking:
+    """Test launch_command stacks command when running differs."""
+
+    @pytest.mark.asyncio
+    async def test_stack_command_when_different(self):
+        """Lines 471-472: running_command differs -> stack the new one."""
+        load = MinimalTestLoad(name="TestLoad")
+        running = LoadCommand(command="on", power_consign=1000.0)
+        load.running_command = running
+        load._stacked_command = None
+
+        new_cmd = LoadCommand(command="idle", power_consign=0.0)
+        await load.launch_command(_t(0), new_cmd)
+        assert load._stacked_command is not None
+        assert load._stacked_command.command == "idle"
+
+    @pytest.mark.asyncio
+    async def test_same_command_clears_stack(self):
+        """Lines 468-470: running_command equals new -> update running, clear stack."""
+        load = MinimalTestLoad(name="TestLoad")
+        running = LoadCommand(command="on", power_consign=1000.0)
+        load.running_command = running
+        load._stacked_command = LoadCommand(command="idle", power_consign=0.0)
+
+        same_cmd = LoadCommand(command="on", power_consign=1000.0)
+        await load.launch_command(_t(0), same_cmd)
+        assert load._stacked_command is None
+        assert load.running_command.command == "on"
+
+
+# =========================================================================
+# Coverage: lines 996-997 - ack_completed_constraint with user_override
+# =========================================================================
+
+
+class TestAckCompletedConstraintUserOverride:
+    """Test ack_completed_constraint with user_override originator."""
+
+    @pytest.mark.asyncio
+    async def test_user_override_resets_state(self):
+        """Lines 994-997: originator=='user_override' resets override state."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.external_user_initiated_state = "forced_on"
+        load.external_user_initiated_state_time = _t(-1)
+        load.asked_for_reset_user_initiated_state_time = None
+
+        ct = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=_t(2),
+            target_value=100,
+        )
+        ct.load_info = {"originator": "user_override"}
+
+        await load.ack_completed_constraint(_t(1), ct)
+        assert load.external_user_initiated_state is None
+        assert load._last_completed_constraint is ct
+
+    @pytest.mark.asyncio
+    async def test_non_user_override_no_reset(self):
+        """Non-user_override originator does not reset state."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.external_user_initiated_state = "forced_on"
+
+        ct = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=_t(2),
+            target_value=100,
+        )
+        ct.load_info = {"originator": "agenda"}
+
+        await load.ack_completed_constraint(_t(1), ct)
+        assert load.external_user_initiated_state == "forced_on"
+
+    @pytest.mark.asyncio
+    async def test_disabled_device_returns_early(self):
+        """Line 991: disabled device returns without doing anything."""
+        home = create_minimal_home_model()
+        home.remove_device = MagicMock()
+        home.add_disabled_device = MagicMock()
+        load = MinimalTestLoad(name="TestLoad", home=home)
+        load.qs_enable_device = False
+
+        ct = create_constraint(
+            load=load, time=_t(0),
+            end_of_constraint=_t(2),
+            target_value=100,
+        )
+        ct.load_info = {"originator": "user_override"}
+
+        await load.ack_completed_constraint(_t(1), ct)
+        assert load._last_completed_constraint is None

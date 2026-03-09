@@ -450,9 +450,14 @@ class QSChargerStatus(object):
 
         return next_amp, next_num_phases
 
-    def get_consign_amps_values(self, consign_is_minimum=True, add_tolerance=0.0) -> (list[int]|None, int|float):
+    def get_consign_amps_values(self, consign_is_minimum=True, add_tolerance=0.0) -> tuple[list[int]|None, int|float]:
 
         possible_num_phases = None
+
+        if consign_is_minimum:
+            consign_amp = self.charger.min_charge
+        else:
+            consign_amp = self.charger.max_charge
 
         if self.command.power_consign is not None and self.command.power_consign > 0:
 
@@ -480,27 +485,19 @@ class QSChargerStatus(object):
                 else:
                     # need to phase switch to get the minimum asked power (either up or down)
                     switch_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number != 3)[0]
-                    res_switch = self.charger._get_amps_from_power_steps(switch_steps, power, safe_border=False)
+                    res_switch = self.charger._get_amps_from_power_steps(switch_steps, power, safe_border=True)
 
-                    if res_switch is None:
-                        # well we stay as we are ... no phase switch
-                        consign_amp = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=False)
+                    # we can switch to the other phase setup
+                    consign_amp = res_switch
+                    if self.current_active_phase_number == 3:
+                        possible_num_phases = [1]
                     else:
-                        # we can switch to the other phase setup
-                        consign_amp = res_switch
-                        if self.current_active_phase_number == 3:
-                            possible_num_phases = [1]
-                        else:
-                            possible_num_phases = [3]
+                        possible_num_phases = [3]
 
             else:
                 native_power_steps = self.charger.car.get_charge_power_per_phase_A(self.charger.physical_3p)[0]
                 consign_amp = self.charger._get_amps_from_power_steps(native_power_steps, power, safe_border=True)
-        else:
-            if consign_is_minimum:
-                consign_amp = self.charger.min_charge
-            else:
-                consign_amp = self.charger.max_charge
+
 
         consign_amp = int(max(consign_amp, self.charger.min_charge))
         consign_amp = int(min(consign_amp, self.charger.max_charge))

@@ -1263,8 +1263,6 @@ class HADeviceMixin:
         else:
             from_ts = to_ts - timedelta(seconds=num_seconds_before)
 
-        ret = None
-
         if from_ts >= hist_f[-1][0]:
             ret = hist_f[-1:]
         elif to_ts < hist_f[0][0]:
@@ -1274,6 +1272,8 @@ class HADeviceMixin:
         else:
 
             in_s = bisect_left(hist_f, from_ts, key=itemgetter(0))
+
+            ret = None
 
             # the state is "valid" for its whole duration so pick the one before
             if in_s > 0:
@@ -1291,9 +1291,6 @@ class HADeviceMixin:
 
             if ret is None:
                 ret = hist_f[in_s:out_s]
-
-        if ret is None:
-            ret = []
 
         if keep_invalid_states is False and ret:
             return [v for v in ret if v[1] is not None]

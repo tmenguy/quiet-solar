@@ -159,17 +159,13 @@ async def _is_notification_for_charger(hass: HomeAssistant, message: str, qs_cha
         
         # Check if message contains any of the charger identifiers or device name
         message_lower = message.lower()
-        if device_name.lower() in message_lower:
+        if device_name.lower() in message_lower or (qs_charger.name and qs_charger.name.lower() in message_lower):
             return True
             
         for charger_id in charger_ids:
             if charger_id.lower() in message_lower:
                 return True
-        
-        # Also check the charger name from quiet solar
-        if qs_charger.name and qs_charger.name.lower() in message_lower:
-            return True
-                
+
         return False
         
     except Exception as e:

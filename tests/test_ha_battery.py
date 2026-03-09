@@ -982,6 +982,158 @@ class TestQSBatteryDischarge:
         assert result == 5000
 
 
+class TestQSBatteryProbeChargeNumberNone:
+    """Test probe_if_command_set returns None when get_max_charging_power() is None."""
+
+    @pytest.fixture
+    def battery(
+        self,
+        hass,
+        battery_config_entry,
+        battery_home,
+        battery_hass_data,
+    ):
+        """Battery with all entities configured."""
+        return QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.battery_power",
+                CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.max_discharge",
+                CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.max_charge",
+                CONF_BATTERY_CHARGE_FROM_GRID_SWITCH: "switch.charge_from_grid",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_probe_returns_none_when_charge_number_unavailable(self, hass, battery):
+        """Lines 101-103: probe returns None when max_charging_power state is unavailable."""
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", STATE_UNAVAILABLE)
+        time = datetime.now(pytz.UTC)
+
+        result = await battery.probe_if_command_set(time, CMD_ON)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_probe_returns_none_when_charge_number_unknown(self, hass, battery):
+        """Lines 101-103: probe returns None when max_charging_power state is unknown."""
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", STATE_UNKNOWN)
+        time = datetime.now(pytz.UTC)
+
+        result = await battery.probe_if_command_set(time, CMD_ON)
+
+        assert result is None
+
+
+class TestQSBatterySetMaxChargingPowerEdge:
+    """Test set_max_charging_power no-op and exception paths."""
+
+    @pytest.fixture
+    def battery(
+        self,
+        hass,
+        battery_config_entry,
+        battery_home,
+        battery_hass_data,
+    ):
+        """Battery with max charge number configured."""
+        return QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.max_charge",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_power_no_op_same_value(
+        self, hass, battery, recorded_service_calls
+    ):
+        """Line 231/241: set_max_charging_power is a no-op when value equals current."""
+        await _async_set_state(hass, "number.max_charge", "4000")
+
+        await battery.set_max_charging_power(4000)
+
+        assert len(recorded_service_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_power_no_arg_returns_early(
+        self, hass, battery, recorded_service_calls
+    ):
+        """Line 231: set_max_charging_power() with no argument (power=None) returns early."""
+        await _async_set_state(hass, "number.max_charge", "4000")
+
+        await battery.set_max_charging_power()
+
+        assert len(recorded_service_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_set_max_charging_power_exception_caught(
+        self, hass, battery
+    ):
+        """Lines 253-254: set_max_charging_power catches exception from service call."""
+        from homeassistant.core import ServiceRegistry
+
+        await _async_set_state(hass, "number.max_charge", "5000")
+
+        async def raise_error(*args, **kwargs):
+            raise RuntimeError("Service fail")
+
+        with patch.object(ServiceRegistry, "async_call", raise_error):
+            await battery.set_max_charging_power(3000)
+
+    @pytest.mark.asyncio
+    async def test_get_max_charging_power_bad_float(self, hass, battery):
+        """Lines 220-223: get_max_charging_power returns None on unparseable state."""
+        await _async_set_state(hass, "number.max_charge", "not_a_number")
+
+        result = battery.get_max_charging_power()
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_set_max_discharging_power_exception_caught(
+        self, hass, battery_config_entry, battery_home, battery_hass_data
+    ):
+        """Lines 171-172: set_max_discharging_power catches exception from service call."""
+        from homeassistant.core import ServiceRegistry
+
+        battery = QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.max_discharge",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            },
+        )
+        await _async_set_state(hass, "number.max_discharge", "5000")
+
+        async def raise_error(*args, **kwargs):
+            raise RuntimeError("Service fail")
+
+        with patch.object(ServiceRegistry, "async_call", raise_error):
+            await battery.set_max_discharging_power(3000)
+
+
 class TestQSBatteryPlatforms:
     """Test QSBattery get_platforms method."""
 

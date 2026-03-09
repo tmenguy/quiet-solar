@@ -278,6 +278,106 @@ async def test_async_unload_entry_handles_exception(fake_hass, mock_config_entry
     assert result is True
 
 
+def test_qs_base_sensor_update_with_value_fn_and_attr():
+    """Line 419: async_update_callback uses value_fn_and_attr when set."""
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = create_mock_device("test")
+
+    description = QSSensorEntityDescription(
+        key="computed_value",
+        translation_key="test",
+        qs_is_none_unavailable=False,
+        value_fn_and_attr=lambda device, key: ("sensor_val", {"extra": 42}),
+    )
+
+    sensor = QSBaseSensor(mock_handler, mock_device, description)
+    sensor.async_write_ha_state = MagicMock()
+
+    test_time = datetime.now(pytz.UTC)
+    sensor.async_update_callback(test_time)
+
+    assert sensor._attr_native_value == "sensor_val"
+    assert sensor._attr_extra_state_attributes == {"extra": 42}
+    sensor.async_write_ha_state.assert_called_once()
+
+
+def test_qs_extra_stored_data_from_dict_invalid():
+    """Lines 464-467: QSExtraStoredData.from_dict returns None on invalid dict."""
+    from custom_components.quiet_solar.sensor import QSExtraStoredData
+
+    result = QSExtraStoredData.from_dict({"bad_key": "value"})
+
+    assert result is None
+
+
+def test_qs_extra_stored_data_from_dict_valid():
+    """Verify QSExtraStoredData.from_dict works with valid dict."""
+    from custom_components.quiet_solar.sensor import QSExtraStoredData
+
+    result = QSExtraStoredData.from_dict({
+        "native_value": "hello",
+        "native_attr": {"foo": "bar"},
+    })
+
+    assert result is not None
+    assert result.native_value == "hello"
+    assert result.native_attr == {"foo": "bar"}
+
+
+@pytest.mark.asyncio
+async def test_qs_load_sensor_current_constraints_async_added_to_hass():
+    """Lines 555-556: async_added_to_hass loads stored constraints via device."""
+    from custom_components.quiet_solar.sensor import (
+        QSLoadSensorCurrentConstraints,
+        QSSensorEntityDescription,
+        QSExtraStoredData,
+    )
+    from custom_components.quiet_solar.const import (
+        HA_CONSTRAINT_SENSOR_HISTORY,
+        HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_device = MagicMock()
+    mock_device.device_id = "test_load"
+    mock_device.device_type = "load"
+    mock_device.name = "Test Load"
+    mock_device.qs_enable_device = True
+    mock_device.async_load_constraints_from_storage = AsyncMock()
+
+    description = QSSensorEntityDescription(
+        key="current_constraint",
+        translation_key="test",
+    )
+
+    sensor = QSLoadSensorCurrentConstraints(mock_handler, mock_device, description)
+
+    stored_constraints = [{"type": "filler", "value": 100}]
+    stored_executed = {"type": "mandatory", "value": 200}
+    stored_data = QSExtraStoredData(
+        native_value="Active",
+        native_attr={
+            HA_CONSTRAINT_SENSOR_HISTORY: stored_constraints,
+            HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT: stored_executed,
+        },
+    )
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = MagicMock()
+        mock_extra.return_value.as_dict.return_value = stored_data.as_dict()
+        await sensor.async_added_to_hass()
+
+    mock_device.async_load_constraints_from_storage.assert_called_once()
+    call_args = mock_device.async_load_constraints_from_storage.call_args
+    assert call_args[0][1] == stored_constraints
+    assert call_args[0][2] == stored_executed
+
+
 def test_qs_load_sensor_current_constraints_update():
     """Test QSLoadSensorCurrentConstraints update callback."""
     from custom_components.quiet_solar.home_model.load import AbstractLoad
@@ -307,3 +407,42 @@ def test_qs_load_sensor_current_constraints_update():
     
     assert sensor._attr_native_value == "Active Constraint"
     sensor.async_write_ha_state.assert_called_once()
+
+
+def test_qs_load_sensor_current_constraints_update_with_last_completed():
+    """Test update callback stores last completed constraint (lines 555-556)."""
+    from custom_components.quiet_solar.home_model.load import AbstractLoad
+    from custom_components.quiet_solar.const import (
+        HA_CONSTRAINT_SENSOR_HISTORY,
+        HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_device = MagicMock(spec=AbstractLoad)
+    mock_device.device_id = "test_load"
+    mock_device.device_type = "load"
+    mock_device.name = "Test Load"
+    mock_device.qs_enable_device = True
+    mock_device.get_active_readable_name = MagicMock(return_value="Active")
+    mock_device.get_active_constraints = MagicMock(return_value=[])
+    mock_device.update_to_be_saved_info = MagicMock(return_value={})
+
+    mock_completed = MagicMock()
+    mock_completed.to_dict = MagicMock(return_value={"type": "mandatory", "value": 42})
+    mock_device._last_completed_constraint = mock_completed
+
+    mock_description = MagicMock()
+    mock_description.key = "current_constraint"
+    mock_description.name = None
+    mock_description.translation_key = "test"
+
+    sensor = QSLoadSensorCurrentConstraints(mock_handler, mock_device, mock_description)
+    sensor.async_write_ha_state = MagicMock()
+
+    test_time = datetime.now(pytz.UTC)
+    sensor.async_update_callback(test_time)
+
+    stored = sensor._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT]
+    assert stored == {"type": "mandatory", "value": 42}
+    mock_completed.to_dict.assert_called_once()

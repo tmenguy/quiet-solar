@@ -211,6 +211,54 @@ async def test_qs_switch_entity_turn_off():
 
 
 @pytest.mark.asyncio
+async def test_qs_switch_entity_turn_on_with_home():
+    """Test turning switch on triggers force_update_all when home is set."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock()
+    mock_device = create_mock_device("test", home=mock_home)
+    mock_device.test_switch = False
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+
+    await switch.async_turn_on()
+
+    assert switch._attr_is_on is True
+    mock_home.force_update_all.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_qs_switch_entity_turn_off_with_home():
+    """Test turning switch off triggers force_update_all when home is set."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock()
+    mock_device = create_mock_device("test", home=mock_home)
+    mock_device.test_switch = True
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+
+    await switch.async_turn_off()
+
+    assert switch._attr_is_on is False
+    mock_home.force_update_all.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_qs_switch_entity_async_switch_callback():
     """Test async_switch callback is used."""
     mock_handler = MagicMock()

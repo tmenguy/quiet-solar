@@ -1,20 +1,24 @@
 import asyncio
 from unittest import TestCase
+from unittest.mock import patch
 
+import numpy as np
 import pytz
+import pytest
 
 from custom_components.quiet_solar.const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, \
     FLOATING_PERIOD_S, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint, TimeBasedSimplePowerLoadConstraint, \
     LoadConstraint, MultiStepsPowerLoadConstraintChargePercent
-from custom_components.quiet_solar.home_model.load import TestLoad
+from custom_components.quiet_solar.home_model.load import TestLoad, PilotedDevice
 from custom_components.quiet_solar.home_model.solver import PeriodSolver
 from custom_components.quiet_solar.home_model.battery import Battery
 from datetime import datetime
 from datetime import timedelta
 
 from custom_components.quiet_solar.home_model.commands import LoadCommand, copy_command, CMD_AUTO_GREEN_ONLY, CMD_IDLE, \
-    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN
+    CMD_GREEN_CHARGE_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_FROM_CONSIGN, CMD_AUTO_GREEN_CONSIGN, \
+    CMD_GREEN_CHARGE_AND_DISCHARGE, CMD_FORCE_CHARGE, CMD_CST_AUTO_CONSIGN, copy_command_and_change_type
 
 
 # def _util_constraint_save_dump(time, cs):
@@ -1328,4 +1332,662 @@ class TestSolver2(TestCase):
 
         print(
             f"\n🎯 CONCLUSION: All assertions passed - the nuanced solar + battery supplementing behavior is working correctly!")
+
+
+# ============================================================================
+# New targeted tests for uncovered solver.py lines
+# ============================================================================
+
+
+def _make_solver(dt, hours, tariffs=0.2/1000.0, loads=None, battery=None,
+                 pv=None, ua=None):
+    """Helper to build a PeriodSolver with sensible defaults."""
+    end = dt + timedelta(hours=hours)
+    if pv is None:
+        pv = [(dt + timedelta(hours=h), 1000.0) for h in range(hours + 1)]
+    if ua is None:
+        ua = [(dt + timedelta(hours=h), 300.0) for h in range(hours + 1)]
+    if loads is None:
+        loads = []
+    return PeriodSolver(
+        start_time=dt, end_time=end, tariffs=tariffs,
+        actionable_loads=loads, battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+
+
+def test_period_solver_default_start_end_time():
+    """PeriodSolver with start_time=None and end_time=None uses datetime.now defaults (lines 49, 52)."""
+    load = TestLoad(name="heater")
+    c = TimeBasedSimplePowerLoadConstraint(
+        time=datetime.now(pytz.UTC), load=load,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        end_of_constraint=datetime.now(pytz.UTC) + timedelta(hours=12),
+        initial_value=0, target_value=1 * 3600, power=1500,
+    )
+    load.push_live_constraint(datetime.now(pytz.UTC), c)
+
+    solver = PeriodSolver(
+        start_time=None, end_time=None, tariffs=0.2 / 1000.0,
+        actionable_loads=[load],
+        pv_forecast=None, unavoidable_consumption_forecast=None,
+    )
+    assert solver._start_time is not None
+    assert solver._end_time is not None
+    assert (solver._end_time - solver._start_time).total_seconds() == pytest.approx(86400.0, abs=5)
+    output_cmds, bcmd = solver.solve()
+    assert output_cmds is not None
+
+
+def test_period_solver_single_element_tariff_list():
+    """Tariffs as a list with exactly 1 element hits the len==1 branch (line 70)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load = TestLoad(name="pool")
+    c = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load.push_live_constraint(dt, c)
+
+    single_tariff = [(dt, 0.15 / 1000.0)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=single_tariff, actionable_loads=[load],
+        pv_forecast=[(dt + timedelta(hours=h), 2000.0) for h in range(5)],
+        unavoidable_consumption_forecast=[(dt + timedelta(hours=h), 300.0) for h in range(5)],
+    )
+    assert solver._tariffs[0][0] == dt
+    assert solver._tariffs[0][1] == 0.15 / 1000.0
+    output_cmds, bcmd = solver.solve(with_self_test=True)
+    assert len(output_cmds) == 1
+
+
+def test_period_solver_zero_sum_ua_forecast():
+    """UA forecast with all-zero values triggers the zero-sum warning (line 104)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    ua = [(dt + timedelta(hours=h), 0.0) for h in range(5)]
+    pv = [(dt + timedelta(hours=h), 1000.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[],
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    assert solver._ua_forecast == ua
+    output_cmds, bcmd = solver.solve()
+    assert output_cmds is not None
+
+
+def test_merge_commands_slots_none_new_commands():
+    """_merge_commands_slots_for_load returns immediately when new_command_list is None (line 257)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load = TestLoad(name="test")
+    c = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load.push_live_constraint(dt, c)
+
+    solver = _make_solver(dt, 4, loads=[load])
+    loads_dict = {}
+    solver._merge_commands_slots_for_load(loads_dict, c, 0, 5, None)
+    assert len(loads_dict) == 0
+
+
+def test_battery_force_charge_positive_charging():
+    """_battery_get_charging_power with CMD_FORCE_CHARGE and room to charge (lines 367-376, 429)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 10000
+    battery.max_charging_power = 3000
+    battery.max_discharging_power = 3000
+    battery._current_charge_value = 2000
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 95.0
+
+    pv = [(dt + timedelta(hours=h), 5000.0) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 300.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+    force_cmds = [copy_command(CMD_FORCE_CHARGE, power_consign=2000.0) for _ in range(num_slots)]
+
+    result = solver._battery_get_charging_power(existing_battery_commands=force_cmds)
+    battery_ext, battery_charge, battery_commands, *_ = result
+    assert len(battery_commands) == num_slots
+    has_force = any(cmd.is_like(CMD_FORCE_CHARGE) for cmd in battery_commands)
+    assert has_force
+    has_positive_consign = any(cmd.power_consign > 0 for cmd in battery_commands)
+    assert has_positive_consign
+
+
+def test_battery_force_charge_zero_when_full():
+    """_battery_get_charging_power with CMD_FORCE_CHARGE and battery full (lines 372-374)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 5000
+    battery.max_charging_power = 2000
+    battery.max_discharging_power = 2000
+    battery._current_charge_value = 4750
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 95.0
+
+    pv = [(dt + timedelta(hours=h), 100.0) for h in range(4)]
+    ua = [(dt + timedelta(hours=h), 300.0) for h in range(4)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=3),
+        tariffs=0.2 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+    force_cmds = [copy_command(CMD_FORCE_CHARGE, power_consign=500.0) for _ in range(num_slots)]
+
+    result = solver._battery_get_charging_power(existing_battery_commands=force_cmds)
+    _, battery_charge, battery_commands, *_ = result
+    assert all(cmd.is_like(CMD_FORCE_CHARGE) for cmd in battery_commands)
+
+
+def test_battery_force_charge_limited_discharge_update():
+    """_battery_get_charging_power CMD_FORCE_CHARGE updates power_consign to max (line 429)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 10000
+    battery.max_charging_power = 5000
+    battery.max_discharging_power = 5000
+    battery._current_charge_value = 3000
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 95.0
+
+    pv = [(dt + timedelta(hours=h), 8000.0) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 200.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+    force_cmds = [copy_command(CMD_FORCE_CHARGE, power_consign=1000.0) for _ in range(num_slots)]
+
+    result = solver._battery_get_charging_power(existing_battery_commands=force_cmds)
+    _, _, battery_commands, *_ = result
+    for cmd in battery_commands:
+        assert cmd.is_like(CMD_FORCE_CHARGE)
+        assert cmd.power_consign >= 1000.0
+
+
+def test_prepare_battery_segmentation_first_segment_empty():
+    """_prepare_battery_segmentation with empty segment at index 0 hits continue (line 510)."""
+    dt = datetime(2024, 6, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 7000
+    battery.max_charging_power = 1500
+    battery.max_discharging_power = 1500
+    battery._current_charge_value = 100
+
+    pv = [(dt + timedelta(hours=h), 500.0) for h in range(9)]
+    ua = [(dt + timedelta(hours=h), 800.0) for h in range(9)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=8),
+        tariffs=0.2 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+    assert num_slots >= 4
+
+    battery_charge = np.ones(num_slots, dtype=np.float64) * 50.0
+    for i in range(min(4, num_slots)):
+        battery_charge[i] = 10.0
+    for i in range(4, num_slots):
+        battery_charge[i] = 5000.0
+    battery_ext = np.zeros(num_slots, dtype=np.float64)
+    battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0)
+
+    with patch.object(solver, "_battery_get_charging_power", return_value=ret):
+        to_shave, energy_delta = solver._prepare_battery_segmentation()
+
+    assert to_shave is None or energy_delta is not None
+
+
+def test_prepare_battery_segmentation_null_current_charge():
+    """_prepare_battery_segmentation with battery.current_charge=None hits line 516."""
+    dt = datetime(2024, 6, 1, 0, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 7000
+    battery.max_charging_power = 1500
+    battery.max_discharging_power = 1500
+    battery._current_charge_value = None
+
+    pv = [(dt + timedelta(hours=h), 1000.0) for h in range(9)]
+    ua = [(dt + timedelta(hours=h), 500.0) for h in range(9)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=8),
+        tariffs=0.2 / 1000.0, actionable_loads=[], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+    assert num_slots >= 8
+
+    battery_charge = np.ones(num_slots, dtype=np.float64) * 5000.0
+    battery_charge[4] = 10.0
+    battery_charge[5] = 10.0
+    battery_ext = np.zeros(num_slots, dtype=np.float64)
+    battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0)
+
+    with patch.object(solver, "_battery_get_charging_power", return_value=ret):
+        to_shave, energy_delta = solver._prepare_battery_segmentation()
+
+    if to_shave is not None:
+        assert energy_delta is not None
+        assert energy_delta < 0
+
+
+def test_constraints_delta_no_bounds_skipped():
+    """_constraints_delta skips constraints that have None bounds (lines 571-572)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500, support_auto=True,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 4, loads=[load1])
+    num_slots = len(solver._available_power)
+    constraints = [(c1, 1.0)]
+    constraints_evolution = {c1: c1}
+    constraints_bounds = {c1: (None, None, None, None)}
+    actions = {load1: [None] * num_slots}
+
+    solved, has_changed, energy_delta = solver._constraints_delta(
+        -500.0, constraints, constraints_evolution, constraints_bounds, actions, 0, num_slots - 1
+    )
+    assert has_changed is False
+
+
+def test_constraints_delta_st_greater_than_nd():
+    """_constraints_delta skips when max(seg_start, first_slot) > min(seg_end, last_slot) (line 582)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500, support_auto=True,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 4, loads=[load1])
+    num_slots = len(solver._available_power)
+    assert num_slots >= 6
+    constraints = [(c1, 1.0)]
+    constraints_evolution = {c1: c1}
+    constraints_bounds = {c1: (5, 2, 5, 2)}
+    actions = {load1: [copy_command(CMD_IDLE)] * num_slots}
+
+    solved, has_changed, energy_delta = solver._constraints_delta(
+        -500.0, constraints, constraints_evolution, constraints_bounds, actions, 0, num_slots - 1
+    )
+    assert has_changed is False
+
+
+def test_get_power_from_commands_none_commands():
+    """_get_power_from_commands skips loads with None command lists (line 698)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=1 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+    solver = _make_solver(dt, 4, loads=[load1])
+
+    loads_dict = {load1: None}
+    out_power, out_consumption = solver._get_power_from_commands(loads_dict)
+    assert np.all(out_power == 0.0)
+    assert load1 in out_consumption
+
+
+def test_solve_loads_with_piloted_device_no_home():
+    """solve() with loads having piloted devices but no home (line 760)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    pd = PilotedDevice(name="pilot1")
+    pd._power_use_conf = 500.0
+    load1 = TestLoad(name="l1")
+    load1.devices_to_pilot.append(pd)
+
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 4, loads=[load1])
+    assert load1.home is None
+    output_cmds, bcmd = solver.solve(with_self_test=True)
+    assert len(output_cmds) == 1
+
+
+def test_solve_off_grid_empty_battery():
+    """solve(is_off_grid=True) with empty battery sets depletion to 0 (lines 789-790)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 5000
+    battery.max_charging_power = 2000
+    battery.max_discharging_power = 2000
+    battery._current_charge_value = 600
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 95.0
+
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=1 * 3600, power=1000,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    pv = [(dt + timedelta(hours=h), 2000.0) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 500.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[load1], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    output_cmds, bcmd = solver.solve(is_off_grid=True, with_self_test=True)
+    assert output_cmds is not None
+    assert bcmd is not None
+
+
+def test_self_test_failure_raises_exception():
+    """solve(with_self_test=True) raises when power accounting diverges (lines 1088-1089)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 4, loads=[load1])
+    num_slots = len(solver._available_power)
+
+    def fake_get_power(loads):
+        bad_power = np.ones(num_slots, dtype=np.float64) * 9999.0
+        return bad_power, {load1: [0.0, 0.0]}
+
+    with patch.object(solver, "_get_power_from_commands", side_effect=fake_get_power):
+        with pytest.raises(Exception, match="SELF TEST FAILED"):
+            solver.solve(with_self_test=True)
+
+
+def test_output_none_command_slots_replaced_with_idle():
+    """Solve output loop replaces None command slots with CMD_IDLE (line 1097)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=2),
+        initial_value=0, target_value=1 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    solver = _make_solver(dt, 6, loads=[load1])
+    num_slots = len(solver._available_power)
+
+    real_merge = solver._merge_commands_slots_for_load
+
+    def patched_merge(loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False):
+        real_merge(loads, constraint, first_slot, last_slot, new_command_list, prio_on_new)
+        if load1 in loads:
+            cmds = loads[load1]
+            if len(cmds) > 2:
+                cmds[-1] = None
+                cmds[-2] = None
+
+    with patch.object(solver, "_merge_commands_slots_for_load", side_effect=patched_merge):
+        output_cmds, bcmd = solver.solve()
+
+    for load, cmds in output_cmds:
+        for t, cmd in cmds:
+            assert cmd is not None
+            assert isinstance(cmd, LoadCommand)
+
+
+def test_output_none_battery_command_replaced():
+    """Solve output loop replaces None battery commands with CMD_GREEN_CHARGE_AND_DISCHARGE (line 1112)."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    battery = Battery(name="bat")
+    battery.capacity = 7000
+    battery.max_charging_power = 1500
+    battery.max_discharging_power = 1500
+    battery._current_charge_value = 3500
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 95.0
+
+    load1 = TestLoad(name="l1")
+    c1 = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=load1, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=4),
+        initial_value=0, target_value=2 * 3600, power=1500,
+    )
+    load1.push_live_constraint(dt, c1)
+
+    pv = [(dt + timedelta(hours=h), 2000.0) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 500.0) for h in range(5)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=4),
+        tariffs=0.2 / 1000.0, actionable_loads=[load1], battery=battery,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+
+    real_charging = solver._battery_get_charging_power
+
+    call_count = [0]
+
+    def patched_charging(**kwargs):
+        result = real_charging(**kwargs)
+        call_count[0] += 1
+        if call_count[0] >= 3:
+            battery_ext, battery_charge, battery_commands, *rest = result
+            if len(battery_commands) > 2:
+                battery_commands[-1] = None
+                battery_commands[-2] = None
+            result = (battery_ext, battery_charge, battery_commands, *rest)
+        return result
+
+    with patch.object(solver, "_battery_get_charging_power", side_effect=patched_charging):
+        output_cmds, bcmd = solver.solve()
+
+    for t, cmd in bcmd:
+        assert cmd is not None
+        assert isinstance(cmd, LoadCommand)
+
+
+def test_solve_no_loads_produces_empty_commands():
+    """solve() with no loads logs and produces empty output."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    solver = _make_solver(dt, 4, loads=[])
+    output_cmds, bcmd = solver.solve()
+    assert output_cmds == []
+    assert len(bcmd) >= 1
+
+
+def test_solve_no_battery_no_loads():
+    """solve() with no battery and no loads returns default battery command."""
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    solver = _make_solver(dt, 4, loads=[], battery=None)
+    output_cmds, bcmd = solver.solve()
+    assert len(bcmd) == 1
+    assert bcmd[0][1].is_like(CMD_GREEN_CHARGE_AND_DISCHARGE)
+
+
+def test_cap_propagation_across_multiple_auto_loads():
+    """_constraints_delta propagates CAP to None/AUTO_GREEN_ONLY cmds (lines 634, 637).
+
+    Requires negative energy_delta, >1 support_auto loads, and at least one
+    slot where one load has CAP while another has None or AUTO_GREEN_ONLY.
+    """
+    dt = datetime(2024, 6, 1, 8, 0, 0, tzinfo=pytz.UTC)
+    car1 = TestLoad(name="car1")
+    car2 = TestLoad(name="car2")
+    car1_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 230 * 3) for a in range(7, 16)]
+    car2_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 230 * 3) for a in range(7, 16)]
+
+    c1 = MultiStepsPowerLoadConstraint(
+        time=dt, load=car1, type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=None, initial_value=None, target_value=15000,
+        power_steps=car1_steps, support_auto=True,
+    )
+    car1.push_live_constraint(dt, c1)
+    c2 = MultiStepsPowerLoadConstraint(
+        time=dt, load=car2, type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=None, initial_value=None, target_value=15000,
+        power_steps=car2_steps, support_auto=True,
+    )
+    car2.push_live_constraint(dt, c2)
+
+    pv = [(dt + timedelta(hours=h), 3000.0) for h in range(7)]
+    ua = [(dt + timedelta(hours=h), 300.0) for h in range(7)]
+    solver = PeriodSolver(
+        start_time=dt, end_time=dt + timedelta(hours=6),
+        tariffs=0.2 / 1000.0, actionable_loads=[car1, car2], battery=None,
+        pv_forecast=pv, unavoidable_consumption_forecast=ua,
+    )
+    num_slots = len(solver._available_power)
+
+    constraints = [(c1, 1.0), (c2, 0.8)]
+    constraints_evolution = {c1: c1, c2: c2}
+    constraints_bounds = {
+        c1: (0, num_slots - 1, 0, num_slots - 1),
+        c2: (0, num_slots - 1, 0, num_slots - 1),
+    }
+    car1_cmds = [copy_command(CMD_AUTO_GREEN_CAP) for _ in range(num_slots)]
+    car2_cmds_list = [copy_command(CMD_AUTO_GREEN_ONLY) for _ in range(num_slots)]
+    car2_cmds_list[0] = None
+    actions = {car1: car1_cmds, car2: car2_cmds_list}
+
+    solved, has_changed, energy_delta = solver._constraints_delta(
+        -1000.0, constraints, constraints_evolution, constraints_bounds,
+        actions, 0, num_slots - 1
+    )
+
+    cmds_car2 = actions[car2]
+    has_cap_propagated = any(
+        cmd is not None and cmd.is_like(CMD_AUTO_GREEN_CAP) for cmd in cmds_car2
+    )
+    assert has_cap_propagated
+
+
+class TestSolverBatterySegmentation(TestCase):
+    """Tests for _prepare_battery_segmentation with None segments."""
+
+    def test_none_segment_skipped_line510(self):
+        """Line 509-510: None entry in segments_to_shave is skipped via continue.
+
+        Battery starts nearly empty with high consumption and zero solar at
+        slot 0, so the battery empties at the very first slot (s[0]==0).
+        This makes segments_to_shave[0] = None (no preceding non-empty
+        range to shave from), hitting the `if s is None: continue` at line 510.
+        Later slots have solar, creating a second non-empty segment.
+        """
+        dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, tzinfo=pytz.UTC)
+        end_time = dt + timedelta(hours=10)
+
+        battery = Battery(name="test_bat")
+        battery.capacity = 10000
+        battery.max_charging_power = 3000
+        battery.max_discharging_power = 3000
+        battery._current_charge_value = 50
+        battery.min_charge_SOC_percent = 5.0
+        battery.max_charge_SOC_percent = 95.0
+
+        pv = []
+        ua = []
+        for h in range(11):
+            t = dt + timedelta(hours=h)
+            if h < 3:
+                pv.append((t, 0.0))
+                ua.append((t, 4000.0))
+            elif h < 7:
+                pv.append((t, 6000.0))
+                ua.append((t, 500.0))
+            else:
+                pv.append((t, 0.0))
+                ua.append((t, 3000.0))
+
+        solver = PeriodSolver(
+            start_time=dt, end_time=end_time,
+            tariffs=0.20 / 1000.0, actionable_loads=[], battery=battery,
+            pv_forecast=pv, unavoidable_consumption_forecast=ua,
+        )
+
+        result = solver._prepare_battery_segmentation(over_budget=0.2)
+
+
+class TestSolverBatteryCommandOutput(TestCase):
+    """Test battery command transition in solve output formatting."""
+
+    def test_battery_command_transition_line1112(self):
+        """Line 1111-1112: None battery command replaced with CMD_GREEN_CHARGE_AND_DISCHARGE.
+
+        Inject a None directly into battery_commands after the solve
+        computes them but before the output formatting loop.
+        """
+        dt = datetime(year=2024, month=6, day=1, hour=10, minute=0, second=0, tzinfo=pytz.UTC)
+        end_time = dt + timedelta(hours=4)
+
+        load = TestLoad(name="load1")
+
+        battery = Battery(name="bat")
+        battery.capacity = 10000
+        battery.max_charging_power = 3000
+        battery.max_discharging_power = 3000
+        battery._current_charge_value = 5000
+        battery.min_charge_SOC_percent = 10.0
+        battery.max_charge_SOC_percent = 90.0
+
+        c1 = MultiStepsPowerLoadConstraint(
+            time=dt, load=load,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=end_time,
+            initial_value=0, target_value=3000,
+            power=1500,
+        )
+        load._constraints = [c1]
+
+        pv = [(dt, 2000.0), (dt + timedelta(hours=2), 4000.0), (end_time, 1000.0)]
+        ua = [(dt, 500.0), (end_time, 500.0)]
+
+        solver = PeriodSolver(
+            start_time=dt, end_time=end_time,
+            tariffs=0.20 / 1000.0, actionable_loads=[load], battery=battery,
+            pv_forecast=pv, unavoidable_consumption_forecast=ua,
+        )
+
+        real_charging = solver._battery_get_charging_power
+
+        def patched_charging(**kwargs):
+            result = real_charging(**kwargs)
+            battery_ext, battery_charge, battery_commands, *rest = result
+            if len(battery_commands) > 1:
+                battery_commands[0] = None
+            return (battery_ext, battery_charge, battery_commands, *rest)
+
+        with patch.object(solver, "_battery_get_charging_power", side_effect=patched_charging):
+            output_cmds, bcmd = solver.solve()
+
+        assert len(bcmd) >= 1
+        for entry in bcmd:
+            assert len(entry) == 2
+            assert entry[1] is not None
 

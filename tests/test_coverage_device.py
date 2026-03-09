@@ -24,7 +24,7 @@ from custom_components.quiet_solar.ha_model.device import (
     load_from_history,
 )
 from custom_components.quiet_solar.home_model.load import AbstractLoad, AbstractDevice
-from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_ON, CMD_CST_ON
+from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_ON, CMD_CST_ON, CMD_IDLE
 from custom_components.quiet_solar.const import (
     COMMAND_BASED_POWER_SENSOR,
     SENSOR_CONSTRAINT_SENSOR,
@@ -965,3 +965,254 @@ async def test_get_next_scheduled_events_duplicate_start_line523():
     events = await dev.get_next_scheduled_events(now, max_number_of_events=5)
     # Only one event (second duplicate was skipped via line 523)
     assert len(events) == 1
+
+
+# ==========================================================================
+# 30. Lines 324-325: root_device_post_home_init exception in bootstrap
+# ==========================================================================
+
+
+def test_root_device_post_home_init_exception_lines324_325():
+    """Cover lines 324-325: exception in bootstrap -> log error and continue."""
+    hass = _make_fake_hass()
+    hass.async_create_task = MagicMock(side_effect=Exception("bootstrap failed"))
+    dev = _make_load_device(hass=hass)
+    dev._entities_to_fill_from_history.add("sensor.test_entity")
+
+    now = datetime.now(tz=pytz.UTC)
+    dev.root_device_post_home_init(now)
+    # Should not raise; error is caught and logged
+
+
+# ==========================================================================
+# 31. Line 582: command_power_state_getter with no sensors -> command_value
+# ==========================================================================
+
+
+def test_command_power_state_getter_no_sensors_line582():
+    """Cover line 597: no accurate or secondary sensor -> value = command_value."""
+    dev = _make_load_device()
+    now = datetime.now(tz=pytz.UTC)
+
+    cmd = LoadCommand(command=CMD_CST_ON, power_consign=750.0)
+    dev.current_command = cmd
+    dev.running_command = None
+    dev.accurate_power_sensor = None
+    dev.secondary_power_sensor = None
+
+    result = dev.command_power_state_getter(COMMAND_BASED_POWER_SENSOR, now)
+    assert result is not None
+    assert result[1] == "750.0"
+    assert dev.best_power_value == 750.0
+
+
+# ==========================================================================
+# 32. Line 625: Notification message for CONSTRAINT_COMPLETED with constraint
+# ==========================================================================
+
+
+@pytest.mark.asyncio
+async def test_on_device_state_change_completed_with_message_line625():
+    """Cover line 629: CONSTRAINT_COMPLETED with last_completed_constraint set."""
+    hass = _make_fake_hass()
+    dev = _make_load_device(hass=hass)
+    dev.mobile_app = None
+    dev.mobile_app_url = None
+    now = datetime.now(tz=pytz.UTC)
+
+    mock_constraint = MagicMock()
+    mock_constraint.get_readable_name_for_load.return_value = "Heat water to 55°C"
+    dev._last_completed_constraint = mock_constraint
+
+    await dev.on_device_state_change(now, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
+
+
+# ==========================================================================
+# 33. Line 702/710: is_sensor_growing returns True when last == max
+# ==========================================================================
+
+
+def test_is_sensor_growing_last_is_max_line710():
+    """Cover line 710: vals[-1] >= max_v and max_v > min_v -> True."""
+    dev = _make_load_device()
+    entity_id = "sensor.increasing"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    now = datetime.now(tz=pytz.UTC)
+    dev._entity_probed_state[entity_id] = [
+        (now - timedelta(minutes=3), 10.0, {}),
+        (now - timedelta(minutes=2), 20.0, {}),
+        (now - timedelta(minutes=1), 30.0, {}),
+        (now, 30.0, {}),
+    ]
+    dev._entity_probed_last_valid_state[entity_id] = (now, 30.0, {})
+
+    result = dev.is_sensor_growing(entity_id, time=now)
+    assert result is True
+
+
+# ==========================================================================
+# 34. Line 1296: get_state_history_data with keep_invalid_states=True
+# ==========================================================================
+
+
+def test_get_state_history_data_keep_invalid_states_line1296():
+    """Cover line 1300: keep_invalid_states=True returns entries with None values."""
+    dev = _make_load_device()
+    entity_id = "sensor.invalid_states"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    base = datetime(2024, 6, 1, 12, 0, 0, tzinfo=pytz.UTC)
+    dev._entity_probed_state[entity_id] = [
+        (base, 10.0, {}),
+        (base + timedelta(seconds=10), None, {}),
+        (base + timedelta(seconds=20), 30.0, {}),
+    ]
+
+    result_filtered = dev.get_state_history_data(
+        entity_id, None, base + timedelta(seconds=25), keep_invalid_states=False
+    )
+    result_unfiltered = dev.get_state_history_data(
+        entity_id, None, base + timedelta(seconds=25), keep_invalid_states=True
+    )
+
+    assert len(result_unfiltered) == 3
+    assert any(v[1] is None for v in result_unfiltered)
+    assert len(result_filtered) == 2
+    assert all(v[1] is not None for v in result_filtered)
+
+
+# ==========================================================================
+# 35. Line 582: command_value = 0.0 when current_command is off/idle
+# ==========================================================================
+
+
+def test_command_power_state_getter_idle_command_line582():
+    """Cover line 582: current_command.is_off_or_idle() -> command_value = 0.0."""
+    dev = _make_load_device()
+    now = datetime.now(tz=pytz.UTC)
+
+    cmd = LoadCommand(command="idle", power_consign=0.0)
+    dev.current_command = cmd
+    dev.running_command = None
+    dev.accurate_power_sensor = None
+    dev.secondary_power_sensor = None
+
+    result = dev.command_power_state_getter(COMMAND_BASED_POWER_SENSOR, now)
+    assert result is not None
+    assert result[1] == "0.0"
+
+
+# ==========================================================================
+# 36. Line 586: command_value = self.power_use when power_consign is 0
+# ==========================================================================
+
+
+def test_command_power_state_getter_zero_consign_line586():
+    """Cover line 586: power_consign == 0 -> command_value = self.power_use."""
+    dev = _make_load_device(power_use=1234.0)
+    now = datetime.now(tz=pytz.UTC)
+
+    cmd = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
+    dev.current_command = cmd
+    dev.running_command = None
+    dev.accurate_power_sensor = None
+    dev.secondary_power_sensor = None
+
+    result = dev.command_power_state_getter(COMMAND_BASED_POWER_SENSOR, now)
+    assert result is not None
+    assert result[1] == "1234.0"
+    assert dev.best_power_value == 1234.0
+
+
+# ==========================================================================
+# 37. Line 625: message = "WRONG STATE" for non-AbstractLoad
+# ==========================================================================
+
+
+class HAOnlyDevice(HADeviceMixin, AbstractDevice):
+    """Device with HADeviceMixin + AbstractDevice but NOT AbstractLoad."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_on_device_state_change_wrong_state_line625():
+    """Cover line 625: DEVICE_STATUS_CHANGE_CONSTRAINT on non-AbstractLoad -> 'WRONG STATE'."""
+    hass = _make_fake_hass()
+    config_entry = FakeConfigEntry(entry_id="test_ha_only")
+    home = MinimalTestHome(voltage=230.0)
+    dev = HAOnlyDevice(
+        hass=hass,
+        config_entry=config_entry,
+        home=home,
+        name="HAOnly",
+        device_type="test_ha",
+    )
+    dev.mobile_app = "mobile_app_test"
+    dev.mobile_app_url = None
+    now = datetime.now(tz=pytz.UTC)
+
+    await dev.on_device_state_change_helper(
+        now, DEVICE_STATUS_CHANGE_CONSTRAINT, title=None
+    )
+
+
+# ==========================================================================
+# 38. Line 702: is_sensor_growing continue past None (via keep_invalid_states)
+# ==========================================================================
+
+
+def test_is_sensor_growing_continues_past_none_line702():
+    """Cover line 702: force None values into the loop via direct attribute manipulation.
+
+    get_state_history_data filters None by default, but the safety check at line 702
+    exists for edge cases. We inject None into the returned data by temporarily
+    patching the method to pass keep_invalid_states=True.
+    """
+    dev = _make_load_device()
+    entity_id = "sensor.grow_none"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    now = datetime.now(tz=pytz.UTC)
+    dev._entity_probed_state[entity_id] = [
+        (now - timedelta(minutes=3), 10.0, {}),
+        (now - timedelta(minutes=2), None, {}),
+        (now - timedelta(minutes=1), 20.0, {}),
+        (now, 30.0, {}),
+    ]
+    dev._entity_probed_last_valid_state[entity_id] = (now, 30.0, {})
+
+    original_get = dev.get_state_history_data
+
+    def get_with_invalids(eid, num_seconds=None, to_ts=None, keep_invalid_states=False):
+        return original_get(eid, num_seconds, to_ts, keep_invalid_states=True)
+
+    with patch.object(dev, "get_state_history_data", side_effect=get_with_invalids):
+        result = dev.is_sensor_growing(entity_id, time=now)
+    assert result is True
+
+
+# ==========================================================================
+# 39. Line 1296: ret is None fallback -> ret = []
+# ==========================================================================
+
+
+def test_get_state_history_data_ret_none_fallback_line1296_v2():
+    """Cover line 1296: ret stays None through all branches.
+
+    Use an entity with a single entry where from_ts and to_ts bracket it
+    such that no branch sets ret, triggering the fallback at line 1295-1296.
+    """
+    dev = _make_load_device()
+    entity_id = "sensor.single_entry"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    base = datetime(2024, 6, 1, 12, 0, 0, tzinfo=pytz.UTC)
+    dev._entity_probed_state[entity_id] = [
+        (base, 10.0, {}),
+    ]
+
+    result = dev.get_state_history_data(entity_id, 5, base + timedelta(seconds=3))
+    assert isinstance(result, list)

@@ -145,6 +145,15 @@ MOCK_SOLAR_WITH_INPUT_CONFIG = {
     CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR: "sensor.solar_inverter_input",
 }
 
+# Mock Solar configuration with ONLY input power sensor (no active power)
+MOCK_SOLAR_INPUT_ONLY_CONFIG = {
+    CONF_NAME: "Test Solar Input Only",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSSolar,
+    CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR: "sensor.solar_inverter_input",
+}
+
+MOCK_SOLAR_INPUT_ONLY_ENTRY_ID = "solar_input_only_entry_123"
+
 # Mock Dynamic Group configuration
 MOCK_DYNAMIC_GROUP_CONFIG = {
     CONF_NAME: "Test Charger Group",

@@ -149,6 +149,27 @@ async def test_qs_button_entity_press():
     assert press_called is True
 
 
+@pytest.mark.asyncio
+async def test_qs_button_entity_press_with_home():
+    """Test button press triggers force_update_all when device.home is set."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock()
+    mock_device = create_mock_device("test", home=mock_home)
+
+    mock_description = QSButtonEntityDescription(
+        key="test_button",
+        translation_key="test",
+        async_press=AsyncMock(),
+    )
+
+    button = QSButtonEntity(mock_handler, mock_device, mock_description)
+    await button.async_press()
+
+    mock_home.force_update_all.assert_awaited_once()
+
+
 def test_qs_button_entity_availability_disabled_device():
     """Test button unavailable when device disabled."""
     mock_handler = MagicMock()

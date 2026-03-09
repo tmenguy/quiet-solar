@@ -378,6 +378,146 @@ class TestHungarianAlgorithm:
         assert total_cost == 106
 
 
+class TestHungarianInternalPaths:
+    """Tests targeting specific internal code paths of the Hungarian algorithm."""
+
+    def test_no_zeros_in_try_assign(self):
+        """Line 210: _try_assign returns None when cost matrix has no zeros.
+
+        After row/col reduction, a uniform matrix has all zeros, so we
+        construct a scenario where _try_assign is called on a modified matrix
+        that has had its zeros removed by the covering/adjustment step.
+        We verify correctness of the final result instead.
+        """
+        from custom_components.quiet_solar.home_model.home_utils import _try_assign
+
+        cost_matrix = np.array([
+            [3, 5, 7],
+            [2, 4, 6],
+            [1, 3, 5]
+        ], dtype=np.float64)
+
+        result = _try_assign(cost_matrix)
+        assert result is None
+
+    def test_row_zero_count_zero_skipped_in_try_assign(self):
+        """Line 222: _try_assign skips rows that have zero zero-count.
+
+        Construct a matrix where after reduction at least one row has no zeros,
+        so the sorted_rows loop hits the 'continue' for row_zero_counts[row]==0.
+        """
+        from custom_components.quiet_solar.home_model.home_utils import _try_assign
+
+        cost_matrix = np.array([
+            [0, 5, 5],
+            [5, 0, 5],
+            [3, 3, 3]
+        ], dtype=np.float64)
+
+        result = _try_assign(cost_matrix)
+        assert result is None
+
+    def test_row_zero_count_zero_in_find_minimum_cover(self):
+        """Line 294: _find_minimum_cover skips rows with no zeros.
+
+        Use a matrix where one row has no zeros so that the row is skipped
+        during the greedy matching inside _find_minimum_cover.
+        """
+        from custom_components.quiet_solar.home_model.home_utils import _find_minimum_cover
+
+        cost_matrix = np.array([
+            [0, 5, 5],
+            [5, 0, 5],
+            [3, 3, 3]
+        ], dtype=np.float64)
+
+        covered_rows, covered_cols = _find_minimum_cover(cost_matrix)
+
+        assert covered_rows.shape == (3,)
+        assert covered_cols.shape == (3,)
+        assert covered_rows.sum() + covered_cols.sum() >= 2
+
+    def test_all_covered_break_path(self):
+        """Line 190: break when all elements are covered (len(uncovered_values)==0).
+
+        Use a degenerate matrix where the covering lines cover everything but
+        no perfect matching exists, forcing the break.
+        """
+        cost_matrix = np.array([
+            [1, 2, 3],
+            [2, 4, 6],
+            [3, 6, 9]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 3
+        assert len(set(assignment.values())) == 3
+        total_cost = sum(cost_matrix[r, c] for r, c in assignment.items())
+        assert total_cost <= 15
+
+    def test_greedy_fallback_path(self):
+        """Lines 199-201: fallback to _greedy_assignment after max iterations.
+
+        Verify the algorithm still returns a valid assignment even on
+        pathological inputs that might exhaust the iteration count.
+        The [[5,9,1],[10,3,2],[8,7,4]] matrix requires multiple adjustment
+        rounds.
+        """
+        cost_matrix = np.array([
+            [5, 9, 1],
+            [10, 3, 2],
+            [8, 7, 4]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 3
+        assert len(set(assignment.values())) == 3
+        total_cost = sum(cost_matrix[r, c] for r, c in assignment.items())
+        assert total_cost <= 15
+
+    def test_proportional_matrix_degenerate(self):
+        """Degenerate matrix where rows are proportional (rank 1).
+
+        After row reduction all entries become zero, making covering trivial
+        but assignment still valid.
+        """
+        cost_matrix = np.array([
+            [2, 4, 6],
+            [1, 2, 3],
+            [3, 6, 9]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 3
+        assert len(set(assignment.values())) == 3
+
+    def test_5x5_forces_multiple_cover_adjustments(self):
+        """5x5 matrix that needs multiple cover/adjustment iterations,
+        exercising the uncovered_mask computation and min_uncovered subtraction.
+        """
+        cost_matrix = np.array([
+            [7, 53, 183, 439, 56],
+            [8, 72, 164, 378, 36],
+            [21, 6, 104, 289, 8],
+            [11, 46, 133, 316, 22],
+            [28, 29, 83, 198, 13]
+        ], dtype=np.float64)
+
+        assignment = hungarian_algorithm(cost_matrix)
+
+        assert len(assignment) == 5
+        assert len(set(assignment.values())) == 5
+
+        from scipy.optimize import linear_sum_assignment
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        scipy_cost = cost_matrix[row_ind, col_ind].sum()
+        our_cost = sum(cost_matrix[r, c] for r, c in assignment.items())
+        assert abs(our_cost - scipy_cost) < 1e-6
+
+
 class TestHungarianEdgeCases:
     """Test edge cases and error conditions."""
 
@@ -1082,6 +1222,67 @@ class TestPreAllocateUnpluggedHomeCars:
         assert "Zoe" not in covered_cars
         assert "Arthur" not in covered_persons
         assert "Magali" not in covered_persons
+
+
+class TestHungarianAlgorithmBreakWhenAllCovered:
+    """Test the break-when-all-covered path in hungarian_algorithm (line 190)."""
+
+    def test_all_covered_after_reduction_triggers_break(self):
+        """Line 188-190: all elements covered -> break -> fallback greedy.
+
+        Patch _try_assign to return None on the first call so the algorithm
+        enters the covering loop. On an all-zeros matrix, _find_minimum_cover
+        covers all rows+columns, leaving no uncovered values and hitting
+        the break at line 190, then the greedy fallback at line 199.
+        """
+        from unittest.mock import patch as _patch
+
+        cost = np.array([
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ])
+        call_count = [0]
+        real_try_assign = __import__(
+            "custom_components.quiet_solar.home_model.home_utils",
+            fromlist=["_try_assign"],
+        )._try_assign
+
+        def fake_try_assign(cm):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None
+            return real_try_assign(cm)
+
+        with _patch(
+            "custom_components.quiet_solar.home_model.home_utils._try_assign",
+            side_effect=fake_try_assign,
+        ):
+            result = hungarian_algorithm(cost)
+
+        assert len(result) == 2
+        assert len(set(result.values())) == 2
+
+    def test_all_zeros_rectangular_triggers_greedy_fallback(self):
+        """Test rectangular matrix that may trigger the greedy fallback."""
+        cost = np.array([
+            [1.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 1.0],
+        ])
+        result = hungarian_algorithm(cost)
+        assert len(result) == 2
+        assert len(set(result.values())) == 2
+
+    def test_identical_rows_assignment(self):
+        """Matrix with identical rows stresses the algorithm."""
+        cost = np.array([
+            [5.0, 5.0, 5.0],
+            [5.0, 5.0, 5.0],
+            [5.0, 5.0, 5.0],
+        ])
+        result = hungarian_algorithm(cost)
+        assert len(result) == 3
+        assert len(set(result.values())) == 3
 
 
 if __name__ == "__main__":

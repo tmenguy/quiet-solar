@@ -170,3 +170,40 @@ def test_pool_power_use():
     """Test pool power consumption setting."""
     pool = FakeQSPool(power=2000)
     assert pool.power_use == 2000
+
+
+def test_pool_update_current_metrics_with_last_completed_constraint():
+    """Test update_current_metrics includes _last_completed_constraint (line 60)."""
+    from custom_components.quiet_solar.ha_model.pool import QSPool
+    from custom_components.quiet_solar.home_model.constraints import (
+        TimeBasedSimplePowerLoadConstraint,
+        DATETIME_MIN_UTC,
+    )
+    from custom_components.quiet_solar.home_model.commands import LoadCommand
+
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=1)
+
+    completed_ct = MagicMock()
+    completed_ct.end_of_constraint = end
+    completed_ct.start_of_constraint = now - timedelta(hours=1)
+    completed_ct.target_value = 3600.0
+    completed_ct.current_value = 1800.0
+
+    active_ct = MagicMock()
+    active_ct.end_of_constraint = end
+    active_ct.start_of_constraint = now
+    active_ct.target_value = 7200.0
+    active_ct.current_value = 3600.0
+
+    pool = FakeQSPool()
+    pool._last_completed_constraint = completed_ct
+    pool._constraints = [active_ct]
+    pool.qs_bistate_current_on_h = 0.0
+    pool.qs_bistate_current_duration_h = 0.0
+    pool.get_next_time_from_hours = MagicMock(return_value=now + timedelta(hours=24))
+
+    QSPool.update_current_metrics(pool, now)
+
+    assert pool.qs_bistate_current_on_h == (1800.0 + 3600.0) / 3600.0
+    assert pool.qs_bistate_current_duration_h == (3600.0 + 7200.0) / 3600.0

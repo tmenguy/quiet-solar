@@ -686,9 +686,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # pull last 14 days; compute efficiency only from segments where SOC decreases
         if self.hass is None:
             return
-        if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
-            return
-        if self.car_battery_capacity is None or self.car_battery_capacity <= 0:
+        if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None or self.car_battery_capacity is None or self.car_battery_capacity <= 0:
             return
 
         start_time = time - timedelta(days=31)
@@ -731,10 +729,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # Helper to get odometer value at or before time (using bisect with key)
         def _odo_at(ts):
             idx = bisect.bisect_right(odo_series, ts, key=itemgetter(0)) - 1
-            if idx < 0:
-                return odo_series[0][1]
-            if idx >= len(odo_series):
-                return odo_series[-1][1]
+            idx = min(idx, len(odo_series) - 1)
             return odo_series[idx][1]
 
         total_energy_kwh = 0.0
@@ -760,20 +755,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             delta_soc = float(soc0 - soc1)
 
-            if delta_soc <= 0.0:
-                continue
+            # we are in a decreasing segment, but maybe with no real SOC decrease, so we check that before counting it
+            # we should keep it as we are decreasing
+            # if delta_soc < 0.0:
+            #    continue
 
-            if odo0 is None or odo1 is None:
-                continue
+            # impossible to have values at Noe
+            # if odo0 is None or odo1 is None:
+            #    continue
 
             delta_km = float(odo1 - odo0)
 
-            if delta_km <= 0.0:
-                continue
-
-            energy_kwh = (delta_soc / 100.0) * cap_kwh
-            total_energy_kwh += energy_kwh
-            total_distance_km += delta_km
+            if delta_km > 0.0 and delta_soc >= 0:
+                energy_kwh = (delta_soc / 100.0) * cap_kwh
+                total_energy_kwh += energy_kwh
+                total_distance_km += delta_km
 
 
         if total_energy_kwh <= 0.0 or total_distance_km <= 1.0:
@@ -852,10 +848,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 return None, None
 
             state, state_attr = self.get_sensor_latest_possible_valid_value_and_attr(entity_id=self.car_tracker, time=time)
-            if state is None:
-                return None, None
 
-            if state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+            if state in [STATE_UNKNOWN, STATE_UNAVAILABLE, None]:
                 return None, None
 
             if state_attr is None:
@@ -1087,11 +1081,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if self.car_charge_percent_max_number_steps and len(self.car_charge_percent_max_number_steps) >= 1:
             p_idx = bisect.bisect_left(self.car_charge_percent_max_number_steps, percent)
-            if p_idx >= len(self.car_charge_percent_max_number_steps):
-                percent = self.car_charge_percent_max_number_steps[-1]
-            else:
-                # get the one that is the closest to the percent but bigger or equal
-                percent = self.car_charge_percent_max_number_steps[p_idx]
+            p_idx = min(p_idx, len(self.car_charge_percent_max_number_steps) - 1)
+            # get the one that is the closest to the percent but bigger or equal
+            percent = self.car_charge_percent_max_number_steps[p_idx]
 
         current_charge_limit = self.get_max_charge_limit()
         if current_charge_limit != percent:

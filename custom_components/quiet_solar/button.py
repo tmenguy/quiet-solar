@@ -257,9 +257,6 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     @callback
     def async_update_callback(self, time:datetime) -> None:
         """Update the entity's state."""
-        if self.hass is None:
-            return
-
         self._set_availabiltiy()
 
         self.async_write_ha_state()

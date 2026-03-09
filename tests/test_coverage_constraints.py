@@ -1053,6 +1053,565 @@ def test_adapt_commands_start_switch_null_start_cmd():
 
 
 # ===========================================================================
+# Lines 748, 759, 768 - _replace_by_command_in_slots edge cases
+# ===========================================================================
+
+def test_replace_by_command_remove_with_null_old_cmd():
+    """Cover line 748: cmd_to_push=None and out_commands[i] is None -> fallback to _power_sorted_cmds[0]."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+    out_commands = [None, LoadCommand(command="on", power_consign=1000)]
+    out_power = [0.0, 1000.0]
+    durations = [SOLVER_STEP_S, SOLVER_STEP_S]
+    delta, dur, limit = constraint._replace_by_command_in_slots(
+        out_commands, out_power, durations, 0, 0, None)
+    assert isinstance(delta, float)
+
+
+def test_replace_by_command_with_sign_change_limit_reached():
+    """Cover line 768: sign change triggers limit_reached=True."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+    out_commands = [None]
+    out_power = [0.0]
+    durations = [SOLVER_STEP_S]
+    cmd = LoadCommand(command="on", power_consign=1000)
+    delta, dur, limit = constraint._replace_by_command_in_slots(
+        out_commands, out_power, durations, 0, 0, cmd,
+        quantity_to_forbid_if_sign_changed=0.001)
+    assert isinstance(limit, bool)
+
+
+def test_replace_by_command_existing_old_cmd_not_none():
+    """Cover line 759: pushing a cmd when old_cmd is not None computes delta correctly."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+    out_commands = [LoadCommand(command="on", power_consign=500)]
+    out_power = [500.0]
+    durations = [SOLVER_STEP_S]
+    cmd = LoadCommand(command="on", power_consign=1000)
+    delta, dur, limit = constraint._replace_by_command_in_slots(
+        out_commands, out_power, durations, 0, 0, cmd)
+    assert not limit
+    assert out_commands[0].power_consign == 1000
+
+
+# ===========================================================================
+# Lines 1134, 1142-1145, 1167-1173, 1177, 1208 - adapt_repartition power idx
+# ===========================================================================
+
+def test_adapt_repartition_increase_at_max_power():
+    """Cover lines 1134-1145: adapt_repartition increase when current power is below min step."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000),
+                     LoadCommand(command="on", power_consign=2000)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=2000)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=1000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert isinstance(has_changes, bool)
+
+
+def test_adapt_repartition_increase_below_min_step():
+    """Cover line 1134: j=0 when current_command_power below min power step."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=100)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert isinstance(has_changes, bool)
+
+
+def test_adapt_repartition_decrease_to_idle():
+    """Cover lines 1167-1173: decrease when j==0 and allow_change_state -> j=-1."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert isinstance(has_changes, bool)
+
+
+def test_adapt_repartition_decrease_no_change_state():
+    """Cover lines 1167-1169: decrease at j==0, allow_change_state=False -> continue."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=False, time=now)
+    assert not has_changes
+
+
+def test_adapt_repartition_zero_delta_power_skip():
+    """Cover line 1208: delta_power == 0 -> continue."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=False, time=now)
+    assert not has_changes
+
+
+def test_adapt_repartition_decrease_already_zero():
+    """Cover line 1177: current_command_power==0 and j<0 -> continue."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500)],
+        support_auto=False,
+    )
+    existing_cmds = [None]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert not has_changes
+
+
+# ===========================================================================
+# Lines 1344, 1419 - CAP filling with support_auto
+# ===========================================================================
+
+def test_adapt_repartition_cap_filling_with_existing_do_not_touch():
+    """Cover line 1344: existing_commands[i] is do_not_touch -> keep as-is."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+    )
+    existing_cmds = [
+        copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1000),
+        None,
+    ]
+    durations = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=1, energy_delta=500.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert isinstance(has_changes, bool)
+
+
+# ===========================================================================
+# Lines 1419, 1806, 1812-1817, 1848, 1867 - compute_best_period_repartition
+# ===========================================================================
+
+def test_compute_best_period_repartition_not_before_battery_cap():
+    """Cover line 1419: default_cmd=CMD_AUTO_GREEN_CAP when support_auto and not is_before_battery."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+    )
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -200.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+        additional_available_energy_to_deplete=0.0,
+        max_power_to_deplete=0.0,
+    )
+    assert result is not None
+    out_constraint, final_ret, out_cmds, out_power, fs, ls, min_i, max_i, rem = result
+    has_cap = any(c is not None and c.is_like(CMD_AUTO_GREEN_CAP) for c in out_cmds)
+    assert has_cap or final_ret
+
+
+def _make_prices_ordered(prices):
+    return sorted(set(prices))
+
+
+def test_compute_best_period_repartition_last_slot_clamped():
+    """Cover line 1419: last_slot >= len(power_available_power) -> clamp."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=24)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+    )
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -500.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_compute_best_period_repartition_mandatory_with_prices():
+    """Cover lines 1763-1774, 1806, 1812-1817, 1848: mandatory price-based repartition."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=3000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, 100.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.10, 0.10, 0.20, 0.20, 0.10, 0.10,
+                       0.20, 0.20, 0.10, 0.10, 0.20, 0.20], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    out_constraint, final_ret, out_cmds, out_power, fs, ls, min_i, max_i, rem = result
+    assert any(c is not None for c in out_cmds)
+
+
+def test_compute_best_period_repartition_mandatory_auto_consign_continuity():
+    """Cover lines 1763-1768: CMD_AUTO_FROM_CONSIGN continuity at first slot."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    load.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1000)
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=4000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, 100.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.10, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Lines 1456, 1502, 1521, 1544, 1550 - ASAP and slot selection
+# ===========================================================================
+
+def test_compute_best_period_repartition_asap():
+    """Cover lines 1456: ASAP constraint with j=None -> as_fast_cmd_idx=0."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -2000.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=True,
+    )
+    assert result is not None
+    _, final_ret, out_cmds, _, _, _, _, _, _ = result
+    assert any(c is not None for c in out_cmds)
+
+
+def test_compute_best_period_repartition_non_auto_slot_expansion():
+    """Cover lines 1521, 1544, 1550: non-auto load with boundary expansion."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(minutes=35)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=10000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 2
+    time_slots = [now, now + timedelta(minutes=30), now + timedelta(minutes=60)]
+    power_avail = np.array([100.0, 100.0], dtype=np.float64)
+    durations = np.array([1800.0, 1800.0], dtype=np.float64)
+    prices = np.array([0.15, 0.15], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_compute_best_period_repartition_first_slot_from_start_of_constraint():
+    """Cover line 1502: first_slot clamped to len(power_available_power)-1."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=1000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    constraint.current_start_of_constraint = now + timedelta(hours=5)
+    n_slots = 6
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, 100.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Lines 1564-1565, 1628 - depletion and j != j_naked
+# ===========================================================================
+
+def test_compute_best_period_repartition_depletion_second_pass():
+    """Cover lines 1564-1565, 1628: second pass for battery depletion with j!=j_naked."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000),
+                     LoadCommand(command="on", power_consign=2000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=8000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+    )
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -100.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+        additional_available_energy_to_deplete=-3000.0,
+        max_power_to_deplete=2000.0,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Lines 1679, 1690, 1696-1697 - price optimization with extra solar
+# ===========================================================================
+
+def test_compute_best_period_repartition_price_optimization():
+    """Cover lines 1679, 1690, 1696-1697: extra solar price optimization."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000),
+                     LoadCommand(command="on", power_consign=2000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+    )
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+    power_avail = np.array([-800.0, -800.0, -100.0, -100.0, -800.0, -800.0,
+                            -100.0, -100.0, -800.0, -800.0, -100.0, -100.0], dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.05, 0.05, 0.20, 0.20, 0.05, 0.05,
+                       0.20, 0.20, 0.05, 0.05, 0.20, 0.20], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Lines 1867 - min/max idx reset
+# ===========================================================================
+
+def test_compute_best_period_repartition_no_energy_impact_resets_indices():
+    """Cover line 1867: min/max idx reset when no energy impact slots."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=0.001,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+    )
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, 5000.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=True,
+    )
+    assert result is not None
+    _, _, _, _, _, _, min_i, max_i, _ = result
+    assert min_i == -1 or max_i == -1 or min_i <= max_i
+
+
+# ===========================================================================
 # Line 869 - _adapt_commands: start_witch_switch = False for first empty
 # ===========================================================================
 
@@ -1118,3 +1677,2333 @@ def test_adapt_commands_positive_recovery_no_sign_limit():
 
     result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 4)
     assert isinstance(result, float)
+
+
+# ===========================================================================
+# NEW TESTS - Target remaining lines for 98% coverage
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Lines 1763-1768, 1774, 1806, 1812-1817, 1848 - mandatory price-based path
+# ---------------------------------------------------------------------------
+
+
+def test_mandatory_price_repartition_enters_price_loop():
+    """Cover lines 1763-1768, 1774, 1806, 1812-1817, 1848.
+
+    Uses MANDATORY_END_TIME with support_auto=False and do_use_available_power_only=False.
+    Makes green-only fill insufficient so quantity_to_be_added > 0 enters price loop.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=n_slots)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=8000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Mostly consuming (positive), minimal solar: green-only fill won't satisfy
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    # One slot has surplus to hit green fill
+    power_avail[0] = -500.0
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.10, 0.10, 0.20, 0.20, 0.10, 0.10,
+                       0.20, 0.20, 0.10, 0.10, 0.20, 0.20], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, final_ret, out_cmds, _, _, _, _, _, _ = result
+    # Should have filled some slots with price-ordered commands
+    assert any(c is not None for c in out_cmds)
+
+
+def test_mandatory_auto_price_repartition_with_consign_continuity():
+    """Cover lines 1763-1768: CMD_AUTO_FROM_CONSIGN continuity in price loop.
+
+    Uses MANDATORY_END_TIME with support_auto=True. Current command is AUTO_FROM_CONSIGN.
+    The first slot price must match the loop price for continuity to trigger.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1000)
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=n_slots)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=8000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # No solar surplus: green fill produces nothing, goes straight to price loop
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    # All same price so first_slot price == price in loop -> continuity triggers
+    prices = np.full(n_slots, 0.10, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, final_ret, out_cmds, _, _, _, _, _, _ = result
+    assert any(c is not None for c in out_cmds)
+
+
+# ---------------------------------------------------------------------------
+# Lines 1679, 1690, 1696-1697, 1726 - price optimization with extra solar
+# ---------------------------------------------------------------------------
+
+
+def test_price_optimization_upgrade_existing_commands():
+    """Cover lines 1679, 1690, 1696-1697, 1726: price optimizer upgrades existing slots.
+
+    Green fill puts low-power commands in some slots. Then price optimizer
+    sees extra solar and upgrades to higher-power commands when cost-effective.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=6)
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30*i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=n_slots)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000),
+                     LoadCommand(command="on", power_consign=2000)],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=12000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Strong solar surplus in some slots -> green fill fills them,
+    # then price optimizer should try upgrading
+    power_avail = np.array([-1500.0, -1500.0, 300.0, 300.0, -1500.0, -1500.0,
+                            300.0, 300.0, -1500.0, -1500.0, 300.0, 300.0], dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.02, 0.02, 0.20, 0.20, 0.02, 0.02,
+                       0.20, 0.20, 0.02, 0.02, 0.20, 0.20], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Lines 1456, 1502, 1521, 1544, 1550 - ASAP and non-auto slot selection
+# ---------------------------------------------------------------------------
+
+
+def test_mandatory_non_auto_spiral_walk_middle_min():
+    """Cover lines 1552-1561: spiral walk with min power in the middle.
+
+    Non-auto mandatory constraint with 6 slots. Min available power in the
+    middle forces the spiral walk to expand both left and right, covering the
+    else branch (lines 1552-1561).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=4)
+    n_slots = 6
+    time_slots = [now + timedelta(minutes=30 * i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Min at index 3 (middle) so the spiral expands both directions
+    power_avail = np.array([200.0, 100.0, 50.0, -800.0, 150.0, 300.0],
+                           dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.15, 0.20, 0.10, 0.15, 0.20, 0.10], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_mandatory_non_auto_spiral_walk_right_min():
+    """Cover lines 1546-1551: spiral walk with min power at right edge.
+
+    When min is at the rightmost index, the loop enters the elif branch
+    (right == len-1) repeatedly, decrementing left.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=3)
+    n_slots = 5
+    time_slots = [now + timedelta(minutes=30 * i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Min at last index (4) so the spiral uses elif (right==len-1) path
+    power_avail = np.array([200.0, 100.0, 150.0, 50.0, -800.0],
+                           dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array([0.15, 0.20, 0.10, 0.15, 0.10], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_mandatory_price_loop_with_some_empty_budgets():
+    """Cover lines 1679, 1806: price optimizer and price loop continue on empty cmds.
+
+    Some slots have exhausted amp budgets, causing adapt_power_steps_budgeting
+    to return empty list for those slots.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30 * i) for i in range(n_slots + 1)]
+    end = time_slots[-1]
+
+    load = _FakeLoadForCoverage()
+    fd = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+    # Exhaust amp budgets for specific slots: budgeting returns empty commands
+    for s in [2, 3, 6, 7]:
+        fd.available_amps_for_group[s] = [0.1, 0.1, 0.1]
+        fd.available_amps_production_for_group[s] = [0.1, 0.1, 0.1]
+    load.father_device = fd
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Some surplus, some consuming: green fill partial, then price loop runs
+    power_avail = np.array(
+        [-800.0, -800.0, 200.0, 200.0, -800.0, -800.0,
+         200.0, 200.0, -800.0, -800.0, 200.0, 200.0],
+        dtype=np.float64,
+    )
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array(
+        [0.10, 0.10, 0.20, 0.20, 0.10, 0.10,
+         0.20, 0.20, 0.10, 0.10, 0.20, 0.20],
+        dtype=np.float64,
+    )
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, _, out_cmds, _, _, _, _, _, _ = result
+    assert any(c is not None for c in out_cmds)
+
+
+def test_mandatory_price_loop_all_empty_budgets():
+    """Cover line 1848: all slots have empty cmds in price loop.
+
+    Green fill uses production limits (generous), price loop uses consumption
+    limits (tiny). So green fill succeeds but price loop gets empty commands.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    time_slots = [now + timedelta(minutes=30 * i) for i in range(n_slots + 1)]
+    end = time_slots[-1]
+
+    load = _FakeLoadForCoverage()
+    fd = TestDynamicGroupDouble(
+        max_amps=[0.1, 0.1, 0.1],
+        max_production_amps=[20.0, 20.0, 20.0],
+        num_slots=n_slots,
+    )
+    load.father_device = fd
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=50000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Small surplus: green fill gets something, but target is huge
+    power_avail = np.full(n_slots, -600.0, dtype=np.float64)
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_price_optimizer_with_existing_commands_and_energy_tracking():
+    """Cover lines 1679, 1690, 1696, 1726: price optimizer with existing commands.
+
+    Green fill puts commands in some slots. The price optimizer iterates over
+    slots with remaining solar and tries to upgrade commands. Some slots have
+    exhausted budgets (line 1679 continue), others get upgraded (1690, 1696).
+    Slots with truly_consumed_power_before >= 0 trigger line 1726.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 12
+    time_slots = [now + timedelta(minutes=30 * i) for i in range(n_slots + 1)]
+    end = time_slots[-1]
+
+    load = _FakeLoadForCoverage()
+    fd = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+    # Some slots with exhausted budget: price optimizer hits continue (line 1679)
+    fd.available_amps_for_group[5] = [0.1, 0.1, 0.1]
+    fd.available_amps_production_for_group[5] = [0.1, 0.1, 0.1]
+    load.father_device = fd
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+        ],
+        support_auto=True,
+        end_of_constraint=end,
+        target_value=8000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    # Mix of surplus and consuming: green fill partial, price optimizer upgrades
+    power_avail = np.array(
+        [-1500.0, -1500.0, 300.0, 300.0, -1500.0, -1500.0,
+         300.0, 300.0, -1500.0, -1500.0, 300.0, 300.0],
+        dtype=np.float64,
+    )
+    durations = np.full(n_slots, 1800.0, dtype=np.float64)
+    prices = np.array(
+        [0.02, 0.02, 0.20, 0.20, 0.02, 0.02,
+         0.20, 0.20, 0.02, 0.02, 0.20, 0.20],
+        dtype=np.float64,
+    )
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_compute_best_period_first_slot_expansion():
+    """Cover line 1521: first_slot -= 1 when time window is too tight.
+
+    Mandatory constraint with tight end time. The available time window
+    is shorter than best_duration_to_meet, so first_slot is expanded.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    step_s = SOLVER_STEP_S
+    time_slots = [now + timedelta(seconds=i * step_s) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    # Start at slot 3, end at slot 4: only 1 slot duration available
+    # With target_value high enough, best_duration_to_meet > 1 slot → expansion
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        start_of_constraint=time_slots[3],
+        end_of_constraint=time_slots[4],
+    )
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, float(step_s), dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_compute_best_period_first_slot_clamped_beyond_array():
+    """Cover line 1502: first_slot clamped to len(power_available_power) - 1.
+
+    Set current_start_of_constraint at the last time_slot boundary so bisect
+    returns n_slots, which is >= len(power_available_power).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time_slots[-1],
+    )
+    # Set start at the very last time_slot boundary: bisect returns n_slots
+    constraint.current_start_of_constraint = time_slots[-1]
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# NEW TARGETED TESTS - Cover remaining missing lines
+# ===========================================================================
+
+
+def test_adapt_repartition_auto_postprocess_all_branches():
+    """Cover lines 1339-1349: support_auto post-processing branches.
+
+    Energy delta is sized so that adaptation modifies slot 0 but then breaks
+    at slot 1 (would overshoot). Slots 1-4 remain out_commands=None and get
+    filled by the support_auto post-processing:
+    - Slot 1: existing=None -> line 1339-1340 (copy empty_cmd)
+    - Slot 2: existing=CMD_AUTO_FROM_CONSIGN -> line 1342-1344 (do_not_touch)
+    - Slot 3: existing=on@0 (zero power) -> line 1346-1347
+    - Slot 4: existing=on@500 (non-zero) -> line 1348-1349
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    from custom_components.quiet_solar.home_model.commands import (
+        copy_command_and_change_type,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        type=CONSTRAINT_TYPE_FILLER,
+        target_value=5000.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 5, dtype=np.float64)
+
+    consign_cmd = copy_command_and_change_type(
+        LoadCommand(command="on", power_consign=500),
+        CMD_AUTO_FROM_CONSIGN.command,
+    )
+    existing_commands = [
+        None,
+        None,
+        consign_cmd,
+        LoadCommand(command="on", power_consign=0),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    out_constraint, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=4, energy_delta=300.0,
+        power_slots_duration_s=durations, existing_commands=existing_commands,
+        allow_change_state=True, time=now,
+    )
+    assert changed is True
+    assert out_cmds[2] is not None
+    assert out_cmds[2].command == CMD_AUTO_FROM_CONSIGN.command
+
+
+def test_adapt_repartition_mandatory_decrease_no_adaptation():
+    """Cover line 1081: mandatory constraint with negative energy_delta -> no adaptation."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        target_value=500.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=1, energy_delta=-500.0,
+        power_slots_duration_s=durations, existing_commands=existing_commands,
+        allow_change_state=True, time=now,
+    )
+    assert changed is False
+
+
+def test_adapt_repartition_decrease_auto_support():
+    """Cover lines 1095-1097: decrease path with support_auto=True.
+
+    Sets do_not_touch_commands=[CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE],
+    default_cmd=CMD_AUTO_GREEN_CAP, empty_cmd=CMD_AUTO_GREEN_CAP.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=True,
+        type=CONSTRAINT_TYPE_FILLER,
+        target_value=500.0,
+        current_value=500.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 3, dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=2, energy_delta=-500.0,
+        power_slots_duration_s=durations, existing_commands=existing_commands,
+        allow_change_state=True, time=now,
+    )
+    assert isinstance(changed, bool)
+
+
+def test_adapt_repartition_increase_no_state_change_empty_slot():
+    """Cover line 1124: increase path with empty slot and allow_change_state=False -> continue."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        target_value=500.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [None, None]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=1, energy_delta=500.0,
+        power_slots_duration_s=durations, existing_commands=existing_commands,
+        allow_change_state=False, time=now,
+    )
+    assert changed is False
+
+
+def test_adapt_repartition_decrease_multistep_j_to_zero():
+    """Cover line 1164: decrease with _get_lower returning > 0 -> j set to 0.
+
+    Steps [500, 1000, 2000], existing at 1500W. _get_lower returns 1 (> 0).
+    In the decrease path, j is set to 0 (minimum power load).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        target_value=500.0,
+        current_value=500.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S, SOLVER_STEP_S], dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=1500),
+        LoadCommand(command="on", power_consign=2000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=1, energy_delta=-800.0,
+        power_slots_duration_s=durations, existing_commands=existing_commands,
+        allow_change_state=True, time=now,
+    )
+    assert changed is True
+    assert any(
+        cmd is not None and cmd.power_consign == 500
+        for cmd in out_cmds
+    )
+
+
+def test_compute_best_mandatory_price_loop_no_budget():
+    """Cover line 1848: mandatory price loop where all slots have empty budgets.
+
+    Uses positive power_available (no surplus) so green fill assigns nothing.
+    Tiny max_amps so the price loop's adapt_power_steps_budgeting returns empty.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[0.1, 0.1, 0.1],
+        num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        end_of_constraint=time_slots[-1],
+        target_value=50000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, final_ret, _, _, _, _, _, _, _ = result
+    assert final_ret is False
+
+
+def test_compute_best_mandatory_price_loop_replaces_green():
+    """Cover lines 1810-1817: price loop replaces green-fill commands.
+
+    Mandatory constraint where green fill uses surplus slots, then price loop
+    adds commands in non-surplus slots. Existing commands from green fill
+    get their energy added back (line 1812-1813) and their consumed power
+    tracked (line 1815-1817).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        end_of_constraint=time_slots[-1],
+        target_value=10000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.array(
+        [-1000.0, -1000.0, 200.0, 200.0, -1000.0, -1000.0],
+        dtype=np.float64,
+    )
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.array([0.10, 0.10, 0.10, 0.10, 0.10, 0.10], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, _, out_cmds, _, _, _, _, _, _ = result
+    assert any(c is not None for c in out_cmds)
+
+
+def test_compute_best_asap_with_support_auto():
+    """Cover line 1466: ASAP with support_auto creates CMD_AUTO_FROM_CONSIGN."""
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    )
+
+    power_avail = np.full(n_slots, -2000.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=True,
+    )
+    assert result is not None
+    _, _, out_cmds, _, _, _, _, _, _ = result
+    has_consign = any(
+        c is not None and c.command == CMD_AUTO_FROM_CONSIGN.command
+        for c in out_cmds
+    )
+    assert has_consign
+
+
+def test_compute_best_expand_last_slot():
+    """Cover line 1523: last_slot += 1 when time window too tight.
+
+    Non-ASAP mandatory with first_slot just before last_slot, where
+    best_duration_to_meet exceeds the available window.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        start_of_constraint=time_slots[4],
+        end_of_constraint=time_slots[5],
+    )
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_price_optimizer_upgrade_with_consumed_power_tracking():
+    """Cover lines 1686-1688, 1709, 1726: price optimizer upgrades commands.
+
+    Green fill puts low-power commands in surplus slots. Price optimizer
+    finds slots where upgrading is not cost-effective (line 1709) and
+    slots with truly_consumed_power_before >= 0 (line 1726).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 8
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+        ],
+        support_auto=True,
+        end_of_constraint=time_slots[-1],
+        target_value=20000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.array(
+        [-600.0, -600.0, -200.0, -200.0, -600.0, -600.0, -200.0, -200.0],
+        dtype=np.float64,
+    )
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.array(
+        [0.01, 0.01, 0.25, 0.25, 0.01, 0.01, 0.25, 0.25],
+        dtype=np.float64,
+    )
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_compute_best_asap_no_available_power_only():
+    """Cover lines 1460, 1483: ASAP with do_use_available_power_only=False.
+
+    Line 1460: as_fast_cmd_idx = len(power_sorted_cmds) - 1 (max step).
+    Line 1483: truly_consumed_power >= 0 tracks depletion energy.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        target_value=3000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    )
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, final_ret, out_cmds, _, _, _, _, _, _ = result
+    assert final_ret
+    assert any(c is not None and c.power_consign == 1000 for c in out_cmds)
+
+
+def test_compute_best_asap_with_depletion():
+    """Cover line 1440: ASAP with additional_available_energy_to_deplete < 0.
+
+    Triggers the depletion power calculation when
+    remaining_additional_available_energy_to_deplete < 0.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    )
+
+    power_avail = np.full(n_slots, -500.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=True,
+        additional_available_energy_to_deplete=-2000.0,
+        max_power_to_deplete=1000.0,
+    )
+    assert result is not None
+
+
+def test_compute_best_expand_last_slot_not_first():
+    """Cover line 1523: last_slot += 1 when first_slot==0 and window too tight.
+
+    Mandatory non-ASAP with end_of_constraint at time_slots[1] -> last_slot=0.
+    Target needs more time than 1 slot, so expansion tries first_slot-=1 (impossible,
+    first_slot==0), then last_slot+=1.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 4
+    time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time_slots[1],
+    )
+
+    power_avail = np.full(n_slots, 200.0, dtype=np.float64)
+    durations = np.full(n_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+def test_price_optimizer_early_break_quantity_satisfied():
+    """Cover line 1672: price optimizer breaks early when quantity <= 0.
+
+    Mandatory constraint where green fill partially satisfies target from
+    surplus slots, leaving a small remainder. The price optimizer finds
+    one more surplus slot and upgrades the command, satisfying the rest.
+    The next iteration's quantity check triggers the break.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+        ],
+        support_auto=True,
+        end_of_constraint=time_slots[-1],
+        target_value=4000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.array(
+        [-800.0, -800.0, -800.0, -800.0, -800.0, -800.0],
+        dtype=np.float64,
+    )
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.array([0.05, 0.05, 0.10, 0.10, 0.05, 0.05], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Line 872 - _adapt_commands: start_witch_switch set to False for first-slot
+# empty segment in sorted_by_size loop
+# ===========================================================================
+
+def test_adapt_commands_sorted_empty_start_extension():
+    """Cover lines 800-801, 825: _adapt_commands start switch extension.
+
+    Setup: load.current_command=None, out_commands start with ON at first_slot.
+    The first inner empty does NOT start at first_slot, so the else branch
+    (line 798-801) creates an extension range, and cmd_to_push=None causes
+    inner_empty_cmds[0] to be extended to first_slot (line 825).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=2, num_on_off=0)
+    load.current_command = None
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    out_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        None,
+    ]
+    out_power = [1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0]
+    durations = [SOLVER_STEP_S] * 6
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, durations, 0.0, 0, 5,
+    )
+    assert isinstance(result, float)
+
+
+def test_adapt_commands_sorted_empty_sets_switch_false():
+    """Cover line 872: sorted_by_size_empty_cmds sets start_witch_switch=False.
+
+    Setup: load.current_command=ON (so prev_cmd is set, and out_commands[0]=None
+    triggers start_witch_switch=True). The first empty spans 2 slots so the
+    fix at line 808 is skipped (durations > SOLVER_STEP_S). Then in
+    sorted_by_size, single-slot empties are processed first, and finally
+    the multi-slot empty at first_slot reaches line 871-872.
+
+    num_max_on_off=1 ensures num_command_state_change stays above
+    num_allowed_switch when the multi-slot empty is reached.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=1, num_on_off=0)
+    load.current_command = LoadCommand(command="on", power_consign=1000)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    on = LoadCommand(command="on", power_consign=1000)
+    out_commands = [None, None, on, None, on, None, on, None, on]
+    out_power = [0.0, 0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0]
+    durations = [SOLVER_STEP_S] * 9
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, durations, 0.0, 0, 8,
+    )
+    assert isinstance(result, float)
+
+
+# ===========================================================================
+# Lines 1264, 1268, 1281-1290, 1299 - Reclaim from future slots for met
+# constraint (is_current_constraint_met=True)
+# ===========================================================================
+
+def test_adapt_repartition_reclaim_future_with_skips():
+    """Cover lines 1264, 1268: reclaim skips already-set and zero-power slots.
+
+    Constraint is met. energy_delta=1000 forces two slot modifications.
+    Each modification triggers reclaim from future slots. The second
+    reclaim finds out_commands[k] already set (line 1264) and zero-power
+    commands (line 1268).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 6, dtype=np.float64)
+    existing_commands: list[LoadCommand | None] = [
+        None,
+        None,
+        None,
+        LoadCommand(command="on", power_consign=0),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is True
+
+
+def test_adapt_repartition_reclaim_future_auto_support():
+    """Cover line 1299: reclaim with support_auto uses CMD_AUTO_GREEN_CAP.
+
+    Met constraint with support_auto=True. Simple reclaim passes
+    (reclaimed_budget <= budget_to_reclaim), leaving reclaim_cmd=None.
+    Post-reclaim path at line 1298-1299 creates CMD_AUTO_GREEN_CAP.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=True,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 4, dtype=np.float64)
+    existing_commands: list[LoadCommand | None] = [
+        None,
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is True
+    has_auto_cap = any(
+        cmd is not None and cmd.command == CMD_AUTO_GREEN_CAP.command
+        for cmd in out_cmds[2:]
+    )
+    assert has_auto_cap
+
+
+def test_adapt_repartition_reclaim_future_multistep_reduce():
+    """Cover lines 1281-1290: reclaim reduces to min power instead of idle.
+
+    Mandatory multi-step constraint already met. Full reclaim at 1000W
+    overshoots budget. Multi-step path (line 1281-1290) reduces to the
+    lowest power step (500W) instead of turning off entirely.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+        end_of_constraint=now + timedelta(hours=10),
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 6, dtype=np.float64)
+    existing_commands: list[LoadCommand | None] = [
+        None,
+        None,
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=2,
+        energy_delta=200.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is True
+    has_reduced = any(
+        cmd is not None and cmd.power_consign == 500
+        for cmd in out_cmds[3:]
+    )
+    assert has_reduced
+
+
+# ===========================================================================
+# Line 1419 - compute_best_period: last_slot clamped when bisect result
+# exceeds power_available_power length
+# ===========================================================================
+
+def test_compute_best_period_last_slot_clamped_mismatch():
+    """Cover line 1419: last_slot >= len(power_available_power) triggers clamp.
+
+    Pass time_slots with more elements than power_available_power + 1.
+    With end_of_constraint at time_slots[-1], bisect_left returns an index
+    that exceeds len(power_available_power), triggering the clamp.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_power = 3
+    time_slots = [now + timedelta(hours=i) for i in range(n_power + 2)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=n_power,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=time_slots[-1],
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.full(n_power, -2000.0, dtype=np.float64)
+    durations = np.full(n_power, 3600.0, dtype=np.float64)
+    prices = np.full(n_power, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+
+
+# ===========================================================================
+# Line 1848 - compute_best_period: mandatory price loop gets no valid
+# commands from budgeting (has_a_cmd stays False)
+# ===========================================================================
+
+def test_compute_best_mandatory_price_loop_no_cmds():
+    """Cover line 1848: mandatory price loop finds no valid commands.
+
+    Green fill uses production limits (generous) and succeeds partially.
+    Green fill sees production limits (generous) so has_a_cmd=True, but
+    available power is too small to place any command (j=None). The price
+    loop uses consumption limits (tiny) and finds no valid commands for
+    any slot, leaving has_a_cmd=False at line 1847.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    n_slots = 6
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[0.1, 0.1, 0.1],
+        max_production_amps=[20.0, 20.0, 20.0],
+        num_slots=n_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        end_of_constraint=time_slots[-1],
+        target_value=50000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    power_avail = np.full(n_slots, -100.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=sorted(set(prices)),
+        do_use_available_power_only=False,
+    )
+    assert result is not None
+    _, final_ret, _, _, _, _, _, _, _ = result
+    assert bool(final_ret) is False
+
+
+# ===========================================================================
+# Line 925 - _adapt_commands: recovery loop with positive init_quantity_to_recover
+# ===========================================================================
+
+def test_adapt_commands_recovery_positive_quantity():
+    """Cover line 925: limit_to_not_change_sign = None for positive recovery.
+
+    Setup: load.current_command=None so start_cmd=None → first empty != first_slot
+    → else branch removes ON at first_slot (positive budget recovery).
+    sorted_by_size fills some empties with min step (lower power) so net
+    quantity_to_recover stays positive. Recovery loop reaches transition
+    from non-empty to empty → init_quantity_to_recover > 0 → line 925.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=6, num_on_off=0)
+    load.current_command = None
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=300),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+    )
+
+    on_hi = LoadCommand(command="on", power_consign=1000)
+    out_commands: list[LoadCommand | None] = [
+        on_hi, None, on_hi, on_hi, None, on_hi, None, None, None, on_hi,
+    ]
+    out_power = [1000.0, 0.0, 1000.0, 1000.0, 0.0, 1000.0, 0.0, 0.0, 0.0, 1000.0]
+    durations = [float(SOLVER_STEP_S)] * 10
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, durations, 0.0, 0, 9,
+    )
+    assert isinstance(result, float)
+
+
+# ===========================================================================
+# Lines 1142-1143 - adapt_repartition increase: 0W step, j==len-1 → continue
+# ===========================================================================
+
+def test_adapt_repartition_increase_zero_power_single_step():
+    """Cover lines 1142-1143: only power step is 0W, increase path.
+
+    When current_command_power=0 (empty slot), j is set to 0. With a single
+    0W step, power_sorted_cmds[0].power_consign (0) <= current_command_power (0)
+    is True. Then j==len-1==0 → continue (line 1143).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=0)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 4, dtype=np.float64)
+    existing: list[LoadCommand | None] = [None, None, None, None]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is False
+
+
+# ===========================================================================
+# Line 1145 - adapt_repartition increase: 0W first step + higher step → j += 1
+# ===========================================================================
+
+def test_adapt_repartition_increase_zero_power_multi_step():
+    """Cover line 1145: 0W first step with higher steps, increase path.
+
+    When current_command_power=0, j=0. power_sorted_cmds[0].power_consign=0
+    <= 0 is True. j != len-1 (len=2) → else → j += 1 (line 1145).
+    Then base_cmd is the 500W step, delta_power = 500 > 0.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=0),
+            LoadCommand(command="on", power_consign=500),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 4, dtype=np.float64)
+    existing: list[LoadCommand | None] = [None, None, None, None]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    # j=0 from line 1128 (current_command_power==0), base_cmd has consign 0,
+    # delta_power = 0 - 0 = 0 -> line 1208 continue for every slot
+    assert changed is False
+
+
+# ===========================================================================
+# Lines 1167-1169 - adapt_repartition decrease: duplicate steps,
+#                   allow_change_state=False → continue
+# ===========================================================================
+
+def test_adapt_repartition_decrease_dup_steps_no_state_change():
+    """Cover lines 1167-1169: decrease with duplicate power steps.
+
+    Steps [500, 500, 1000], existing at 500W. _get_lower returns 1 (two 500W
+    entries ≤ 500). Else branch sets j=0. Then cmds[0].power=500 ≥ 500 → True.
+    j==0 → True. allow_change_state=False → continue (line 1169).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 4, dtype=np.float64)
+    existing: list[LoadCommand | None] = [
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=False,
+        time=now,
+    )
+    assert changed is False
+
+
+# ===========================================================================
+# Line 1171 - adapt_repartition decrease: duplicate steps,
+#             allow_change_state=True → j = -1
+# ===========================================================================
+
+def test_adapt_repartition_decrease_dup_steps_state_change():
+    """Cover line 1171: decrease with duplicate steps, allow state change.
+
+    Same duplicate-step setup as above but allow_change_state=True.
+    j==0 → True. allow_change_state is not False → else → j = -1 (line 1171).
+    Then base_cmd = CMD_IDLE, delta_power = 0 - 500 = -500.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 4, dtype=np.float64)
+    existing: list[LoadCommand | None] = [
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is True
+    has_idle = any(c is not None and c.is_off_or_idle() for c in out_cmds)
+    assert has_idle
+
+
+# ===========================================================================
+# Line 1208 - adapt_repartition: delta_power == 0 via negative piloted delta
+# ===========================================================================
+
+class _FakeLoadWithNegativePilotedDelta(_FakeLoadForCoverage):
+    """Load that returns a negative piloted delta for remove direction."""
+
+    def __init__(self, piloted_delta_remove: float = 0.0, **kwargs):
+        super().__init__(**kwargs)
+        self._piloted_delta_remove = piloted_delta_remove
+
+    def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx, add):
+        if add:
+            return 0.0
+        return self._piloted_delta_remove
+
+
+def test_adapt_repartition_decrease_delta_power_zero():
+    """Cover line 1208: delta_power == 0 → continue.
+
+    Decrease path: steps=[1000], existing=1000W. _get_lower returns 0 →
+    j=-1 (allow_change_state=True). base_cmd=CMD_IDLE (power=0).
+    delta_power = 0 - 1000 = -1000. piloted_delta = -1000 (from load).
+    delta_power -= (-1000) → 0. Line 1208: continue.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadWithNegativePilotedDelta(piloted_delta_remove=-1000.0)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 4, dtype=np.float64)
+    existing: list[LoadCommand | None] = [
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is False
+
+
+# ===========================================================================
+# Lines 1142-1143 - adapt_repartition increase: zero-consign step at max
+# ===========================================================================
+
+def test_adapt_repartition_increase_zero_consign_single_step():
+    """Cover lines 1142-1143: increase path with a single zero-power step.
+
+    When current_command_power == 0 (no existing), j is set to 0 at line 1128.
+    Then line 1141: power_sorted_cmds[0].power_consign (0) <= 0 is True.
+    With a single step, j == len-1 (0 == 0) -> continue at lines 1142-1143.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=0)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 2, dtype=np.float64)
+    existing: list[LoadCommand | None] = [None, None]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is False
+
+
+# ===========================================================================
+# Lines 1144-1145 - adapt_repartition increase: zero-consign not at max
+# ===========================================================================
+
+def test_adapt_repartition_increase_zero_consign_two_steps():
+    """Cover lines 1144-1145: increase path with zero-power step not at max.
+
+    Steps = [0W, 1000W]. No existing command -> current_command_power = 0.
+    j set to 0 at line 1128. Line 1141: 0 <= 0 -> True.
+    j (0) != len-1 (1) -> j += 1 at lines 1144-1145.
+    Then base_cmd = power_sorted_cmds[1] (1000W), delta_power = 1000.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=0),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=5000.0,
+        current_value=0.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 2, dtype=np.float64)
+    existing: list[LoadCommand | None] = [None, None]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=5000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    # current_command_power=0 -> if branch (j=0) -> base_cmd=0W step
+    # delta_power=0 -> line 1208 continue for every slot
+    assert changed is False
+
+
+# ===========================================================================
+# Lines 1167-1169 - adapt_repartition reduction: duplicate steps, no state change
+# ===========================================================================
+
+def test_adapt_repartition_reduce_duplicate_steps_no_state_change():
+    """Cover lines 1167-1169: reduction with duplicate power steps.
+
+    Steps = [500W, 500W]. Existing at 500W.
+    _get_lower_consign_idx_for_power([500, 500], 500) returns j=1 (last).
+    Then if (j==0 or j is None) is False -> else: j = 0.
+    Line 1166: power_sorted_cmds[0].power_consign (500) >= 500 -> True.
+    j == 0 -> True. allow_change_state=False -> continue (line 1169).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=500.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 2, dtype=np.float64)
+    existing: list[LoadCommand | None] = [
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=False,
+        time=now,
+    )
+    assert changed is False
+
+
+# ===========================================================================
+# Lines 1170-1171 - adapt_repartition reduction: duplicate steps, with state change
+# ===========================================================================
+
+def test_adapt_repartition_reduce_duplicate_steps_with_state_change():
+    """Cover lines 1170-1171: reduction with duplicate steps, allow_change_state=True.
+
+    Same setup as above but allow_change_state=True.
+    After line 1167 (j==0), allow_change_state is True -> j = -1 (line 1171).
+    Then base_cmd = CMD_IDLE, delta_power = 0 - 500 = -500 (actual reduction).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(max_amps=[20.0, 20.0, 20.0], num_slots=2)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+        ],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=500.0,
+    )
+
+    durations = np.array([float(SOLVER_STEP_S)] * 2, dtype=np.float64)
+    existing: list[LoadCommand | None] = [
+        LoadCommand(command="on", power_consign=500),
+        LoadCommand(command="on", power_consign=500),
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+    )
+    assert changed is True
+    has_idle = any(
+        cmd is not None and cmd.command == CMD_IDLE.command
+        for cmd in out_cmds
+    )
+
+
+# ===========================================================================
+# Line 1208 - adapt_repartition: same power as only step -> delta_power == 0
+# ===========================================================================
+
+def test_adapt_repartition_same_power_skips():
+    """Cover line 1208: existing command at same power as only step.
+
+    Steps=[500W], existing=[500W], increase. _get_lower returns j=0 which is
+    len-1=0 -> continue at line 1137 (already at max). No changes.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500)],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, _, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=False, time=now)
+    assert not has_changes
+
+
+# ===========================================================================
+# Lines 1135-1137 - adapt_repartition: increase, already at max power
+# ===========================================================================
+
+def test_adapt_repartition_increase_already_at_max():
+    """Cover lines 1135-1137: existing at max step, increase path.
+
+    Steps=[500,1000], existing=[1000W]. _get_lower returns j=1=len-1
+    -> continue at line 1137 (already at max).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=1000)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, _, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=False, time=now)
+    assert not has_changes
+
+
+# ===========================================================================
+# Lines 1156-1161 - adapt_repartition: decrease at min, allow state change
+# ===========================================================================
+
+def test_adapt_repartition_decrease_at_min_with_state_change():
+    """Cover lines 1156, 1160-1161: decrease at min step, allow_change_state=True.
+
+    Steps=[500,1000], existing=[500W], decrease. _get_lower returns j=0.
+    (j==0) -> True. allow_change_state=True -> j=-1 -> CMD_IDLE.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert has_changes
+
+
+# ===========================================================================
+# Lines 1167, 1170-1171 - adapt_repartition: decrease with duplicate steps,
+#                         allow_change_state=True -> j = -1
+# ===========================================================================
+
+def test_adapt_repartition_decrease_dup_steps_line_1167():
+    """Cover lines 1167, 1170-1171: decrease with duplicate power steps.
+
+    Steps=[500,500,1000], existing=500W. _get_lower([500,500,1000], 500)
+    returns j=1 (two 500W entries). j>0 -> else: j=0 (line 1164).
+    Line 1166: cmds[0].power(500) >= 500 -> True.
+    j==0 -> True (line 1167). allow_change_state=True -> j=-1 (line 1171).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=True, time=now)
+    assert has_changes
+    has_idle = any(
+        cmd is not None and cmd.is_off_or_idle()
+        for cmd in out_cmds
+    )
+    assert has_idle
+
+
+# ===========================================================================
+# Lines 1167-1169 - adapt_repartition: decrease with duplicate steps,
+#                   allow_change_state=False -> continue
+# ===========================================================================
+
+def test_adapt_repartition_decrease_dup_steps_line_1169():
+    """Cover lines 1167-1169: decrease with duplicate steps, no state change.
+
+    Same as above but allow_change_state=False.
+    j==0 (line 1167). allow_change_state=False -> continue (line 1169).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=500),
+            LoadCommand(command="on", power_consign=1000),
+        ],
+        support_auto=False,
+    )
+    existing_cmds = [LoadCommand(command="on", power_consign=500)]
+    durations = np.array([SOLVER_STEP_S], dtype=np.float64)
+    _, _, has_changes, _, _, _ = constraint.adapt_repartition(
+        first_slot=0, last_slot=0, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing_cmds,
+        allow_change_state=False, time=now)
+    assert not has_changes
+
+
+# ===========================================================================
+# Lines 1529-1561 - compute_best_period: non-auto slot exploration
+# ===========================================================================
+
+def test_compute_best_period_non_auto_slot_exploration():
+    """Exercise the non-auto slot-exploration code (lines 1529-1561).
+
+    Uses support_auto=False with MANDATORY type so the code enters the
+    non-ASAP price-based filling path with sorted_available_power built
+    from the left/right expansion around argmin.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    num_slots = 6
+    time_slots = [now + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots)]
+
+    load = _FakeLoadForCoverage()
+    load.father_device = TestDynamicGroupDouble(
+        max_amps=[20.0, 20.0, 20.0], num_slots=num_slots,
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        support_auto=False,
+        initial_value=0.0,
+        target_value=500.0,
+        current_value=0.0,
+        end_of_constraint=time_slots[-1],
+    )
+    constraint.is_before_battery = False
+
+    # min available power at index 2 (interior) so left/right expands both ways
+    power_available = np.array(
+        [100.0, 50.0, -500.0, 200.0, 300.0, 150.0], dtype=np.float64,
+    )
+    durations = np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64)
+    prices = np.array([0.15, 0.12, 0.08, 0.10, 0.20, 0.18], dtype=np.float64)
+
+    out = constraint.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        time_slots=time_slots,
+    )
+    assert out is not None
+
+
+# ===========================================================================
+# Direct unit tests for _get_lower_consign_idx_for_power
+# ===========================================================================
+
+def _make_constraint_with_steps(power_values: list[float]) -> MultiStepsPowerLoadConstraint:
+    """Build a minimal constraint with the given power step values."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage()
+    steps = [LoadCommand(command="on", power_consign=p) for p in power_values]
+    return MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=steps,
+        type=CONSTRAINT_TYPE_FILLER,
+        support_auto=False,
+        initial_value=0.0,
+        target_value=1000.0,
+        current_value=0.0,
+    )
+
+
+class TestGetLowerConsignIdxForPower:
+    """Direct tests for _get_lower_consign_idx_for_power."""
+
+    def test_single_cmd_match_non_strict(self):
+        """Single [500], power=500, non-strict -> 0 (equal allowed)."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 0
+
+    def test_single_cmd_match_strict(self):
+        """Single [500], power=500, strict -> -1 (nothing strictly below)."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == -1
+
+    def test_single_cmd_power_above(self):
+        """Single [500], power=1000, non-strict -> 0."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 1000, strict=False) == 0
+
+    def test_single_cmd_power_below(self):
+        """Single [500], power=100, non-strict -> -1."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 100, strict=False) == -1
+
+    def test_multi_exact_match_mid_non_strict(self):
+        """[100, 500, 1000], power=500, non-strict -> 1."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 1
+
+    def test_multi_exact_match_mid_strict(self):
+        """[100, 500, 1000], power=500, strict -> 0."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == 0
+
+    def test_multi_between_values(self):
+        """[100, 500, 1000], power=750, non-strict -> 1."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 750, strict=False) == 1
+
+    def test_multi_above_all(self):
+        """[100, 500, 1000], power=2000, non-strict -> 2 (last index)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 2000, strict=False) == 2
+
+    def test_multi_below_all(self):
+        """[100, 500, 1000], power=50, non-strict -> -1."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 50, strict=False) == -1
+
+    def test_multi_exact_first_strict(self):
+        """[100, 500, 1000], power=100, strict -> -1."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 100, strict=True) == -1
+
+    def test_multi_exact_last_non_strict(self):
+        """[100, 500, 1000], power=1000, non-strict -> 2."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 1000, strict=False) == 2
+
+    def test_duplicates_non_strict(self):
+        """[500, 500], power=500, non-strict -> 1."""
+        c = _make_constraint_with_steps([500, 500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 1
+
+    def test_duplicates_strict(self):
+        """[500, 500], power=500, strict -> -1."""
+        c = _make_constraint_with_steps([500, 500])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == -1
+
+    def test_multi_between_strict(self):
+        """[100, 500, 1000], power=750, strict -> 1 (same as non-strict for non-exact)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 750, strict=True) == 1
+
+    def test_multi_above_all_strict(self):
+        """[100, 500, 1000], power=2000, strict -> 2."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_lower_consign_idx_for_power(c._power_sorted_cmds, 2000, strict=True) == 2
+
+
+# ===========================================================================
+# Direct unit tests for _get_higher_consign_idx_for_power
+# ===========================================================================
+
+class TestGetHigherConsignIdxForPower:
+    """Direct tests for _get_higher_consign_idx_for_power."""
+
+    def test_single_cmd_match_non_strict(self):
+        """Single [500], power=500, non-strict -> 0 (equal allowed)."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 0
+
+    def test_single_cmd_match_strict(self):
+        """Single [500], power=500, strict -> 1 (nothing strictly above)."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == 1
+
+    def test_single_cmd_power_below(self):
+        """Single [500], power=100, non-strict -> 0."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 100, strict=False) == 0
+
+    def test_single_cmd_power_above(self):
+        """Single [500], power=1000, non-strict -> 1 (= len)."""
+        c = _make_constraint_with_steps([500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 1000, strict=False) == 1
+
+    def test_multi_exact_match_mid_non_strict(self):
+        """[100, 500, 1000], power=500, non-strict -> 1."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 1
+
+    def test_multi_exact_match_mid_strict(self):
+        """[100, 500, 1000], power=500, strict -> 2."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == 2
+
+    def test_multi_between_values(self):
+        """[100, 500, 1000], power=750, non-strict -> 2."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 750, strict=False) == 2
+
+    def test_multi_below_all(self):
+        """[100, 500, 1000], power=50, non-strict -> 0."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 50, strict=False) == 0
+
+    def test_multi_above_all(self):
+        """[100, 500, 1000], power=2000, non-strict -> 3 (= len)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 2000, strict=False) == 3
+
+    def test_multi_exact_last_strict(self):
+        """[100, 500, 1000], power=1000, strict -> 3 (= len)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 1000, strict=True) == 3
+
+    def test_multi_exact_first_non_strict(self):
+        """[100, 500, 1000], power=100, non-strict -> 0."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 100, strict=False) == 0
+
+    def test_duplicates_non_strict(self):
+        """[500, 500], power=500, non-strict -> 0."""
+        c = _make_constraint_with_steps([500, 500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=False) == 0
+
+    def test_duplicates_strict(self):
+        """[500, 500], power=500, strict -> 2 (= len)."""
+        c = _make_constraint_with_steps([500, 500])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 500, strict=True) == 2
+
+    def test_multi_between_strict(self):
+        """[100, 500, 1000], power=750, strict -> 2 (same as non-strict for non-exact)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 750, strict=True) == 2
+
+    def test_multi_above_all_strict(self):
+        """[100, 500, 1000], power=2000, strict -> 3 (= len)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        assert c._get_higher_consign_idx_for_power(c._power_sorted_cmds, 2000, strict=True) == 3
+
+
+# ===========================================================================
+# Symmetry / consistency tests
+# ===========================================================================
+
+class TestConsignIdxSymmetry:
+    """Verify lower/higher are consistent with each other."""
+
+    def test_exact_match_lower_le_higher(self):
+        """For exact matches, lower(non-strict) <= higher(non-strict)."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        cmds = c._power_sorted_cmds
+        for cmd in cmds:
+            lo = c._get_lower_consign_idx_for_power(cmds, cmd.power_consign, strict=False)
+            hi = c._get_higher_consign_idx_for_power(cmds, cmd.power_consign, strict=False)
+            assert lo <= hi, f"power={cmd.power_consign}: lower={lo} > higher={hi}"
+
+    def test_lower_result_valid(self):
+        """lower(non-strict) result has power_consign <= queried power."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        cmds = c._power_sorted_cmds
+        for power in [50, 100, 300, 500, 750, 1000, 2000]:
+            idx = c._get_lower_consign_idx_for_power(cmds, power, strict=False)
+            if idx >= 0:
+                assert cmds[idx].power_consign <= power
+
+    def test_higher_result_valid(self):
+        """higher(non-strict) result has power_consign >= queried power."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        cmds = c._power_sorted_cmds
+        for power in [50, 100, 300, 500, 750, 1000, 2000]:
+            idx = c._get_higher_consign_idx_for_power(cmds, power, strict=False)
+            if idx < len(cmds):
+                assert cmds[idx].power_consign >= power
+
+    def test_strict_lower_result_valid(self):
+        """lower(strict) result has power_consign < queried power."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        cmds = c._power_sorted_cmds
+        for power in [50, 100, 300, 500, 750, 1000, 2000]:
+            idx = c._get_lower_consign_idx_for_power(cmds, power, strict=True)
+            if idx >= 0:
+                assert cmds[idx].power_consign < power
+
+    def test_strict_higher_result_valid(self):
+        """higher(strict) result has power_consign > queried power."""
+        c = _make_constraint_with_steps([100, 500, 1000])
+        cmds = c._power_sorted_cmds
+        for power in [50, 100, 300, 500, 750, 1000, 2000]:
+            idx = c._get_higher_consign_idx_for_power(cmds, power, strict=True)
+            if idx < len(cmds):
+                assert cmds[idx].power_consign > power

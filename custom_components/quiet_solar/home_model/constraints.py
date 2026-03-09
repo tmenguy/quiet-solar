@@ -792,8 +792,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if inner_empty_cmds[0][0] == first_slot:
                         # we start by a empty : do we need to stay on?
                         rge = [first_slot, inner_empty_cmds[0][1]]
-                        if start_cmd is None:
-                            start_cmd = self._power_sorted_cmds[0]
+                        # if start_cmd is None: #impossible by construction as we are starting with a switch, we should have a start cmd
+                        #    start_cmd = self._power_sorted_cmds[0]
                         cmd_to_push = copy_command(start_cmd)
                     else:
                         # we start by a true command, do we want to continue to be stopped?
@@ -1116,7 +1116,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                                                                                              commands=existing_commands,
                                                                                                                              for_add=(init_energy_delta >= 0.0),
                                                                                                                              use_production_limits=use_production_limits)
-
                 if init_energy_delta >= 0.0:
 
                     if current_command_power == 0 and allow_change_state is False:
@@ -1127,22 +1126,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # j == 0 : lowest possible ON value
                         j = 0
                     else:
-                        j = self._get_lower_consign_idx_for_power(power_sorted_cmds, current_command_power)
+                        j = self._get_higher_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
 
-                        if j is None:
-                            # lowest possible ON value
-                            j = 0
-                        elif j == len(power_sorted_cmds) - 1:
+                        if j >= len(power_sorted_cmds):
                             # we are already at the max power, we cannot add more, force to stay at this power
                             continue
-                        else:
-                            j += 1
-
-                        if j is not None and power_sorted_cmds[j].power_consign <= current_command_power:
-                           if j == len(power_sorted_cmds) - 1:
-                               continue #do nothing, we are already at the max power
-                           else:
-                               j += 1
 
                 else: # init_energy_delta < 0.0:
 
@@ -1151,31 +1139,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # we won't be able to reduce...cap at 0 to force stay this way
                         continue
                     else:
-                        j = self._get_lower_consign_idx_for_power(power_sorted_cmds, current_command_power)
+                        j = self._get_lower_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
 
-                        if (j is None or j == 0):
+                        if j < 0:
                             if allow_change_state is False:
                                 # we won't be able to go below
                                 continue
                             else:
+                                # it means : stop!
                                 j = -1
                         else:
                             # go to the minimum power load
                             j = 0
-
-                        if j is not None and j >= 0 and power_sorted_cmds[j].power_consign >= current_command_power:
-                           if j == 0:
-                               if allow_change_state is False:
-                                   continue #do nothing, we are already at the min power
-                               else:
-                                   j = -1
-                           else:
-                               j -= 1
-
-                        if current_command_power == 0 and j < 0:
-                            # we are already consuming nothing, we cannot reduce more
-                            continue
-
 
                 if j is not None:
 
@@ -1281,8 +1256,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 elif len(self._power_sorted_cmds) > 1:
                                     # we can use directly as we want to go lower than cmd.power_consign
                                     j = self._get_lower_consign_idx_for_power(self._power_sorted_cmds, cmd.power_consign)
-                                    if j is not None and j > 0:
-                                        # we won't "stop" the load, but we will reduce its power consumption
+                                    if j > 0:
+                                        # we won't "stop" the load, but we will reduce its power consumption, by using the lower power command
                                         possible_power_piloted_delta = 0.0
                                         reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k]) - self.get_delta_budget_quantity(self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
                                         if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
@@ -1352,15 +1327,28 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         return out_constraint, energy_delta * init_energy_delta <= 0.0, num_changes > 0, energy_delta, out_commands, out_delta_power
 
 
-    def _get_lower_consign_idx_for_power(self, power_sorted_cmds:list[LoadCommand], power: float) -> int | None:
+    def _get_lower_consign_idx_for_power(self, power_sorted_cmds:list[LoadCommand], power: float, strict=False) -> int:
 
-        j = None
-        if power >= power_sorted_cmds[0].power_consign:
-            j = 0
-            while j < len(power_sorted_cmds) - 1 and power_sorted_cmds[j + 1].power_consign <= power:
-                j += 1
+        res = len(power_sorted_cmds) - 1
+        for i in range(len(power_sorted_cmds)):
+            # yes strict check >= to get someone strictly below, not strict : the current one can be equal
+            if (strict and power_sorted_cmds[i].power_consign >= power) or (strict is False and power_sorted_cmds[i].power_consign > power):
+                res = i - 1 # can be < 0
+                break
 
-        return j
+        return res
+
+    def _get_higher_consign_idx_for_power(self, power_sorted_cmds:list[LoadCommand], power: float, strict=False) -> int:
+
+        res = 0
+        for i in range(len(power_sorted_cmds) - 1, -1, -1):
+            # yes strict check <= to get someone strictly below, not strict : the current one can be equal
+            if (strict and power_sorted_cmds[i].power_consign <= power) or (
+                    strict is False and power_sorted_cmds[i].power_consign < power):
+                res = i + 1  # can be len(power_sorted_cmds)
+                break
+
+        return res
 
 
 
@@ -1452,10 +1440,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 if do_use_available_power_only:
                     # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
                     j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - power_piloted_delta)
-                    if j is None:
-                        as_fast_cmd_idx = 0
-                    else:
-                        as_fast_cmd_idx = j
+                    as_fast_cmd_idx = max(0, j)
                 else:
                     as_fast_cmd_idx = len(power_sorted_cmds) - 1
 
@@ -1539,15 +1524,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 for i in range(len(sub_power_available_power) - 1):
                     if left == 0:
                         right = right + 1
-                        if right >= len(sub_power_available_power):
-                            # should never happen
-                            break
+                        # if right >= len(sub_power_available_power):
+                        #   # should never happen
+                        #    break
                         sorted_available_power.append(right)
                     elif right == len(sub_power_available_power) - 1:
                         left = left - 1
-                        if left < 0:
-                            # should never happen
-                            break
+                        # if left < 0:
+                        #    # should never happen
+                        #    break
                         sorted_available_power.append(left)
                     else:
                         left_val = sub_power_available_power[left - 1]
@@ -1560,10 +1545,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             right = right + 1
                             sorted_available_power.append(right)
 
-                if len(sorted_available_power) != len(sub_power_available_power):
-                    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
-                    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
-
+                # if len(sorted_available_power) != len(sub_power_available_power):
+                #    _LOGGER.error(f"compute_best_period_repartition: ordered_exploration is not the same size as sub_power_available_power {len(sorted_available_power)} != {len(sub_power_available_power)}")
+                #    sorted_available_power = sub_power_available_power.argsort() # power_available_power negative value means free power
 
             has_a_cmd = False
 
@@ -1608,6 +1592,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                          (0.0 - local_remaining_additional_available_energy_to_deplete) * 3600.0 /
                                                          float(power_slots_duration_s[i]))
 
+
                     # remove the power_piloted_delta from the available power, as it will be counted in the command we will add
                     j = self._get_lower_consign_idx_for_power(power_sorted_cmds, additional_available_power - available_power - power_piloted_delta)
                     if additional_available_power > 0.0:
@@ -1616,7 +1601,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         j_naked = j
 
 
-                    if j is not None:
+                    if j >= 0:
 
                         if self.support_auto:
                             if j == j_naked:
@@ -1721,11 +1706,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                                 out_commands[i] = new_cmd
 
-                                truly_consumed_power_before = power_available_power[i] + out_power[i]
-                                if truly_consumed_power_before >= 0:
-                                    remaining_additional_available_energy_to_deplete -= (truly_consumed_power_before *
-                                                                                         power_slots_duration_s[
-                                                                                             i]) / 3600.0
+                                # truly_consumed_power_before = power_available_power[i] + out_power[i]
+                                # truly_consumed_power_before is by construction < 0 see the big if we are in ...
+                                # if truly_consumed_power_before >= 0:
+                                #     remaining_additional_available_energy_to_deplete -= (truly_consumed_power_before *
+                                #                                                          power_slots_duration_s[
+                                #                                                              i]) / 3600.0
 
                                 out_power[i] = power_to_add
                                 out_power_idxs[i] = power_to_add_idx

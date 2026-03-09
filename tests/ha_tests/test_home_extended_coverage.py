@@ -1397,7 +1397,8 @@ class TestQSHomeConsumptionHistoryAndForecast:
         forecast.home_non_controlled_consumption = None
 
         now = datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC)
-        result = await forecast.init_forecasts(now)
+        with patch.object(QSSolarHistoryVals, "init", new_callable=AsyncMock, return_value=(None, None)):
+            result = await forecast.init_forecasts(now)
         assert result is True
         assert forecast.home_non_controlled_consumption is not None
 

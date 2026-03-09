@@ -122,9 +122,6 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
         if val is None:
             val = float(getattr(self.device, self.entity_description.key, 1.0))
 
-        if val is None:
-            val = 1.0
-
         await self.async_set_native_value(val, for_init=True)
 
     async def async_set_native_value(self, value: float, for_init:bool=False) -> None:

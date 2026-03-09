@@ -6,11 +6,15 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
 from homeassistant import config_entries
+from homeassistant.helpers import selector
+import voluptuous as vol
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_NAME,
+    PERCENTAGE,
     UnitOfElectricCurrent,
     UnitOfPower,
+    UnitOfTemperature,
 )
 from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
 from homeassistant.core import HomeAssistant
@@ -32,6 +36,7 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_MAX_CHARGE,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_GRID_POWER_SENSOR,
+    CONF_GRID_POWER_SENSOR_INVERTED,
     DATA_HANDLER,
     CONF_CAR_CHARGER_MIN_CHARGE,
     CONF_CAR_CHARGER_MAX_CHARGE,
@@ -65,14 +70,35 @@ from custom_components.quiet_solar.const import (
     CONF_OFF_GRID_ENTITY,
     CONF_OFF_GRID_STATE_VALUE,
     CONF_OFF_GRID_INVERTED,
+    CONF_MOBILE_APP,
+    CONF_MOBILE_APP_URL,
+    CONF_CHARGER_LATITUDE,
+    CONF_CHARGER_LONGITUDE,
+    CONF_CHARGER_DEVICE_OCPP,
+    CONF_CHARGER_DEVICE_WALLBOX,
+    CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
+    CONF_SOLAR_FORECAST_PROVIDER,
+    CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
+    CONF_SOLAR_MAX_PHASE_AMPS,
+    CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
+    CONF_BATTERY_CHARGE_PERCENT_SENSOR,
+    CONF_POOL_TEMPERATURE_SENSOR,
+    CONF_SWITCH,
+    SOLCAST_SOLAR_DOMAIN,
+    OPEN_METEO_SOLAR_DOMAIN,
+    DASHBOARD_NO_SECTION,
 )
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.battery import QSBattery
 from custom_components.quiet_solar.ha_model.solar import QSSolar
-from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric, QSChargerOCPP, QSChargerWallbox
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.person import QSPerson
+from custom_components.quiet_solar.ha_model.pool import QSPool
 from custom_components.quiet_solar.ha_model.heat_pump import QSHeatPump
 
 from tests.factories import create_minimal_home_model
@@ -1000,3 +1026,589 @@ async def test_flow_handler_is_creation_flow(hass: HomeAssistant):
     flow = QSFlowHandler()
     flow.hass = hass
     assert flow.is_creation_flow() is True
+
+
+# =============================================================================
+# Entity selector defaults (lines 247, 257)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_add_entity_selector_optional_with_existing_value(hass: HomeAssistant):
+    """Test add_entity_selector uses suggested_value for optional field with existing value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_ent_sel_opt_247",
+        data={CONF_NAME: "Test", CONF_GRID_POWER_SENSOR: "sensor.grid_power"},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    sc_dict: dict = {}
+    flow.add_entity_selector(
+        sc_dict, CONF_GRID_POWER_SENSOR, False,
+        entity_list=["sensor.grid_power", "sensor.other"],
+    )
+
+    keys = list(sc_dict.keys())
+    assert len(keys) == 1
+    key = keys[0]
+    assert isinstance(key, vol.Optional)
+    assert key.description == {"suggested_value": "sensor.grid_power"}
+
+
+@pytest.mark.asyncio
+async def test_add_entity_selector_no_entity_list_no_domain(hass: HomeAssistant):
+    """Test add_entity_selector with no entity list and no domain uses plain EntitySelector."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_ent_sel_plain_257",
+        data={CONF_NAME: "Test"},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    sc_dict: dict = {}
+    flow.add_entity_selector(sc_dict, CONF_GRID_POWER_SENSOR, False)
+
+    keys = list(sc_dict.keys())
+    assert len(keys) == 1
+    val = sc_dict[keys[0]]
+    assert isinstance(val, selector.EntitySelector)
+
+
+# =============================================================================
+# Dashboard section index (line 318)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_dashboard_section_not_found(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test dashboard section falls back to DASHBOARD_NO_SECTION when name not found."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_dash_nf_318",
+        data={
+            CONF_NAME: "Test",
+            CONF_DEVICE_DASHBOARD_SECTION: "nonexistent_section",
+        },
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    fake_home.dashboard_sections = [("cars", "mdi:car"), ("pools", "mdi:pool")]
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    schema = flow.get_common_schema(type=QSCar.conf_type_name)
+
+    found_key = None
+    for key in schema:
+        if getattr(key, "schema", None) == CONF_DEVICE_DASHBOARD_SECTION:
+            found_key = key
+            break
+    assert found_key is not None
+    assert found_key.default() == DASHBOARD_NO_SECTION
+
+
+# =============================================================================
+# Power group self-exclusion (line 347)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_power_group_excludes_self(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test dynamic group schema excludes own name from group list."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_grp_self_347",
+        data={CONF_NAME: "MyGroup"},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    root_group = QSHome.__new__(QSHome)
+    root_group.name = "Root"
+    self_group = MagicMock()
+    self_group.name = "MyGroup"
+    other_group = MagicMock()
+    other_group.name = "OtherGroup"
+    fake_home._all_dynamic_groups = [root_group, self_group, other_group]
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    schema = flow.get_common_schema(
+        type=QSDynamicGroup.conf_type_name,
+        add_power_group_selector=True,
+    )
+
+    found_key = None
+    for key in schema:
+        if getattr(key, "schema", None) == CONF_DEVICE_DYNAMIC_GROUP_NAME:
+            found_key = key
+            break
+    assert found_key is not None
+
+    selector_val = schema[found_key]
+    options = selector_val.config["options"]
+    option_labels = [o if isinstance(o, str) else o.get("label", o.get("value")) for o in options]
+    assert "MyGroup" not in option_labels
+    assert "OtherGroup" in option_labels
+
+
+# =============================================================================
+# Mobile app defaults (lines 481, 499)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_mobile_app_with_defaults(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test mobile app selector with existing default values."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_mobile_481",
+        data={
+            CONF_NAME: "Test",
+            CONF_MOBILE_APP: "mobile_app_phone",
+            CONF_MOBILE_APP_URL: "https://example.com",
+        },
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+    hass.services.async_register(NOTIFY_DOMAIN, "mobile_app_phone", MagicMock())
+
+    schema = flow.get_common_schema(type=QSHome.conf_type_name, add_mobile_app=True)
+
+    mobile_key = None
+    url_key = None
+    for key in schema:
+        k = getattr(key, "schema", None)
+        if k == CONF_MOBILE_APP:
+            mobile_key = key
+        elif k == CONF_MOBILE_APP_URL:
+            url_key = key
+
+    assert mobile_key is not None
+    assert mobile_key.description == {"suggested_value": "mobile_app_phone"}
+    assert url_key is not None
+    assert url_key.description == {"suggested_value": "https://example.com"}
+
+
+# =============================================================================
+# Charger lat/lon defaults (lines 526, 539)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_charger_schema_with_lat_lon_defaults(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test charger schema includes suggested lat/lon values when configured."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_charger_latlon_526",
+        data={
+            CONF_NAME: "Test Charger",
+            CONF_CHARGER_LATITUDE: 48.8566,
+            CONF_CHARGER_LONGITUDE: 2.3522,
+        },
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    fake_home._all_dynamic_groups = [MagicMock()]
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    sc_dict = flow.get_all_charger_schema_base(
+        type=QSChargerGeneric.conf_type_name,
+        add_load_power_sensor_mandatory=True,
+    )
+
+    lat_key = None
+    lon_key = None
+    for key in sc_dict:
+        k = getattr(key, "schema", None)
+        if k == CONF_CHARGER_LATITUDE:
+            lat_key = key
+        elif k == CONF_CHARGER_LONGITUDE:
+            lon_key = key
+
+    assert lat_key is not None
+    assert lat_key.description == {"suggested_value": 48.8566}
+    assert lon_key is not None
+    assert lon_key.description == {"suggested_value": 2.3522}
+
+
+# =============================================================================
+# clean_data reset keys (lines 587-589)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_clean_data_removes_entity_on_reset_selector(hass: HomeAssistant):
+    """Test clean_data removes entity key when reset selector is truthy."""
+    from custom_components.quiet_solar.config_flow import _get_reset_selector_entity_name
+
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    entity_key = "some_entity"
+    reset_key = _get_reset_selector_entity_name(entity_key)
+
+    data = {
+        CONF_NAME: "Test",
+        entity_key: "sensor.old_value",
+        reset_key: True,
+    }
+
+    flow.clean_data(data)
+
+    assert entity_key not in data
+    assert reset_key in data
+    assert data[reset_key] is False
+
+
+# =============================================================================
+# get_entry_title (line 598 - unknown type)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_entry_title_without_device_type(hass: HomeAssistant):
+    """Test get_entry_title when DEVICE_TYPE is missing from data."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    data = {CONF_NAME: "My Device"}
+    title = flow.get_entry_title(data)
+    assert title == "unknown: My Device"
+
+
+@pytest.mark.asyncio
+async def test_get_entry_title_with_known_type(hass: HomeAssistant):
+    """Test get_entry_title with a known device type returns the right label."""
+    flow = QSFlowHandler()
+    flow.hass = hass
+
+    data = {CONF_NAME: "Living Room", DEVICE_TYPE: QSPool.conf_type_name}
+    title = flow.get_entry_title(data)
+    assert title == "pool: Living Room"
+
+
+# =============================================================================
+# Options steps with entities (lines 630-631, 721, 727, 743, 758, 814, 841,
+# 873, 877-878, 882)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_options_home_step_with_power_entities(hass: HomeAssistant):
+    """Test home options step includes grid power selector when power entities exist."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_home_power_630",
+        data={
+            CONF_NAME: "Test Home",
+            DEVICE_TYPE: QSHome.conf_type_name,
+            CONF_GRID_POWER_SENSOR: "sensor.grid",
+        },
+        title="home: Test Home",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "sensor.grid", "100", {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_home()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_GRID_POWER_SENSOR)
+
+    grid_key = None
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_GRID_POWER_SENSOR:
+            grid_key = key
+            break
+    assert grid_key is not None
+    assert grid_key.description == {"suggested_value": "sensor.grid"}
+
+
+@pytest.mark.asyncio
+async def test_options_solar_step_with_entities_and_providers(
+    hass: HomeAssistant,
+):
+    """Test solar options step includes entity selectors and forecast providers."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_solar_opts_721",
+        data={
+            CONF_NAME: "Test Solar",
+            DEVICE_TYPE: QSSolar.conf_type_name,
+            CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.pv_power",
+            CONF_SOLAR_FORECAST_PROVIDER: SOLCAST_SOLAR_DOMAIN,
+            CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 6000,
+            CONF_SOLAR_MAX_PHASE_AMPS: 25,
+        },
+        title="solar: Test Solar",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "sensor.pv_power", "3000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+
+    hass.data[SOLCAST_SOLAR_DOMAIN] = {"some_key": True}
+    hass.data[OPEN_METEO_SOLAR_DOMAIN] = {"some_key": True}
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_solar()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR)
+    assert _schema_has_key(schema, CONF_SOLAR_FORECAST_PROVIDER)
+    assert _schema_has_key(schema, CONF_SOLAR_MAX_OUTPUT_POWER_VALUE)
+    assert _schema_has_key(schema, CONF_SOLAR_MAX_PHASE_AMPS)
+
+    for key in schema.schema:
+        k = getattr(key, "schema", None)
+        if k == CONF_SOLAR_FORECAST_PROVIDER:
+            assert key.description == {"suggested_value": SOLCAST_SOLAR_DOMAIN}
+
+
+@pytest.mark.asyncio
+async def test_options_charger_ocpp_step_with_existing_device(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test charger OCPP options step shows device selector with suggested value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_charger_ocpp_814",
+        data={
+            CONF_NAME: "Test OCPP Charger",
+            DEVICE_TYPE: QSChargerOCPP.conf_type_name,
+            CONF_CHARGER_DEVICE_OCPP: "device_abc123",
+        },
+        title="charger: Test OCPP Charger",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    fake_home._all_dynamic_groups = [MagicMock()]
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_charger_ocpp()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_CHARGER_DEVICE_OCPP)
+
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_CHARGER_DEVICE_OCPP:
+            assert key.description == {"suggested_value": "device_abc123"}
+
+
+@pytest.mark.asyncio
+async def test_options_charger_wallbox_step_with_existing_device(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test charger Wallbox options step shows device selector with suggested value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_charger_wb_841",
+        data={
+            CONF_NAME: "Test Wallbox",
+            DEVICE_TYPE: QSChargerWallbox.conf_type_name,
+            CONF_CHARGER_DEVICE_WALLBOX: "device_wb456",
+        },
+        title="charger: Test Wallbox",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    fake_home._all_dynamic_groups = [MagicMock()]
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_charger_wallbox()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_CHARGER_DEVICE_WALLBOX)
+
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_CHARGER_DEVICE_WALLBOX:
+            assert key.description == {"suggested_value": "device_wb456"}
+
+
+@pytest.mark.asyncio
+async def test_options_battery_step_with_power_and_percent_entities(
+    hass: HomeAssistant,
+):
+    """Test battery options step includes power and percent entity selectors."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_battery_873",
+        data={
+            CONF_NAME: "Test Battery",
+            DEVICE_TYPE: QSBattery.conf_type_name,
+            CONF_BATTERY_CAPACITY: 10000,
+            CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.bat_power",
+            CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.bat_max_disch",
+            CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.bat_max_ch",
+            CONF_BATTERY_CHARGE_PERCENT_SENSOR: "sensor.bat_soc",
+        },
+        title="battery: Test Battery",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "sensor.bat_power", "500",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+    hass.states.async_set(
+        "number.bat_max_disch", "3000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+    hass.states.async_set(
+        "number.bat_max_ch", "3000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+    hass.states.async_set(
+        "sensor.bat_soc", "75",
+        {ATTR_UNIT_OF_MEASUREMENT: PERCENTAGE},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_battery()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_BATTERY_CHARGE_DISCHARGE_SENSOR)
+    assert _schema_has_key(schema, CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER)
+    assert _schema_has_key(schema, CONF_BATTERY_MAX_CHARGE_POWER_NUMBER)
+    assert _schema_has_key(schema, CONF_BATTERY_CHARGE_PERCENT_SENSOR)
+
+
+@pytest.mark.asyncio
+async def test_options_pool_step_with_temperature_entities(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test pool options step includes temperature entity selector when temp entities exist."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_pool_1259",
+        data={
+            CONF_NAME: "Test Pool",
+            DEVICE_TYPE: QSPool.conf_type_name,
+            CONF_POWER: 1500,
+            CONF_POOL_TEMPERATURE_SENSOR: "sensor.pool_temp",
+        },
+        title="pool: Test Pool",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    fake_home._all_dynamic_groups = [MagicMock()]
+    mock_data_handler.home = fake_home
+
+    hass.states.async_set(
+        "sensor.pool_temp", "25",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfTemperature.CELSIUS},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_pool()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_POOL_TEMPERATURE_SENSOR)
+
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_POOL_TEMPERATURE_SENSOR:
+            assert key.description == {"suggested_value": "sensor.pool_temp"}
+
+
+# =============================================================================
+# Legacy HA options flow (line 1523)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_legacy_options_flow_sets_config_entry(hass: HomeAssistant):
+    """Test QSOptionsFlowHandler sets config_entry for old HA versions."""
+    from homeassistant.config_entries import OptionsFlow
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_legacy_1523",
+        data={CONF_NAME: "Test"},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    original_prop = OptionsFlow.__dict__["config_entry"]
+
+    try:
+        OptionsFlow.config_entry = property(
+            fget=lambda self: getattr(self, "_compat_config_entry", None),
+            fset=lambda self, val: object.__setattr__(self, "_compat_config_entry", val),
+        )
+
+        with patch(
+            "custom_components.quiet_solar.config_flow.AwesomeVersion",
+        ) as mock_av:
+            mock_av.return_value = mock_av
+            mock_av.__lt__ = lambda self, other: True
+            flow = QSOptionsFlowHandler(config_entry)
+
+        assert flow._compat_config_entry is config_entry
+    finally:
+        OptionsFlow.config_entry = original_prop
