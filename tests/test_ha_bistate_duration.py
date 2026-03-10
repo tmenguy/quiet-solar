@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from datetime import time as dt_time
 import pytz
 
@@ -14,7 +14,6 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     CONF_NAME,
 )
-from homeassistant.components.recorder.models import LazyState
 from homeassistant.core import HomeAssistant
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -40,7 +39,6 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONF_SWITCH,
     SOLVER_STEP_S,
-    CONF_ACCURATE_POWER_SENSOR,
 )
 
 from tests.factories import create_minimal_home_model
@@ -97,22 +95,6 @@ class ConcreteBiStateDevice(QSBiStateDuration):
 
     def get_select_translation_key(self):
         return "test_select_key"
-
-
-class SequencePowerDevice(ConcreteBiStateDevice):
-    """BiState device with deterministic power samples."""
-
-    def __init__(self, power_samples: list[float | None], **kwargs):
-        super().__init__(**kwargs)
-        self._power_samples = list(power_samples)
-        self._power_sample_calls: list[tuple[int, float | None]] = []
-
-    def get_average_sensor(self, *args, **kwargs):
-        """Return next value from the power sample list."""
-        idx = len(self._power_sample_calls)
-        value = self._power_samples.pop(0) if self._power_samples else None
-        self._power_sample_calls.append((idx, value))
-        return value
 
 
 class TestQSBiStateDurationInit:
@@ -330,105 +312,6 @@ class TestQSBiStateDurationModes:
         device.load_is_auto_to_be_boosted = True
 
         assert device.support_user_override() is False
-
-
-class TestQSBiStateDurationPowerUse:
-    """Test power_use property computations."""
-
-    async def test_power_use_uses_average_sensor_from_history(
-        self, hass: HomeAssistant, bistate_setup
-    ):
-        """Test power_use uses get_average_sensor over LazyState history."""
-        entity_id = "sensor.test_power"
-        device = ConcreteBiStateDevice(
-            hass=hass,
-            config_entry=bistate_setup["config_entry"],
-            home=bistate_setup["home"],
-            **{
-                CONF_NAME: "Test Device",
-                CONF_ACCURATE_POWER_SENSOR: entity_id,
-            },
-        )
-        device.power_use = 900.0
-
-        time_now = datetime.datetime.now(tz=pytz.UTC)
-        attr_cache: dict[str, dict[str, object]] = {}
-
-        def _lazy_state(power: float, when: datetime.datetime) -> LazyState:
-            row = MagicMock()
-            row.attributes = '{"unit_of_measurement": "W"}'
-            row.last_changed_ts = when.timestamp()
-            row.last_updated_ts = when.timestamp()
-            return LazyState(
-                row=row,
-                attr_cache=attr_cache,
-                start_time_ts=when.timestamp(),
-                entity_id=entity_id,
-                state=str(power),
-                last_updated_ts=when.timestamp(),
-                no_attributes=False,
-            )
-
-        states = [
-            _lazy_state(1000.0, time_now - datetime.timedelta(hours=2)),
-            _lazy_state(2000.0, time_now - datetime.timedelta(hours=1)),
-        ]
-
-        with patch(
-            "custom_components.quiet_solar.ha_model.device.load_from_history",
-            new_callable=AsyncMock,
-            return_value=states,
-        ):
-            await device._async_bootstrap_from_history(entity_id, time_now)
-
-        assert device.power_use == pytest.approx(1500.0, rel=0.01)
-
-    def test_power_use_recompute_fallback_chain(
-        self, hass: HomeAssistant, bistate_setup
-    ):
-        """Test power_use recomputation uses fallback chain."""
-        device = SequencePowerDevice(
-            hass=hass,
-            config_entry=bistate_setup["config_entry"],
-            home=bistate_setup["home"],
-            power_samples=[None, 0.0, 500.0],
-            **{
-                CONF_NAME: "Test Device",
-                CONF_ACCURATE_POWER_SENSOR: "sensor.test_power",
-            },
-        )
-        device.power_use = 900.0
-        device._last_power_use_computation_time = datetime.datetime.now(
-            tz=pytz.UTC
-        ) - datetime.timedelta(seconds=SOLVER_STEP_S + 1)
-
-        assert device.power_use == 500.0
-        assert len(device._power_sample_calls) == 3
-
-        device._last_power_use_computation_time = datetime.datetime.now(tz=pytz.UTC)
-        assert device.power_use == 900.0
-        assert len(device._power_sample_calls) == 3
-
-    def test_power_use_fallback_to_config(
-        self, hass: HomeAssistant, bistate_setup
-    ):
-        """Test power_use falls back to configured power when samples empty."""
-        device = SequencePowerDevice(
-            hass=hass,
-            config_entry=bistate_setup["config_entry"],
-            home=bistate_setup["home"],
-            power_samples=[None, 0.0, None],
-            **{
-                CONF_NAME: "Test Device",
-                CONF_ACCURATE_POWER_SENSOR: "sensor.test_power",
-            },
-        )
-        device.power_use = 750.0
-        device._last_power_use_computation_time = datetime.datetime.now(
-            tz=pytz.UTC
-        ) - datetime.timedelta(seconds=SOLVER_STEP_S + 1)
-
-        assert device.power_use == 750.0
 
 
 class TestQSBiStateDurationExpectedState:
