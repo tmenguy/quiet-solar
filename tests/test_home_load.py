@@ -436,3 +436,118 @@ class TestAbstractLoadConstraintValue:
         assert hasattr(load, 'current_constraint_current_value')
         assert hasattr(load, 'current_constraint_current_energy')
         assert hasattr(load, 'current_constraint_current_percent_completion')
+
+
+# =============================================================================
+# Test is_device_light_on
+# =============================================================================
+
+class TestIsDeviceLightOn:
+    """Test is_device_light_on on AbstractDevice and PilotedDevice."""
+
+    def test_returns_false_when_no_command(self):
+        """Return False when current_command is None."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        device.current_command = None
+        assert device.is_device_light_on() is False
+
+    def test_returns_false_when_idle_command(self):
+        """Return False when current_command is idle/off."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        device.current_command = CMD_IDLE
+        assert device.is_device_light_on() is False
+
+    def test_returns_false_when_off_command(self):
+        """Return False when current_command is off."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        device.current_command = CMD_OFF
+        assert device.is_device_light_on() is False
+
+    def test_returns_true_when_on_command(self):
+        """Return True when current_command is active."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        device.current_command = CMD_ON
+        assert device.is_device_light_on() is True
+
+    def test_piloted_device_delegates_to_is_activated(self):
+        """PilotedDevice.is_device_light_on delegates to is_piloted_device_activated."""
+        home = create_minimal_home_model()
+        pd = PilotedDevice(name="Piloted", home=home)
+        pd.clients = []
+        assert pd.is_device_light_on() is False
+
+        client = AbstractDevice(name="Client", home=home)
+        client._enabled = True
+        client.current_command = CMD_ON
+        pd.clients = [client]
+        assert pd.is_device_light_on() is True
+
+
+# =============================================================================
+# Test power_use property with dampening
+# =============================================================================
+
+class TestPowerUseDampened:
+    """Test updated power_use property with _dampened_computed_power_use."""
+
+    def test_dampened_takes_priority(self):
+        """Dampened value is returned over config value."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home, **{CONF_POWER: 1000})
+        device._dampened_computed_power_use = 1500.0
+        assert device.power_use == 1500.0
+
+    def test_fallback_to_config_when_dampened_is_none(self):
+        """Fall back to _power_use_conf when dampened is None."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home, **{CONF_POWER: 800})
+        assert device._dampened_computed_power_use is None
+        assert device.power_use == 800.0
+
+    def test_returns_none_when_both_none(self):
+        """Return None when both dampened and config are None."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        assert device._power_use_conf is None
+        assert device._dampened_computed_power_use is None
+        assert device.power_use is None
+
+    def test_setter_sets_dampened_not_config(self):
+        """Setter writes to _dampened_computed_power_use, not _power_use_conf."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home, **{CONF_POWER: 500})
+        device.power_use = 900.0
+        assert device._dampened_computed_power_use == 900.0
+        assert device._power_use_conf == 500
+
+    def test_init_picks_up_measured_power_from_kwargs(self):
+        """Init reads measured_power from kwargs into _dampened_computed_power_use."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(
+            name="Test", home=home,
+            **{CONF_POWER: 500, f"measured_{CONF_POWER}": 750.0},
+        )
+        assert device._dampened_computed_power_use == 750.0
+        assert device.power_use == 750.0
+
+
+# =============================================================================
+# Test reset() clears _dampen_start_transition
+# =============================================================================
+
+class TestResetClearsDampenTransition:
+    """Test that reset() clears _dampen_start_transition."""
+
+    def test_reset_clears_dampen_start(self):
+        """Reset clears _dampen_start_transition to None."""
+        home = create_minimal_home_model()
+        device = AbstractDevice(name="Test", home=home)
+        device._dampen_start_transition = datetime.datetime.now(pytz.UTC)
+        assert device._dampen_start_transition is not None
+
+        device.reset()
+        assert device._dampen_start_transition is None
