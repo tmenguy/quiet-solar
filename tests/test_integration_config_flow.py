@@ -178,7 +178,7 @@ async def test_get_common_schema_includes_optional_fields(hass: HomeAssistant):
         "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
         side_effect=lambda _h, entities: entities,
     ):
-        schema = flow.get_common_schema(
+        schema,_ = flow.get_common_schema(
             type=QSDynamicGroup.conf_type_name,
             add_power_value_selector=1000,
             add_load_power_sensor=True,
@@ -1107,7 +1107,7 @@ async def test_get_common_schema_dashboard_section_not_found(
 
     flow = _init_options_flow(hass, config_entry)
 
-    schema = flow.get_common_schema(type=QSCar.conf_type_name)
+    schema, _ = flow.get_common_schema(type=QSCar.conf_type_name)
 
     found_key = None
     for key in schema:
@@ -1148,7 +1148,7 @@ async def test_get_common_schema_power_group_excludes_self(
 
     flow = _init_options_flow(hass, config_entry)
 
-    schema = flow.get_common_schema(
+    schema, _ = flow.get_common_schema(
         type=QSDynamicGroup.conf_type_name,
         add_power_group_selector=True,
     )
@@ -1195,7 +1195,7 @@ async def test_get_common_schema_mobile_app_with_defaults(
     flow = _init_options_flow(hass, config_entry)
     hass.services.async_register(NOTIFY_DOMAIN, "mobile_app_phone", MagicMock())
 
-    schema = flow.get_common_schema(type=QSHome.conf_type_name, add_mobile_app=True)
+    schema, _ = flow.get_common_schema(type=QSHome.conf_type_name, add_mobile_app=True)
 
     mobile_key = None
     url_key = None
@@ -1240,7 +1240,7 @@ async def test_charger_schema_with_lat_lon_defaults(
 
     flow = _init_options_flow(hass, config_entry)
 
-    sc_dict = flow.get_all_charger_schema_base(
+    sc_dict, _ = flow.get_all_charger_schema_base(
         type=QSChargerGeneric.conf_type_name,
         add_load_power_sensor_mandatory=True,
     )
@@ -1702,3 +1702,60 @@ async def test_options_flow_car_dampening_placeholders_no_home_entry(
     assert placeholders["theoretical_charge_6"] == f"{int(230 * 6 * 1)} W"
     assert placeholders["theoretical_charge_10"] == f"{int(230 * 10 * 1)} W"
     assert placeholders["measured_charge_6"] == "-- W"
+
+
+# =============================================================================
+# measured_power placeholder tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_measured_power_placeholder_present(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test placeholders include measured_power when config entry has it."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_meas_pw",
+        data={CONF_NAME: "Test", f"measured_{CONF_POWER}": 1234.0},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    _, placeholders = flow.get_common_schema(
+        type=QSDynamicGroup.conf_type_name,
+        add_power_value_selector=1000,
+    )
+
+    assert placeholders[f"measured_{CONF_POWER}"] == "1234 W"
+
+
+@pytest.mark.asyncio
+async def test_get_common_schema_measured_power_placeholder_absent(
+    hass: HomeAssistant, mock_data_handler,
+):
+    """Test placeholders show '-- W' when no measured_power in config entry."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_no_meas_pw",
+        data={CONF_NAME: "Test"},
+        title="Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    fake_home = create_minimal_home_model()
+    mock_data_handler.home = fake_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    _, placeholders = flow.get_common_schema(
+        type=QSDynamicGroup.conf_type_name,
+        add_power_value_selector=1000,
+    )
+
+    assert placeholders[f"measured_{CONF_POWER}"] == "-- W"
