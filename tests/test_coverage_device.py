@@ -22,11 +22,14 @@ from custom_components.quiet_solar.ha_model.device import (
     get_median_sensor,
     HADeviceMixin,
     load_from_history,
+    DAMPENING_TIME_S,
 )
 from custom_components.quiet_solar.home_model.load import AbstractLoad, AbstractDevice
 from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_ON, CMD_CST_ON, CMD_IDLE
 from custom_components.quiet_solar.const import (
     COMMAND_BASED_POWER_SENSOR,
+    CONF_ACCURATE_POWER_SENSOR,
+    CONF_POWER,
     SENSOR_CONSTRAINT_SENSOR,
     DEVICE_STATUS_CHANGE_CONSTRAINT,
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
@@ -1262,3 +1265,210 @@ def test_get_median_sensor_empty_history_line857():
     now = datetime.now(tz=pytz.UTC)
     result = dev.get_median_sensor(entity_id, num_seconds=60, time=now)
     assert result is None
+
+
+# ==========================================================================
+# dampen_power_use tests
+# ==========================================================================
+
+
+class DampenableDevice(HADeviceMixin, AbstractLoad):
+    """Test subclass that uses the base AbstractDevice.power_use property."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    @property
+    def efficiency_factor(self) -> float:
+        return 1.0
+
+    def get_update_value_callback_for_constraint_class(self, constraint):
+        return None
+
+    def is_off_grid(self):
+        return False
+
+
+def _make_dampenable(hass=None, power=None, accurate_power_sensor=None, **kwargs):
+    """Create a DampenableDevice for dampening tests."""
+    if hass is None:
+        hass = _make_fake_hass()
+    config_entry = kwargs.pop("config_entry", FakeConfigEntry(entry_id="damp_test"))
+    home = kwargs.pop("home", MinimalTestHome(voltage=230.0))
+    extra = {}
+    if power is not None:
+        extra[CONF_POWER] = power
+    if accurate_power_sensor is not None:
+        extra[CONF_ACCURATE_POWER_SENSOR] = accurate_power_sensor
+    extra.update(kwargs)
+    return DampenableDevice(
+        hass=hass,
+        config_entry=config_entry,
+        home=home,
+        name=extra.pop("name", "DampenLoad"),
+        device_type=extra.pop("device_type", "test"),
+        **extra,
+    )
+
+
+class TestDampenPowerUse:
+    """Tests for HADeviceMixin.dampen_power_use."""
+
+    def test_device_off_resets_transition(self):
+        """When device is not light-on, _dampen_start_transition resets to None."""
+        dev = _make_dampenable()
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = now - timedelta(minutes=10)
+        dev.current_command = CMD_IDLE
+
+        dev.dampen_power_use(now)
+        assert dev._dampen_start_transition is None
+
+    def test_device_on_sets_transition_start(self):
+        """First call with device light-on sets _dampen_start_transition."""
+        dev = _make_dampenable()
+        now = datetime.now(tz=pytz.UTC)
+        dev.current_command = CMD_ON
+        assert dev._dampen_start_transition is None
+
+        dev.dampen_power_use(now)
+        assert dev._dampen_start_transition == now
+
+    def test_before_window_no_dampening(self):
+        """Before the 20-min window, no dampening occurs."""
+        dev = _make_dampenable(power=1000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(minutes=10)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        dev.dampen_power_use(now)
+        assert dev._dampened_computed_power_use is None
+
+    def test_after_window_no_dampening(self):
+        """After the 1.5x window (>30 min), no dampening occurs."""
+        dev = _make_dampenable(power=1000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(minutes=35)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        dev.dampen_power_use(now)
+        assert dev._dampened_computed_power_use is None
+
+    def test_no_accurate_power_sensor_no_dampening(self):
+        """Without accurate_power_sensor, no dampening occurs."""
+        dev = _make_dampenable(power=1000)
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        dev.dampen_power_use(now)
+        assert dev._dampened_computed_power_use is None
+
+    def test_inside_window_valid_median_updates_power(self):
+        """Inside the window with valid median, dampened power is updated."""
+        dev = _make_dampenable(power=1000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=1200.0):
+            dev.dampen_power_use(now)
+
+        assert dev._dampened_computed_power_use == 1200.0
+        assert dev.power_use == 1200.0
+
+    def test_inside_window_updates_config_entry(self):
+        """Valid dampening saves measured_power to config entry data."""
+        hass = _make_fake_hass()
+        entry = FakeConfigEntry(entry_id="cfg_damp", data={"name": "Test"})
+        dev = _make_dampenable(
+            hass=hass, config_entry=entry,
+            power=1000, accurate_power_sensor="sensor.power",
+        )
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=1500.0):
+            dev.dampen_power_use(now)
+
+        assert entry.data[f"measured_{CONF_POWER}"] == 1500.0
+        assert len(hass.config_entries.update_calls) == 1
+
+    def test_inside_window_median_none_no_change(self):
+        """When get_median_sensor returns None, no dampening occurs (bug fix)."""
+        dev = _make_dampenable(power=1000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=None):
+            dev.dampen_power_use(now)
+
+        assert dev._dampened_computed_power_use is None
+
+    def test_inside_window_median_zero_no_change(self):
+        """When median is 0, no dampening occurs."""
+        dev = _make_dampenable(power=1000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=0.0):
+            dev.dampen_power_use(now)
+
+        assert dev._dampened_computed_power_use is None
+
+    def test_inside_window_median_below_threshold_no_change(self):
+        """When median < _power_use_conf / 3, no dampening occurs."""
+        dev = _make_dampenable(power=3000, accurate_power_sensor="sensor.power")
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=500.0):
+            dev.dampen_power_use(now)
+
+        assert dev._dampened_computed_power_use is None
+
+    def test_inside_window_no_config_power_uses_average_for_min_val(self):
+        """When _power_use_conf is None, get_average_sensor is used for min_val."""
+        dev = _make_dampenable(accurate_power_sensor="sensor.power")
+        assert dev._power_use_conf is None
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with (
+            patch.object(dev, "get_average_sensor", return_value=900.0) as avg_mock,
+            patch.object(dev, "get_median_sensor", return_value=800.0),
+        ):
+            dev.dampen_power_use(now)
+
+        avg_mock.assert_called_once()
+        assert dev._dampened_computed_power_use == 800.0
+
+    def test_inside_window_no_config_entry_still_dampens(self):
+        """Without config_entry, dampening still sets _dampened_computed_power_use."""
+        dev = _make_dampenable(
+            power=1000, accurate_power_sensor="sensor.power",
+            config_entry=None,
+        )
+        start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
+        now = datetime.now(tz=pytz.UTC)
+        dev._dampen_start_transition = start
+        dev.current_command = CMD_ON
+
+        with patch.object(dev, "get_median_sensor", return_value=1100.0):
+            dev.dampen_power_use(now)
+
+        assert dev._dampened_computed_power_use == 1100.0
