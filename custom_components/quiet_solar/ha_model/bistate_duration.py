@@ -47,8 +47,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.is_load_time_sensitive = True
 
-        self._last_power_use_computation_time: datetime | None = None
-
         self.qs_bistate_current_duration_h : float = 0.0
         self.qs_bistate_current_on_h : float = 0.0
 
@@ -61,8 +59,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             ct = self._constraints[0]
             self.qs_bistate_current_on_h = ct.convert_target_value_to_time(ct.current_value)/3600.0
             self.qs_bistate_current_duration_h = ct.convert_target_value_to_time(ct.target_value)/3600.0
-
-
 
     async def user_set_default_on_duration(self, float_value: float, for_init:bool = False):
         self.default_on_duration = float_value
@@ -82,40 +78,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             if await self.do_run_check_load_activity_and_constraints(time):
                 self.home.force_next_solve()
             await self.home.update_all_states(time)
-
-    @property
-    def power_use(self):
-        power = self._power_use_conf
-
-        if power is None:
-            return None
-
-        power = float(power)
-
-        if self.accurate_power_sensor is not None:
-            time = datetime.now(tz=pytz.UTC)
-            if self._last_power_use_computation_time is None or (time - self._last_power_use_computation_time).total_seconds() > SOLVER_STEP_S:
-
-                power = self.get_average_sensor(self.accurate_power_sensor,num_seconds=4*3600, time=time, min_val=self._power_use_conf/3.0)
-                if power is None or power == 0.0:
-                    power = self.get_average_sensor(self.accurate_power_sensor, num_seconds=8 * 3600, time=time,
-                                                    min_val=self._power_use_conf / 3.0)
-                if power is None or power == 0.0:
-                    power = self.get_average_sensor(self.accurate_power_sensor, num_seconds=24 * 3600, time=time,
-                                                    min_val=self._power_use_conf / 3.0)
-                if power is None or power == 0.0:
-                    power = self._power_use_conf
-
-                self._last_power_use_computation_time = time
-
-                _LOGGER.info(f"power_use: recomputation for {self.name} to {power} (conf:{self._power_use_conf})")
-
-
-        return float(power)
-
-    @power_use.setter
-    def power_use(self, power: float | None):
-        self._power_use_conf = power
 
     def get_power_from_switch_state(self, state : str | None) -> float | None:
         if state is None:

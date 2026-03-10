@@ -111,6 +111,9 @@ class AbstractDevice(object):
         self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
+        self._dampen_start_transition: datetime| None = None
+        self._dampened_computed_power_use: float | None = kwargs.pop(f"measured_{CONF_POWER}", None)
+
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         self.reset_daily_load_datas()
 
@@ -126,15 +129,22 @@ class AbstractDevice(object):
 
         self._computed_dashboard_section = None
 
+    def is_device_light_on(self) -> bool:
+        if self.current_command is None or self.current_command.is_off_or_idle():
+            return False
+        return True
+
     @property
     def power_use(self):
+        if self._dampened_computed_power_use is not None:
+            return float(self._dampened_computed_power_use)
         if self._power_use_conf is None:
             return None
         return float(self._power_use_conf)
 
     @power_use.setter
     def power_use(self, power: float | None):
-        self._power_use_conf = power
+        self._dampened_computed_power_use = power
 
     def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx: int | None, add: bool = True) -> float:
         if len(self.devices_to_pilot) == 0:
@@ -243,6 +253,7 @@ class AbstractDevice(object):
         _LOGGER.info(f"Reset device {self.name}")
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         self.reset_daily_load_datas()
+        self._dampen_start_transition = None
 
     async def user_clean_and_reset(self):
         _LOGGER.info(f"user_clean_and_reset device {self.name}")
@@ -593,6 +604,9 @@ class PilotedDevice(AbstractDevice):
                 if client.current_command is not None and not client.current_command.is_off_or_idle():
                     return True
         return False
+
+    def is_device_light_on(self) -> bool:
+        return self.is_piloted_device_activated
 
     def prepare_slots_for_piloted_device_budget(self, num_slots: int):
         self.num_demanding_clients = [0]*num_slots

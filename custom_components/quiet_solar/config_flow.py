@@ -279,9 +279,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                           add_max_on_off=False,
                           add_amps_sensors=False,
                           add_phase_number=False
-                          ) -> dict:
+                          ) -> tuple[dict, dict]:
 
         default_name = self.config_entry.data.get(CONF_NAME)
+
+        placeholders = {}
 
 
         if default_name is None:
@@ -414,6 +416,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
             )})
 
+            measured = self.config_entry.data.get(f"measured_{CONF_POWER}")
+            if measured is not None:
+                placeholders[f"measured_{CONF_POWER}"] = f"{int(measured)} W"
+            else:
+                placeholders[f"measured_{CONF_POWER}"] = "-- W"
+
 
 
         if add_max_phase_amps_selector:
@@ -501,12 +509,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     })
 
 
-        return sc
+        return sc, placeholders
 
 
-    def get_all_charger_schema_base(self, type, add_load_power_sensor_mandatory ):
+    def get_all_charger_schema_base(self, type, add_load_power_sensor_mandatory ) -> tuple[dict, dict]:
 
-        sc = self.get_common_schema(type=type,
+        sc, placeholders = self.get_common_schema(type=type,
                                     add_load_power_sensor=True,
                                     add_load_power_sensor_mandatory=add_load_power_sensor_mandatory,
                                     add_calendar=False,
@@ -561,7 +569,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                             )
                         ),
                 })
-        return sc
+        return sc, placeholders
 
 
     @abstractmethod
@@ -608,7 +616,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=54, add_amps_sensors=True, add_load_power_sensor=True)
+        sc_dict, placeholders = self.get_common_schema(type=TYPE, add_is_3p=True, add_max_phase_amps_selector=54, add_amps_sensors=True, add_load_power_sensor=True)
 
         sc_dict.update(  {
 
@@ -691,7 +699,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
 
@@ -703,7 +712,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE, add_amps_sensors=True)
+        sc_dict, placeholders = self.get_common_schema(type=TYPE, add_amps_sensors=True)
 
         power_entities = selectable_power_entities(self.hass)
         if len(power_entities) > 0 :
@@ -773,7 +782,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_charger_generic(self, user_input=None):
@@ -784,7 +794,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=True)
+        sc_dict, placeholders = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=True)
         self.add_entity_selector(sc_dict, CONF_CHARGER_PLUGGED, True, domain=[BINARY_SENSOR_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER, True, domain=[NUMBER_DOMAIN])
         self.add_entity_selector(sc_dict, CONF_CHARGER_PAUSE_RESUME_SWITCH, True, domain=[SWITCH_DOMAIN])
@@ -794,7 +804,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_charger_ocpp(self, user_input=None):
@@ -805,7 +816,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
+        sc_dict, placeholders = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_OCPP)
         if default is None:
@@ -822,7 +833,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_charger_wallbox(self, user_input=None):
@@ -832,7 +844,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             #do sotme stuff to update
             r = await self.async_entry_next(user_input, TYPE)
             return r
-        sc_dict = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
+        sc_dict, placeholders = self.get_all_charger_schema_base(type=TYPE, add_load_power_sensor_mandatory=False)
 
         default = self.config_entry.data.get(CONF_CHARGER_DEVICE_WALLBOX)
         if default is None:
@@ -849,7 +861,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
     async def async_step_battery(self, user_input=None):
 
@@ -860,7 +873,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE)
+        sc_dict, placeholders = self.get_common_schema(type=TYPE)
 
         sc_dict.update({
             vol.Optional(CONF_BATTERY_IS_DC_COUPLED,
@@ -940,7 +953,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_car(self, user_input=None):
@@ -986,7 +1000,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 return r
 
 
-        sc_dict = self.get_common_schema(type=TYPE, add_calendar=True, add_mobile_app=False, add_efficiency_selector=True)
+        sc_dict, placeholders = self.get_common_schema(type=TYPE, add_calendar=True, add_mobile_app=False, add_efficiency_selector=True)
 
         # sc_dict.update(
         #    {
@@ -1118,7 +1132,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         is_3p = self.config_entry.data.get(CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, False)
         phase_mult = 3 if is_3p else 1
 
-        placeholders = {}
         for a in range(1, 33):
             theoretical = int(home_voltage * a * phase_mult)
             placeholders[f"theoretical_charge_{a}"] = f"{theoretical} W"
@@ -1132,7 +1145,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         return self.async_show_form(
             step_id=TYPE,
             data_schema=schema,
-            description_placeholders=placeholders,
+            description_placeholders=placeholders
         )
 
     async def async_step_person(self, user_input=None):
@@ -1145,7 +1158,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE, add_mobile_app=True)
+        sc_dict, placeholders = self.get_common_schema(type=TYPE, add_mobile_app=True)
 
         # Person entity selector
         person_entities = [
@@ -1224,7 +1237,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_heat_pump(self, user_input=None):
@@ -1237,7 +1251,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE,
+        sc_dict, placeholders = self.get_common_schema(type=TYPE,
                                          add_power_value_selector=2000,
                                          add_load_power_sensor=True,
                                          add_is_3p=True,
@@ -1251,7 +1265,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_pool(self, user_input=None):
@@ -1266,7 +1281,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE,
+        sc_dict, placeholders = self.get_common_schema(type=TYPE,
                                          add_power_value_selector=1500,
                                          add_load_power_sensor=True,
                                          add_calendar=False,
@@ -1297,7 +1312,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_on_off_duration(self, user_input=None):
@@ -1308,7 +1324,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE,
+        sc_dict, placeholders = self.get_common_schema(type=TYPE,
                                          add_power_value_selector=1000,
                                          add_load_power_sensor=True,
                                          add_calendar=True,
@@ -1324,7 +1340,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_climate(self, user_input=None):
@@ -1350,7 +1367,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 r = await self.async_entry_next(user_input, TYPE)
                 return r
 
-        sc_dict = self.get_common_schema(type=TYPE,
+        sc_dict, placeholders = self.get_common_schema(type=TYPE,
                                          add_power_value_selector=1000,
                                          add_load_power_sensor=True,
                                          add_calendar=True,
@@ -1422,7 +1439,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
     async def async_step_dynamic_group(self, user_input=None):
@@ -1433,7 +1451,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
-        sc_dict = self.get_common_schema(type=TYPE,
+        sc_dict, placeholders = self.get_common_schema(type=TYPE,
                                          add_load_power_sensor=True,
                                          add_is_3p=True,
                                          add_max_phase_amps_selector=32,
@@ -1445,7 +1463,8 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(
             step_id=TYPE,
-            data_schema=schema
+            data_schema=schema,
+            description_placeholders=placeholders
         )
 
 @dataclass

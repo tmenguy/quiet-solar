@@ -2683,8 +2683,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
 
             if self.car:
-                _LOGGER.info(f"check_load_activity_and_constraints: unplugged connected car {self.car.name}: reset")
-                self.car.user_selected_person_name_for_car = None # physical unplug, reset the user selected person, may trigger a person allocation
+                _LOGGER.warning(
+                    "check_load_activity_and_constraints: unplugged connected car %s on charger %s: "
+                    "clearing user_selected_person=%s and resetting charger",
+                    self.car.name, self.name, self.car.user_selected_person_name_for_car,
+                )
+                self.car.user_selected_person_name_for_car = None
                 self.reset(keep_commands=True) # will detach the car
                 self.user_attached_car_name = None # physical unplug, reset the user selected car for charger
                 do_force_solve = True

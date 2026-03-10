@@ -22,7 +22,7 @@ from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BA
     FLOATING_PERIOD_S, DEVICE_STATUS_CHANGE_CONSTRAINT, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, \
     CONF_PHASE_1_AMPS_SENSOR, \
     CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_STATUS_CHANGE_ERROR, \
-    DEVICE_STATUS_CHANGE_NOTIFY
+    DEVICE_STATUS_CHANGE_NOTIFY, CONF_POWER
 from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice
 
@@ -231,6 +231,8 @@ async def load_from_history(hass, entity_id:str, start_time: datetime, end_time:
 
 MAX_STATE_HISTORY_S = 3600*24*3  # 3 days
 
+DAMPENING_TIME_S = 20 * 60
+
 class HADeviceMixin:
 
     conf_type_name = CONF_TYPE_NAME_HADeviceMixin
@@ -300,6 +302,40 @@ class HADeviceMixin:
 
         self._computed_dashboard_section = None
 
+    def dampen_power_use(self, time: datetime):
+        # to be overridden by loads that want to dampen their power use for better user experience
+        if isinstance(self, AbstractDevice):
+            if self.is_device_light_on():
+                if self._dampen_start_transition is None:
+                    self._dampen_start_transition = time
+
+                duration_from_start = (time - self._dampen_start_transition).total_seconds()
+
+                if  duration_from_start > DAMPENING_TIME_S and duration_from_start < DAMPENING_TIME_S*1.5:
+
+                    if self.accurate_power_sensor is not None:
+                        # ok we do have some data
+                        if self._power_use_conf is None:
+                            min_val = self.get_average_sensor(self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time)
+                            if min_val is not None:
+                                min_val = min_val / 3.0
+                        else:
+                            min_val = self._power_use_conf / 3.0
+
+                        power = self.get_median_sensor(self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time, min_val=min_val)
+                        if power is not None and power > 0:
+                            if self._power_use_conf is None or power > self._power_use_conf/3.0:
+
+                                self._dampened_computed_power_use = power
+
+                                if self.config_entry:
+                                    data = dict(self.config_entry.data)
+                                    to_be_saved = {}
+                                    to_be_saved[f"measured_{CONF_POWER}"] = power
+                                    data.update(to_be_saved)
+                                    self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+            else:
+                self._dampen_start_transition = None
 
     async def _async_bootstrap_from_history(self, entity_id:str, time: datetime):
 
@@ -1020,6 +1056,8 @@ class HADeviceMixin:
 
         for ha_object in self._exposed_entities:
             ha_object.async_update_callback(time)
+
+        self.dampen_power_use(time)
 
     def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
                               non_ha_entity_get_state: Callable[[str, datetime | None], tuple[

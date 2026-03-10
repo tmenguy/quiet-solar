@@ -202,6 +202,9 @@
                     "num_max_on_off": "Maximum Number of allowed turn on or turn off of the climate per day",
                     "power": "Power of the climate (W)"
                 },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
                 "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
                 "title": "A Climate duration based"
             },
@@ -232,6 +235,9 @@
                     "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
                     "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)",
                     "power": "Power consumption of the heat pump (W)"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
                 },
                 "description": "Configure a centralized heat pump used by several climates splits",
                 "title": "Add a centralized Heat Pump"
@@ -287,6 +293,9 @@
                     "power": "Power of the load (W)",
                     "switch": "On/Off of the load"
                 },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
             },
@@ -321,6 +330,9 @@
                     "water_temp_27": "# Hours of pump ON for Water 24\u00b0C < temp < 27\u00b0C, clear for default, DEFAULT IF NO TEMP",
                     "water_temp_30": "# Hours of pump ON for Water 27\u00b0C < temp < 30\u00b0C, clear for default",
                     "water_temp_99": "# Hours of pump ON for Water temp > 30\u00b0C, clear for default"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
@@ -806,6 +818,9 @@
                     "num_max_on_off": "Maximum Number of allowed turn on or turn off of the climate per day",
                     "power": "Power of the climate (W)"
                 },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
                 "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
                 "title": "A Climate duration based"
             },
@@ -835,6 +850,9 @@
                     "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
                     "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)",
                     "power": "Power consumption of the heat pump (W)"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
                 },
                 "description": "Configure a centralized heat pump used by several climates splits",
                 "title": "Add a centralized Heat Pump"
@@ -890,6 +908,9 @@
                     "power": "Power of the load (W)",
                     "switch": "On/Off of the load"
                 },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
                 "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
                 "title": "A generic duration based load"
             },
@@ -924,6 +945,9 @@
                     "water_temp_27": "# Hours of pump ON for Water 24\u00b0C < temp < 27\u00b0C, clear for default, DEFAULT IF NO TEMP",
                     "water_temp_30": "# Hours of pump ON for Water 27\u00b0C < temp < 30\u00b0C, clear for default",
                     "water_temp_99": "# Hours of pump ON for Water temp > 30\u00b0C, clear for default"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
                 },
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"

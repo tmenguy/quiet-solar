@@ -292,6 +292,9 @@
           "water_temp_27": "# Hours of pump ON for Water 24°C < temp < 27°C, clear for default, DEFAULT IF NO TEMP",
           "water_temp_30": "# Hours of pump ON for Water 27°C < temp < 30°C, clear for default",
           "water_temp_99": "# Hours of pump ON for Water temp > 30°C, clear for default"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}"
         }
       },
       "on_off_duration": {
@@ -306,6 +309,9 @@
           "accurate_power_sensor": "Power sensor of the load (W, kW)",
           "num_max_on_off" : "Maximum Number of allowed turn on or turn off of the load per day",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}"
         }
       },
       "climate": {
@@ -323,6 +329,9 @@
           "accurate_power_sensor": "Power sensor of the climate (W, kW)",
           "num_max_on_off" : "Maximum Number of allowed turn on or turn off of the climate per day",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the climate being on"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}"
         }
       },
       "dynamic_group": {
@@ -354,6 +363,9 @@
           "phase_1_amps_sensor": "Phase 1 Amps sensor (A)",
           "phase_2_amps_sensor": "Phase 2 Amps sensor (A) (not needed for mono phase)",
           "phase_3_amps_sensor": "Phase 3 Amps sensor (A) (not needed for mono phase)"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}"
         }
       }
     }
@@ -625,6 +637,9 @@
           "water_temp_27": "[%key:component::quiet_solar::config::step::pool::data::water_temp_27%]",
           "water_temp_30": "[%key:component::quiet_solar::config::step::pool::data::water_temp_30%]",
           "water_temp_99": "[%key:component::quiet_solar::config::step::pool::data::water_temp_99%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::pool::data_description::power%]"
         }
       },
       "on_off_duration": {
@@ -639,6 +654,9 @@
           "num_max_on_off": "[%key:component::quiet_solar::config::step::on_off_duration::data::num_max_on_off%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::on_off_duration::data::accurate_power_sensor%]",
           "calendar" : "[%key:component::quiet_solar::config::step::on_off_duration::data::calendar%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::on_off_duration::data_description::power%]"
         }
       },
       "climate": {
@@ -656,6 +674,9 @@
           "num_max_on_off": "[%key:component::quiet_solar::config::step::climate::data::num_max_on_off%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::climate::data::accurate_power_sensor%]",
           "calendar" : "[%key:component::quiet_solar::config::step::climate::data::calendar%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::climate::data_description::power%]"
         }
       },
       "dynamic_group": {
@@ -686,6 +707,9 @@
           "phase_1_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_1_amps_sensor%]",
           "phase_2_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_2_amps_sensor%]",
           "phase_3_amps_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::phase_3_amps_sensor%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::heat_pump::data_description::power%]"
         }
       }
     }
