@@ -115,8 +115,10 @@ def _make_home(battery=None, voltage=230.0, home_load_power=500.0,
     home.battery_can_discharge = MagicMock(return_value=True)
     home.is_off_grid = MagicMock(return_value=False)
     home.dashboard_sections = None
-    home.get_best_persons_cars_allocations = AsyncMock()
+    home.compute_and_set_best_persons_cars_allocations = AsyncMock()
     home.get_preferred_person_for_car = MagicMock(return_value=None)
+    home._last_persons_car_allocation = {}
+    home.force_next_person_allocation_compute_and_set = MagicMock()
 
     # Provide realistic power values for budget capping in
     # budgeting_algorithm_minimize_diffs when battery discharge is involved.
@@ -5080,38 +5082,6 @@ class TestRemoveAllPersonConstraints:
 
 
 # =============================================================================
-# Additional coverage: convert_auto_constraint_to_manual_if_needed (3687-3688)
-# =============================================================================
-
-
-class TestConvertAutoConstraintToManual:
-    """Lines 3687-3688: convert_auto_constraint_to_manual_if_needed delegates."""
-
-    def test_no_op_when_not_person_automated(self):
-        """Line 3687: condition is False, body not executed."""
-        hass = _make_hass()
-        home = _make_home()
-        ch = _create_charger(hass, home, name="ConvertCh")
-        _init_charger_states(ch)
-        ch.possible_charge_error_start_time = None
-        ch.convert_auto_constraint_to_manual_if_needed()
-
-    def test_delegates_when_person_automated(self):
-        """Lines 3687-3688: mocked get_charge_type returns matching value."""
-        from custom_components.quiet_solar.const import CAR_CHARGE_TYPE_PERSON_AUTOMATED
-        hass = _make_hass()
-        home = _make_home()
-        ch = _create_charger(hass, home, name="ConvertChAuto")
-        _init_charger_states(ch)
-        ch.get_charge_type = MagicMock(return_value=CAR_CHARGE_TYPE_PERSON_AUTOMATED)
-        ch.charger = MagicMock()
-        ch.charger.convert_auto_constraint_to_manual_if_needed = MagicMock()
-
-        ch.convert_auto_constraint_to_manual_if_needed()
-        ch.charger.convert_auto_constraint_to_manual_if_needed.assert_called_once()
-
-
-# =============================================================================
 # Additional coverage: OCPP with use_ocpp_custom_charging_profile (4511-4512)
 # =============================================================================
 
@@ -5673,49 +5643,6 @@ class TestIntermediateTargetGreaterThanTarget:
         assert result is True
         filler_cts = [c for c in charger._constraints if c is not None]
         assert len(filler_cts) >= 1
-
-
-# =============================================================================
-# Lines 3687-3688: convert_auto_constraint_to_manual_if_needed
-# =============================================================================
-
-
-class TestConvertAutoConstraintToManual:
-    """Lines 3687-3688: convert_auto_constraint_to_manual_if_needed paths."""
-
-    def test_not_person_type_no_delegation(self):
-        """Line 3687 covered: type is not PERSON_AUTOMATED => no delegation."""
-        from custom_components.quiet_solar.const import CAR_CHARGE_TYPE_NOT_PLUGGED
-
-        hass = _make_hass()
-        home = _make_home()
-        charger = _create_charger(hass, home)
-
-        charger.get_charge_type = MagicMock(
-            return_value=(CAR_CHARGE_TYPE_NOT_PLUGGED, None)
-        )
-        inner_mock = MagicMock()
-        charger.charger = inner_mock
-
-        charger.convert_auto_constraint_to_manual_if_needed()
-        inner_mock.convert_auto_constraint_to_manual_if_needed.assert_not_called()
-
-    def test_person_automated_delegates(self):
-        """Lines 3687-3688 covered: mock get_charge_type to match the string."""
-        from custom_components.quiet_solar.const import CAR_CHARGE_TYPE_PERSON_AUTOMATED
-
-        hass = _make_hass()
-        home = _make_home()
-        charger = _create_charger(hass, home)
-
-        charger.get_charge_type = MagicMock(
-            return_value=CAR_CHARGE_TYPE_PERSON_AUTOMATED
-        )
-        inner_mock = MagicMock()
-        charger.charger = inner_mock
-
-        charger.convert_auto_constraint_to_manual_if_needed()
-        inner_mock.convert_auto_constraint_to_manual_if_needed.assert_called_once()
 
 
 # =============================================================================

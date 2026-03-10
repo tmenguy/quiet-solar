@@ -1231,13 +1231,13 @@ async def test_charger_check_load_activity_unplugged(
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     charger_device.car = car_device
-    car_device._user_selected_person_name_for_car = "Person A"
+    car_device.user_selected_person_name_for_car = "Person A"
 
     charger_device.is_not_plugged = MagicMock(return_value=True)
     charger_device.is_plugged = MagicMock(return_value=False)
     charger_device.set_charging_num_phases = AsyncMock(return_value=True)
     charger_device.reset = MagicMock()
-    charger_device.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    charger_device.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     do_force = await charger_device.check_load_activity_and_constraints(time)

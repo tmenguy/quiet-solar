@@ -53,14 +53,14 @@ async def test_car_device_post_home_init_no_person_match(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
 
     # Set an invalid person name that won't match any existing person
-    car_device._user_selected_person_name_for_car = "NonExistentPerson"
+    car_device.user_selected_person_name_for_car = "NonExistentPerson"
     car_device._current_forecasted_person_name_from_boot = None
 
     time = datetime.now(tz=pytz.UTC)
     car_device.device_post_home_init(time)
 
     # Should clear the invalid person selection
-    assert car_device._user_selected_person_name_for_car is None
+    assert car_device.user_selected_person_name_for_car is None
     assert car_device.current_forecasted_person is None
 
 
@@ -86,7 +86,7 @@ async def test_car_device_post_home_init_force_no_person(
     await hass.async_block_till_done()
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
-    car_device._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+    car_device.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
 
     time = datetime.now(tz=pytz.UTC)
     car_device.device_post_home_init(time)
@@ -618,7 +618,7 @@ async def test_car_update_to_be_saved_extra_device_info(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
 
     # Set some values to save
-    car_device._user_selected_person_name_for_car = "TestPerson"
+    car_device.user_selected_person_name_for_car = "TestPerson"
 
     mock_person = MagicMock()
     mock_person.name = "ForecastPerson"
@@ -663,5 +663,5 @@ async def test_car_use_saved_extra_device_info(
 
     car_device.use_saved_extra_device_info(stored_data)
 
-    assert car_device._user_selected_person_name_for_car == "RestoredPerson"
+    assert car_device.user_selected_person_name_for_car == "RestoredPerson"
     assert car_device._current_forecasted_person_name_from_boot == "RestoredForecast"

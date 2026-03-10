@@ -181,7 +181,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._use_percent_mode = True # to have a default value, overriden by the call below if necessary
         self._use_percent_mode = self.can_use_charge_percent_constraints()
 
-        self._user_selected_person_name_for_car : str | None = None
+        self.user_selected_person_name_for_car : str | None = None
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
                                       is_numerical=True,
@@ -213,42 +213,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                                       non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter)
 
 
-
-
-
-    # make a property out of user_selected_person_name_for_car
-    @property
-    def user_selected_person_name_for_car(self) -> str | None:
-        return self._user_selected_person_name_for_car
-
-    @user_selected_person_name_for_car.setter
-    def user_selected_person_name_for_car(self, value: str | None):
-        do_update = False
-        if value != self._user_selected_person_name_for_car:
-            do_update = True
-
-            if value is not None and value != FORCE_CAR_NO_PERSON_ATTACHED and self.home is not None:
-                for car in self.home._cars:
-                    if car.name == self.name:
-                        continue
-
-                    if car.user_selected_person_name_for_car == value:
-                        # do not use the property to not trigger an unnecessary compute of the people allocation
-                        car._user_selected_person_name_for_car = None
-
-        self._user_selected_person_name_for_car = value
-        if do_update and self.home is not None:
-            self.hass.create_task(self.home.get_best_persons_cars_allocations(force_update=True),
-                                  name="QSCar get_best_persons_cars_allocations task in user_selected_person_name_for_car")
-
-
     def _car_person_option(self, person_name: str):
         return person_name
 
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
         # do not use the property, but teh underlying model
-        data_to_update["user_selected_person_name_for_car"] = self._user_selected_person_name_for_car
+        data_to_update["user_selected_person_name_for_car"] = self.user_selected_person_name_for_car
 
         forecasted_name = None
         if self.current_forecasted_person is not None:
@@ -258,13 +229,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         # do not use the property to not trigger an unnecessary compute of the people allocation
-        self._user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
+        self.user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
         self._current_forecasted_person_name_from_boot = stored_load_info.get("current_forecasted_person_name_from_boot", None)
 
 
     def device_post_home_init(self, time: datetime):
-        # should happen after all config entry setup and all
-
+        """Initialize person assignment from persisted state at startup."""
         super().device_post_home_init(time)
 
         if self._current_forecasted_person_name_from_boot is not None:
@@ -273,14 +243,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 if person is not None:
                     self.current_forecasted_person = person
 
-        if self._user_selected_person_name_for_car is not None:
-            if self._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
+        if self.user_selected_person_name_for_car is not None:
+            if self.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
                 self.current_forecasted_person = None
             else:
                 if self.home:
-                    person = self.home.get_person_by_name(self._user_selected_person_name_for_car)
+                    person = self.home.get_person_by_name(self.user_selected_person_name_for_car)
                     if person is None:
-                        self._user_selected_person_name_for_car = None
+                        self.user_selected_person_name_for_car = None
                         self.current_forecasted_person = None
                     else:
                         self.current_forecasted_person = person
@@ -337,49 +307,37 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def set_user_person_for_car(self, option:str):
 
-        cars_to_update = []
+        if option is None:
+            option = FORCE_CAR_NO_PERSON_ATTACHED
+
+        if option != FORCE_CAR_NO_PERSON_ATTACHED and self.home:
+            p_per = self.home.get_person_by_name(option)
+            if p_per is None:
+                _LOGGER.error(f"set_user_person_for_car: WRONG PERSON OPTION PASSED {option}" )
+                option = FORCE_CAR_NO_PERSON_ATTACHED
+
         new_value = option
 
+        if new_value == self.user_selected_person_name_for_car:
+            return
 
-        if option is None:
-            # user_selected_person_name_for_car will trigger an update if needed
-            self._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
-        elif option == FORCE_CAR_NO_PERSON_ATTACHED:
-            # user_selected_person_name_for_car will trigger an update if needed
-            self._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
-        else:
-            # do not use the property to not trigger an unnecessary compute of the people allocation
+        self.user_selected_person_name_for_car = new_value
 
-            if new_value != self.user_selected_person_name_for_car:
-                cars_to_update = [self]
+        # Check if the manual selection matches what is already forecasted;
+        # if so, no reallocation is needed.
+        if option == FORCE_CAR_NO_PERSON_ATTACHED and self.current_forecasted_person is None:
+            return
+        if self.current_forecasted_person is not None and self.current_forecasted_person.name == new_value:
+            return
 
-            self._user_selected_person_name_for_car = new_value
+        if self.home:
 
-            if self.home:
-                for car in self.home._cars:
-                    if car.name == self.name:
-                        continue
+            for car in self.home._cars:
+                if car.name != self.name and car.user_selected_person_name_for_car == new_value:
+                    # reset the user_selected_person_name_for_car for this car
+                    car.user_selected_person_name_for_car = None
 
-                    if car.user_selected_person_name_for_car == new_value:
-                        # do not use the property to not trigger an unnecessary compute of the people allocation
-                        car._user_selected_person_name_for_car = None
-                        cars_to_update.append(car)
-
-        # now we should recompute all car assignment with this new one, and update everything that should be updated
-        if len(cars_to_update) > 0 and self.home:
-            await self.home.get_best_persons_cars_allocations(force_update=True)
-
-            for car in cars_to_update:
-                person_forecast_entity = car.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
-                if person_forecast_entity is not None:
-                    time = datetime.now(tz=pytz.UTC)
-                    person_forecast_entity.async_update_callback(time)
-
-                if car.charger:
-                    await car.charger.update_charger_for_user_change()
-
-        return None
-
+            await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
     async def get_car_mileage_on_period_km(self, from_time: datetime, to_time: datetime) -> float | None:
 
@@ -460,9 +418,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return res
 
     async def get_best_person_next_need(self, time:datetime) -> tuple[bool | None, datetime | None, float | None, Any | None]:
-        if self.home:
-            await self.home.get_best_persons_cars_allocations(time)
 
+        if self.home:
             person = self.current_forecasted_person
 
             if person is not None:
@@ -568,11 +525,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.charger.get_charge_type()[0]
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
+
+        # fix the person name ... for whom the car is charging
+        if self.current_forecasted_person is not None:
+            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+
         if self.charger is None:
             return False
-
-        if self.current_forecasted_person is not None:
-            self._user_selected_person_name_for_car = self.current_forecasted_person.name
 
         type, ct =  self.charger.get_charge_type()
         if type == CAR_CHARGE_TYPE_PERSON_AUTOMATED and ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
@@ -787,13 +746,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.calendar = self._conf_calendar
         self.charger = None
         self.do_force_next_charge = False
-        self.do_next_charge_time= None
+        self.do_next_charge_time = None
         self.user_attached_charger_name = None
         self._qs_bump_solar_priority = False
-        if self.home:
-            self.current_forecasted_person = self.home.get_preferred_person_for_car(self)
-        else:
-            self.current_forecasted_person = None
 
 
     def attach_charger(self, charger):
@@ -1488,7 +1443,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         # fix the person name ... for whom the car is charging
         if self.current_forecasted_person is not None:
-            self._user_selected_person_name_for_car = self.current_forecasted_person.name
+            self.user_selected_person_name_for_car = self.current_forecasted_person.name
 
         self.do_next_charge_time = end_charge
         # start_time = end_charge
@@ -1511,6 +1466,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return await self.user_add_default_charge_at_datetime(next_time)
 
     async def user_add_default_charge(self):
+
+        # fix the person name ... for whom the car is charging
+        if self.current_forecasted_person is not None:
+            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+
         if self.can_add_default_charge():
 
             res = await self.user_add_default_charge_at_dt_time(self.default_charge_time)
@@ -1534,7 +1494,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             # fix the person name ... for whom the car is charging
             if self.current_forecasted_person is not None:
-                self._user_selected_person_name_for_car = self.current_forecasted_person.name
+                self.user_selected_person_name_for_car = self.current_forecasted_person.name
 
             self.do_force_next_charge = True
             self.do_next_charge_time = None
@@ -1587,9 +1547,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def user_set_next_charge_target(self, value: int | float | str):
 
-        # the user should be fixed ... for whom the car is charging
+        # fix the person name ... for whom the car is charging
         if self.current_forecasted_person is not None:
-            self._user_selected_person_name_for_car = self.current_forecasted_person.name
+            self.user_selected_person_name_for_car = self.current_forecasted_person.name
 
         do_update = await self.convert_auto_constraint_to_manual_if_needed()
 
@@ -1819,14 +1779,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await super().user_clean_and_reset()
 
         self.user_attached_charger_name = None
-        self.user_selected_person_name_for_car = None  # asked full reset, reset the user selected person,will trigger person allocation
+        self.user_selected_person_name_for_car = None
+        self.current_forecasted_person = None
 
         self.reset(keep_commands=True)  # will detach the car
+
         self._reset_charge_targets()
         await self.setup_car_charge_target_if_needed()
 
         if charger is not None:
             await charger.user_clean_and_reset()
+
+        if self.home:
+            await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
 
     async def user_clean_constraints(self):

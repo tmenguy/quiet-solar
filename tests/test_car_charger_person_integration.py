@@ -739,13 +739,13 @@ class TestCarPersonAllocation:
         car2 = env.cars[1]
 
         # Set person on car1
-        car1._user_selected_person_name_for_car = "Person_1"
+        car1.user_selected_person_name_for_car = "Person_1"
 
         # Now set same person on car2 - should clear from car1
         car2.user_selected_person_name_for_car = "Person_1"
 
-        # Car1 should have lost the person assignment
-        assert car1._user_selected_person_name_for_car is None or car1._user_selected_person_name_for_car != "Person_1"
+        # Direct attribute assignment no longer triggers cross-car clearing
+        assert car1.user_selected_person_name_for_car == "Person_1"
 
     @pytest.mark.asyncio
     async def test_current_forecasted_person_assignment(
@@ -1040,7 +1040,7 @@ class TestCarChargeConstraintFlow:
         person.add_to_mileage_history(day, 100.0, leave_time)
 
         # Mock the home's allocation method to not fail
-        env.home.get_best_persons_cars_allocations = AsyncMock()
+        env.home.compute_and_set_best_persons_cars_allocations = AsyncMock()
 
         is_covered, next_time, target_charge, person_obj = await car.get_best_person_next_need(env.time)
 
@@ -1174,7 +1174,7 @@ class TestCarResetInit:
         car = env.cars[0]
         person = env.persons[0]
 
-        car._user_selected_person_name_for_car = "Person_1"
+        car.user_selected_person_name_for_car = "Person_1"
         car.current_forecasted_person = person
 
         data = {}
@@ -1200,7 +1200,7 @@ class TestCarResetInit:
 
         car.use_saved_extra_device_info(stored_data)
 
-        assert car._user_selected_person_name_for_car == "SomePerson"
+        assert car.user_selected_person_name_for_car == "SomePerson"
         assert car._current_forecasted_person_name_from_boot == "AnotherPerson"
 
 

@@ -300,7 +300,7 @@ async def test_user_set_next_charge_target_sets_person(
     car.current_forecasted_person = SimpleNamespace(name="MyPerson")
 
     await car.user_set_next_charge_target(80)
-    assert car._user_selected_person_name_for_car == "MyPerson"
+    assert car.user_selected_person_name_for_car == "MyPerson"
 
 
 # ===========================================================================
@@ -1226,7 +1226,7 @@ async def test_get_car_person_option_with_user_selected(
 ) -> None:
     """Returns user selected person name when set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="popt_usr")
-    car._user_selected_person_name_for_car = "MyPerson"
+    car.user_selected_person_name_for_car = "MyPerson"
     result = car.get_car_person_option()
     assert result == "MyPerson"
 
@@ -1248,7 +1248,7 @@ async def test_get_car_person_option_none(
 ) -> None:
     """Returns None when no person is set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="popt_no")
-    car._user_selected_person_name_for_car = None
+    car.user_selected_person_name_for_car = None
     car.current_forecasted_person = None
     result = car.get_car_person_option()
     assert result is None
@@ -1344,7 +1344,7 @@ async def test_user_add_default_charge_at_datetime(
     result = await car.user_add_default_charge_at_datetime(end)
     assert result is True
     assert car.do_next_charge_time == end
-    assert car._user_selected_person_name_for_car == "P1"
+    assert car.user_selected_person_name_for_car == "P1"
 
 
 async def test_user_add_default_charge_at_datetime_no_charger(
@@ -1556,10 +1556,10 @@ async def test_set_user_person_for_car_none(
 ) -> None:
     """Setting None should set to FORCE_CAR_NO_PERSON_ATTACHED."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pers_none")
-    car.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    car.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     await car.set_user_person_for_car(None)
-    assert car._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+    assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
 
 
 async def test_set_user_person_for_car_force_no(
@@ -1568,10 +1568,10 @@ async def test_set_user_person_for_car_force_no(
 ) -> None:
     """Setting FORCE_CAR_NO_PERSON_ATTACHED explicitly."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pers_fno")
-    car.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    car.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     await car.set_user_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
-    assert car._user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+    assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
 
 
 # ===========================================================================
@@ -1729,15 +1729,16 @@ async def test_user_selected_person_setter_clears_others(
     car1 = hass.data[DOMAIN].get(car1_entry.entry_id)
     car2 = hass.data[DOMAIN].get(car2_entry.entry_id)
 
-    car2._user_selected_person_name_for_car = "Alice"
+    car2.user_selected_person_name_for_car = "Alice"
 
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    data_handler.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
-    # Setting Alice on car1 should clear car2
     car1.user_selected_person_name_for_car = "Alice"
-    assert car1._user_selected_person_name_for_car == "Alice"
-    assert car2._user_selected_person_name_for_car is None
+    assert car1.user_selected_person_name_for_car == "Alice"
+    # Plain attribute assignment no longer triggers cross-car clearing;
+    # that logic now lives exclusively in set_user_person_for_car.
+    assert car2.user_selected_person_name_for_car == "Alice"
 
 
 # ===========================================================================

@@ -1062,6 +1062,10 @@ class TestPersonsCarForecast:
                 print(f"Person {person.name} next need at {check_time}: leave at {leave_time} for {mileage}km")
 
 
+            # Allocation must run before get_best_person_next_need since it no
+            # longer triggers allocation internally.
+            await mock_home.compute_and_set_best_persons_cars_allocations(time=check_time, force_update=True)
+
             car_results = {}
             for car in mock_home._cars:
                 is_person_covered, next_usage_time, person_min_target_charge, person = await car.get_best_person_next_need(check_time)
@@ -1085,7 +1089,9 @@ class TestPersonsCarForecast:
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
                 elif "buz" in car_key:
-                    assert "brice" in person.name.lower(), f"Expected brice for ID.buzz, got {person.name if person else None}"
+                    # Brice has no forecast, so with the new allocation logic
+                    # he is not assigned to any car.
+                    assert person is None, f"Expected no person for ID.buzz, got {person.name if person else None}"
                     assert person_min_target_charge is None
 
 

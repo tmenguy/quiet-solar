@@ -2688,7 +2688,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     "clearing user_selected_person=%s and resetting charger",
                     self.car.name, self.name, self.car.user_selected_person_name_for_car,
                 )
-                self.car.user_selected_person_name_for_car = None
+                self.car.user_selected_person_name_for_car = None # in fact if a car is unplugged ... why changing any allocation?
                 self.reset(keep_commands=True) # will detach the car
                 self.user_attached_car_name = None # physical unplug, reset the user selected car for charger
                 do_force_solve = True
@@ -3200,6 +3200,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         car.charger = self
 
+        if self.home:
+            self.home.force_next_person_allocation_compute_and_set()
+
     def detach_car(self):
         if self.car is not None:
             self.car.charger = None
@@ -3679,12 +3682,6 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 ct_ret = ct
 
         return type, ct_ret
-
-
-    def convert_auto_constraint_to_manual_if_needed(self):
-        if self.get_charge_type() == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
-            self.charger.convert_auto_constraint_to_manual_if_needed()
-
 
     async def ensure_correct_state(self, time: datetime, probe_only:bool = False) -> tuple[bool | None, bool, datetime | None]:
 

@@ -1801,7 +1801,7 @@ class TestHomePersonMethods:
         """No persons/cars returns empty dict."""
         home = await _get_home(hass, home_config_entry)
         t = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
-        result = await home.get_best_persons_cars_allocations(t, force_update=True)
+        result = await home.compute_and_set_best_persons_cars_allocations(t, force_update=True)
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio

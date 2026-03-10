@@ -799,7 +799,7 @@ class TestQSHomeExtendedCoverage:
         home._persons = []
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await home.get_best_persons_cars_allocations(time)
+        result = await home.compute_and_set_best_persons_cars_allocations(time)
         assert isinstance(result, dict)
 
     def test_get_preferred_person_for_car_no_persons(self, home):

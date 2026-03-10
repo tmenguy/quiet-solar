@@ -30,7 +30,8 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
     PERSON_NOTIFY_REASON_CHANGED_CAR, PREFERRED_CAR_ENERGY_THRESHOLD_KWH, \
     CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, \
-    SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID
+    SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID, \
+    SENSOR_CAR_PERSON_FORECAST
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
@@ -72,7 +73,7 @@ HOME_PERSON_CAR_MIN_SEGMENT_S = 30
 HOME_PERSON_CAR_MIN_OVERLAP_S = 30
 HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S = 15*60
 
-HOME_PERSON_CAR_ALLOCATION_CACHE_S = 10*60
+HOME_PERSON_CAR_ALLOCATION_CACHE_S = 3*60
 
 HOME_SEGMENT_PRE_DELTA_TIMEDELTA = timedelta(minutes=30)
 
@@ -1184,6 +1185,9 @@ class QSHome(QSDynamicGroup):
     def force_next_solve(self):
         self._last_solve_done = None
 
+    def force_next_person_allocation_compute_and_set(self):
+        self._last_persons_car_allocation_time = None
+
     def get_non_controlled_consumption_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
@@ -1993,7 +1997,7 @@ class QSHome(QSDynamicGroup):
                     await self._compute_and_store_person_car_forecasts(local_day_utc)
                     _LOGGER.info(f"update_forecast_probers: compute prev day {local_day_shifted}/{prev_local_day_shifted} -> {local_day_utc}")
 
-            await self.get_best_persons_cars_allocations(time)
+
 
     def _compute_person_needed_time_and_date(self, time:datetime):
 
@@ -2067,6 +2071,7 @@ class QSHome(QSDynamicGroup):
         for car in self._cars:
             if car.name in covered_cars:
                 continue
+
             if car.car_is_invited:
                 continue
 
@@ -2217,10 +2222,16 @@ class QSHome(QSDynamicGroup):
                 total += val
         return total
 
-    async def get_best_persons_cars_allocations(self, time:datetime | None=None, force_update=False, do_notify=True) -> dict[str,QSPerson]:
+    async def compute_and_set_best_persons_cars_allocations(self, time: datetime | None=None, force_update=False, do_notify=True) -> dict[str,QSPerson]:
 
         if time is None:
             time = datetime.now(tz=pytz.UTC)
+
+        initial_car_allocated_persons = {}
+
+        for car in self._cars:
+            initial_car_allocated_persons[car.name] = car.current_forecasted_person
+
 
         if self._last_persons_car_allocation_time is None or \
                 force_update or \
@@ -2232,10 +2243,7 @@ class QSHome(QSDynamicGroup):
             covered_cars = set()
             covered_persons = set()
 
-            initial_car_allocated_persons = {}
-
             for car in self._cars:
-                initial_car_allocated_persons[car.name] = car.current_forecasted_person
 
                 car.current_forecasted_person = None
 
@@ -2251,6 +2259,12 @@ class QSHome(QSDynamicGroup):
                     self._last_persons_car_allocation[car.name] = p_per
                     covered_persons.add(p_per.name)
                     covered_cars.add(car.name)
+
+            for car in self._cars:
+                # after direct assignement force invited cars to not be assigned
+                if car.car_is_invited:
+                    covered_cars.add(car.name)
+
 
             person_forecasts: dict[str, tuple[datetime | None, float | None]] = {}
             for person in self._persons:
@@ -2270,6 +2284,8 @@ class QSHome(QSDynamicGroup):
                     continue
                 forecast = person_forecasts.get(person.name)
                 if forecast is None:
+                    # no forecast no assignement, we consider the person as covered to not have them in the optimization problem
+                    covered_persons.add(person.name)
                     continue
                 p_s.append((person, forecast[0], forecast[1]))
 
@@ -2326,59 +2342,7 @@ class QSHome(QSDynamicGroup):
                     covered_cars.add(car_name)
                     covered_persons.add(person.name)
                     car.current_forecasted_person = person
-                _LOGGER.debug("get_best_persons_cars_allocations: Car:%s -> Person:%s", car_name, person.name)
-
-            for car in self._cars:
-
-                if car.name in covered_cars:
-                    continue
-                if car.car_is_invited:
-                    continue
-                if car.current_forecasted_person is not None:
-                    continue
-                if car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
-                    car.current_forecasted_person = None
-                    continue
-                if car.user_selected_person_name_for_car is not None:
-                    # we shouldn't be there ...
-                    if car.user_selected_person_name_for_car not in covered_persons:
-                        person = self.get_person_by_name(car.user_selected_person_name_for_car)
-                        if person is not None and person.name not in covered_persons:
-                            covered_persons.add(person.name)
-                            car.current_forecasted_person = person
-                            self._last_persons_car_allocation[car.name] = person
-                            _LOGGER.warning("get_best_persons_cars_allocations: last resort by user selection: Car:%s -> Person:%s", car.name, person.name)
-                            continue
-                if car.current_forecasted_person is None:
-
-                    for person in self._persons:
-
-                        if person.name in covered_persons:
-                            continue
-
-                        if person.preferred_car == car.name:
-                            covered_persons.add(person.name)
-                            car.current_forecasted_person = person
-                            self._last_persons_car_allocation[car.name] = person
-                            break
-
-                if car.current_forecasted_person is None:
-                    # try to find another person
-                    for person in self._persons:
-
-                        if person.name in covered_persons:
-                            continue
-
-                        for p_car in person.get_authorized_cars():
-                            if p_car.name == car.name:
-                                covered_persons.add(person.name)
-                                car.current_forecasted_person = person
-                                self._last_persons_car_allocation[car.name] = person
-                                _LOGGER.info("get_best_persons_cars_allocations: last resort by preferred car: Car:%s -> Person:%s", car.name, person.name)
-                                break
-
-                        if car.current_forecasted_person is not None:
-                            break
+                    _LOGGER.debug("get_best_persons_cars_allocations: Car:%s -> Person:%s", car_name, person.name)
 
             str_p_c = ""
             for car_name, person in self._last_persons_car_allocation.items():
@@ -2388,20 +2352,59 @@ class QSHome(QSDynamicGroup):
 
             _LOGGER.info(f"get_best_persons_cars_allocations: {str_p_c}")
 
-            if do_notify:
-                persons_to_notify = set()
-                for car in self._cars:
-                    initial_person : QSPerson | None = initial_car_allocated_persons.get(car.name, None)
-                    if initial_person is not None and car.current_forecasted_person is None:
-                        persons_to_notify.add(initial_person)
-                    elif initial_person is None and car.current_forecasted_person is not None:
-                        persons_to_notify.add(car.current_forecasted_person)
-                    elif initial_person is not None and car.current_forecasted_person is not None and initial_person.name != car.current_forecasted_person.name:
-                        persons_to_notify.add(initial_person)
-                        persons_to_notify.add(car.current_forecasted_person)
+        else:
+            # Cache hit: re-apply allocation to car objects in case something
+            # (e.g. car.reset() from attach_car) overwrote current_forecasted_person
+            for car_name, person in self._last_persons_car_allocation.items():
+                car = self.get_car_by_name(car_name)
+                if car is not None and car.current_forecasted_person != person:
+                    _LOGGER.info(
+                        "get_best_persons_cars_allocations: cache re-apply: "
+                        "Car:%s -> Person:%s (was %s)",
+                        car_name, person.name,
+                        car.current_forecasted_person.name if car.current_forecasted_person else "None",
+                    )
+                    car.current_forecasted_person = person
 
-                for person in persons_to_notify:
-                    await person.notify_of_forecast_if_needed(notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
+        # now check stuff to do on changed person / chargers, etc
+
+        changed_person_names: set[str] = set()
+        persons_that_changed: list[QSPerson] = []
+        cars_that_changed: list[QSCar] = []
+        for car in self._cars:
+            initial_person: QSPerson | None = initial_car_allocated_persons.get(car.name, None)
+
+            if initial_person is not car.current_forecasted_person:
+                cars_that_changed.append(car)
+
+            if initial_person is not None and car.current_forecasted_person is None:
+                if initial_person.name not in changed_person_names:
+                    changed_person_names.add(initial_person.name)
+                    persons_that_changed.append(initial_person)
+            elif initial_person is None and car.current_forecasted_person is not None:
+                if car.current_forecasted_person.name not in changed_person_names:
+                    changed_person_names.add(car.current_forecasted_person.name)
+                    persons_that_changed.append(car.current_forecasted_person)
+            elif initial_person is not None and car.current_forecasted_person is not None and initial_person.name != car.current_forecasted_person.name:
+                if initial_person.name not in changed_person_names:
+                    changed_person_names.add(initial_person.name)
+                    persons_that_changed.append(initial_person)
+                if car.current_forecasted_person.name not in changed_person_names:
+                    changed_person_names.add(car.current_forecasted_person.name)
+                    persons_that_changed.append(car.current_forecasted_person)
+
+        if do_notify:
+            for person in persons_that_changed:
+                await person.notify_of_forecast_if_needed(notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
+
+        for car in cars_that_changed:
+            person_forecast_entity = car.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
+            if person_forecast_entity is not None:
+                time = datetime.now(tz=pytz.UTC)
+                person_forecast_entity.async_update_callback(time)
+
+            if car.charger:
+                await car.charger.update_charger_for_user_change()
 
         return self._last_persons_car_allocation
 
@@ -2440,6 +2443,9 @@ class QSHome(QSDynamicGroup):
                     await self._consumption_forecast.home_non_controlled_consumption.save_values()
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
                 self._compute_non_controlled_forecast_intl(time)
+
+        #it has its own logic of tiing and caching
+        await self.compute_and_set_best_persons_cars_allocations(time=time, force_update=False, do_notify=True)
 
 
     async def finish_off_grid_switch(self, time: datetime) -> tuple[bool, bool]:

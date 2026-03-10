@@ -953,11 +953,15 @@ async def test_car_set_user_person_for_car_updates_other_cars(
     await hass.async_block_till_done()
 
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    data_handler.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
+
+    mock_person = MagicMock()
+    mock_person.name = "Person A"
+    data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
 
     car1_device = hass.data[DOMAIN].get(car1_entry.entry_id)
     car2_device = hass.data[DOMAIN].get(car2_entry.entry_id)
-    car2_device._user_selected_person_name_for_car = "Person A"
+    car2_device.user_selected_person_name_for_car = "Person A"
 
     await car1_device.set_user_person_for_car("Person A")
 
@@ -1788,14 +1792,14 @@ async def test_car_user_clean_and_reset(
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device._constraints = [MagicMock()]
     car_device.user_attached_charger_name = charger_device.name
-    car_device._user_selected_person_name_for_car = "Person A"
+    car_device.user_selected_person_name_for_car = "Person A"
     car_device._next_charge_target = 90
     car_device._next_charge_target_energy = 30000.0
     car_device.do_force_next_charge = True
     car_device.do_next_charge_time = datetime.now(tz=pytz.UTC)
 
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    data_handler.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
         await car_device.user_clean_and_reset()

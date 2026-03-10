@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytz
 
@@ -330,8 +330,11 @@ def create_minimal_home_model(
     home._cars = []
     home._chargers = []
     home._loads = []
+    home._last_persons_car_allocation = {}
     home.available_amps_for_group = [[max_phase_amps] * 3]
     home.available_amps_production_for_group= [[max_phase_amps] * 3]
+    home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
+    home.get_preferred_person_for_car = MagicMock(return_value=None)
 
     def get_car_by_name(car_name: str):
         for car in home._cars:

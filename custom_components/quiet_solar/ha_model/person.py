@@ -352,12 +352,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         if notify_reason == PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER:
             do_notify = daily_notification and charger is None
-            if do_notify:
-                await self.home.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
         elif notify_reason == PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS:
             do_notify = daily_notification and charger is not None
-            if do_notify:
-                await self.home.get_best_persons_cars_allocations(time, force_update=True, do_notify=False)
         elif notify_reason == PERSON_NOTIFY_REASON_CHANGED_CAR:
             do_notify = True
 

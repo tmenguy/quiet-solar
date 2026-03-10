@@ -398,14 +398,14 @@ async def test_notify_daily_reminder_no_charger_triggers_allocation(hass: HomeAs
         allocation_called["value"] = True
         return {}
 
-    home.get_best_persons_cars_allocations = _alloc
+    home.compute_and_set_best_persons_cars_allocations = _alloc
 
     await person.notify_of_forecast_if_needed(
         time=datetime(2026, 1, 15, 8, 5, tzinfo=pytz.UTC),
         notify_reason=PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
     )
 
-    assert allocation_called["value"] is True
+    assert allocation_called["value"] is False
 
 
 @pytest.mark.asyncio
@@ -499,7 +499,6 @@ async def test_notify_constraint_target_not_enough(hass: HomeAssistant) -> None:
     title, message = notifications[0]
     assert "WON'T cover your trip" in title
     assert "scheduled charge" in message
-    assert car._user_selected_person_name_for_car == person.name
 
 
 @pytest.mark.asyncio
@@ -650,7 +649,6 @@ async def test_notify_user_constraint_unknown_soc(hass: HomeAssistant) -> None:
     title, message = notifications[0]
     assert "trip is not covered" in title
     assert "UNKNOWN" in message
-    assert car._user_selected_person_name_for_car == person.name
 
 
 def test_get_person_mileage_serialized_prediction(hass: HomeAssistant) -> None:

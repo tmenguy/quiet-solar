@@ -27,6 +27,18 @@ from custom_components.quiet_solar.home_model.load import AbstractDevice
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 import numpy as np
 
+class _HashableNS(SimpleNamespace):
+    """SimpleNamespace with __hash__ for use in sets."""
+    __hash__ = object.__hash__
+
+
+class _FakeCharger:
+    """Stub charger with awaitable update method."""
+
+    async def update_charger_for_user_change(self):
+        pass
+
+
 from custom_components.quiet_solar.ha_model.home import (
     QSHomeMode,
     QSHomeConsumptionHistoryAndForecast,
@@ -39,6 +51,11 @@ from custom_components.quiet_solar.ha_model.home import (
     NUM_INTERVALS_PER_DAY,
     BEGINING_OF_TIME,
 )
+
+class _HashableNS(SimpleNamespace):
+    """SimpleNamespace with __hash__ for use in sets."""
+    __hash__ = object.__hash__
+
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -622,7 +639,8 @@ async def test_home_best_persons_cars_allocations_basic(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
@@ -632,27 +650,30 @@ async def test_home_best_persons_cars_allocations_basic(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(True, 90.0, 60.0, 0.0)
         ),
     )
 
-    person_a = SimpleNamespace(
+    person_a = _HashableNS(
         name="Person A",
         preferred_car="Car A",
         update_person_forecast=MagicMock(
             return_value=(datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC), 30.0)
         ),
         get_authorized_cars=MagicMock(return_value=[car_a, car_b]),
+        notify_of_forecast_if_needed=AsyncMock(),
     )
-    person_b = SimpleNamespace(
+    person_b = _HashableNS(
         name="Person B",
         preferred_car="Car B",
         update_person_forecast=MagicMock(
             return_value=(datetime(2026, 1, 16, 9, 0, tzinfo=pytz.UTC), 20.0)
         ),
         get_authorized_cars=MagicMock(return_value=[car_a, car_b]),
+        notify_of_forecast_if_needed=AsyncMock(),
     )
 
     home._cars = [car_a, car_b]
@@ -662,7 +683,7 @@ async def test_home_best_persons_cars_allocations_basic(
         "custom_components.quiet_solar.ha_model.home.hungarian_algorithm",
         return_value={0: 0, 1: 1},
     ):
-        result = await home.get_best_persons_cars_allocations(
+        result = await home.compute_and_set_best_persons_cars_allocations(
             time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
             force_update=True,
             do_notify=False,
@@ -1435,7 +1456,7 @@ async def test_home_update_forecast_probers_flow(
 
     home.recompute_people_historical_data = AsyncMock()
     home._compute_and_store_person_car_forecasts = AsyncMock()
-    home.get_best_persons_cars_allocations = AsyncMock()
+    home.compute_and_set_best_persons_cars_allocations = AsyncMock()
 
     prev_time = datetime(2026, 1, 15, 2, 0, tzinfo=pytz.UTC)
     home._last_forecast_probe_time = prev_time
@@ -1453,7 +1474,6 @@ async def test_home_update_forecast_probers_flow(
 
     home.recompute_people_historical_data.assert_called()
     home._compute_and_store_person_car_forecasts.assert_called()
-    home.get_best_persons_cars_allocations.assert_called()
 
 
 async def test_home_update_all_states_handles_solar_exception(
@@ -1545,34 +1565,38 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
         current_forecasted_person=None,
         user_selected_person_name_for_car="Person Selected",
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
     car_force_none = SimpleNamespace(
         name="Car Force None",
         current_forecasted_person=person_preferred,
         user_selected_person_name_for_car=FORCE_CAR_NO_PERSON_ATTACHED,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
     car_preferred = SimpleNamespace(
         name="Car Preferred",
         current_forecasted_person=person_selected,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
     car_authorized = SimpleNamespace(
         name="Car Authorized",
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
 
     home._cars = [car_selected, car_force_none, car_preferred, car_authorized]
     home._persons = [person_selected, person_preferred, person_authorized]
 
-    result = await home.get_best_persons_cars_allocations(
+    result = await home.compute_and_set_best_persons_cars_allocations(
         time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
         force_update=True,
         do_notify=True,
@@ -1580,12 +1604,11 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
 
     assert result
     assert car_selected.current_forecasted_person == person_selected
-    assert car_preferred.current_forecasted_person == person_preferred
-    assert car_authorized.current_forecasted_person == person_authorized
+    # Phase 5 fallback was removed; persons with no forecast don't get assigned
+    assert car_preferred.current_forecasted_person is None
+    assert car_authorized.current_forecasted_person is None
 
     person_selected.notify_of_forecast_if_needed.assert_called()
-    person_preferred.notify_of_forecast_if_needed.assert_called()
-    person_authorized.notify_of_forecast_if_needed.assert_called()
 
 
 async def test_home_update_loads_error_paths(
@@ -1756,7 +1779,8 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
@@ -1766,19 +1790,21 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
             return_value=(False, 40.0, 80.0, 10.0)
         ),
     )
 
-    person = SimpleNamespace(
+    person = _HashableNS(
         name="Person A",
         preferred_car=None,
         update_person_forecast=MagicMock(
             return_value=(None, 30.0)
         ),
         get_authorized_cars=MagicMock(return_value=[car_main, SimpleNamespace(name="Other")]),
+        notify_of_forecast_if_needed=AsyncMock(),
     )
 
     home._cars = [car_main, car_unused]
@@ -1788,7 +1814,7 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         "custom_components.quiet_solar.ha_model.home.hungarian_algorithm",
         return_value={0: 0},
     ):
-        await home.get_best_persons_cars_allocations(
+        await home.compute_and_set_best_persons_cars_allocations(
             time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
             force_update=True,
             do_notify=False,
@@ -1811,7 +1837,7 @@ async def test_home_best_persons_cars_allocations_no_allocations(
     home._cars = []
     home._persons = []
 
-    result = await home.get_best_persons_cars_allocations(
+    result = await home.compute_and_set_best_persons_cars_allocations(
         time=None,
         force_update=True,
         do_notify=False,
@@ -1877,19 +1903,21 @@ async def test_home_best_persons_cars_allocations_skip_cases(
         current_forecasted_person=None,
         user_selected_person_name_for_car=None,
         car_is_invited=True,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
     preset_car = SimpleNamespace(
         name="Preset",
         current_forecasted_person=SimpleNamespace(name="PresetPerson"),
         user_selected_person_name_for_car=None,
         car_is_invited=False,
-        charger=object(),
+        charger=_FakeCharger(),
+        ha_entities={},
     )
     home._cars = [invited_car, preset_car]
     home._persons = []
 
-    result = await home.get_best_persons_cars_allocations(
+    result = await home.compute_and_set_best_persons_cars_allocations(
         time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
         force_update=True,
         do_notify=False,

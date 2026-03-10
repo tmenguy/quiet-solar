@@ -242,7 +242,7 @@ async def test_home_get_best_persons_cars_allocations_no_data(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    result = await home.get_best_persons_cars_allocations()
+    result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
 
 
@@ -639,7 +639,7 @@ async def test_home_get_best_persons_cars_allocations_with_car_and_person(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    result = await home.get_best_persons_cars_allocations()
+    result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
 
 
@@ -1194,7 +1194,7 @@ async def test_home_persons_cars_no_person_attached(
         from custom_components.quiet_solar.const import FORCE_CAR_NO_PERSON_ATTACHED
         car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
 
-    result = await home.get_best_persons_cars_allocations()
+    result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
     for car in home._cars:
         assert car.current_forecasted_person is None
@@ -1238,7 +1238,7 @@ async def test_home_persons_cars_user_selected_person(
     for car in home._cars:
         car.user_selected_person_name_for_car = MOCK_PERSON_CONFIG["name"]
 
-    result = await home.get_best_persons_cars_allocations()
+    result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
 
 
@@ -2336,7 +2336,7 @@ async def test_persons_cars_user_selected_person_not_covered(
         car.user_selected_person_name_for_car = MOCK_PERSON_CONFIG["name"]
         car.current_forecasted_person = None
 
-    result = await home.get_best_persons_cars_allocations()
+    result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
 
 
@@ -3049,14 +3049,18 @@ async def test_allocation_energy_optimal_over_preferred(
     time = datetime.now(tz=pytz.UTC)
 
     for car in home._cars:
-        car.charger = MagicMock()
+        charger_mock = MagicMock()
+        charger_mock.update_charger_for_user_change = AsyncMock()
+        car.charger = charger_mock
         car.car_is_invited = False
         car.user_selected_person_name_for_car = None
+        car.ha_entities = {}
 
     for person in home._persons:
         person.update_person_forecast = MagicMock(
             return_value=(time + timedelta(hours=8), 100.0)
         )
+        person.notify_of_forecast_if_needed = AsyncMock()
 
     huge_diff = PREFERRED_CAR_ENERGY_THRESHOLD_KWH + 100.0
 
@@ -3073,7 +3077,7 @@ async def test_allocation_energy_optimal_over_preferred(
         return raw, huge_diff
 
     with patch("custom_components.quiet_solar.ha_model.home.QSHome._build_raw_energy_matrix", staticmethod(mock_build)):
-        result = await home.get_best_persons_cars_allocations(time=time, force_update=True)
+        result = await home.compute_and_set_best_persons_cars_allocations(time=time, force_update=True)
 
     assert isinstance(result, dict)
 
@@ -3608,7 +3612,7 @@ async def test_car_allocation_no_forecasted_person_skip(
     for p in home._persons:
         p.update_person_forecast = MagicMock(return_value=(time + timedelta(hours=8), 50.0))
 
-    result = await home.get_best_persons_cars_allocations(
+    result = await home.compute_and_set_best_persons_cars_allocations(
         time=time, force_update=True, do_notify=False
     )
 
@@ -4238,19 +4242,19 @@ async def test_allocation_force_no_person_fallback(
     home = data_handler.home
     car = home._cars[0]
 
-    assert car._user_selected_person_name_for_car is None
+    assert car.user_selected_person_name_for_car is None
 
     logger = logging.getLogger("custom_components.quiet_solar.ha_model.home")
     original_info = logger.info
 
     def inject_force(msg, *args, **kwargs):
         if "No persons or cars to allocate" in str(msg):
-            car._user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+            car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
         return original_info(msg, *args, **kwargs)
 
     with patch.object(logger, "info", side_effect=inject_force), \
          patch.object(home, "_pre_allocate_unplugged_home_cars"):
-        await home.get_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
     assert car.current_forecasted_person is None
 
@@ -4262,14 +4266,7 @@ async def test_allocation_user_selected_person_fallback(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Cover lines 2354, 2360-2367: fallback loop resolves a user-selected
-    person name that was injected after the first loop already ran.
-
-    Two cars are used so that:
-    - car_a gets current_forecasted_person pre-set  (line 2354 continue)
-    - car_b gets user_selected set to the person name (lines 2360-2367)
-    """
-    import logging
+    """Verify allocation runs without error (Phase 5 fallback was removed)."""
     from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -4284,21 +4281,6 @@ async def test_allocation_user_selected_person_fallback(
     await hass.config_entries.async_setup(car_a_entry.entry_id)
     await hass.async_block_till_done()
 
-    car_b_data = {
-        **MOCK_CAR_CONFIG,
-        "name": "Car B",
-        "car_tracker": "device_tracker.test_car_b",
-        "car_plugged": "binary_sensor.test_car_b_plugged",
-        "car_charge_percent_sensor": "sensor.test_car_b_soc",
-    }
-    car_b_entry = MockConfigEntry(
-        domain=DOMAIN, data=car_b_data, entry_id="car_b_2360",
-        title="car: Car B", unique_id="qs_car_b_2360",
-    )
-    car_b_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(car_b_entry.entry_id)
-    await hass.async_block_till_done()
-
     person_entry = MockConfigEntry(
         domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_2360",
         title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_2360",
@@ -4311,30 +4293,16 @@ async def test_allocation_user_selected_person_fallback(
     home = data_handler.home
     person = home._persons[0]
     car_a = next(c for c in home._cars if c.name == "Car A")
-    car_b = next(c for c in home._cars if c.name == "Car B")
 
-    assert car_a._user_selected_person_name_for_car is None
-    assert car_b._user_selected_person_name_for_car is None
+    assert car_a.user_selected_person_name_for_car is None
 
-    logger = logging.getLogger("custom_components.quiet_solar.ha_model.home")
-    original_info = logger.info
-
-    def inject_state(msg, *args, **kwargs):
-        if "No persons or cars to allocate" in str(msg):
-            car_a.current_forecasted_person = person
-            car_b._user_selected_person_name_for_car = person.name
-        return original_info(msg, *args, **kwargs)
-
-    with patch.object(logger, "info", side_effect=inject_state), \
-         patch.object(person, "update_person_forecast", return_value=(None, None)), \
+    with patch.object(person, "update_person_forecast", return_value=(None, None)), \
          patch.object(home, "_pre_allocate_unplugged_home_cars"):
-        await home.get_best_persons_cars_allocations(force_update=True)
+        result = await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
-    assert car_b.current_forecasted_person == person
+    assert isinstance(result, dict)
 
     await hass.config_entries.async_unload(person_entry.entry_id)
-    await hass.async_block_till_done()
-    await hass.config_entries.async_unload(car_b_entry.entry_id)
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(car_a_entry.entry_id)
     await hass.async_block_till_done()

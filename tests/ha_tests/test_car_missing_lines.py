@@ -545,12 +545,12 @@ async def test_reset_with_no_home(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """reset() when home is None sets current_forecasted_person to None (line 800)."""
+    """reset() when home is None no longer modifies current_forecasted_person."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="reset_nohome")
     car.current_forecasted_person = SimpleNamespace(name="P1")
     car.home = None
     car.reset()
-    assert car.current_forecasted_person is None
+    assert car.current_forecasted_person is not None
     assert car.charger is None
 
 
@@ -916,15 +916,21 @@ async def test_set_user_person_triggers_charger_update(
 
     car = hass.data[DOMAIN].get(car_entry.entry_id)
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    data_handler.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     charger_mock = MagicMock()
     charger_mock.update_charger_for_user_change = AsyncMock()
     car.charger = charger_mock
 
+    mock_person = MagicMock()
+    mock_person.name = "NewPerson"
+    data_handler.home._persons = [mock_person]
+    data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
+
     await car.set_user_person_for_car("NewPerson")
-    assert car._user_selected_person_name_for_car == "NewPerson"
-    charger_mock.update_charger_for_user_change.assert_awaited_once()
+    assert car.user_selected_person_name_for_car == "NewPerson"
+    # Charger update now happens inside compute_and_set_best_persons_cars_allocations
+    data_handler.home.compute_and_set_best_persons_cars_allocations.assert_awaited_once()
 
 
 # ===========================================================================

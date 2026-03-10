@@ -840,7 +840,7 @@ async def test_person_notify_forecast_daily_constraints(
     person_device.predicted_mileage = 50.0
     person_device.predicted_leave_time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     person_device.on_device_state_change = AsyncMock()
-    person_device.home.get_best_persons_cars_allocations = AsyncMock(return_value={})
+    person_device.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
     await person_device.notify_of_forecast_if_needed(
         time=datetime(2026, 1, 15, 8, 30, tzinfo=pytz.UTC),
