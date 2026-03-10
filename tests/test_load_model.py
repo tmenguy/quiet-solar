@@ -970,7 +970,8 @@ class TestAbstractLoadConstraints:
     def test_get_min_max_power_no_power_use(self):
         """Test get_min_max_power returns 0,0 when no power_use."""
         load = self.create_load()
-        load.power_use = None
+        load._power_use_conf = None
+        load._dampened_computed_power_use = None
         min_p, max_p = load.get_min_max_power()
         assert min_p == 0.0
         assert max_p == 0.0
@@ -3506,7 +3507,7 @@ class TestAbstractDeviceExtended:
     def test_power_use_setter(self, basic_device):
         """Test power_use setter (lines 136-137)."""
         basic_device.power_use = 2000.0
-        assert basic_device._power_use_conf == 2000.0
+        assert basic_device._dampened_computed_power_use == 2000.0
 
     def test_is_off_grid_with_home(self, basic_device):
         """Test is_off_grid delegates to home (lines 173-176)."""
