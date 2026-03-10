@@ -1068,6 +1068,27 @@ class TestPreAllocateUnpluggedHomeCars:
 
         assert home._last_persons_car_allocation["CarA"].name == "Bob"
 
+    def test_invited_unplugged_car_skipped(self):
+        """An invited car with no charger should be skipped (home.py line 2076)."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        car = _FakeCar("InvitedCar", is_home=True, has_charger=False, is_invited=True,
+                        coverage_map={50.0: (True, 80.0, 60.0, 5.0)})
+        person = _FakePerson("Alice", preferred_car="InvitedCar",
+                             authorized_car_names=["InvitedCar"])
+
+        home = _make_home([car], [person])
+        forecasts = {"Alice": (now, 50.0)}
+        covered_cars: set[str] = set()
+        covered_persons: set[str] = set()
+
+        home._pre_allocate_unplugged_home_cars(now, forecasts, covered_cars, covered_persons)
+
+        assert len(home._last_persons_car_allocation) == 0
+        assert "InvitedCar" not in covered_cars
+
     def test_plugged_car_skipped(self):
         """A car connected to a charger should not be pre-allocated."""
         from datetime import datetime, timezone

@@ -2382,3 +2382,18 @@ async def test_user_add_default_charge_no_charger(
 
     # Should not raise, just returns because can_add_default_charge is False
     await car.user_add_default_charge()
+
+
+async def test_user_add_default_charge_sets_person_name(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """user_add_default_charge copies current_forecasted_person to
+    user_selected_person_name_for_car (car.py line 1472)."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="defchg_pn")
+    car.charger = None
+    car.current_forecasted_person = SimpleNamespace(name="ForecastedUser")
+
+    await car.user_add_default_charge()
+
+    assert car.user_selected_person_name_for_car == "ForecastedUser"

@@ -459,6 +459,25 @@ def test_get_average_sensor_empty_history_line870():
     assert result is None
 
 
+def test_get_average_sensor_with_data_line904():
+    """Cover line 904: get_average_sensor returns computed average when data exists."""
+    dev = _make_load_device()
+    entity_id = "sensor.avg_data"
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True)
+
+    now = datetime.now(tz=pytz.UTC)
+    dev._entity_probed_state[entity_id] = [
+        (now - timedelta(seconds=30), 100.0, {}),
+        (now - timedelta(seconds=20), 200.0, {}),
+        (now - timedelta(seconds=10), 300.0, {}),
+    ]
+    dev._entity_probed_last_valid_state[entity_id] = (now - timedelta(seconds=10), 300.0, {})
+
+    result = dev.get_average_sensor(entity_id, num_seconds=60, time=now)
+    assert result is not None
+    assert isinstance(result, float)
+
+
 # ==========================================================================
 # 16. Line 874: get_median_power
 # ==========================================================================
