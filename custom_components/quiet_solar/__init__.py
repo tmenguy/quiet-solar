@@ -17,7 +17,8 @@ _LOGGER = logging.getLogger(__name__)
 from .const import (
     DATA_DEVICE_IDS,
     DOMAIN,
-    DATA_HANDLER, DEVICE_TYPE
+    DATA_HANDLER, DEVICE_TYPE,
+    DATA_SKIP_RELOAD_ENTRY_IDS,
 )
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -205,6 +206,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return False
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the config entry."""
+    """Reload the config entry, unless flagged as a data-only save."""
+    skip_set = hass.data.get(DOMAIN, {}).get(DATA_SKIP_RELOAD_ENTRY_IDS)
+    if skip_set is not None and entry.entry_id in skip_set:
+        skip_set.discard(entry.entry_id)
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 

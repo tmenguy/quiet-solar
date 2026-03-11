@@ -1329,7 +1329,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                          self._last_dampening_update = time
                          data = dict(self.config_entry.data)
                          data.update(self._salvable_dampening)
-                         self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                         self.save_entry_data_no_reload(data)
 
         return do_update
 

@@ -1725,12 +1725,16 @@ class QSHome(QSDynamicGroup):
         if isinstance(device, QSBattery):
             self.physical_battery = None
         elif isinstance(device, QSCar):
-            # remove the car from the list
+            for charger in self._chargers:
+                if charger.car is device:
+                    charger.detach_car()
             try:
                 self._cars.remove(device)
             except Exception as e:
                 _LOGGER.warning(f"Attempted to remove car {device.name} that was not in the list of cars {e}", exc_info=True, stack_info=True)
         elif isinstance(device, QSChargerGeneric):
+            if device.car is not None:
+                device.detach_car()
             try:
                 self._chargers.remove(device)
             except Exception as e:

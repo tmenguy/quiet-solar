@@ -324,7 +324,7 @@ class TestQSChargerGenericCarManagement(unittest.TestCase):
         mock_car.reset.assert_called_once()
 
     def test_attach_same_car(self):
-        """Test attach_car with same car (should return early)."""
+        """Test attach_car with same car object (should return early)."""
         mock_car = MagicMock()
         mock_car.name = "TestCar"
 
@@ -335,6 +335,35 @@ class TestQSChargerGenericCarManagement(unittest.TestCase):
 
         # Should return without doing anything
         self.assertEqual(self.charger.car, mock_car)
+
+    def test_attach_car_replaces_stale_same_name_object(self):
+        """Test that attach_car replaces a stale car object with same name but different identity."""
+        old_car = MagicMock()
+        old_car.name = "TestCar"
+        old_car.charger = self.charger
+
+        new_car = MagicMock()
+        new_car.name = "TestCar"
+        new_car.calendar = None
+        new_car.reset = MagicMock()
+        new_car.get_charge_power_per_phase_A = MagicMock(return_value=([1000, 2000, 3000], 6, 16))
+
+        self.charger.car = old_car
+        time = datetime.now(pytz.UTC)
+
+        with patch.object(self.charger, 'can_do_3_to_1_phase_switch', return_value=False), \
+             patch.object(type(self.charger), 'physical_3p', new_callable=PropertyMock) as mock_3p, \
+             patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
+             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
+            mock_3p.return_value = True
+            mock_min.return_value = 6
+            mock_max.return_value = 16
+
+            self.charger.attach_car(new_car, time)
+
+        self.assertIs(self.charger.car, new_car)
+        self.assertIsNone(old_car.charger)
+        self.assertEqual(new_car.charger, self.charger)
 
     def test_detach_car(self):
         """Test detach_car method."""

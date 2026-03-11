@@ -2723,8 +2723,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             elif self.car:
                 # there is already a car connected, check if it is the right one
                 #change car we have a better one ...
-                if best_car.name != self.car.name:
-                    _LOGGER.info("check_load_activity_and_constraints: CHANGE CONNECTED CAR!")
+                if best_car is not self.car:
+                    car_id_str = "CHANGE CONNECTED CAR!" if best_car.name != self.car.name else "REFRESHING stale car object (same name, different instance)"
+                    _LOGGER.info("check_load_activity_and_constraints: %s (best name %s car name %s)", car_id_str, best_car.name,  self.car.name)
                     self.detach_car() # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
@@ -3183,7 +3184,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def attach_car(self, car, time: datetime):
 
         if self.car is not None:
-            if self.car.name == car.name:
+            if self.car is car:
                 return
             self.detach_car()
 

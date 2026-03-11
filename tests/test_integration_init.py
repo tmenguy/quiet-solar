@@ -174,6 +174,240 @@ async def test_async_reload_entry(hass: HomeAssistant, mock_config_entry):
 
 
 @pytest.mark.asyncio
+async def test_async_reload_entry_skipped_when_flagged(hass: HomeAssistant, mock_config_entry):
+    """Test that reload is skipped when the entry is flagged for data-only save."""
+    from custom_components.quiet_solar.const import DATA_SKIP_RELOAD_ENTRY_IDS
+
+    hass.data.setdefault(DOMAIN, {})
+    skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
+    skip_set.add(mock_config_entry.entry_id)
+
+    with patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        await async_reload_entry(hass, mock_config_entry)
+
+        mock_reload.assert_not_called()
+
+    assert mock_config_entry.entry_id not in skip_set
+
+
+@pytest.mark.asyncio
+async def test_async_reload_entry_not_skipped_for_other_entries(hass: HomeAssistant, mock_config_entry):
+    """Test that the skip flag for one entry does not affect other entries."""
+    from custom_components.quiet_solar.const import DATA_SKIP_RELOAD_ENTRY_IDS
+
+    hass.data.setdefault(DOMAIN, {})
+    skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
+    skip_set.add("some_other_entry_id")
+
+    with patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        await async_reload_entry(hass, mock_config_entry)
+
+        mock_reload.assert_called_once_with(mock_config_entry.entry_id)
+
+    assert "some_other_entry_id" in skip_set
+
+
+@pytest.mark.asyncio
+async def test_async_reload_entry_skip_flag_consumed_once(hass: HomeAssistant, mock_config_entry):
+    """Test that the skip flag is consumed after one use so subsequent updates reload normally."""
+    from custom_components.quiet_solar.const import DATA_SKIP_RELOAD_ENTRY_IDS
+
+    hass.data.setdefault(DOMAIN, {})
+    skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
+    skip_set.add(mock_config_entry.entry_id)
+
+    with patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        await async_reload_entry(hass, mock_config_entry)
+        mock_reload.assert_not_called()
+
+        await async_reload_entry(hass, mock_config_entry)
+        mock_reload.assert_called_once_with(mock_config_entry.entry_id)
+
+
+@pytest.mark.asyncio
+async def test_async_reload_entry_no_skip_set_at_all(hass: HomeAssistant, mock_config_entry):
+    """Test reload works normally when DATA_SKIP_RELOAD_ENTRY_IDS was never created."""
+    hass.data.setdefault(DOMAIN, {})
+
+    with patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        await async_reload_entry(hass, mock_config_entry)
+
+        mock_reload.assert_called_once_with(mock_config_entry.entry_id)
+
+
+@pytest.mark.asyncio
+async def test_save_entry_data_no_reload_sets_skip_flag(hass: HomeAssistant, mock_config_entry):
+    """Test that save_entry_data_no_reload sets the skip flag before updating entry."""
+    from custom_components.quiet_solar.const import DATA_SKIP_RELOAD_ENTRY_IDS
+    from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+    from custom_components.quiet_solar.home_model.load import AbstractDevice
+
+    hass.data.setdefault(DOMAIN, {})
+
+    device = MagicMock(spec=HADeviceMixin)
+    device.hass = hass
+    device.config_entry = mock_config_entry
+
+    HADeviceMixin.save_entry_data_no_reload(device, {"key": "value"})
+
+    skip_set = hass.data[DOMAIN].get(DATA_SKIP_RELOAD_ENTRY_IDS)
+    assert skip_set is not None
+    assert mock_config_entry.entry_id in skip_set
+
+
+@pytest.mark.asyncio
+async def test_save_entry_data_no_reload_noop_without_hass(hass: HomeAssistant):
+    """Test that save_entry_data_no_reload is a no-op when hass is None."""
+    from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+
+    device = MagicMock(spec=HADeviceMixin)
+    device.hass = None
+    device.config_entry = MagicMock()
+
+    HADeviceMixin.save_entry_data_no_reload(device, {"key": "value"})
+
+
+@pytest.mark.asyncio
+async def test_save_entry_data_no_reload_noop_without_config_entry(hass: HomeAssistant):
+    """Test that save_entry_data_no_reload is a no-op when config_entry is None."""
+    from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+
+    device = MagicMock(spec=HADeviceMixin)
+    device.hass = hass
+    device.config_entry = None
+
+    HADeviceMixin.save_entry_data_no_reload(device, {"key": "value"})
+
+
+@pytest.mark.asyncio
+async def test_remove_device_car_detaches_from_charger(hass: HomeAssistant):
+    """Test that removing a car device detaches it from any charger referencing it."""
+    from custom_components.quiet_solar.ha_model.car import QSCar
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+
+    mock_home = create_minimal_home_model()
+
+    mock_car = MagicMock(spec=QSCar)
+    mock_car.name = "TestCar"
+    mock_car.charger = None
+    mock_car.car_is_invited = False
+
+    mock_charger = MagicMock(spec=QSChargerGeneric)
+    mock_charger.name = "TestCharger"
+    mock_charger.car = mock_car
+
+    mock_home._cars = [mock_car]
+    mock_home._chargers = [mock_charger]
+    mock_home._persons = []
+    mock_home._heat_pumps = []
+    mock_home._all_piloted_devices = []
+    mock_home._all_loads = []
+    mock_home._all_dynamic_groups = []
+    mock_home._all_devices = []
+
+    from custom_components.quiet_solar.ha_model.home import QSHome
+    QSHome.remove_device(mock_home, mock_car)
+
+    mock_charger.detach_car.assert_called_once()
+    assert mock_car not in mock_home._cars
+
+
+@pytest.mark.asyncio
+async def test_remove_device_car_no_detach_when_not_attached(hass: HomeAssistant):
+    """Test that removing a car does not detach if charger has a different car."""
+    from custom_components.quiet_solar.ha_model.car import QSCar
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+
+    mock_home = create_minimal_home_model()
+
+    mock_car = MagicMock(spec=QSCar)
+    mock_car.name = "TestCar"
+
+    other_car = MagicMock(spec=QSCar)
+    other_car.name = "OtherCar"
+
+    mock_charger = MagicMock(spec=QSChargerGeneric)
+    mock_charger.name = "TestCharger"
+    mock_charger.car = other_car
+
+    mock_home._cars = [mock_car]
+    mock_home._chargers = [mock_charger]
+    mock_home._persons = []
+    mock_home._heat_pumps = []
+    mock_home._all_piloted_devices = []
+    mock_home._all_loads = []
+    mock_home._all_dynamic_groups = []
+    mock_home._all_devices = []
+
+    from custom_components.quiet_solar.ha_model.home import QSHome
+    QSHome.remove_device(mock_home, mock_car)
+
+    mock_charger.detach_car.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_remove_device_charger_detaches_car(hass: HomeAssistant):
+    """Test that removing a charger device detaches its attached car."""
+    from custom_components.quiet_solar.ha_model.car import QSCar
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+
+    mock_home = create_minimal_home_model()
+
+    mock_car = MagicMock(spec=QSCar)
+    mock_car.name = "TestCar"
+
+    mock_charger = MagicMock(spec=QSChargerGeneric)
+    mock_charger.name = "TestCharger"
+    mock_charger.car = mock_car
+
+    mock_home._chargers = [mock_charger]
+    mock_home._persons = []
+    mock_home._heat_pumps = []
+    mock_home._all_piloted_devices = []
+    mock_home._all_loads = []
+    mock_home._all_dynamic_groups = []
+    mock_home._all_devices = []
+
+    from custom_components.quiet_solar.ha_model.home import QSHome
+    QSHome.remove_device(mock_home, mock_charger)
+
+    mock_charger.detach_car.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_remove_device_charger_no_detach_when_no_car(hass: HomeAssistant):
+    """Test that removing a charger without an attached car does not call detach."""
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+
+    mock_home = create_minimal_home_model()
+
+    mock_charger = MagicMock(spec=QSChargerGeneric)
+    mock_charger.name = "TestCharger"
+    mock_charger.car = None
+
+    mock_home._chargers = [mock_charger]
+    mock_home._persons = []
+    mock_home._heat_pumps = []
+    mock_home._all_piloted_devices = []
+    mock_home._all_loads = []
+    mock_home._all_dynamic_groups = []
+    mock_home._all_devices = []
+
+    from custom_components.quiet_solar.ha_model.home import QSHome
+    QSHome.remove_device(mock_home, mock_charger)
+
+    mock_charger.detach_car.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
     """Test reloading all quiet solar entries."""
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")

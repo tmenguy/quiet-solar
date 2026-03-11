@@ -22,7 +22,7 @@ from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BA
     FLOATING_PERIOD_S, DEVICE_STATUS_CHANGE_CONSTRAINT, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, \
     CONF_PHASE_1_AMPS_SENSOR, \
     CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_STATUS_CHANGE_ERROR, \
-    DEVICE_STATUS_CHANGE_NOTIFY, CONF_POWER
+    DEVICE_STATUS_CHANGE_NOTIFY, CONF_POWER, DATA_SKIP_RELOAD_ENTRY_IDS
 from ..home_model.home_utils import get_average_time_series
 from ..home_model.load import AbstractLoad, AbstractDevice
 
@@ -302,6 +302,15 @@ class HADeviceMixin:
 
         self._computed_dashboard_section = None
 
+    def save_entry_data_no_reload(self, data: dict):
+        """Update config entry data without triggering a config entry reload."""
+        if self.hass is None or self.config_entry is None:
+            return
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        skip_set = domain_data.setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
+        skip_set.add(self.config_entry.entry_id)
+        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+
     def dampen_power_use(self, time: datetime):
         # to be overridden by loads that want to dampen their power use for better user experience
         if isinstance(self, AbstractDevice):
@@ -333,7 +342,7 @@ class HADeviceMixin:
                                     to_be_saved = {}
                                     to_be_saved[f"measured_{CONF_POWER}"] = power
                                     data.update(to_be_saved)
-                                    self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+                                    self.save_entry_data_no_reload(data)
             else:
                 self._dampen_start_transition = None
 

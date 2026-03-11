@@ -7,6 +7,7 @@ MANUFACTURER = "QuietSolarAbstraction"
 DEFAULT_ATTRIBUTION = f"Data provided by {MANUFACTURER}"
 DATA_HANDLER = "quiet_solar_data_handler"
 DATA_DEVICE_IDS = "quiet_solar_device_ids"
+DATA_SKIP_RELOAD_ENTRY_IDS = "quiet_solar_skip_reload_entry_ids"
 
 DEVICE_TYPE = "device_type"
 
