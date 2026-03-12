@@ -144,6 +144,30 @@ class LoadConstraint(object):
 
         self.real_constraint = self
 
+
+    def has_a_following_constraint(self):
+        if self.load._constraints is None:
+            self.load._constraints = []
+
+        found_idx = -1
+        for i, c in enumerate(self.load._constraints):
+            if c is self:
+                found_idx = i
+                break
+
+        if found_idx == -1 or found_idx == len(self.load._constraints) - 1:
+            return False
+
+        next = self.load._constraints[found_idx + 1]
+
+        if (next.current_start_of_constraint is None or next.current_start_of_constraint == DATETIME_MIN_UTC or
+                self.end_of_constraint is None or self.end_of_constraint == DATETIME_MAX_UTC or
+                (next.current_start_of_constraint - self.end_of_constraint).total_seconds() < SOLVER_STEP_S + 1):
+            return True
+
+        return False
+
+
     @property
     def use_time_for_budgeting(self):
         return False
@@ -464,7 +488,6 @@ class LoadConstraint(object):
         return ret
 
 
-
     def is_constraint_met(self, time:datetime | None=None, current_value=None) -> bool:
         """ is the constraint met in its current form? """
 
@@ -608,7 +631,8 @@ class LoadConstraint(object):
                           power_slots_duration_s: npt.NDArray[np.float64],
                           existing_commands: list[LoadCommand | None],
                           allow_change_state: bool,
-                          time: datetime) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                          time: datetime,
+                          allow_no_reclaim: bool = False) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """ Adapt the power repartition of the constraint over the given period."""
 
 class MultiStepsPowerLoadConstraint(LoadConstraint):
@@ -1035,7 +1059,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                           power_slots_duration_s: npt.NDArray[np.float64],
                           existing_commands: list[LoadCommand | None],
                           allow_change_state: bool,
-                          time: datetime) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                          time: datetime,
+                          allow_no_reclaim: bool = False) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         """ Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1088,7 +1113,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if self.support_auto:
 
                 if init_energy_delta >= 0.0:
-                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_GREEN_CAP]
+                    do_not_touch_commands = [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE]
                     default_cmd = copy_command(CMD_AUTO_GREEN_CONSIGN)
                     empty_cmd = copy_command(CMD_AUTO_GREEN_ONLY)
                 else:
@@ -1287,9 +1312,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 delta_budget_quantity -= (d_budget_quantity - budget_quantity_to_be_reclaimed)
                                 _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {budget_quantity_to_be_reclaimed} {self.get_unit_string()} from the future")
                             else:
-                                # the constraint was met and we can't reduce the futur: stop here
-                                start_solved_frontier = i
-                                break
+                                if allow_no_reclaim:
+                                    _LOGGER.info(f"adapt_repartition: {self.name} reclaim failed but allowed to grow (non-mandatory or has following constraint)")
+                                else:
+                                    # the constraint was met and we can't reduce the future: stop here
+                                    start_solved_frontier = i
+                                    break
 
 
                     if energy_delta * init_energy_delta <= 0.0:
@@ -1306,7 +1334,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             if self.support_auto and num_changes > 0:
 
                 # CAP the modified segment to what has been computed ...or force some consumption
-                # we may in fact do that "all the time" but we are not sure of the futue, so limit
+                # we may in fact do that "all the time" but we are not sure of the future, so limit
                 # the forced caps to where they are important? use first_modified_slot instead?
                 for i in range(start_solved_frontier, last_slot + 1):
 

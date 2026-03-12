@@ -581,6 +581,8 @@ class PeriodSolver(object):
                 if st > nd:
                     continue
 
+                has_direct_following_constraint = ci.has_a_following_constraint()
+                allow_no_reclaim = has_direct_following_constraint or ci.is_mandatory is False
 
                 # energy_delta can be negative or positive, negative means reduce the consumed energy by the constraint
                 init_energy_delta = energy_delta
@@ -591,7 +593,8 @@ class PeriodSolver(object):
                     power_slots_duration_s=self._durations_s,
                     existing_commands=out_commands,
                     allow_change_state=allow_change_state,
-                    time=self._start_time)
+                    time=self._start_time,
+                    allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False)
                 if has_changes:
                     _LOGGER.info(
                         f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")

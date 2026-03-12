@@ -2033,14 +2033,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if cs.command.is_like(CMD_AUTO_GREEN_CAP):
 
                 if cs.command.power_consign == 0:
-                    # forbid charge in that case ...
+                    # default: forbid charge to preserve battery charge plan
                     possible_num_phases = [cs.current_active_phase_number]
                     if current_state is True and can_change_state is False:
                         # we charge and we should stop but we can't ... stay at minimum
                         possible_amps = [self.min_charge]
                     else:
-                        possible_amps = [0]
-
+                        # check if there's enough surplus beyond the battery's charge demand
+                        # to allow charging without hurting the battery .. in fact it is very properly handled directly in the
+                        # budgeting algorithm budgeting_algorithm_minimize_diffs is is_before_battery is False : it will save the battery
+                        # stay at minimal charging:
+                        possible_amps = [0, self.min_charge]
                 else:
                     possible_num_phases, max_charge = cs.get_consign_amps_values(consign_is_minimum=False, add_tolerance=0.2)
             # below is not needed as the auto green consign is made to consume battery, but still being really auto green, so no minimum amps here
