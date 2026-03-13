@@ -1231,15 +1231,15 @@ class TestSolver(TestCase):
 
         # Create alternating solar pattern to encourage multiple on/off cycles
         # High solar -> pool on, Low solar -> pool off, repeating
+        # Use 45-min alternating so OFF gaps (~2700s) stay below LONG_ON_OFF_SWITCH_S (3600s)
         pv_forecast = []
-        for h in range(12):
-            hour = dt + timedelta(hours=h)
-            # Alternating pattern: 2 hours high, 2 hours low
-            if (h // 2) % 2 == 0:
+        for i in range(16):
+            t = dt + timedelta(minutes=45 * i)
+            if i % 2 == 0:
                 solar_power = 4000  # High solar - pool should run
             else:
-                solar_power = 500  # Low solar - pool might stop to save for later
-            pv_forecast.append((hour, solar_power))
+                solar_power = 500  # Low solar - pool might stop
+            pv_forecast.append((t, solar_power))
 
         # Low unavoidable consumption
         unavoidable_consumption_forecast = [
@@ -1338,15 +1338,15 @@ class TestSolver(TestCase):
         # Create variable tariffs - alternating cheap/expensive periods
         # This should encourage the solver to turn loads on during cheap periods
         # and off during expensive periods, creating multiple cycles
+        # Use 45-min alternating so OFF gaps (~2700s) stay below LONG_ON_OFF_SWITCH_S (3600s)
         tariffs = []
-        for h in range(24):
-            hour = dt + timedelta(hours=h)
-            # Pattern: 3 hours cheap, 3 hours expensive, repeating
-            if (h // 3) % 2 == 0:
+        for i in range(32):
+            t = dt + timedelta(minutes=45 * i)
+            if i % 2 == 0:
                 price = 0.10 / 1000.0  # Cheap
             else:
                 price = 0.30 / 1000.0  # Expensive
-            tariffs.append((hour, price))
+            tariffs.append((t, price))
 
         # Test without limit first
         cumulus_unlimited = TestLoad(name="cumulus_unlimited")
@@ -1481,15 +1481,15 @@ class TestSolver(TestCase):
         heater.push_live_constraint(dt, heater_constraint)
 
         # Solar pattern that would encourage multiple cycles
+        # Use 45-min alternating so OFF gaps (~2700s) stay below LONG_ON_OFF_SWITCH_S (3600s)
         pv_forecast = []
-        for h in range(8):
-            hour = dt + timedelta(hours=h)
-            # Alternating high/low solar
-            if h % 2 == 0:
+        for i in range(11):
+            t = dt + timedelta(minutes=45 * i)
+            if i % 2 == 0:
                 solar_power = 5000
             else:
                 solar_power = 1000
-            pv_forecast.append((hour, solar_power))
+            pv_forecast.append((t, solar_power))
 
         unavoidable_consumption_forecast = [(dt + timedelta(hours=h), 400) for h in range(8)]
 

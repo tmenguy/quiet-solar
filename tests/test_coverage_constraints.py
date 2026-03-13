@@ -18,7 +18,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    SOLVER_STEP_S,
+    SOLVER_STEP_S, CHANGE_ON_OFF_STATE_HYSTERESIS_S, LONG_ON_OFF_SWITCH_S,
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
@@ -92,7 +92,6 @@ class _FakeLoadForCoverage:
         return [a, a, a]
 
     def get_first_unlocked_slot_index(self, time_slots, change_state_hysteresis_s=None):
-        from custom_components.quiet_solar.home_model.load import CHANGE_ON_OFF_STATE_HYSTERESIS_S
         if change_state_hysteresis_s is None:
             change_state_hysteresis_s = CHANGE_ON_OFF_STATE_HYSTERESIS_S
         if self.num_max_on_off is None or self.last_state_change_time is None:
@@ -4294,3 +4293,93 @@ def test_forced_slot_adapt_repartition_skip():
         time_slots=time_slots,
     )
     assert out_delta[0] == 0.0, "Forced slot 0 should not be modified"
+
+
+# ===========================================================================
+# Line 915 - _adapt_commands: protect long initial OFF when over switch budget
+# ===========================================================================
+
+def test_adapt_commands_protect_long_initial_off_at_switch_limit():
+    """Cover line 915: candidate_to_removal = False for a long initial OFF gap.
+
+    When the load is ON, the solver wants it OFF for a long time (>= LONG_ON_OFF_SWITCH_S),
+    and num_allowed_switch is exhausted, the initial OFF must be preserved (not filled).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=4, num_on_off=4)
+    load.current_command = LoadCommand(command="on", power_consign=1000)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    num_off_slots = int(LONG_ON_OFF_SWITCH_S / SOLVER_STEP_S) + 2
+    total_slots = num_off_slots + 3
+
+    out_commands: list[LoadCommand | None] = (
+        [None] * num_off_slots
+        + [LoadCommand(command="on", power_consign=1000)] * 2
+        + [None]
+    )
+    out_power = [
+        (0.0 if c is None else c.power_consign) for c in out_commands
+    ]
+    durations = [float(SOLVER_STEP_S)] * total_slots
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, durations, 0.0, 0, total_slots - 1
+    )
+    assert isinstance(result, float)
+    for i in range(num_off_slots):
+        assert out_commands[i] is None, (
+            f"Slot {i} should stay OFF - the long initial OFF must be preserved"
+        )
+
+
+# ===========================================================================
+# Line 938 - _adapt_commands: Phase 2 filling a gap at first_slot sets
+#            start_witch_switch = False
+# ===========================================================================
+
+def test_adapt_commands_phase2_fills_first_slot_gap_sets_switch_false():
+    """Cover line 938: Phase 2 fills a single-slot gap at first_slot.
+
+    Phase 1 must NOT fire so that start_witch_switch stays True when Phase 2
+    processes the gap. This requires few transitions with ample switch budget,
+    so that the Phase 1 condition (num_changes > min(allowed-3, allowed//2))
+    is False, but the single-slot gap at first_slot is still a candidate.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=20, num_on_off=0)
+    load.current_command = LoadCommand(command="on", power_consign=1000)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    # Pattern: [OFF, ON, ON] with load currently ON.
+    # num_command_state_change = 2, num_allowed_switch = 20.
+    # Phase 1 condition: 2 > min(17, 10) = 10 -> False, so Phase 1 skipped.
+    # Phase 2: single-slot gap [0,0] at first_slot with start_witch_switch=True
+    # -> line 937-938 sets start_witch_switch = False.
+    out_commands: list[LoadCommand | None] = [
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+    out_power = [0.0, 1000.0, 1000.0]
+    durations = [float(SOLVER_STEP_S)] * 3
+
+    result = constraint._adapt_commands(
+        out_commands, out_power, durations, 0.0, 0, 2
+    )
+    assert isinstance(result, float)
+    assert out_commands[0] is not None, (
+        "Single-slot OFF blip at first_slot should be filled by Phase 2"
+    )

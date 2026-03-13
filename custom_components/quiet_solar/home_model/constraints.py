@@ -18,7 +18,8 @@ import importlib
 
 from .home_utils import is_amps_greater, min_amps, add_amps, is_amps_zero
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
-    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONSTRAINT_TYPE_FILLER, SOLVER_STEP_S
+    CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONSTRAINT_TYPE_FILLER, SOLVER_STEP_S, \
+    LONG_ON_OFF_SWITCH_S
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -822,11 +823,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             quantity_to_recover = 0.0
 
-            if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
+            if num_command_state_change > 1 and num_command_state_change > min(num_allowed_switch - 3, num_allowed_switch//2):
                 # too many state changes .... need to merge some commands
                 # keep only the main one as it is solar only
-
-
 
                 if start_witch_switch and len(inner_empty_cmds) > 0:
                     # we are starting with a switch...can we try to not do it?
@@ -841,13 +840,23 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         rge = [first_slot, max(first_slot, inner_empty_cmds[0][0]-1)]
                         cmd_to_push = None
 
-
                     durations_s = 0
                     for i in range(rge[0], rge[1]+1):
                         durations_s += power_slots_duration_s[i]
 
-                    if durations_s <= SOLVER_STEP_S + 1:
+                    kill_first_switch = False
+
+                    if num_command_state_change > num_allowed_switch:
+                        # we are already pretty bad, we need to kill if
+                        if  durations_s <= LONG_ON_OFF_SWITCH_S:
+                            # we can remove the first empty command, it is not too long
+                            kill_first_switch = True
+                    elif durations_s <= SOLVER_STEP_S + 1:
                         # we can remove the first empty command, small enough
+                        kill_first_switch = True
+
+                    if kill_first_switch:
+                        # we can remove the first command
 
                         _LOGGER.info(f"_adapt_commands: removed start with switch command for {durations_s}s by {cmd_to_push}")
                         num_command_state_change -= 1
@@ -876,29 +885,45 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # switch has been removed at the start ....
                         start_witch_switch = False
 
-
-
-
             if num_command_state_change > 1 and num_command_state_change > num_allowed_switch - 3:
                 do_for_num_switch_reduction = True
             else:
                 do_for_num_switch_reduction = False
 
             sorted_by_size_empty_cmds = []
+            protect_before = first_slot
+
             for empty_cmd in inner_empty_cmds:
                 empty_cmd.append(empty_cmd[1] +1 - empty_cmd[0])
                 empty_cmd.append(False)
+                empty_cmd_duration_s = 0
+                for i in range(empty_cmd[0], empty_cmd[1] + 1):
+                    empty_cmd_duration_s += power_slots_duration_s[i]
+                empty_cmd.append(empty_cmd_duration_s)
+
+                candidate_to_removal = False
                 if empty_cmd[2] == 1:
                     # only single slots
-                    sorted_by_size_empty_cmds.append(empty_cmd)
+                    candidate_to_removal = True
                     empty_cmd[3] = True
                 elif do_for_num_switch_reduction:
+                    if empty_cmd[4] < LONG_ON_OFF_SWITCH_S:
+                        candidate_to_removal = True
+                if empty_cmd[0] == first_slot and num_command_state_change > num_allowed_switch  and (empty_cmd[1] == last_slot or empty_cmd[4] >= LONG_ON_OFF_SWITCH_S):
+                    # special case where there is an off "only" that has been requested, or a long enough empty just after now and we don't have anymore enough  num_allowed_switch
+                    # to allow it : we should allow an off anyway!
+                    candidate_to_removal = False
+
+                if candidate_to_removal:
                     sorted_by_size_empty_cmds.append(empty_cmd)
+                elif empty_cmd[0] == first_slot:
+                    protect_before = empty_cmd[1] + 1
 
             #remove the smallest holes first
-            sorted_by_size_empty_cmds = sorted(inner_empty_cmds, key=lambda x: x[2])
+            sorted_by_size_empty_cmds = sorted(sorted_by_size_empty_cmds, key=lambda x: x[4])
 
             if len(sorted_by_size_empty_cmds) > 0:
+
 
                 for empty_cmd in sorted_by_size_empty_cmds:
                     # if we start with a non switch and the first is empty : it means the previous was empty so replacing it will actually NOT remove any switch
@@ -944,7 +969,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     cmd_to_push = None
 
 
-
                 # well just a xor :)
                 if start_witch_switch:
                     prev_cmd_is_to_be_replaced = not is_cmd_to_be_replaced(first_slot)
@@ -952,8 +976,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     prev_cmd_is_to_be_replaced = is_cmd_to_be_replaced(first_slot)
 
 
-
                 for i in range(first_slot, last_slot + 1):
+
+                    if i < protect_before:
+                        continue
 
                     limit_reached = False
 
