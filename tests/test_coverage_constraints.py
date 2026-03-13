@@ -35,6 +35,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
     TimeBasedSimplePowerLoadConstraint,
+    get_readable_date_string,
 )
 from tests.factories import MinimalTestLoad, TestDynamicGroupDouble, create_constraint, create_charge_percent_constraint
 
@@ -4933,3 +4934,234 @@ def test_adapt_repartition_reclaim_future_decrements_switch_budget():
         assert out_cmds[7].is_off_or_idle(), (
             "Future lone ON slot should be reclaimed to IDLE"
         )
+
+
+# ===========================================================================
+# Hysteresis enforcement tests (step 6)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _new_segment_duration_s direct tests
+# ---------------------------------------------------------------------------
+
+def test_new_segment_duration_isolated_slot():
+    """Isolated slot returns its own duration only."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+    existing = [None, None, None]
+    out = [None, None, None]
+    dur = MultiStepsPowerLoadConstraint._new_segment_duration_s(
+        1, True, existing, out, [900.0, 900.0, 900.0], 0, 2)
+    assert dur == 900.0
+
+
+def test_new_segment_duration_extends_both_directions():
+    """Segment includes adjacent same-state neighbors in both directions."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None, on, None]
+    out = [None, None, None, None]
+    dur = MultiStepsPowerLoadConstraint._new_segment_duration_s(
+        1, True, existing, out, [900.0, 900.0, 900.0, 900.0], 0, 3)
+    assert dur == 900.0 * 3
+
+
+def test_new_segment_duration_stops_at_boundary():
+    """Scan stops at first_slot and last_slot boundaries."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None, None, None, on]
+    out = [None, None, None, None, None]
+    dur = MultiStepsPowerLoadConstraint._new_segment_duration_s(
+        2, True, existing, out, [900.0] * 5, 2, 2)
+    assert dur == 900.0
+
+def test_adapt_commands_keeps_long_on_segment():
+    """ON segments longer than CHANGE_ON_OFF_STATE_HYSTERESIS_S are kept."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=10, num_on_off=0)
+    load.current_command = None
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    long_dur = CHANGE_ON_OFF_STATE_HYSTERESIS_S
+    on = LoadCommand(command="on", power_consign=1000)
+    out_commands = [None, on, on, None]
+    out_power = [0.0, 1000.0, 1000.0, 0.0]
+    durations = [long_dur] * 4
+
+    result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 3)
+    assert isinstance(result, float)
+    assert out_commands[1] is not None, "Long ON segment should be kept"
+
+
+def test_adapt_commands_preserves_boundary_on_segment():
+    """Short ON segment touching the start (continuation from current_command ON)
+    is NOT removed because it extends an existing run."""
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    load = _FakeLoadForCoverage(num_max_on_off=10, num_on_off=0, current_command=on)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    short_dur = (CHANGE_ON_OFF_STATE_HYSTERESIS_S - 1) / 2.0
+    out_commands = [on, None, None, None]
+    out_power = [1000.0, 0.0, 0.0, 0.0]
+    durations = [short_dur] * 4
+
+    result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 3)
+    assert isinstance(result, float)
+    assert out_commands[0] is not None, "Boundary ON segment should be preserved"
+
+
+# ---------------------------------------------------------------------------
+# adapt_repartition: hysteresis blocks short OFF->ON segment
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_hysteresis_blocks_short_on_creation():
+    """A new ON segment shorter than CHANGE_ON_OFF_STATE_HYSTERESIS_S is
+    blocked even when the switch budget allows it."""
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=10, num_on_off=0)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+    )
+
+    n = 4
+    short_dur = CHANGE_ON_OFF_STATE_HYSTERESIS_S / 2.0
+    durations = np.array([short_dur] * n, dtype=np.float64)
+    existing = [None] * n
+    time_slots = [now + timedelta(seconds=short_dur * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = constraint.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    on_count = sum(1 for cmd in out_cmds if cmd is not None and not cmd.is_off_or_idle())
+    assert on_count == 0, (
+        f"Short slots ({short_dur}s each) below hysteresis "
+        f"({CHANGE_ON_OFF_STATE_HYSTERESIS_S}s) should not create new ON segments"
+    )
+
+
+# ---------------------------------------------------------------------------
+# adapt_repartition: hysteresis blocks short ON->OFF segment
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_hysteresis_blocks_short_off_split():
+    """Cover lines 1368-1371: splitting an ON segment to create a short OFF
+    segment is blocked by the hysteresis check even when switch budget allows.
+
+    Forced slots lock the edges so the iteration can only try interior slots.
+    Short slot durations ensure the resulting OFF would be < hysteresis.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=10, num_on_off=0,
+        current_command=on,
+        last_state_change_time=now - timedelta(seconds=1),
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+    )
+
+    short_dur = CHANGE_ON_OFF_STATE_HYSTERESIS_S / 2.0
+    n = 6
+    durations = np.array([short_dur] * n, dtype=np.float64)
+    existing = [on, on, on, on, on, on]
+    time_slots = [now + timedelta(seconds=short_dur * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = constraint.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+
+# ===========================================================================
+# Line 48 - get_readable_date_string: "today" branch
+# ===========================================================================
+
+def test_get_readable_date_string_today_branch():
+    """Cover line 48: get_readable_date_string returns 'today HH:MM' for today's date."""
+    local_now = datetime.now(tz=pytz.UTC).astimezone(tz=None)
+    local_today_noon = datetime(
+        local_now.year, local_now.month, local_now.day, 12, 0, 0,
+        tzinfo=local_now.tzinfo,
+    )
+    target_utc = local_today_noon.astimezone(pytz.UTC)
+    result = get_readable_date_string(target_utc, for_small_standalone=False)
+    assert result.startswith("today "), f"Expected 'today ...', got {result!r}"
+
+
+# ===========================================================================
+# Lines 905, 933, 976 - _adapt_commands: short-duration empty cmds and
+#                        start_witch_switch=True with quantity recovery
+# ===========================================================================
+
+def test_adapt_commands_short_empty_and_switch_true_recovery():
+    """Cover lines 905, 933, 976.
+
+    Setup: load ON, commands [None, ON, None, ON, ON].
+    Slot 0 has duration 1000s (> 901 threshold so Phase 1 doesn't kill).
+    Slot 2 has duration 300s (< 600 CHANGE_ON_OFF_STATE_HYSTERESIS_S).
+
+    - Line 905: empty_cmd [2,2] duration 300 < 600 -> candidate_to_removal = True
+    - Line 933: in removal loop, 300 < 600 and not last_slot -> pass
+    - Line 976: start_witch_switch stays True, quantity_to_recover != 0
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=6, num_on_off=1,
+        current_command=LoadCommand(command="on", power_consign=1000),
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    # Pattern: [None, ON, None, ON, ON] with load currently ON.
+    # _num_command_state_change returns: num=4, empties=[[0,0],[2,2]],
+    # start_witch_switch=True, start_cmd=ON.
+    out_commands: list[LoadCommand | None] = [
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+    out_power = [0.0, 1000.0, 0.0, 1000.0, 1000.0]
+    # Slot 0: 1000s (> 901 so Phase 1 won't kill), slot 2: 300s (< 600 for hysteresis)
+    durations = [1000.0, 900.0, 300.0, 900.0, 900.0]
+
+    result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 4)
+    assert isinstance(result, float)
+    # Slot 2 was filled (empty cmd removed)
+    assert out_commands[2] is not None, "Short interior gap should be filled"

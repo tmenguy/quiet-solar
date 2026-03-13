@@ -19,7 +19,7 @@ import importlib
 from .home_utils import is_amps_greater, min_amps, add_amps, is_amps_zero
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN, CONSTRAINT_TYPE_FILLER, SOLVER_STEP_S, \
-    LONG_ON_OFF_SWITCH_S
+    LONG_ON_OFF_SWITCH_S, CHANGE_ON_OFF_STATE_HYSTERESIS_S
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -812,7 +812,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 forced[i] = copy_command(self.load.current_command)
         return forced
 
-    def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, budgeting_quantity_to_be_added, first_slot: int, last_slot: int) -> float:
+    def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, budgeting_quantity_to_be_added, first_slot: int, last_slot: int, forced_slot_commands: dict|None = None) -> float:
 
         if self.load.num_max_on_off is not None and self.support_auto is False:
             num_command_state_change, inner_empty_cmds, start_witch_switch, start_cmd = self._num_command_state_change_and_empty_inner_commands(out_commands, first_slot, last_slot)
@@ -823,11 +823,14 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             quantity_to_recover = 0.0
 
-            if num_command_state_change > 1 and num_command_state_change > min(num_allowed_switch - 3, num_allowed_switch//2):
-                # too many state changes .... need to merge some commands
-                # keep only the main one as it is solar only
+            protect_before = first_slot
+            if forced_slot_commands:
+                for i in forced_slot_commands:
+                    protect_before = max(protect_before, i + 1)
 
-                if start_witch_switch and len(inner_empty_cmds) > 0:
+            if num_command_state_change > 1:
+
+                if start_witch_switch and len(inner_empty_cmds) > 0 and protect_before == first_slot: #  protect_before != first_slot we are not allowed to change the begining
                     # we are starting with a switch...can we try to not do it?
                     if inner_empty_cmds[0][0] == first_slot:
                         # we start by a empty : do we need to stay on?
@@ -847,17 +850,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     kill_first_switch = False
 
                     if num_command_state_change > num_allowed_switch:
-                        # we are already pretty bad, we need to kill if
-                        if  durations_s <= LONG_ON_OFF_SWITCH_S:
+                        # we are already pretty bad, we need to kill if small enough, or keep it
+                        if  durations_s <= max(SOLVER_STEP_S + 1, max(CHANGE_ON_OFF_STATE_HYSTERESIS_S, LONG_ON_OFF_SWITCH_S)):
                             # we can remove the first empty command, it is not too long
                             kill_first_switch = True
-                    elif durations_s <= SOLVER_STEP_S + 1:
+                    elif durations_s < CHANGE_ON_OFF_STATE_HYSTERESIS_S:
                         # we can remove the first empty command, small enough
                         kill_first_switch = True
 
                     if kill_first_switch:
                         # we can remove the first command
-
                         _LOGGER.info(f"_adapt_commands: removed start with switch command for {durations_s}s by {cmd_to_push}")
                         num_command_state_change -= 1
                         num_removed += 1
@@ -891,26 +893,22 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 do_for_num_switch_reduction = False
 
             sorted_by_size_empty_cmds = []
-            protect_before = first_slot
 
             for empty_cmd in inner_empty_cmds:
-                empty_cmd.append(empty_cmd[1] +1 - empty_cmd[0])
-                empty_cmd.append(False)
                 empty_cmd_duration_s = 0
                 for i in range(empty_cmd[0], empty_cmd[1] + 1):
                     empty_cmd_duration_s += power_slots_duration_s[i]
                 empty_cmd.append(empty_cmd_duration_s)
 
                 candidate_to_removal = False
-                if empty_cmd[2] == 1:
-                    # only single slots
+                if empty_cmd[2] <= CHANGE_ON_OFF_STATE_HYSTERESIS_S:
                     candidate_to_removal = True
-                    empty_cmd[3] = True
-                elif do_for_num_switch_reduction:
-                    if empty_cmd[4] < LONG_ON_OFF_SWITCH_S:
-                        candidate_to_removal = True
-                if empty_cmd[0] == first_slot and num_command_state_change > num_allowed_switch  and (empty_cmd[1] == last_slot or empty_cmd[4] >= LONG_ON_OFF_SWITCH_S):
-                    # special case where there is an off "only" that has been requested, or a long enough empty just after now and we don't have anymore enough  num_allowed_switch
+                elif do_for_num_switch_reduction and empty_cmd[2] <= LONG_ON_OFF_SWITCH_S:
+                    candidate_to_removal = True
+
+                if empty_cmd[0] == first_slot and (protect_before != first_slot or (num_command_state_change > num_allowed_switch and (empty_cmd[1] == last_slot or empty_cmd[2] >= LONG_ON_OFF_SWITCH_S))):
+                    # special case where there is an off "only" that has been requested,
+                    # or a long enough empty just after now and we don't have anymore enough  num_allowed_switch
                     # to allow it : we should allow an off anyway!
                     candidate_to_removal = False
 
@@ -920,19 +918,23 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     protect_before = empty_cmd[1] + 1
 
             #remove the smallest holes first
-            sorted_by_size_empty_cmds = sorted(sorted_by_size_empty_cmds, key=lambda x: x[4])
+            sorted_by_size_empty_cmds = sorted(sorted_by_size_empty_cmds, key=lambda x: x[2])
 
             if len(sorted_by_size_empty_cmds) > 0:
 
-
                 for empty_cmd in sorted_by_size_empty_cmds:
-                    # if we start with a non switch and the first is empty : it means the previous was empty so replacing it will actually NOT remove any switch
+                    # if we start with a non switch and the first is empty :
+                    # it means the previous was empty so replacing it will actually NOT remove any switch
                     if empty_cmd[0] == first_slot and start_witch_switch is False:
                         continue
 
-                    # if we do have already removed enough switches ... stop
-                    if empty_cmd[3] is False and num_command_state_change <= num_allowed_switch:
-                        break
+                    if empty_cmd[1] < last_slot and empty_cmd[2] <= CHANGE_ON_OFF_STATE_HYSTERESIS_S:
+                        # we will remove it whatever as the CHANGE_ON_OFF_STATE_HYSTERESIS_S won't be respected
+                        pass
+                    else:
+                        # if we do have already removed enough switches ... stop
+                        if num_command_state_change <= num_allowed_switch:
+                            break
 
                     if empty_cmd[0] == first_slot:
                         start_witch_switch = False
@@ -979,6 +981,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 for i in range(first_slot, last_slot + 1):
 
                     if i < protect_before:
+                        prev_cmd_is_to_be_replaced = is_cmd_to_be_replaced(i)
                         continue
 
                     limit_reached = False
@@ -1007,7 +1010,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     # could have been changed by the flipping cmd code above
                     prev_cmd_is_to_be_replaced = is_cmd_to_be_replaced(i)
-
 
             _LOGGER.info(f"Adapted command for on_off num/max:{self.load.name} {self.load.num_on_off}/{self.load.num_max_on_off} Removed empty segments {num_removed}")
 
@@ -1069,6 +1071,41 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 cost -= 1
 
         return cost
+
+    @staticmethod
+    def _new_segment_duration_s(slot_idx: int, turning_on: bool,
+                                existing_commands: list,
+                                out_commands: list,
+                                power_slots_duration_s,
+                                first_slot: int, last_slot: int) -> float:
+        """Return the total duration (seconds) of the contiguous new-state
+        segment that would be created by flipping *slot_idx*.
+
+        Scans left and right from *slot_idx* counting consecutive slots that
+        are already in the target state (in the merged view) plus the slot
+        itself."""
+        target_on = turning_on
+
+        def _is_target(idx: int) -> bool:
+            cmd = out_commands[idx] if out_commands[idx] is not None else existing_commands[idx]
+            slot_on = cmd is not None and not cmd.is_off_or_idle()
+            return slot_on == target_on
+
+        duration = float(power_slots_duration_s[slot_idx])
+
+        for k in range(slot_idx - 1, first_slot - 1, -1):
+            if _is_target(k):
+                duration += float(power_slots_duration_s[k])
+            else:
+                break
+
+        for k in range(slot_idx + 1, last_slot + 1):
+            if _is_target(k):
+                duration += float(power_slots_duration_s[k])
+            else:
+                break
+
+        return duration
 
     def adapt_power_steps_budgeting_low_level(self,
                                               slot_idx: int | None=None,
@@ -1273,6 +1310,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 if slot_transition_cost > 0:
                                     if restrict_to_free_transitions or remaining_switches < slot_transition_cost:
                                         continue
+                                    if self._new_segment_duration_s(
+                                            i, True, existing_commands, out_commands,
+                                            power_slots_duration_s, first_slot, last_slot) < CHANGE_ON_OFF_STATE_HYSTERESIS_S:
+                                        continue
                             # j == 0 : lowest possible ON value
                             j = 0
                         else:
@@ -1300,6 +1341,10 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                                                     turning_on=False, first_slot=first_slot, last_slot=last_slot)
                                     if slot_transition_cost > 0:
                                         if restrict_to_free_transitions or remaining_switches < slot_transition_cost:
+                                            continue
+                                        if self._new_segment_duration_s(
+                                                i, False, existing_commands, out_commands,
+                                                power_slots_duration_s, first_slot, last_slot) < CHANGE_ON_OFF_STATE_HYSTERESIS_S:
                                             continue
                                     j = -1
                                 else:
@@ -2031,7 +2076,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         _LOGGER.error(
                             f"compute_best_period_repartition: no power sorted commands for mandatory per price repartition {self.name}")
 
-            quantity_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, quantity_to_be_added, first_slot, last_slot)
+            quantity_to_be_added = self._adapt_commands(out_commands, out_power, power_slots_duration_s, quantity_to_be_added, first_slot, last_slot, forced_slot_commands=forced_slot_commands)
             final_ret = quantity_to_be_added <= 0.0
 
 
