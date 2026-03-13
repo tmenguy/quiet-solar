@@ -29,6 +29,7 @@ from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_S
     CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
     MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
     PERSON_NOTIFY_REASON_CHANGED_CAR, PREFERRED_CAR_ENERGY_THRESHOLD_KWH, \
+    PASS1_PREFERRED_CAR_PENALTY_KWH, FAR_FUTURE_FORECAST_THRESHOLD_S, \
     CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, \
     SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID, \
     SENSOR_CAR_PERSON_FORECAST
@@ -2071,85 +2072,6 @@ class QSHome(QSDynamicGroup):
                                               leave_time=persons_mileage[person][1])
 
 
-    def _pre_allocate_unplugged_home_cars(
-        self,
-        time: datetime,
-        person_forecasts: dict[str, tuple[datetime | None, float | None]],
-        covered_cars: set[str],
-        covered_persons: set[str],
-    ) -> None:
-        """Assign unplugged-at-home cars to persons whose trips are already covered.
-
-        For each car that is at home but not connected to a charger:
-        1. If a person whose preferred car is this car has a covered trip,
-           assign them (preferred car takes priority).
-        2. Otherwise, pick the authorized person with the smallest energy
-           margin (closest fit), to leave cars with more spare charge
-           available for others.
-        """
-        for car in self._cars:
-            if car.name in covered_cars:
-                continue
-
-            if car.car_is_invited:
-                continue
-
-            if car.charger is not None:
-                continue
-
-            preferred_person = None
-            preferred_margin = None
-            best_person = None
-            best_margin = None
-
-            for person in self._persons:
-                if person.name in covered_persons:
-                    continue
-                forecast = person_forecasts.get(person.name)
-                if forecast is None:
-                    continue
-
-                p_leave_time, p_mileage = forecast
-                if p_leave_time is None:
-                    continue
-
-                authorized_car_names = [c.name for c in person.get_authorized_cars()]
-                if car.name not in authorized_car_names:
-                    continue
-
-                is_covered, current_soc, needed_soc, diff_energy = (
-                    car.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
-                )
-
-                if is_covered is not True:
-                    continue
-
-                margin = diff_energy if diff_energy is not None else 0.0
-
-                if person.preferred_car == car.name:
-                    if preferred_margin is None or margin < preferred_margin:
-                        preferred_margin = margin
-                        preferred_person = person
-                else:
-                    if best_margin is None or margin < best_margin:
-                        best_margin = margin
-                        best_person = person
-
-            chosen = preferred_person or best_person
-            chosen_margin = preferred_margin if preferred_person is not None else best_margin
-
-            if chosen is not None:
-                covered_cars.add(car.name)
-                covered_persons.add(chosen.name)
-                self._last_persons_car_allocation[car.name] = chosen
-                _LOGGER.info(
-                    "Pre-allocated unplugged home car %s to %s "
-                    "(trip covered, preferred=%s, margin %.2f kWh)",
-                    car.name, chosen.name,
-                    chosen == preferred_person,
-                    chosen_margin or 0.0,
-                )
-
     @staticmethod
     def _build_raw_energy_matrix(
         p_s: list[tuple],
@@ -2161,21 +2083,27 @@ class QSHome(QSDynamicGroup):
 
         Sentinel values in the returned matrix:
           0.0  = unauthorized pair (person cannot drive car)
-         -1.0  = no departure forecast
+         -1.0  = no departure forecast (or forecast too far in the future)
          -2.0  = car data error
          -3.0  = already covered (no charging needed)
          >0    = diff_energy in kWh
         """
         costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
         E_max = 0.0
+        far_future_threshold = timedelta(seconds=FAR_FUTURE_FORECAST_THRESHOLD_S)
 
         for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
+            is_far_future = (
+                p_leave_time is not None
+                and (p_leave_time - time) > far_future_threshold
+            )
+
             for p_car in person.get_authorized_cars():
                 car_index = c_name_to_index.get(p_car.name, None)
                 if car_index is None:
                     continue
 
-                if p_leave_time is None:
+                if p_leave_time is None or is_far_future:
                     score = -1.0
                 else:
                     is_covered, current_soc, needed_soc, diff_energy = (
@@ -2201,9 +2129,21 @@ class QSHome(QSDynamicGroup):
         c_s: list,
         preferred_car_penalty: float,
     ) -> np.ndarray:
-        """Convert raw sentinel-based energy matrix into a cost matrix for the Hungarian algorithm."""
+        """Convert raw sentinel-based energy matrix into a cost matrix for the Hungarian algorithm.
+
+        Sentinel mapping:
+          0.0 (unauthorized)  -> maxi_val (effectively forbidden)
+         -1.0 (no forecast)   -> E_max + 1.0
+         -2.0 (car data err)  -> E_max + 1.0
+         -3.0 (covered)       -> 0.0 if car is unplugged, E_max + 0.5 if plugged
+
+        The plugged-car penalty for covered pairs discourages "wasting" a
+        plugged-in car on a trip that needs no charging, saving it for
+        someone who actually needs the car charged.
+        """
         costs = raw_energy.copy()
         maxi_val = max(1e12, (E_max + 1.0) * (1.0 + max(len(c_s), len(p_s))))
+        plugged_covered_penalty = E_max + 0.5
 
         for person_index in range(len(p_s)):
             for car_index in range(len(c_s)):
@@ -2215,7 +2155,10 @@ class QSHome(QSDynamicGroup):
                     elif costs[person_index, car_index] == -2.0:
                         costs[person_index, car_index] = E_max + 1.0
                     elif costs[person_index, car_index] == -3.0:
-                        costs[person_index, car_index] = 0.0
+                        if c_s[car_index].charger is not None:
+                            costs[person_index, car_index] = plugged_covered_penalty
+                        else:
+                            costs[person_index, car_index] = 0.0
 
                     if preferred_car_penalty > 0.0:
                         person = p_s[person_index][0]
@@ -2293,10 +2236,6 @@ class QSHome(QSDynamicGroup):
                 if p_mileage is not None:
                     person_forecasts[person.name] = (p_leave_time, p_mileage)
 
-            self._pre_allocate_unplugged_home_cars(
-                time, person_forecasts, covered_cars, covered_persons,
-            )
-
             p_s = []
             for person in self._persons:
                 if person.name in covered_persons:
@@ -2321,7 +2260,7 @@ class QSHome(QSDynamicGroup):
             else:
                 raw_energy, E_max = self._build_raw_energy_matrix(p_s, c_s, c_name_to_index, time)
 
-                costs_energy = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=0.0)
+                costs_energy = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_KWH)
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 

@@ -1013,6 +1013,63 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         return budgeting_quantity_to_be_added
 
+    @staticmethod
+    def _get_merged_slot_is_on(slot_idx: int, existing_commands: list[LoadCommand | None],
+                               out_commands: list[LoadCommand | None]) -> bool:
+        """Return True if the merged view of the slot is ON (non-idle, non-None)."""
+        cmd = out_commands[slot_idx] if out_commands[slot_idx] is not None else existing_commands[slot_idx]
+        return cmd is not None and not cmd.is_off_or_idle()
+
+    def _get_transition_cost(self, slot_idx: int, existing_commands: list[LoadCommand | None],
+                             out_commands: list[LoadCommand | None],
+                             turning_on: bool, first_slot: int, last_slot: int) -> int:
+        """Return the net transition count change (+2, 0, or -2) caused by
+        flipping slot *slot_idx* to ON (turning_on=True) or OFF (turning_on=False).
+
+        Uses the merged view (out_commands overrides existing_commands) to check
+        the state of neighboring slots."""
+
+        # Left neighbor state
+        if slot_idx > first_slot:
+            left_on = self._get_merged_slot_is_on(slot_idx - 1, existing_commands, out_commands)
+        elif slot_idx == 0:
+            left_on = (self.load.current_command is not None
+                       and not self.load.current_command.is_off_or_idle())
+        else:
+            left_cmd = existing_commands[slot_idx - 1] if existing_commands else None
+            left_on = left_cmd is not None and not left_cmd.is_off_or_idle()
+
+        # Right neighbor state
+        if slot_idx < last_slot:
+            right_on = self._get_merged_slot_is_on(slot_idx + 1, existing_commands, out_commands)
+        else:
+            right_on = False
+
+        if turning_on:
+            # OFF -> ON: each OFF neighbor adds a transition, each ON neighbor removes one
+            cost = 0
+            if not left_on:
+                cost += 1
+            else:
+                cost -= 1
+            if not right_on:
+                cost += 1
+            else:
+                cost -= 1
+        else:
+            # ON -> OFF: each ON neighbor adds a transition, each OFF neighbor removes one
+            cost = 0
+            if left_on:
+                cost += 1
+            else:
+                cost -= 1
+            if right_on:
+                cost += 1
+            else:
+                cost -= 1
+
+        return cost
+
     def adapt_power_steps_budgeting_low_level(self,
                                               slot_idx: int | None=None,
                                               existing_amps: list[float|int]| None=None ,
@@ -1167,212 +1224,249 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     default_cmd = copy_command(CMD_AUTO_GREEN_CAP)
                     empty_cmd = copy_command(CMD_AUTO_GREEN_CAP)
 
-            for i in sorted_available_power:
+            if self.load.num_max_on_off is not None and not self.support_auto:
+                remaining_switches = self.load.num_max_on_off - self.load.num_on_off
+            else:
+                remaining_switches = None
 
-                if i in forced_slot_commands:
-                    continue
+            num_passes = 2 if remaining_switches is not None else 1
+            for _pass_idx in range(num_passes):
+                restrict_to_free_transitions = (_pass_idx == 0 and num_passes > 1)
 
-                current_command_power = 0.0
+                if energy_delta * init_energy_delta <= 0.0:
+                    break
 
-                if existing_commands and existing_commands[i] is not None:
+                for i in sorted_available_power:
 
-                    if existing_commands[i].is_like_one_of_cmds(do_not_touch_commands):
+                    if i in forced_slot_commands:
                         continue
 
-                    current_command_power = existing_commands[i].power_consign
+                    slot_transition_cost = 0
+                    current_command_power = 0.0
 
-                if current_command_power > 0.0:
-                    num_non_zero_existing_commands += 1
+                    if existing_commands and existing_commands[i] is not None:
 
-                j = None
-
-                power_sorted_cmds, is_current_empty_command, possible_power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i,
-                                                                                                                             commands=existing_commands,
-                                                                                                                             for_add=(init_energy_delta >= 0.0),
-                                                                                                                             use_production_limits=use_production_limits)
-                if init_energy_delta >= 0.0:
-
-                    if current_command_power == 0 and allow_change_state is False:
-                        # we do not want to change the state of the load, so we cannot add energy
-                        continue
-
-                    if current_command_power == 0:
-                        # j == 0 : lowest possible ON value
-                        j = 0
-                    else:
-                        j = self._get_higher_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
-
-                        if j >= len(power_sorted_cmds):
-                            # we are already at the max power, we cannot add more, force to stay at this power
+                        if existing_commands[i].is_like_one_of_cmds(do_not_touch_commands):
                             continue
 
-                else: # init_energy_delta < 0.0:
+                        current_command_power = existing_commands[i].power_consign
 
-                    # for reduction: reduce strongly
-                    if current_command_power == 0 or is_current_empty_command:
-                        # we won't be able to reduce...cap at 0 to force stay this way
-                        continue
-                    else:
-                        j = self._get_lower_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
+                    if current_command_power > 0.0:
+                        num_non_zero_existing_commands += 1
 
-                        if j < 0:
-                            if allow_change_state is False:
-                                # we won't be able to go below
-                                continue
-                            else:
-                                # it means : stop!
-                                j = -1
-                        else:
-                            # go to the minimum power load
+                    j = None
+
+                    power_sorted_cmds, is_current_empty_command, possible_power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i,
+                                                                                                                                 commands=existing_commands,
+                                                                                                                                 for_add=(init_energy_delta >= 0.0),
+                                                                                                                                 use_production_limits=use_production_limits)
+                    if init_energy_delta >= 0.0:
+
+                        if current_command_power == 0 and allow_change_state is False:
+                            # we do not want to change the state of the load, so we cannot add energy
+                            continue
+
+                        if current_command_power == 0:
+                            if remaining_switches is not None:
+                                slot_transition_cost = self._get_transition_cost(i, existing_commands, out_commands,
+                                                                                 turning_on=True, first_slot=first_slot, last_slot=last_slot)
+                                if slot_transition_cost > 0:
+                                    if restrict_to_free_transitions or remaining_switches < slot_transition_cost:
+                                        continue
+                            # j == 0 : lowest possible ON value
                             j = 0
-
-                if j is not None:
-
-                    if j >= 0:
-                        base_cmd = power_sorted_cmds[j]
-                    else:
-                        # can't be init_energy_delta >= 0.0 in this case, so CAP only ....
-                        if self.support_auto:
-                            base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
                         else:
-                            base_cmd = copy_command(CMD_IDLE)
+                            j = self._get_higher_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
 
-                    if not self.support_auto:
-                        pass_through_command = base_cmd
-                    else:
-                        pass_through_command = copy_command(default_cmd)
+                            if j >= len(power_sorted_cmds):
+                                # we are already at the max power, we cannot add more, force to stay at this power
+                                continue
 
-                    delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
+                    else: # init_energy_delta < 0.0:
 
-                    if init_energy_delta >= 0.0:
-                        if is_current_empty_command:
-                            #we move from no client to add one: count the piloted_delta
-                            delta_power += possible_power_piloted_delta
-                    elif j < 0:
-                        # we are reducing consumption to 0, so we can also reduce the piloted devices
-                        if not is_current_empty_command:
-                            delta_power -= possible_power_piloted_delta
+                        # for reduction: reduce strongly
+                        if current_command_power == 0 or is_current_empty_command:
+                            # we won't be able to reduce...cap at 0 to force stay this way
+                            continue
+                        else:
+                            j = self._get_lower_consign_idx_for_power(power_sorted_cmds, current_command_power, strict=True)
 
-                    if delta_power == 0.0:
-                        continue # no change in power, nothing to do
+                            if j < 0:
+                                if allow_change_state is False:
+                                    # we won't be able to go below
+                                    continue
+                                elif remaining_switches is not None:
+                                    slot_transition_cost = self._get_transition_cost(i, existing_commands, out_commands,
+                                                                                    turning_on=False, first_slot=first_slot, last_slot=last_slot)
+                                    if slot_transition_cost > 0:
+                                        if restrict_to_free_transitions or remaining_switches < slot_transition_cost:
+                                            continue
+                                    j = -1
+                                else:
+                                    # it means : stop!
+                                    j = -1
+                            else:
+                                # go to the minimum power load
+                                j = 0
 
-                    d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
+                    if j is not None:
 
-                    d_budget_quantity = self.get_delta_budget_quantity(base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
+                        if j >= 0:
+                            base_cmd = power_sorted_cmds[j]
+                        else:
+                            # can't be init_energy_delta >= 0.0 in this case, so CAP only ....
+                            if self.support_auto:
+                                base_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                            else:
+                                base_cmd = copy_command(CMD_IDLE)
 
-                    if (energy_delta - d_energy)* init_energy_delta <= 0:
-                        # sign has changed ... we are no more in over consume or under consume
+                        if not self.support_auto:
+                            pass_through_command = base_cmd
+                        else:
+                            pass_through_command = copy_command(default_cmd)
+
+                        delta_power = base_cmd.power_consign - current_command_power # should be same sign as init_energy_delta
+
                         if init_energy_delta >= 0.0:
-                            #we are overconsuming if we do that: don't allow this change
-                            # for under consume it is ok to underconsume a bit more
-                            break
-
-                    if init_energy_delta >= 0.0:
-                        # we want to consume a bit more if possible so we should add energy
-                        if j < len(power_sorted_cmds) - 1:
-                            new_base_cmd = power_sorted_cmds[j+1]
-                            new_delta_power = new_base_cmd.power_consign - current_command_power
-
-                            #if init_energy_delta >= 0.0:
                             if is_current_empty_command:
-                                new_delta_power += possible_power_piloted_delta
+                                #we move from no client to add one: count the piloted_delta
+                                delta_power += possible_power_piloted_delta
+                        elif j < 0:
+                            # we are reducing consumption to 0, so we can also reduce the piloted devices
+                            if not is_current_empty_command:
+                                delta_power -= possible_power_piloted_delta
 
-                            new_d_energy = (new_delta_power* power_slots_duration_s[i]) / 3600.0
-                            if (energy_delta - new_d_energy) * init_energy_delta >= 0:
-                                j += 1
-                                delta_power = new_delta_power
-                                d_energy = new_d_energy
-                                d_budget_quantity = self.get_delta_budget_quantity(new_base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
-                                base_cmd = new_base_cmd
+                        if delta_power == 0.0:
+                            continue # no change in power, nothing to do
 
-                    out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
-                                                                   new_type=pass_through_command.command)
-                    _LOGGER.info(
-                        f"adapt_repartition: adapted {self.name} with command {out_commands[i]} / {i} effective in {int(np.sum(power_slots_duration_s[:i]))}s")
+                        d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0 # should be same sign as init_energy_delta
 
-                    out_delta_power[i] = delta_power
-                    delta_budget_quantity += d_budget_quantity
-                    energy_delta -= d_energy
+                        d_budget_quantity = self.get_delta_budget_quantity(base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
 
-                    if first_modified_slot is None:
-                        first_modified_slot = i
-                    else:
-                        first_modified_slot = min(first_modified_slot, i)
+                        if (energy_delta - d_energy)* init_energy_delta <= 0:
+                            # sign has changed ... we are no more in over consume or under consume
+                            if init_energy_delta >= 0.0:
+                                #we are overconsuming if we do that: don't allow this change
+                                # for under consume it is ok to underconsume a bit more
+                                break
 
-                    num_changes += 1
+                        if init_energy_delta >= 0.0:
+                            # we want to consume a bit more if possible so we should add energy
+                            if j < len(power_sorted_cmds) - 1:
+                                new_base_cmd = power_sorted_cmds[j+1]
+                                new_delta_power = new_base_cmd.power_consign - current_command_power
 
-                    if init_energy_delta > 0.0:
-                        if is_current_constraint_met:
-                            # we should reclaim some power or time "from the future" to meet the constraint, we need to reclaim d_energy
-                            budget_quantity_to_be_reclaimed = d_budget_quantity
-                            has_reclaimed = False
-                            for k in range(len(power_slots_duration_s) - 1, last_slot, -1 ):
+                                #if init_energy_delta >= 0.0:
+                                if is_current_empty_command:
+                                    new_delta_power += possible_power_piloted_delta
 
-                                if out_commands[k] is not None:
-                                    # it has been reclaimed already
-                                    continue
+                                new_d_energy = (new_delta_power* power_slots_duration_s[i]) / 3600.0
+                                if (energy_delta - new_d_energy) * init_energy_delta >= 0:
+                                    j += 1
+                                    delta_power = new_delta_power
+                                    d_energy = new_d_energy
+                                    d_budget_quantity = self.get_delta_budget_quantity(new_base_cmd.power_consign, power_slots_duration_s[i]) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
+                                    base_cmd = new_base_cmd
 
-                                cmd = existing_commands[k]
-                                if cmd is None or cmd.power_consign <= 0.0:
-                                    continue
+                        out_commands[i] = copy_command_and_change_type(cmd=base_cmd,
+                                                                       new_type=pass_through_command.command)
+                        _LOGGER.info(
+                            f"adapt_repartition: adapted {self.name} with command {out_commands[i]} / {i} effective in {int(np.sum(power_slots_duration_s[:i]))}s")
 
-                                # we go to 0 : we reclaim all
-                                possible_power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=k, add=False)
+                        out_delta_power[i] = delta_power
+                        delta_budget_quantity += d_budget_quantity
+                        energy_delta -= d_energy
 
-                                reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k])
+                        if first_modified_slot is None:
+                            first_modified_slot = i
+                        else:
+                            first_modified_slot = min(first_modified_slot, i)
 
-                                do_reclaim = False
-                                reclaim_cmd = None
-                                if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
-                                    do_reclaim = True
-                                elif self.is_mandatory is False:
-                                    do_reclaim = True
-                                elif len(self._power_sorted_cmds) > 1:
-                                    # we can use directly as we want to go lower than cmd.power_consign
-                                    j = self._get_lower_consign_idx_for_power(self._power_sorted_cmds, cmd.power_consign)
-                                    if j > 0:
-                                        # we won't "stop" the load, but we will reduce its power consumption, by using the lower power command
-                                        possible_power_piloted_delta = 0.0
-                                        reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k]) - self.get_delta_budget_quantity(self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
-                                        if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
-                                            do_reclaim = True
-                                            reclaim_cmd = copy_command(cmd, power_consign=self._power_sorted_cmds[0].power_consign)
+                        num_changes += 1
+
+                        if remaining_switches is not None and slot_transition_cost != 0:
+                            remaining_switches -= slot_transition_cost
+
+                        if init_energy_delta > 0.0:
+                            if is_current_constraint_met:
+                                # we should reclaim some power or time "from the future" to meet the constraint, we need to reclaim d_energy
+                                budget_quantity_to_be_reclaimed = d_budget_quantity
+                                has_reclaimed = False
+                                for k in range(len(power_slots_duration_s) - 1, last_slot, -1 ):
+
+                                    if out_commands[k] is not None:
+                                        # it has been reclaimed already
+                                        continue
+
+                                    cmd = existing_commands[k]
+                                    if cmd is None or cmd.power_consign <= 0.0:
+                                        continue
+
+                                    # we go to 0 : we reclaim all
+                                    possible_power_piloted_delta = self.load.get_possible_delta_power_from_piloted_devices_for_budget(slot_idx=k, add=False)
+                                    reclaim_cost = 0
+
+                                    if remaining_switches is not None:
+                                        reclaim_cost = self._get_transition_cost(k, existing_commands, out_commands,
+                                                                                 turning_on=False, first_slot=first_slot,
+                                                                                 last_slot=len(out_commands) - 1)
+
+                                    reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k])
+
+                                    do_reclaim = False
+                                    reclaim_cmd = None
+                                    if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
+                                        do_reclaim = True
+                                    elif self.is_mandatory is False:
+                                        do_reclaim = True
+                                    elif len(self._power_sorted_cmds) > 1:
+                                        # we can use directly as we want to go lower than cmd.power_consign
+                                        j = self._get_lower_consign_idx_for_power(self._power_sorted_cmds, cmd.power_consign)
+                                        if j > 0:
+                                            # we won't "stop" the load, but we will reduce its power consumption, by using the lower power command
+                                            possible_power_piloted_delta = 0.0
+                                            reclaimed_budget_quantity = self.get_delta_budget_quantity(cmd.power_consign, power_slots_duration_s[k]) - self.get_delta_budget_quantity(self._power_sorted_cmds[0].power_consign, power_slots_duration_s[k])
+                                            if reclaimed_budget_quantity <= budget_quantity_to_be_reclaimed:
+                                                do_reclaim = True
+                                                reclaim_cmd = copy_command(cmd, power_consign=self._power_sorted_cmds[0].power_consign)
 
 
-                                if do_reclaim:
-                                    has_reclaimed = True
-                                    budget_quantity_to_be_reclaimed -= reclaimed_budget_quantity
+                                    if do_reclaim:
+                                        has_reclaimed = True
+                                        budget_quantity_to_be_reclaimed -= reclaimed_budget_quantity
 
-                                    if reclaim_cmd is None:
-                                        if self.support_auto:
-                                            reclaim_cmd = copy_command(CMD_AUTO_GREEN_CAP)
-                                        else:
-                                            reclaim_cmd = copy_command(CMD_IDLE)
+                                        if reclaim_cmd is None:
+                                            if self.support_auto:
+                                                reclaim_cmd = copy_command(CMD_AUTO_GREEN_CAP)
+                                            else:
+                                                reclaim_cmd = copy_command(CMD_IDLE)
 
-                                    out_delta_power[k] -= (cmd.power_consign - reclaim_cmd.power_consign + possible_power_piloted_delta)
-                                    out_commands[k] = reclaim_cmd
+                                        out_delta_power[k] -= (cmd.power_consign - reclaim_cmd.power_consign + possible_power_piloted_delta)
+                                        out_commands[k] = reclaim_cmd
 
+                                        if remaining_switches is not None and reclaim_cmd.is_off_or_idle():
+                                            remaining_switches -= reclaim_cost
 
-                                    if budget_quantity_to_be_reclaimed < 0:
+                                        if budget_quantity_to_be_reclaimed < 0:
+                                            break
+
+                                if has_reclaimed:
+                                    # cool we do have successfully reclaimed some energy for a met constraint...
+                                    delta_budget_quantity -= (d_budget_quantity - budget_quantity_to_be_reclaimed)
+                                    _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {budget_quantity_to_be_reclaimed} {self.get_unit_string()} from the future")
+                                else:
+                                    if allow_no_reclaim:
+                                        _LOGGER.info(f"adapt_repartition: {self.name} reclaim failed but allowed to grow (non-mandatory or has following constraint)")
+                                    else:
+                                        # the constraint was met and we can't reduce the future: stop here
+                                        start_solved_frontier = i
                                         break
 
-                            if has_reclaimed:
-                                # cool we do have successfully reclaimed some energy for a met constraint...
-                                delta_budget_quantity -= (d_budget_quantity - budget_quantity_to_be_reclaimed)
-                                _LOGGER.info(f"adapt_repartition: adapted {self.name} reclaimed met constraint {budget_quantity_to_be_reclaimed} {self.get_unit_string()} from the future")
-                            else:
-                                if allow_no_reclaim:
-                                    _LOGGER.info(f"adapt_repartition: {self.name} reclaim failed but allowed to grow (non-mandatory or has following constraint)")
-                                else:
-                                    # the constraint was met and we can't reduce the future: stop here
-                                    start_solved_frontier = i
-                                    break
 
-
-                    if energy_delta * init_energy_delta <= 0.0:
-                        # it means they are not of the same sign, we are done
-                        start_solved_frontier = i
-                        break
+                        if energy_delta * init_energy_delta <= 0.0:
+                            # it means they are not of the same sign, we are done
+                            start_solved_frontier = i
+                            break
 
             out_constraint = self.shallow_copy_for_budget_delta_quantity(delta_budget_quantity)
 

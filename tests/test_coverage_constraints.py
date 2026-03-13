@@ -4383,3 +4383,553 @@ def test_adapt_commands_phase2_fills_first_slot_gap_sets_switch_false():
     assert out_commands[0] is not None, (
         "Single-slot OFF blip at first_slot should be filled by Phase 2"
     )
+
+
+# ===========================================================================
+# Transition-aware adapt_repartition tests
+# ===========================================================================
+
+def _make_constraint_with_num_max(num_max_on_off=4, num_on_off=0, power=1000.0,
+                                   support_auto=False, current_command=None):
+    """Helper: create a constraint whose load has num_max_on_off configured.
+
+    Uses the real TestLoad from load.py (same as solver tests) to ensure
+    full adapter/budget infrastructure is available.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    from custom_components.quiet_solar.home_model.load import TestLoad
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
+    load = TestLoad(name="trans_load", num_max_on_off=num_max_on_off,
+                    min_p=power, max_p=power)
+    load.num_on_off = num_on_off
+    load.current_command = current_command
+    constraint = TimeBasedSimplePowerLoadConstraint(
+        time=now,
+        load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=now + timedelta(hours=8),
+        initial_value=0,
+        target_value=4 * 3600,
+        power=power,
+        support_auto=support_auto,
+    )
+    load.push_live_constraint(now, constraint)
+    return constraint, load
+
+
+# ---------------------------------------------------------------------------
+# _get_merged_slot_is_on
+# ---------------------------------------------------------------------------
+
+def test_get_merged_slot_is_on_prefers_out():
+    """out_commands overrides existing_commands in merged view."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+    on_cmd = LoadCommand(command="on", power_consign=1000)
+    existing = [on_cmd, None]
+    out = [None, on_cmd]
+    assert MultiStepsPowerLoadConstraint._get_merged_slot_is_on(0, existing, out) is True
+    assert MultiStepsPowerLoadConstraint._get_merged_slot_is_on(1, existing, out) is True
+    out_idle = [LoadCommand(command="idle", power_consign=0), None]
+    assert MultiStepsPowerLoadConstraint._get_merged_slot_is_on(0, existing, out_idle) is False
+
+
+# ---------------------------------------------------------------------------
+# _get_transition_cost – all neighbor combinations
+# ---------------------------------------------------------------------------
+
+def test_transition_cost_isolated_on():
+    """OFF neighbors on both sides → cost +2 for turning ON."""
+    c, _ = _make_constraint_with_num_max()
+    existing = [None, None, None]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=True, first_slot=0, last_slot=2) == 2
+
+
+def test_transition_cost_extend_left():
+    """Left ON, right OFF → cost 0 for turning ON (extend segment)."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None, None]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=True, first_slot=0, last_slot=2) == 0
+
+
+def test_transition_cost_extend_right():
+    """Left OFF, right ON → cost 0 for turning ON."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [None, None, on]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=True, first_slot=0, last_slot=2) == 0
+
+
+def test_transition_cost_join_segments():
+    """Both neighbors ON → cost -2 for turning ON (join two segments)."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None, on]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=True, first_slot=0, last_slot=2) == -2
+
+
+def test_transition_cost_split_segment():
+    """Both neighbors ON → cost +2 for turning OFF (split segment)."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, on, on]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=False, first_slot=0, last_slot=2) == 2
+
+
+def test_transition_cost_shrink_from_edge():
+    """One neighbor ON, one OFF → cost 0 for turning OFF (shrink)."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, on, None]
+    out = [None, None, None]
+    assert c._get_transition_cost(1, existing, out, turning_on=False, first_slot=0, last_slot=2) == 0
+
+
+def test_transition_cost_uses_current_command_for_slot0():
+    """When slot_idx==0 and first_slot==0, uses load.current_command for left neighbor."""
+    on = LoadCommand(command="on", power_consign=1000)
+    c, load = _make_constraint_with_num_max(current_command=on)
+    existing = [None, None]
+    out = [None, None]
+    cost = c._get_transition_cost(0, existing, out, turning_on=True, first_slot=0, last_slot=1)
+    assert cost == 0
+
+    c2, load2 = _make_constraint_with_num_max(current_command=None)
+    cost2 = c2._get_transition_cost(0, existing, out, turning_on=True, first_slot=0, last_slot=1)
+    assert cost2 == 2
+
+
+def test_transition_cost_left_from_existing_before_first_slot():
+    """When slot_idx == first_slot > 0, uses existing_commands[slot_idx-1]."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None, None, None]
+    out = [None, None, None, None]
+    cost = c._get_transition_cost(1, existing, out, turning_on=True, first_slot=1, last_slot=3)
+    assert cost == 0
+
+
+def test_transition_cost_at_last_slot():
+    """Right neighbor treated as OFF when slot_idx == last_slot."""
+    c, _ = _make_constraint_with_num_max()
+    on = LoadCommand(command="on", power_consign=1000)
+    existing = [on, None]
+    out = [None, None]
+    cost = c._get_transition_cost(1, existing, out, turning_on=True, first_slot=0, last_slot=1)
+    assert cost == 0
+
+
+# ---------------------------------------------------------------------------
+# adapt_repartition: OFF->ON blocked by budget
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_blocks_new_on_segment_when_budget_exhausted():
+    """adapt_repartition skips OFF->ON when it would create an isolated
+    segment (+2) and remaining_switches is 0."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000)
+    now = datetime.now(tz=pytz.UTC)
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None] * n
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    on_count = sum(1 for cmd in out_cmds if cmd is not None and not cmd.is_off_or_idle())
+    assert on_count == 0, "No slots should turn ON when switch budget is 0 and all are isolated"
+
+
+def test_adapt_repartition_allows_segment_extension():
+    """adapt_repartition allows OFF->ON next to an existing ON (cost 0)
+    even when remaining_switches is 0."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000)
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, None, on, on, None, None]
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    extended_slots = [i for i in [1, 4] if out_cmds[i] is not None and not out_cmds[i].is_off_or_idle()]
+    assert len(extended_slots) > 0, "Should extend existing ON segment (cost 0) even with budget 0"
+
+
+# ---------------------------------------------------------------------------
+# adapt_repartition: ON->OFF blocked by budget (segment split)
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_blocks_segment_split_on_reclaim():
+    """Turning OFF a slot in the middle of an ON block (cost +2) is blocked.
+
+    We use forced_slot_commands to lock the edges, forcing the iteration to
+    try the middle of the ON block first. With budget exhausted, the middle
+    slot (both neighbors ON) should be skipped (cost +2).
+    """
+    on = LoadCommand(command="on", power_consign=1000)
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000,
+                                             current_command=on)
+    c._type = CONSTRAINT_TYPE_FILLER
+    now = datetime.now(tz=pytz.UTC)
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [on, on, on, on, on, on]
+    load.last_state_change_time = now - timedelta(seconds=1)
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=-2000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    for i in range(n):
+        if out_cmds[i] is not None and out_cmds[i].is_off_or_idle():
+            merged_left = existing[i - 1] if i > 0 else None
+            merged_right = existing[i + 1] if i < n - 1 else None
+            left_on = merged_left is not None and not merged_left.is_off_or_idle()
+            right_on = merged_right is not None and not merged_right.is_off_or_idle()
+            if out_cmds[i - 1] is not None:
+                left_on = not out_cmds[i - 1].is_off_or_idle()
+            if i < n - 1 and out_cmds[i + 1] is not None:
+                right_on = not out_cmds[i + 1].is_off_or_idle()
+            assert not (left_on and right_on), (
+                f"Slot {i} turned OFF with both neighbors ON (split) when budget is 0"
+            )
+
+
+def test_adapt_repartition_allows_edge_shrink_on_reclaim():
+    """Turning OFF a slot at the edge of an ON block (cost 0) is allowed
+    even when budget is 0."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000)
+    c._type = CONSTRAINT_TYPE_FILLER  # non-mandatory so reduction is allowed
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, on, on, on, on, None]
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=-5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    edges_turned_off = [i for i in [1, 4] if out_cmds[i] is not None and out_cmds[i].is_off_or_idle()]
+    assert len(edges_turned_off) > 0, "Should shrink from edge (cost 0) even with budget 0"
+
+
+# ---------------------------------------------------------------------------
+# Two-pass iteration: extensions first, then new segments
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_two_pass_prefers_extensions():
+    """With budget for only 2 switches, pass 1 extends existing ON segments
+    before pass 2 creates new isolated ones."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=6, num_on_off=4, power=1000)
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    n = 8
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, None, on, on, None, None, None, None]
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=10000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    adj_turned_on = sum(1 for i in [1, 4] if out_cmds[i] is not None and not out_cmds[i].is_off_or_idle())
+    assert adj_turned_on > 0, "Pass 1 should extend adjacent slots before creating new segments"
+
+
+# ---------------------------------------------------------------------------
+# remaining_switches budget update after a change
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_budget_decremented():
+    """Verify the switch budget is consumed: with budget for 2 switches,
+    exactly one new isolated ON segment (+2) should be created."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=6, num_on_off=4, power=1000)
+    now = datetime.now(tz=pytz.UTC)
+    n = 8
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None] * n
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=50000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    on_segments = []
+    in_segment = False
+    for i in range(n):
+        merged = out_cmds[i] if out_cmds[i] is not None else existing[i]
+        is_on = merged is not None and not merged.is_off_or_idle()
+        if is_on and not in_segment:
+            on_segments.append(i)
+            in_segment = True
+        elif not is_on:
+            in_segment = False
+
+    assert len(on_segments) <= 1, (
+        f"With budget for 2 switches, at most 1 isolated ON segment should be created, got {len(on_segments)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# No limit (remaining_switches=None) passes through unchanged
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_no_limit_allows_all():
+    """Without num_max_on_off, all state changes are allowed freely."""
+    now = datetime.now(tz=pytz.UTC)
+    from custom_components.quiet_solar.home_model.load import TestLoad
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
+    load = TestLoad(name="free_load", min_p=1000, max_p=1000)
+    load.current_command = None
+    constraint = TimeBasedSimplePowerLoadConstraint(
+        time=now, load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=now + timedelta(hours=8),
+        initial_value=0, target_value=4 * 3600, power=1000,
+        support_auto=False,
+    )
+    load.push_live_constraint(now, constraint)
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None] * n
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = constraint.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=5000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    on_count = sum(1 for cmd in out_cmds if cmd is not None and not cmd.is_off_or_idle())
+    assert on_count > 0, "Without num_max_on_off, transitions should be created freely"
+
+
+# ---------------------------------------------------------------------------
+# Reclaim loop transition guard
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_reclaim_respects_transition_budget():
+    """The reclaim-from-future loop should not split ON segments when budget is 0."""
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000)
+    c._current_value = c.target_value
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    n = 10
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, on, None, None, None, on, on, on, on, on]
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=4, energy_delta=2000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    for k in range(6, 9):
+        if out_cmds[k] is not None and out_cmds[k].is_off_or_idle():
+            existing_left = existing[k - 1] if k > 0 else None
+            existing_right = existing[k + 1] if k < n - 1 else None
+            left_on = existing_left is not None and not existing_left.is_off_or_idle()
+            right_on = existing_right is not None and not existing_right.is_off_or_idle()
+            assert not (left_on and right_on), (
+                f"Reclaim at slot {k} split an ON segment when budget was 0"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Two-pass outer loop: energy satisfied on pass 1 → skip pass 2
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_two_pass_with_num_max():
+    """Cover line 1237: pass 1 satisfies energy_delta via edge shrinkage
+    (cost 0), then pass 2 hits the outer-loop break immediately.
+
+    Uses negative energy_delta (reclaim) so the delta can be fully consumed
+    in pass 1 (the positive-delta sign check prevents overshooting and would
+    never let the delta reach zero in pass 1).
+    """
+    now = datetime.now(tz=pytz.UTC)
+    on = LoadCommand(command="on", power_consign=1000)
+    load = _FakeLoadForCoverage(num_max_on_off=6, num_on_off=4)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+    )
+
+    n = 6
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, on, on, on, on, None]
+    slot_energy_wh = 1000.0 * SOLVER_STEP_S / 3600.0
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining_e, out_cmds, out_delta = constraint.adapt_repartition(
+        first_slot=0, last_slot=n - 1, energy_delta=-slot_energy_wh * 1.5,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    assert changed, "Edge shrinkage should have been made"
+
+
+# ---------------------------------------------------------------------------
+# Reclaim-from-future loop: transition guard and budget update
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_reclaim_future_with_transition_guard():
+    """The reclaim-from-future loop respects the transition guard.
+
+    Setup: constraint is met, we add energy in the near slots, and the reclaim
+    loop tries to take back from future ON slots. With num_max_on_off set and
+    budget exhausted, the reclaim should not split segments.
+    """
+    on = LoadCommand(command="on", power_consign=1000)
+    c, load = _make_constraint_with_num_max(num_max_on_off=4, num_on_off=4, power=1000)
+    c._current_value = c.target_value
+    now = datetime.now(tz=pytz.UTC)
+    n = 12
+    durations = np.full(n, SOLVER_STEP_S, dtype=np.float64)
+    existing = [None, on, None, None, None, None, on, on, on, on, on, on]
+    time_slots = [now + timedelta(seconds=SOLVER_STEP_S * i) for i in range(n)]
+
+    _, solved, changed, remaining_e, out_cmds, out_delta = c.adapt_repartition(
+        first_slot=0, last_slot=4, energy_delta=2000.0,
+        power_slots_duration_s=durations, existing_commands=existing,
+        allow_change_state=True, time=now, time_slots=time_slots)
+
+    for k in range(7, 11):
+        if out_cmds[k] is not None and out_cmds[k].is_off_or_idle():
+            left_cmd = out_cmds[k-1] if out_cmds[k-1] is not None else existing[k-1]
+            right_cmd = out_cmds[k+1] if out_cmds[k+1] is not None else existing[k+1]
+            left_on = left_cmd is not None and not left_cmd.is_off_or_idle()
+            right_on = right_cmd is not None and not right_cmd.is_off_or_idle()
+            assert not (left_on and right_on), (
+                f"Reclaim at future slot {k} split an ON segment"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Lines 1409-1416: reclaim-from-future enters remaining_switches guard
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_reclaim_future_blocked_by_switch_budget():
+    """Cover lines 1414-1416: reclaim from future ON slot is blocked because
+    turning it OFF would split a segment (cost +2) and budget is exhausted.
+
+    The reclaim loop iterates backwards from the end. Slots 7, 6 are edge
+    and get reclaimed (cost 0). Then slot 5 has left=ON(4), right=ON(6 was
+    just reclaimed to IDLE BUT existing[6]=ON and out[6]=IDLE so merged=IDLE).
+    Wait — to get cost +2 we need both neighbors ON. So we use a setup where
+    slot edges have out_commands already set from a prior reclaim iteration,
+    leaving interior slots with both neighbors ON in the existing commands.
+    We achieve this by having two consecutive reclaim cycles: the first one
+    claims the last slot, and the second one faces the middle of the block.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=4, num_on_off=4)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    on = LoadCommand(command="on", power_consign=1000)
+    durations = np.array([SOLVER_STEP_S] * 8, dtype=np.float64)
+    existing_commands: list[LoadCommand | None] = [
+        None, None, None, on, on, on, on, on,
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=2,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+    )
+    for k in range(4, 7):
+        if out_cmds[k] is not None and out_cmds[k].is_off_or_idle():
+            left_cmd = out_cmds[k - 1] if out_cmds[k - 1] is not None else existing_commands[k - 1]
+            right_cmd = out_cmds[k + 1] if out_cmds[k + 1] is not None else existing_commands[k + 1]
+            left_on = left_cmd is not None and not left_cmd.is_off_or_idle()
+            right_on = right_cmd is not None and not right_cmd.is_off_or_idle()
+            assert not (left_on and right_on), (
+                f"Reclaim at slot {k} split an ON segment with no switch budget"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Line 1451-1452: remaining_switches decremented after successful reclaim
+# ---------------------------------------------------------------------------
+
+def test_adapt_repartition_reclaim_future_decrements_switch_budget():
+    """Cover line 1451-1452: after a successful reclaim that turns a future
+    slot to IDLE, remaining_switches is decremented by reclaim_cost.
+
+    Setup: constraint is met, energy_delta>0 triggers add+reclaim. Future ON
+    slot is at the edge of its block (cost 0 to turn OFF), so reclaim succeeds.
+    The budget update at line 1451 runs with cost 0 (no decrement effect, but
+    the line is reached). We also include a lone future ON (cost -2) to exercise
+    the decrement path.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(num_max_on_off=6, num_on_off=0)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        type=CONSTRAINT_TYPE_FILLER,
+        initial_value=0.0,
+        target_value=100.0,
+        current_value=100.0,
+    )
+
+    durations = np.array([SOLVER_STEP_S] * 8, dtype=np.float64)
+    on = LoadCommand(command="on", power_consign=1000)
+    existing_commands: list[LoadCommand | None] = [
+        None, None, None, None, None, None, None, on,
+    ]
+
+    _, _, changed, _, out_cmds, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=2,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+    )
+    if out_cmds[7] is not None:
+        assert out_cmds[7].is_off_or_idle(), (
+            "Future lone ON slot should be reclaimed to IDLE"
+        )

@@ -2931,62 +2931,6 @@ async def test_mileage_default_person_min_update(
     await hass.async_block_till_done()
 
 
-async def test_pre_allocate_unplugged_p_leave_time_none(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """Cover line 2106: _pre_allocate_unplugged_home_cars skips when p_leave_time is None."""
-    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
-
-    await hass.config_entries.async_setup(home_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    car_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_CAR_CONFIG,
-        entry_id="car_2106_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}",
-        unique_id="qs_car_2106_test",
-    )
-    car_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(car_entry.entry_id)
-    await hass.async_block_till_done()
-
-    person_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_PERSON_CONFIG,
-        entry_id="person_2106_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}",
-        unique_id="qs_person_2106_test",
-    )
-    person_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(person_entry.entry_id)
-    await hass.async_block_till_done()
-
-    data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    home = data_handler.home
-    time = datetime.now(tz=pytz.UTC)
-
-    car = home._cars[0]
-    person = home._persons[0]
-
-    car.charger = None
-    car.car_is_invited = False
-
-    covered_cars = set()
-    covered_persons = set()
-    person_forecasts = {person.name: (None, 50.0)}
-
-    home._pre_allocate_unplugged_home_cars(time, person_forecasts, covered_cars, covered_persons)
-
-    assert car.name not in covered_cars
-
-    await hass.config_entries.async_unload(person_entry.entry_id)
-    await hass.async_block_till_done()
-    await hass.config_entries.async_unload(car_entry.entry_id)
-    await hass.async_block_till_done()
-
-
 async def test_allocation_energy_optimal_over_preferred(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
@@ -4252,8 +4196,7 @@ async def test_allocation_force_no_person_fallback(
             car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
         return original_info(msg, *args, **kwargs)
 
-    with patch.object(logger, "info", side_effect=inject_force), \
-         patch.object(home, "_pre_allocate_unplugged_home_cars"):
+    with patch.object(logger, "info", side_effect=inject_force):
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
     assert car.current_forecasted_person is None
@@ -4296,8 +4239,7 @@ async def test_allocation_user_selected_person_fallback(
 
     assert car_a.user_selected_person_name_for_car is None
 
-    with patch.object(person, "update_person_forecast", return_value=(None, None)), \
-         patch.object(home, "_pre_allocate_unplugged_home_cars"):
+    with patch.object(person, "update_person_forecast", return_value=(None, None)):
         result = await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
     assert isinstance(result, dict)

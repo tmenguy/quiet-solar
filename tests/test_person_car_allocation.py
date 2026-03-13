@@ -106,7 +106,6 @@ class _FakeHome:
 
     # Bind all the real QSHome methods needed by the allocation pipeline.
     compute_and_set_best_persons_cars_allocations = QSHome.compute_and_set_best_persons_cars_allocations
-    _pre_allocate_unplugged_home_cars = QSHome._pre_allocate_unplugged_home_cars
     _build_raw_energy_matrix = staticmethod(QSHome._build_raw_energy_matrix)
     _finalize_cost_matrix = staticmethod(QSHome._finalize_cost_matrix)
     _compute_assignment_energy = staticmethod(QSHome._compute_assignment_energy)
@@ -221,11 +220,77 @@ class TestSetUserPersonEdgeCases:
         )
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
-        # Magali is auto-assigned to Twingo; manually confirming should skip realloc
-        assert _person_name(twingo) == "Magali"
-        await twingo.set_user_person_for_car("Magali")
-        assert twingo.user_selected_person_name_for_car == "Magali"
-        assert _person_name(twingo) == "Magali"
+        # Arthur is auto-assigned to Twingo (his preferred car);
+        # manually confirming should skip realloc
+        assert _person_name(twingo) == "Arthur"
+        await twingo.set_user_person_for_car("Arthur")
+        assert twingo.user_selected_person_name_for_car == "Arthur"
+        assert _person_name(twingo) == "Arthur"
+
+
+class TestPersonSwapNotification:
+    """Cover lines 2350-2352: both old and new person tracked when a car's
+    assigned person changes from A to B."""
+
+    @pytest.mark.asyncio
+    async def test_swap_tracks_both_old_and_new_person(self):
+        """When a forecast change forces two cars to swap their assigned
+        persons, both the outgoing and incoming person on each car must be
+        added to the notification list.
+
+        Step 1 -- PersonX needs 70km (only CarA covers), PersonY needs 30km:
+          CarA(80km)->PersonX, CarB(40km)->PersonY
+
+        Step 2 -- swap mileages so PersonY needs 70km, PersonX needs 30km:
+          CarA(80km)->PersonY, CarB(40km)->PersonX
+
+        This exercises lines 2350-2352 (new person on a swapped car).
+        """
+        leave = datetime.now(timezone.utc).replace(hour=7, minute=30) + timedelta(days=1)
+
+        car_a = _FakeCar("CarA", remaining_km=80, has_charger=False)
+        car_b = _FakeCar("CarB", remaining_km=40, has_charger=False)
+
+        person_x = _FakePerson(
+            "PersonX", preferred_car=None,
+            authorized_car_names=["CarA", "CarB"],
+            forecast_leave_time=leave, forecast_mileage=70.0,
+        )
+        person_y = _FakePerson(
+            "PersonY", preferred_car=None,
+            authorized_car_names=["CarA", "CarB"],
+            forecast_leave_time=leave, forecast_mileage=30.0,
+        )
+
+        home = _FakeHome([car_a, car_b], [person_x, person_y])
+
+        # Step 1: PersonX needs 70km -> only CarA covers -> CarA->PersonX, CarB->PersonY
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        assert _person_name(car_a) == "PersonX"
+        assert _person_name(car_b) == "PersonY"
+
+        # Step 2: swap the mileages
+        person_x._forecast_mileage = 30.0
+        person_y._forecast_mileage = 70.0
+
+        notified = []
+        orig_notify = _FakePerson.notify_of_forecast_if_needed
+
+        async def _capture_notify(self_person, **kwargs):
+            notified.append(self_person.name)
+            return await orig_notify(self_person, **kwargs)
+
+        _FakePerson.notify_of_forecast_if_needed = _capture_notify
+        try:
+            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        finally:
+            _FakePerson.notify_of_forecast_if_needed = orig_notify
+
+        # Allocation should have swapped
+        assert _person_name(car_a) == "PersonY", f"CarA should now be PersonY, got {_person_name(car_a)}"
+        assert _person_name(car_b) == "PersonX", f"CarB should now be PersonX, got {_person_name(car_b)}"
+        assert "PersonX" in notified, "PersonX should be notified of the swap"
+        assert "PersonY" in notified, "PersonY should be notified of the swap"
 
 
 class TestCacheHitReApply:
@@ -257,10 +322,10 @@ class TestPersonCarAllocationScenario:
     async def test_automatic_assignment(self):
         """First automatic allocation should produce:
 
-        Thomas → Tesla  (preferred, no charger, pre-allocated)
-        Arthur → Zoe    (needs 100 km, Twingo only has 70 → energy-optimal picks Zoe)
-        Magali → Twingo  (needs 20 km, Twingo has 70 → covered)
-        IDBuzz → nobody  (10 km, nobody left needs it)
+        Thomas → Tesla  (preferred, no charger, covered)
+        Arthur → Twingo (preferred, plugged, needs charging but preferred wins)
+        Magali → Zoe    (preferred, plugged, covered)
+        IDBuzz → nobody (10 km, nobody left needs it)
         """
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
             _build_scenario()
@@ -271,11 +336,11 @@ class TestPersonCarAllocationScenario:
         assert _person_name(tesla) == "Thomas", (
             f"Tesla should be Thomas, got {_person_name(tesla)}"
         )
-        assert _person_name(zoe) == "Arthur", (
-            f"Zoe should be Arthur, got {_person_name(zoe)}"
+        assert _person_name(twingo) == "Arthur", (
+            f"Twingo should be Arthur, got {_person_name(twingo)}"
         )
-        assert _person_name(twingo) == "Magali", (
-            f"Twingo should be Magali, got {_person_name(twingo)}"
+        assert _person_name(zoe) == "Magali", (
+            f"Zoe should be Magali, got {_person_name(zoe)}"
         )
         assert _person_name(idbuzz) is None, (
             f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"
