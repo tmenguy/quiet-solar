@@ -3,7 +3,8 @@ from datetime import time as dt_time
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
     CONSTRAINT_TYPE_MANDATORY_END_TIME, \
-    CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool, CONSTRAINT_TYPE_FILLER_AUTO
+    CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool, CONSTRAINT_TYPE_FILLER_AUTO, \
+    CONSTRAINT_TYPE_FILLER
 from ..ha_model.on_off_duration import QSOnOffDuration
 from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MIN_UTC
 
@@ -119,13 +120,15 @@ class QSPool(QSOnOffDuration):
 
                 # schedule the load to be launched
                 type = CONSTRAINT_TYPE_MANDATORY_END_TIME
+                degraded_type = CONSTRAINT_TYPE_FILLER
                 if self.is_best_effort_only_load():
                     type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling
+                    degraded_type = CONSTRAINT_TYPE_FILLER_AUTO
 
 
                 load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
-                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                        degraded_type=degraded_type,
                         time=time,
                         load=self,
                         from_user=False,

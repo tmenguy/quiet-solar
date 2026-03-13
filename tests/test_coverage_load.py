@@ -864,7 +864,7 @@ class TestAbstractLoadUpdateLiveConstraints:
             initial_value=100,  # Already met
         )
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True  # force_solving should be True
 
@@ -880,7 +880,7 @@ class TestAbstractLoadUpdateLiveConstraints:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,  # Not mandatory
         )
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -897,7 +897,7 @@ class TestAbstractLoadUpdateLiveConstraints:
         )
         ct.always_end_at_end_of_constraint = False
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         # Should be pushed, force_solving True
         assert result is True
@@ -916,7 +916,7 @@ class TestAbstractLoadUpdateLiveConstraints:
         ct.always_end_at_end_of_constraint = False
         ct.pushed_count = 5  # Already pushed too many times
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -942,7 +942,7 @@ class TestAbstractLoadUpdateLiveConstraints:
         )
         ct2.from_user = True  # Higher score
         load._constraints = [ct1, ct2]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -963,7 +963,7 @@ class TestAbstractLoadUpdateLiveConstraints:
 
         ct._update_value_callback = stop_callback
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         # Period must be large enough that the constraint end is within time+period
         result = await load.update_live_constraints(t, timedelta(hours=24))
         # Constraint is stopped (skip=True), filtered out, force_solving=True
@@ -976,7 +976,7 @@ class TestAbstractLoadUpdateLiveConstraints:
         # Previous update was yesterday
         yesterday = datetime(2026, 2, 10, 23, 50, 0, tzinfo=pytz.UTC)
         today = datetime(2026, 2, 11, 0, 10, 0, tzinfo=pytz.UTC)
-        load._last_constraint_update = yesterday
+        load.last_check_update = yesterday
         ct = create_constraint(
             load=load, time=yesterday,
             end_of_constraint=today + timedelta(hours=2),
@@ -1000,7 +1000,7 @@ class TestAbstractLoadUpdateLiveConstraints:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         await load.update_live_constraints(t, timedelta(minutes=30))
         # After update, next_or_current_constraint_end_time should be set
         if load._constraints:
@@ -1017,7 +1017,7 @@ class TestAbstractLoadUpdateLiveConstraints:
             target_value=100, initial_value=100,
         )
         load._last_completed_constraint = completed
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert load.current_constraint_current_percent_completion == 100.0
 
@@ -1033,7 +1033,7 @@ class TestAbstractLoadUpdateLiveConstraints:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         # Active constraint should be properly processed
         assert load.next_or_current_constraint_end_time is not None
@@ -1057,7 +1057,7 @@ class TestAbstractLoadMarkConstraintDone:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         await load.mark_current_constraint_has_done(t)
         # Constraint should be marked as done (current_value = target_value)
 
@@ -1142,7 +1142,7 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -1173,7 +1173,7 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -1206,7 +1206,7 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(minutes=30))
         assert result is True
 
@@ -1232,7 +1232,7 @@ class TestAbstractLoadUpdateConstraintCallback:
 
         ct._update_value_callback = met_callback
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True
 
@@ -1253,7 +1253,7 @@ class TestAbstractLoadUpdateConstraintCallback:
 
         ct._update_value_callback = stop_callback
         load._constraints = [ct]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True
 
@@ -1388,7 +1388,7 @@ class TestUpdateLiveConstraintsInnerLoop:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True
 
@@ -1412,7 +1412,7 @@ class TestUpdateLiveConstraintsInnerLoop:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True
 
@@ -1823,6 +1823,6 @@ class TestUpdateLiveConstraintsLine1295:
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct0, ct1, ct2, ct3]
-        load._last_constraint_update = t
+        load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True

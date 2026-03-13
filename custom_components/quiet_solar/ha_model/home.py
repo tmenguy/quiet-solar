@@ -1863,10 +1863,22 @@ class QSHome(QSDynamicGroup):
 
         # check for active loads
         for load in self._all_loads:
+
+            now_local_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            prev_local_date = now_local_date if load.last_check_update is None else load.last_check_update.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+
+            if prev_local_date.day != now_local_date.day:
+                # we should reset some stuffs
+                _LOGGER.info("update_live_constraints: day has changed, reset daily load datas for %s", load.name)
+                load.reset_daily_load_datas(time)
+
             if load.qs_enable_device is False:
-                continue
-            if await load.do_run_check_load_activity_and_constraints(time):
-                self.force_next_solve()
+                pass
+            else:
+                if await load.do_run_check_load_activity_and_constraints(time):
+                    self.force_next_solve()
+
+            load.last_check_update = time
 
 
     async def _prepare_data_for_dump(self, start, end):

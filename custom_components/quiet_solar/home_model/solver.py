@@ -594,7 +594,8 @@ class PeriodSolver(object):
                     existing_commands=out_commands,
                     allow_change_state=allow_change_state,
                     time=self._start_time,
-                    allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False)
+                    allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False,
+                    time_slots=self._time_slots)
                 if has_changes:
                     _LOGGER.info(
                         f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
@@ -976,7 +977,7 @@ class PeriodSolver(object):
 
             if energy_given_back_to_grid < 0.0 and first_surplus_index is not None:
 
-                energy_to_be_spent = min(self._battery.get_value_full() , (-energy_given_back_to_grid)*0.9) # try to reuse 90% of the estimated energy given back to the grid, so we can try to force some loads to consume more
+                energy_to_be_spent = min(self._battery.get_value_full() , (0.0-energy_given_back_to_grid)) # try to reuse estimated energy given back to the grid, so we can try to force some loads to consume more
 
                 probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
 
@@ -1016,11 +1017,14 @@ class PeriodSolver(object):
                     # if possible we can bump any possible constraint has we know it is energy that we can use
                     for c in self._active_constraints:
                         c_now = constraints_evolution.get(c, c)
-                        first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
-                        add_to_probe = True
-                        if c_now.is_constraint_met() and max_idx_with_energy_impact < probe_window_start:
-                            # we don't want to give a constraint some more energy AFTER it has been completed
+                        if is_off_grid and c.load.is_best_effort_only_load():
                             add_to_probe = False
+                        else:
+                            first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
+                            add_to_probe = True
+                            if c_now.is_constraint_met() and max_idx_with_energy_impact < probe_window_start:
+                                # we don't want to give a constraint some more energy AFTER it has been completed
+                                add_to_probe = False
 
                         if add_to_probe:
                             constraints.append((c, c.score(self._start_time)))

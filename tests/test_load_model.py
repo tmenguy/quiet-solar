@@ -2662,13 +2662,11 @@ class TestUpdateLiveConstraints:
         """Test update_live_constraints with no constraints."""
         load = self.create_load()
         load._constraints = []
-        load._last_constraint_update = None
 
         time_now = self.BASE_TIME
         result = await load.update_live_constraints(time_now, timedelta(minutes=5))
 
         assert result is False
-        assert load._last_constraint_update == time_now
 
     @pytest.mark.asyncio
     async def test_update_live_constraints_met_constraint_skipped(self):
@@ -2712,24 +2710,6 @@ class TestUpdateLiveConstraints:
 
         # Should update current constraint values
         assert load.current_constraint_current_value == 50.0
-
-    @pytest.mark.asyncio
-    async def test_update_live_constraints_resets_daily_on_day_change(self):
-        """Test daily data is reset on day change."""
-        load = self.create_load()
-        load._constraints = []
-
-        # Set last update to a specific time yesterday in local timezone
-        yesterday_utc = datetime(2026, 1, 19, 20, 0, tzinfo=pytz.UTC)  # 8 PM UTC
-        load._last_constraint_update = yesterday_utc
-        load.num_on_off = 5
-
-        # Now is a different day in local time
-        time_now = datetime(2026, 1, 20, 20, 0, tzinfo=pytz.UTC)  # 8 PM UTC next day
-        await load.update_live_constraints(time_now, timedelta(minutes=5))
-
-        # num_on_off should be reset on day change
-        assert load.num_on_off == 0
 
 
 # =============================================================================

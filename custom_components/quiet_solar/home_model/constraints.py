@@ -632,7 +632,8 @@ class LoadConstraint(object):
                           existing_commands: list[LoadCommand | None],
                           allow_change_state: bool,
                           time: datetime,
-                          allow_no_reclaim: bool = False) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                          allow_no_reclaim: bool = False,
+                          time_slots: list[datetime] | None = None) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """ Adapt the power repartition of the constraint over the given period."""
 
 class MultiStepsPowerLoadConstraint(LoadConstraint):
@@ -794,6 +795,22 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         return delta_quantity, durations_s, False
 
 
+    def _get_forced_slot_commands(self, time_slots: list[datetime], first_slot: int, last_slot: int) -> dict[int, LoadCommand | None]:
+        """Return a dict mapping slot indices to the command they MUST output during
+        the minimum state hold period. Empty dict when no slots are forced."""
+        if not self.load or self.load.num_max_on_off is None or self.support_auto:
+            return {}
+        first_unlocked = self.load.get_first_unlocked_slot_index(time_slots)
+        if first_unlocked <= first_slot or self.load.current_command is None:
+            return {}
+        forced: dict[int, LoadCommand | None] = {}
+        for i in range(first_slot, min(first_unlocked, last_slot + 1)):
+            if self.load.current_command.is_off_or_idle():
+                forced[i] = None
+            else:
+                forced[i] = copy_command(self.load.current_command)
+        return forced
+
     def _adapt_commands(self, out_commands, out_power, power_slots_duration_s, budgeting_quantity_to_be_added, first_slot: int, last_slot: int) -> float:
 
         if self.load.num_max_on_off is not None and self.support_auto is False:
@@ -801,7 +818,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             num_allowed_switch = self.load.num_max_on_off - self.load.num_on_off
             num_removed = 0
 
-            _LOGGER.info(f"Probe commands for on_off num/max: {self.load.num_on_off}/{self.load.num_max_on_off}")
+            _LOGGER.info(f"_adapt_commands: Probe commands for on_off num/max: {self.load.name} {self.load.num_on_off}/{self.load.num_max_on_off}")
 
             quantity_to_recover = 0.0
 
@@ -1060,7 +1077,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                           existing_commands: list[LoadCommand | None],
                           allow_change_state: bool,
                           time: datetime,
-                          allow_no_reclaim: bool = False) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+                          allow_no_reclaim: bool = False,
+                          time_slots: list[datetime] | None = None) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
 
         """ Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1110,6 +1128,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             default_cmd = None
             empty_cmd = None
 
+            forced_slot_commands = self._get_forced_slot_commands(time_slots, first_slot, last_slot) if time_slots else {}
+
             if self.support_auto:
 
                 if init_energy_delta >= 0.0:
@@ -1122,6 +1142,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     empty_cmd = copy_command(CMD_AUTO_GREEN_CAP)
 
             for i in sorted_available_power:
+
+                if i in forced_slot_commands:
+                    continue
 
                 current_command_power = 0.0
 
@@ -1440,13 +1463,19 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             _LOGGER.info(
                 f"compute_best_period_repartition: as fast as possible constraint {self.name} nrj/duration: {quantity_to_be_added}")
 
+            forced_slot_commands = self._get_forced_slot_commands(time_slots, first_slot, last_slot)
+
             has_a_cmd = False
             for i in range(first_slot, last_slot + 1):
 
                 # we will add a command from 0 command so by construction power_piloted_delta will happen
                 power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
 
+                # stronger that the forced slots_commands ... can be dangerous to output such command now
                 if len(power_sorted_cmds) == 0:
+                    continue
+
+                if i in forced_slot_commands and forced_slot_commands[i] is None:
                     continue
 
                 has_a_cmd = True
@@ -1535,9 +1564,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 elif last_slot < len(power_available_power) - 1:
                     last_slot += 1
 
+            forced_slot_commands = self._get_forced_slot_commands(time_slots, first_slot, last_slot)
+            forced_has_on_commands = any(cmd is not None for cmd in forced_slot_commands.values())
+
             if self.support_auto:
                 # if we do support automatic filling: we will get all the available power, as soon as we get it:
                 # so consume it greedily
+                sorted_available_power = range(last_slot + 1 - first_slot)
+            elif forced_has_on_commands:
+                # ON + hold: sequential ordering for continuity with current command
                 sorted_available_power = range(last_slot + 1 - first_slot)
             else:
                 sub_power_available_power = power_available_power[first_slot:last_slot + 1]
@@ -1609,6 +1644,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                                                                                                         for_add=True,
                                                                                                                         use_production_limits=True)
 
+                    # stronger than the forced slots : may be dangerous to output a command if forbidden by amps or other stuffs
                     if len(power_sorted_cmds) == 0:
                         continue
 
@@ -1628,6 +1664,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     else:
                         j_naked = j
 
+                    if i in forced_slot_commands:
+                        forced_cmd = forced_slot_commands[i]
+                        if j < 0 and forced_cmd is not None:
+                            j = 0
+                            j_naked = 0
+                        elif j >= 0 and forced_cmd is None:
+                            j = -1
 
                     if j >= 0:
 
@@ -1680,6 +1723,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible,
                 # this is checked in the charger budgeting algorithm, with self.home.battery_can_discharge() is False
                 for i in range(first_slot, last_slot + 1):
+
+                    if i in forced_slot_commands:
+                        continue
 
                     if quantity_to_be_added <= 0.0:
                         break
@@ -1811,6 +1857,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # may depend on the load type for a boiler you want to be closer, for a car it is more the asap? let's do reverse
 
                         for i in explore_range:
+
+                            if i in forced_slot_commands:
+                                continue
 
                             if prices[i] == price:
 

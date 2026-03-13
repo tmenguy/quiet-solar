@@ -2028,3 +2028,31 @@ async def test_home_forecast_getters_without_sources(
     assert home.get_solar_from_current_forecast(
         datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     ) == []
+
+
+async def test_update_loads_constraints_resets_daily_on_day_change(
+    hass: HomeAssistant,
+    setup_home_entry: ConfigEntry,
+    setup_charger_entry: ConfigEntry,
+) -> None:
+    """Test that update_loads_constraints resets num_on_off when the day changes."""
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+    home._init_completed = True
+
+    assert len(home._all_loads) > 0
+    load = home._all_loads[0]
+
+    load.externally_initialized_constraints = True
+    load.config_entry_initialized = True
+
+    yesterday_utc = datetime(2026, 1, 19, 20, 0, tzinfo=pytz.UTC)
+    load.last_check_update = yesterday_utc
+    load.num_on_off = 5
+
+    time_now = datetime(2026, 1, 20, 20, 0, tzinfo=pytz.UTC)
+
+    await home.update_loads_constraints(time_now)
+
+    assert load.num_on_off == 0

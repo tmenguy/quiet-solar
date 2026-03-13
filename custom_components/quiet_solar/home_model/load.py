@@ -16,12 +16,14 @@ from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT
     CONF_DEVICE_EFFICIENCY, DEVICE_STATUS_CHANGE_CONSTRAINT, \
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
     CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, \
-    CONF_DEVICE_TO_PILOT_NAME
+    CONF_DEVICE_TO_PILOT_NAME, SOLVER_STEP_S
 
 import slugify
 
 if TYPE_CHECKING:
     import QSDynamicGroup
+
+CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10*60, SOLVER_STEP_S//2)
 
 NUM_MAX_INVALID_PROBES_COMMANDS = 10
 
@@ -115,6 +117,7 @@ class AbstractDevice(object):
         self._dampened_computed_power_use: float | None = kwargs.pop(f"measured_{CONF_POWER}", None)
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
+        self.last_check_update: datetime | None = None
         self.reset_daily_load_datas()
 
         self._ack_command(None, None)
@@ -364,6 +367,8 @@ class AbstractDevice(object):
     def update_to_be_saved_extra_device_info(self, data_to_update:dict):
         data_to_update["num_on_off"] = self.num_on_off
         data_to_update["current_command"] = self.current_command.to_dict() if self.current_command is not None else None
+        data_to_update["last_state_change_time"] = self.last_state_change_time.isoformat() if self.last_state_change_time is not None else None
+        data_to_update["last_check_update"] = self.last_check_update.isoformat() if self.last_check_update is not None else None
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         self.num_on_off = stored_load_info.get("num_on_off", 0)
@@ -380,10 +385,33 @@ class AbstractDevice(object):
         if cmd_dict is not None:
             self.current_command = LoadCommand(**cmd_dict)
 
+        last_change_str = stored_load_info.get("last_state_change_time", None)
+        if last_change_str is not None:
+            self.last_state_change_time = datetime.fromisoformat(last_change_str)
+        else:
+            self.last_state_change_time = None
+
+        last_check_update_update_str = stored_load_info.get("last_check_update", None)
+        if last_check_update_update_str is not None:
+            self.last_check_update = datetime.fromisoformat(last_check_update_update_str)
+        else:
+            self.last_check_update = None
+
+
+
 
     def reset_daily_load_datas(self, time:datetime | None = None):
         self.num_on_off = 0
+        self.last_state_change_time: datetime | None = None
 
+    def get_first_unlocked_slot_index(self, time_slots: list[datetime], change_state_hysteresis_s: float = CHANGE_ON_OFF_STATE_HYSTERESIS_S) -> int:
+        """Return the first slot index where the solver is allowed to change state.
+        All slots from 0 to return_value - 1 must keep the load's current command."""
+        if self.num_max_on_off is None or self.last_state_change_time is None:
+            return 0
+        unlock_time = self.last_state_change_time + timedelta(seconds=change_state_hysteresis_s)
+        idx = bisect_left(time_slots, unlock_time)
+        return min(idx, len(time_slots))
 
     def get_min_max_power(self) -> tuple[float, float]:
         return 0.0, 0.0
@@ -449,6 +477,7 @@ class AbstractDevice(object):
 
             if do_count:
                 self.num_on_off += 1
+                self.last_state_change_time = time
                 _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
 
     @property
@@ -691,7 +720,6 @@ class AbstractLoad(AbstractDevice):
 
         self.qs_best_effort_green_only = False
 
-        self._last_constraint_update: datetime|None = None
         self._last_hash_state = None
 
         self.is_load_time_sensitive = False
@@ -1240,24 +1268,14 @@ class AbstractLoad(AbstractDevice):
         return False
 
     async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
+        # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
+        # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
+        # if it is the last and the one before are for the next days)
+
 
         if self.qs_enable_device is False:
             self._constraints = []
             return True
-
-        # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
-        # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
-        # if it is the last and the one before are for the next days)
-        if self._last_constraint_update is None:
-            self._last_constraint_update = time
-
-        prev_local_date = self._last_constraint_update.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        now_local_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-
-        if prev_local_date.day != now_local_date.day:
-            # we should reset some stuffs
-            self.reset_daily_load_datas(time)
-
 
         current_constraint = None
         #if self.running_command is not None:
@@ -1402,7 +1420,6 @@ class AbstractLoad(AbstractDevice):
             if c.end_of_constraint < DATETIME_MAX_UTC:
                 self.next_or_current_constraint_end_time = c.end_of_constraint
 
-        self._last_constraint_update = time
         return force_solving
 
 

@@ -658,7 +658,7 @@ class QSChargerGroup(object):
                 battery_asked_charge = 0.0
 
                 # battery_current_charge = full_available_home_power - grid_available_home_power
-                # not exactly true : as there can be clamping by the inverter in the available power
+                # not exactly true : as there can be clamping by the inverter in the available power we need to reserve for the battery
                 # use get_battery_charge_values for real battery charge value
                 if self.home.battery is not None:
                     battery_asked_charge = self.home.battery.get_current_battery_asked_change_for_outside_production_system()
@@ -1616,6 +1616,7 @@ class QSChargerGroup(object):
                 # if it is done anyway it is because of too high amps for exp...
                 cs.charger._expected_charge_state.set(new_state, time)
                 cs.charger.num_on_off += 1
+                cs.charger.last_state_change_time = time
 
                 if cs.charger._expected_charge_state.last_change_asked is None:
                     _LOGGER.info(
@@ -2804,7 +2805,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # both are set ... we will ignore the time based one
                 self.car.do_next_charge_time = None
 
-            degraded_type = CONSTRAINT_TYPE_FILLER_AUTO
+            degraded_type = CONSTRAINT_TYPE_FILLER
             if self.qs_bump_solar_charge_priority:
                 degraded_type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN
 
