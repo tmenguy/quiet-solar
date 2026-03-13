@@ -4346,12 +4346,10 @@ def test_adapt_commands_protect_long_initial_off_at_switch_limit():
 # ===========================================================================
 
 def test_adapt_commands_phase2_fills_first_slot_gap_sets_switch_false():
-    """Cover line 938: Phase 2 fills a single-slot gap at first_slot.
+    """Cover line 859: Phase 1 elif kills a short first-slot gap (< hysteresis).
 
-    Phase 1 must NOT fire so that start_witch_switch stays True when Phase 2
-    processes the gap. This requires few transitions with ample switch budget,
-    so that the Phase 1 condition (num_changes > min(allowed-3, allowed//2))
-    is False, but the single-slot gap at first_slot is still a candidate.
+    Load ON, first slot OFF with duration < CHANGE_ON_OFF_STATE_HYSTERESIS_S.
+    Phase 1 kills it (line 859), setting start_witch_switch=False (line 888).
     """
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage(num_max_on_off=20, num_on_off=0)
@@ -4365,24 +4363,21 @@ def test_adapt_commands_phase2_fills_first_slot_gap_sets_switch_false():
     )
 
     # Pattern: [OFF, ON, ON] with load currently ON.
-    # num_command_state_change = 2, num_allowed_switch = 20.
-    # Phase 1 condition: 2 > min(17, 10) = 10 -> False, so Phase 1 skipped.
-    # Phase 2: single-slot gap [0,0] at first_slot with start_witch_switch=True
-    # -> line 937-938 sets start_witch_switch = False.
+    # Slot 0 duration 500 < CHANGE_ON_OFF_STATE_HYSTERESIS_S (600) -> Phase 1 kills.
     out_commands: list[LoadCommand | None] = [
         None,
         LoadCommand(command="on", power_consign=1000),
         LoadCommand(command="on", power_consign=1000),
     ]
     out_power = [0.0, 1000.0, 1000.0]
-    durations = [float(SOLVER_STEP_S)] * 3
+    durations = [500.0, 900.0, 900.0]
 
     result = constraint._adapt_commands(
         out_commands, out_power, durations, 0.0, 0, 2
     )
     assert isinstance(result, float)
     assert out_commands[0] is not None, (
-        "Single-slot OFF blip at first_slot should be filled by Phase 2"
+        "Short first-slot OFF (<600s) should be filled by Phase 1"
     )
 
 
@@ -5165,3 +5160,51 @@ def test_adapt_commands_short_empty_and_switch_true_recovery():
     assert isinstance(result, float)
     # Slot 2 was filled (empty cmd removed)
     assert out_commands[2] is not None, "Short interior gap should be filled"
+
+
+# ===========================================================================
+# Line 940 - _adapt_commands: Phase 2 sets start_witch_switch = False for
+#            first-slot empty cmd at the hysteresis boundary
+# ===========================================================================
+
+def test_adapt_commands_phase2_first_slot_sets_switch_false():
+    """Cover line 940: Phase 2 removal loop sets start_witch_switch=False.
+
+    A first-slot empty cmd with duration exactly CHANGE_ON_OFF_STATE_HYSTERESIS_S
+    survives Phase 1 (which uses strict '<') but enters Phase 2's pass branch
+    (which uses '<='). This reaches line 940.
+
+    Setup: load ON, commands [None, ON, ON].
+    Slot 0 duration = CHANGE_ON_OFF_STATE_HYSTERESIS_S exactly.
+    num_command_state_change=2, num_allowed_switch=20 (ample budget).
+    Phase 1 elif: 600 < 600 -> False -> doesn't kill.
+    Phase 2: empty [0,0] duration=600 <= 600 -> candidate (line 904).
+    Removal loop: 600 <= 600 -> pass (line 931). 0 == first_slot -> line 940.
+    """
+    now = datetime.now(tz=pytz.UTC)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=20, num_on_off=0,
+        current_command=LoadCommand(command="on", power_consign=1000),
+    )
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+    )
+
+    out_commands: list[LoadCommand | None] = [
+        None,
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+    out_power = [0.0, 1000.0, 1000.0]
+    durations = [float(CHANGE_ON_OFF_STATE_HYSTERESIS_S), 900.0, 900.0]
+
+    result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 2)
+    assert isinstance(result, float)
+    # The first-slot gap was filled by Phase 2
+    assert out_commands[0] is not None, (
+        "First-slot gap at hysteresis boundary should be filled by Phase 2"
+    )
