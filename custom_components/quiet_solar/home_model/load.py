@@ -1452,6 +1452,12 @@ class AbstractLoad(AbstractDevice):
 
 
     def reset_override_state_and_set_reset_ask_time(self, time: datetime | None = None):
+        if self.external_user_initiated_state is None or self.external_user_initiated_state_time is None:
+            self.external_user_initiated_state = None
+            self.external_user_initiated_state_time = None
+            self.asked_for_reset_user_initiated_state_time = None
+            return
+
         self.external_user_initiated_state = None
         self.external_user_initiated_state_time = None
         if self.asked_for_reset_user_initiated_state_time is None:

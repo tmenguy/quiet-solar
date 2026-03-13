@@ -2,11 +2,11 @@ from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 from ..const import POOL_TEMP_STEPS, CONF_POOL_TEMPERATURE_SENSOR, SENSOR_CONSTRAINT_SENSOR_POOL, \
-    CONSTRAINT_TYPE_MANDATORY_END_TIME, \
     CONF_POOL_WINTER_IDX, CONF_POOL_DEFAULT_IDX, CONF_TYPE_NAME_QSPool, CONSTRAINT_TYPE_FILLER_AUTO, \
     CONSTRAINT_TYPE_FILLER
+from ..ha_model.bistate_duration import ConstraintItemType
 from ..ha_model.on_off_duration import QSOnOffDuration
-from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MIN_UTC
+from ..home_model.constraints import DATETIME_MIN_UTC
 
 
 class QSPool(QSOnOffDuration):
@@ -49,7 +49,7 @@ class QSPool(QSOnOffDuration):
     def update_current_metrics(self, time:datetime, end_range: dt_time | None = None):
 
         if end_range is None:
-            end_range = dt_time(hour=0, minute=0, second=0)
+            end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
 
         end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time,
                                                 output_in_utc=True)
@@ -101,47 +101,34 @@ class QSPool(QSOnOffDuration):
 
         return self.pool_steps[idx][2]*3600.0
 
-    async def check_load_activity_and_constraints(self, time: datetime) -> bool:
-        # check that we have a connected car, and which one, or that it is completely disconnected
-        #  if there is no more car ... just reset
-        ret = False
-        if self.bistate_mode != "bistate_mode_auto" and self.bistate_mode != "pool_winter_mode":
-            ret =  await super().check_load_activity_and_constraints(time)
-        else:
-
+    async def _build_mode_constraint_items(self, time, bistate_mode, do_push_constraint_after):
+        if bistate_mode in ("bistate_mode_auto", "pool_winter_mode"):
             if self.default_on_finish_time is None:
                 self.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
 
-            end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
+            end_schedule = self.get_next_time_from_hours(
+                local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
 
-            force_winter = self.bistate_mode == "pool_winter_mode"
+            force_winter = bistate_mode == "pool_winter_mode"
 
             if end_schedule is not None:
-
-                # schedule the load to be launched
-                type = CONSTRAINT_TYPE_MANDATORY_END_TIME
                 degraded_type = CONSTRAINT_TYPE_FILLER
                 if self.is_best_effort_only_load():
-                    type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling
                     degraded_type = CONSTRAINT_TYPE_FILLER_AUTO
 
-
-                load_mandatory = TimeBasedSimplePowerLoadConstraint(
-                        type=type,
-                        degraded_type=degraded_type,
-                        time=time,
-                        load=self,
-                        from_user=False,
-                        end_of_constraint=end_schedule,
-                        power=self.power_use,
-                        initial_value=0,
+                start_schedule = do_push_constraint_after
+                if start_schedule is None or start_schedule < end_schedule:
+                    return [ConstraintItemType(
+                        start_schedule=start_schedule,
+                        end_schedule=end_schedule,
                         target_value=self.get_pool_filter_time_s(force_winter, time),
-                )
-                ret = self.push_live_constraint(time, load_mandatory)
+                        has_user_forced_constraint=False,
+                        agenda_push=False,
+                        degraded_type=degraded_type,
+                    )]
+            return []
 
-            self.update_current_metrics(time, end_range=self.default_on_finish_time)
-
-        return ret
+        return await super()._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
 
 

@@ -24,7 +24,7 @@ bistate_modes = [
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
 USER_OVERRIDE_STATE_BACK_DURATION_S = 60
 
-ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push"], defaults=(None, None, 0.0, False, False))
+ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push", "degraded_type"], defaults=(None, None, 0.0, False, False, None))
 
 _LOGGER = logging.getLogger(__name__)
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
@@ -167,6 +167,75 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
     @abstractmethod
     async def execute_command_system(self, time: datetime, command: LoadCommand, state:str|None) -> bool | None:
         """ execute the command on the system """
+
+    async def _build_mode_constraint_items(self, time: datetime, bistate_mode: str,
+                                           do_push_constraint_after: datetime | None) -> list[ConstraintItemType]:
+        """Build constraint items for the current bistate mode.
+
+        Override in subclasses to handle custom modes (e.g. pool auto/winter).
+        """
+        constraints = []
+
+        if bistate_mode == self._bistate_mode_on:
+            end_schedule = self.get_proper_local_adapted_tomorrow(time)
+            start_schedule = do_push_constraint_after
+            ct = None
+            if start_schedule is None or start_schedule < end_schedule:
+                ct = ConstraintItemType(start_schedule=start_schedule,
+                                         end_schedule=end_schedule,
+                                         target_value=25*3600.0, # 25 hours, more than a day will force the load to be on
+                                         has_user_forced_constraint=True,
+                                         agenda_push=False)
+                constraints.append(ct)
+            _LOGGER.debug(
+                f"_build_mode_constraint_items: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}")
+        elif bistate_mode == "bistate_mode_default":
+            if self.default_on_duration is not None and  self.default_on_finish_time is not None:
+                end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
+                start_schedule = do_push_constraint_after
+                ct = None
+                if start_schedule is None or start_schedule < end_schedule:
+                    ct = ConstraintItemType(start_schedule=start_schedule,
+                                            end_schedule=end_schedule,
+                                            target_value=self.default_on_duration * 3600.0,
+                                            has_user_forced_constraint=False,
+                                            agenda_push=False)
+                    constraints.append(ct)
+                _LOGGER.debug(
+                    f"_build_mode_constraint_items: bistate bistate_mode_default for load {self.name} {ct}")
+        else:
+            events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
+
+            for ev in events:
+                start_schedule, end_schedule = ev
+                if start_schedule is not None and end_schedule is not None:
+
+                    if do_push_constraint_after is not None and end_schedule < do_push_constraint_after:
+                        continue
+
+                    if end_schedule <= time:
+                        continue
+
+                    # start_schedule = max(time, start_schedule) don't do that the constraint has to be stable! for comparison in the push constraints
+                    if do_push_constraint_after is not None:
+                        start_schedule = max(do_push_constraint_after, start_schedule)
+                    if start_schedule >= end_schedule:
+                        continue
+                    target_value = (end_schedule - start_schedule).total_seconds()
+                    if bistate_mode != "bistate_mode_exact_calendar":
+                        # bistate mode auto, start should be None or after the overridden time if any
+                        start_schedule = do_push_constraint_after
+
+                    ct = ConstraintItemType(start_schedule=start_schedule,
+                                            end_schedule=end_schedule,
+                                            target_value=target_value,
+                                            has_user_forced_constraint=False,
+                                            agenda_push=True)
+                    constraints.append(ct)
+                    _LOGGER.debug(
+                        f"_build_mode_constraint_items: bistate calendar {bistate_mode} for load {self.name} {ct}")
+
+        return constraints
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         """ check the load activity and set proper constraints """
@@ -344,67 +413,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")
         else:
 
-            constraints = []
-
-            if bistate_mode == self._bistate_mode_on:
-                end_schedule = self.get_proper_local_adapted_tomorrow(time)
-                start_schedule = do_push_constraint_after
-                ct = None
-                if start_schedule is None or start_schedule < end_schedule:
-                    ct = ConstraintItemType(start_schedule=start_schedule,
-                                             end_schedule=end_schedule,
-                                             target_value=25*3600.0, # 25 hours, more than a day will force the load to be on
-                                             has_user_forced_constraint=True,
-                                             agenda_push=False)
-                    constraints.append(ct)
-                _LOGGER.debug(
-                    f"check_load_activity_and_constraints: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}")
-            elif bistate_mode == "bistate_mode_default":
-                if self.default_on_duration is not None and  self.default_on_finish_time is not None:
-                    end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
-                    start_schedule = do_push_constraint_after
-                    ct = None
-                    if start_schedule is None or start_schedule < end_schedule:
-                        ct = ConstraintItemType(start_schedule=start_schedule,
-                                                end_schedule=end_schedule,
-                                                target_value=self.default_on_duration * 3600.0,
-                                                has_user_forced_constraint=False,
-                                                agenda_push=False)
-                        constraints.append(ct)
-                    _LOGGER.debug(
-                        f"check_load_activity_and_constraints: bistate bistate_mode_default for load {self.name} {ct}")
-            else:
-                events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
-
-                for ev in events:
-                    start_schedule, end_schedule = ev
-                    if start_schedule is not None and end_schedule is not None:
-
-                        if do_push_constraint_after is not None and end_schedule < do_push_constraint_after:
-                            continue
-
-                        if end_schedule <= time:
-                            continue
-
-                        # start_schedule = max(time, start_schedule) don't do that the constraint has to be stable! for comparison in the push constraints
-                        if do_push_constraint_after is not None:
-                            start_schedule = max(do_push_constraint_after, start_schedule)
-                        if start_schedule >= end_schedule:
-                            continue
-                        target_value = (end_schedule - start_schedule).total_seconds()
-                        if bistate_mode != "bistate_mode_exact_calendar":
-                            # bistate mode auto, start should be None or after the overridden time if any
-                            start_schedule = do_push_constraint_after
-
-                        ct = ConstraintItemType(start_schedule=start_schedule,
-                                                end_schedule=end_schedule,
-                                                target_value=target_value,
-                                                has_user_forced_constraint=False,
-                                                agenda_push=True)
-                        constraints.append(ct)
-                        _LOGGER.debug(
-                            f"check_load_activity_and_constraints: bistate calendar {bistate_mode} for load {self.name} {ct}")
-
+            constraints = await self._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
             if len(constraints) > 0:
 
@@ -415,9 +424,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if ct.has_user_forced_constraint is False and self.is_best_effort_only_load():
                         type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
 
+                    degraded_type = ct.degraded_type if ct.degraded_type is not None else CONSTRAINT_TYPE_FILLER_AUTO
+
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
                             type=type,
-                            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                            degraded_type=degraded_type,
                             time=time,
                             load=self,
                             from_user=ct.has_user_forced_constraint,
