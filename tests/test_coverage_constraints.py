@@ -5119,19 +5119,24 @@ def test_get_readable_date_string_today_branch():
 # ===========================================================================
 
 def test_adapt_commands_short_empty_and_switch_true_recovery():
-    """Cover lines 905, 933, 976.
+    """Cover lines 905, 933, 976, 984-985.
 
     Setup: load ON, commands [None, ON, None, ON, ON].
-    Slot 0 has duration 1000s (> 901 threshold so Phase 1 doesn't kill).
-    Slot 2 has duration 300s (< 600 CHANGE_ON_OFF_STATE_HYSTERESIS_S).
+    Slot 0 has duration 1000s (> hysteresis so Phase 1 doesn't kill).
+    Slot 2 has duration 300s (<= CHANGE_ON_OFF_STATE_HYSTERESIS_S).
 
-    - Line 905: empty_cmd [2,2] duration 300 < 600 -> candidate_to_removal = True
-    - Line 933: in removal loop, 300 < 600 and not last_slot -> pass
+    With num_max_on_off=20 (ample budget), do_for_num_switch_reduction is False,
+    so the first-slot empty [0,0] (dur 1000 > 600) is NOT a candidate, causing
+    line 918 to set protect_before = 1.
+
+    - Line 905: empty_cmd [2,2] duration 300 <= 600 -> candidate_to_removal = True
+    - Line 933: in removal loop, 300 <= 600 and not last_slot -> pass
     - Line 976: start_witch_switch stays True, quantity_to_recover != 0
+    - Lines 984-985: recovery loop, i=0 < protect_before=1 -> continue
     """
     now = datetime.now(tz=pytz.UTC)
     load = _FakeLoadForCoverage(
-        num_max_on_off=6, num_on_off=1,
+        num_max_on_off=20, num_on_off=0,
         current_command=LoadCommand(command="on", power_consign=1000),
     )
 
@@ -5145,6 +5150,9 @@ def test_adapt_commands_short_empty_and_switch_true_recovery():
     # Pattern: [None, ON, None, ON, ON] with load currently ON.
     # _num_command_state_change returns: num=4, empties=[[0,0],[2,2]],
     # start_witch_switch=True, start_cmd=ON.
+    # With num_allowed=20, do_for_num_switch_reduction=False (4 > 17 is False).
+    # Empty [0,0] dur=1000 > 600: NOT candidate -> protect_before = 1 (line 918).
+    # Empty [2,2] dur=300 <= 600: candidate -> removed by Phase 2.
     out_commands: list[LoadCommand | None] = [
         None,
         LoadCommand(command="on", power_consign=1000),
@@ -5153,7 +5161,7 @@ def test_adapt_commands_short_empty_and_switch_true_recovery():
         LoadCommand(command="on", power_consign=1000),
     ]
     out_power = [0.0, 1000.0, 0.0, 1000.0, 1000.0]
-    # Slot 0: 1000s (> 901 so Phase 1 won't kill), slot 2: 300s (< 600 for hysteresis)
+    # Slot 0: 1000s (> 600 so Phase 1 won't kill), slot 2: 300s (<= 600)
     durations = [1000.0, 900.0, 300.0, 900.0, 900.0]
 
     result = constraint._adapt_commands(out_commands, out_power, durations, 0.0, 0, 4)
