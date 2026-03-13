@@ -907,6 +907,9 @@ class QSHome(QSDynamicGroup):
                 # here we should wait for each load to be idle, nothing will happen before all the loads are idle
                 # or ... 3 minutes
                 self._switch_to_off_grid_launched = time
+            else:
+                # back to on-grid: clear the off-grid gate so update_loads resumes immediately
+                self._switch_to_off_grid_launched = None
 
             # force solve
             self.force_next_solve()
@@ -1874,7 +1877,7 @@ class QSHome(QSDynamicGroup):
 
             if load.qs_enable_device is False:
                 pass
-            else:
+            elif self._switch_to_off_grid_launched is None: #check for re-entrance
                 if await load.do_run_check_load_activity_and_constraints(time):
                     self.force_next_solve()
 
@@ -2555,7 +2558,8 @@ class QSHome(QSDynamicGroup):
             do_force_solve = False
             for load in all_loads:
 
-                if load.is_load_active(time) is False:
+                # check _switch_to_off_grid_launched for re_entrance
+                if load.is_load_active(time) is False or self._switch_to_off_grid_launched is not None:
                     continue
 
                 try:
@@ -2578,7 +2582,7 @@ class QSHome(QSDynamicGroup):
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-        if do_force_solve and (active_loads or self.battery is not None):
+        if do_force_solve and (active_loads or self.battery is not None) and self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
 
             _LOGGER.info("DO SOLVE")
 
@@ -2610,7 +2614,7 @@ class QSHome(QSDynamicGroup):
 
             self._commands, self._battery_commands = solver.solve(is_off_grid=self.is_off_grid())
 
-        if self.battery and self._battery_commands is not None:
+        if self.battery and self._battery_commands is not None and self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
 
             while len(self._battery_commands) > 0 and self._battery_commands[0][0] < time + self._update_step_s:
                 cmd_time, command = self._battery_commands.pop(0)
@@ -2623,38 +2627,40 @@ class QSHome(QSDynamicGroup):
 
         delta_amps = [0, 0, 0]
 
-        for load, commands in self._commands:
+        if self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
 
-            prev_cmd = load.current_command
-            if prev_cmd is None:
-                prev_cmd = CMD_IDLE
+            for load, commands in self._commands:
 
-            while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
+                prev_cmd = load.current_command
+                if prev_cmd is None:
+                    prev_cmd = CMD_IDLE
 
-                cmd_time, command = commands.pop(0)
+                while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
 
-                new_amps = load.get_phase_amps_from_power_for_budgeting(command.power_consign)
-                current_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
-                delta_load_amps = diff_amps(new_amps, current_amps)
+                    cmd_time, command = commands.pop(0)
 
-                if command.power_consign == 0 or load.father_device.is_delta_current_acceptable(delta_amps=add_amps(delta_amps, delta_load_amps), time=time):
-                    # _LOGGER.info(f"---> Set load command {load.name} {command}")
-                    await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
-                    # only launch one at a time for a given load
-                    delta_amps = add_amps(delta_amps, delta_load_amps)
-                    break
-                else:
-                    _LOGGER.warning(f"update_loads: ---> FORBID Set load command {load.name} {command} delta_amps {delta_amps} delta_load_amps {delta_load_amps}")
+                    new_amps = load.get_phase_amps_from_power_for_budgeting(command.power_consign)
+                    current_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
+                    delta_load_amps = diff_amps(new_amps, current_amps)
 
-                prev_cmd = command
+                    if command.power_consign == 0 or load.father_device.is_delta_current_acceptable(delta_amps=add_amps(delta_amps, delta_load_amps), time=time):
+                        # _LOGGER.info(f"---> Set load command {load.name} {command}")
+                        await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
+                        # only launch one at a time for a given load
+                        delta_amps = add_amps(delta_amps, delta_load_amps)
+                        break
+                    else:
+                        _LOGGER.warning(f"update_loads: ---> FORBID Set load command {load.name} {command} delta_amps {delta_amps} delta_load_amps {delta_load_amps}")
 
-        for load in all_loads:
-            if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
-                # set them back to a kind of "idle" state, many times will be "OFF" CMD
-                # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
-                await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads or not active")
+                    prev_cmd = command
 
-            await load.do_probe_state_change(time)
+            for load in all_loads:
+                if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
+                    # set them back to a kind of "idle" state, many times will be "OFF" CMD
+                    # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
+                    await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads or not active")
+
+                await load.do_probe_state_change(time)
 
 
     async def force_update_all(self, time: datetime = None):

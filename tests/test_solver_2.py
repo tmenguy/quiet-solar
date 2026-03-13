@@ -2102,3 +2102,67 @@ def test_solve_off_grid_truly_empty_battery_lines789_790():
     output_cmds, bcmd = solver.solve(is_off_grid=True, with_self_test=False)
     assert output_cmds is not None
 
+
+def test_surplus_off_grid_best_effort_skip():
+    """Cover solver.py line 1021: off-grid surplus skips best-effort loads."""
+    dt = datetime(year=2024, month=6, day=1, hour=8, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
+    start_time = dt
+    end_time = dt + timedelta(hours=8)
+    tariffs = 0.15 / 1000.0
+
+    best_effort_load = TestLoad(name="best_effort_pool")
+    best_effort_load.qs_best_effort_green_only = True
+
+    normal_load = TestLoad(name="normal_heater")
+
+    battery = Battery(name="test_battery")
+    battery.capacity = 10000
+    battery.max_charging_power = 4000
+    battery.max_discharging_power = 4000
+    battery._current_charge_value = 9500
+    battery.min_charge_SOC_percent = 10.0
+    battery.max_charge_SOC_percent = 100.0
+
+    be_steps = [copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 15)]
+    be_constraint = MultiStepsPowerLoadConstraint(
+        time=dt, load=best_effort_load,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=None,
+        initial_value=None,
+        target_value=10000,
+        power_steps=be_steps,
+        support_auto=True,
+    )
+    best_effort_load.push_live_constraint(dt, be_constraint)
+
+    normal_constraint = TimeBasedSimplePowerLoadConstraint(
+        time=dt, load=normal_load,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        end_of_constraint=dt + timedelta(hours=6),
+        initial_value=0,
+        target_value=3 * 3600,
+        power=3000,
+    )
+    normal_load.push_live_constraint(dt, normal_constraint)
+
+    pv_forecast = []
+    for h in range(8):
+        hour = dt + timedelta(hours=h)
+        solar_power = 10000 if h <= 5 else 5000
+        pv_forecast.append((hour, solar_power))
+
+    ua_forecast = [(dt + timedelta(hours=h), 500) for h in range(8)]
+
+    solver = PeriodSolver(
+        start_time=start_time, end_time=end_time,
+        tariffs=tariffs,
+        actionable_loads=[best_effort_load, normal_load],
+        battery=battery,
+        pv_forecast=pv_forecast,
+        unavoidable_consumption_forecast=ua_forecast,
+    )
+
+    load_commands, battery_commands = solver.solve(is_off_grid=True, with_self_test=True)
+    assert load_commands is not None
+    assert battery_commands is not None
+

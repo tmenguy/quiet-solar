@@ -5,6 +5,7 @@ Uses real objects from tests/factories.py - no mocks for constraint logic.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -55,6 +56,7 @@ class _FakeLoadForCoverage:
         father_device=None,
         off_grid: bool = False,
         time_sensitive: bool = False,
+        last_state_change_time: datetime | None = None,
     ):
         self.name = name
         self.efficiency_factor = efficiency_factor
@@ -64,6 +66,7 @@ class _FakeLoadForCoverage:
         self.father_device = father_device
         self._off_grid = off_grid
         self._time_sensitive = time_sensitive
+        self.last_state_change_time = last_state_change_time
 
     def get_update_value_callback_for_constraint_class(self, _constraint):
         return None
@@ -87,6 +90,16 @@ class _FakeLoadForCoverage:
     def get_phase_amps_from_power_for_piloted_budgeting(self, power):
         a = power / 230.0
         return [a, a, a]
+
+    def get_first_unlocked_slot_index(self, time_slots, change_state_hysteresis_s=None):
+        from custom_components.quiet_solar.home_model.load import CHANGE_ON_OFF_STATE_HYSTERESIS_S
+        if change_state_hysteresis_s is None:
+            change_state_hysteresis_s = CHANGE_ON_OFF_STATE_HYSTERESIS_S
+        if self.num_max_on_off is None or self.last_state_change_time is None:
+            return 0
+        unlock_time = self.last_state_change_time + timedelta(seconds=change_state_hysteresis_s)
+        idx = bisect_left(time_slots, unlock_time)
+        return min(idx, len(time_slots))
 
 
 # ===========================================================================
@@ -4007,3 +4020,277 @@ class TestConsignIdxSymmetry:
             idx = c._get_higher_consign_idx_for_power(cmds, power, strict=True)
             if idx < len(cmds):
                 assert cmds[idx].power_consign > power
+
+
+# ===========================================================================
+# Forced-slot-commands coverage (minimum state hold time)
+# ===========================================================================
+
+def test_forced_slot_asap_off_skip():
+    """Cover line 1479: ASAP path skips forced OFF slots."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(minutes=50)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=copy_command(CMD_IDLE),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=500.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    )
+    n_slots = 4
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -1500.0, dtype=np.float64)
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is None, "Forced OFF slot 0 should remain None in ASAP path"
+    assert any(c is not None for c in out_commands[1:]), "Later slots should have commands"
+
+
+def test_forced_slot_sequential_ordering_on_hold():
+    """Cover line 1576: ON+hold triggers sequential ordering for green pass."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=LoadCommand(command="on", power_consign=500),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -800.0, dtype=np.float64)
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is not None, "Forced ON slot 0 should have a command"
+
+
+def test_forced_slot_j_steering_force_on():
+    """Cover lines 1669-1671: j < 0 but forced ON overrides to j=0."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=LoadCommand(command="on", power_consign=500),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    # Slot 0: high positive = no solar -> j would be -1 normally
+    # Later slots: surplus solar -> commands allocated there
+    power_avail = np.full(n_slots, -800.0, dtype=np.float64)
+    power_avail[0] = 2000.0
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is not None, "Slot 0 should be ON despite no available power (forced ON j-steering)"
+
+
+def test_forced_slot_j_steering_force_off():
+    """Cover lines 1672-1673: j >= 0 but forced OFF overrides to j=-1."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=copy_command(CMD_IDLE),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=2000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    power_avail = np.full(n_slots, -1500.0, dtype=np.float64)
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is None, "Slot 0 should be OFF (forced) despite available solar"
+    assert any(c is not None for c in out_commands[1:]), "Later slots should have commands"
+
+
+def test_forced_slot_price_optimizer_skip():
+    """Cover line 1728: price optimizer skips forced slots."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=copy_command(CMD_IDLE),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=5000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    # Some surplus solar so price optimizer has slots to try to upgrade
+    power_avail = np.full(n_slots, -800.0, dtype=np.float64)
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.full(n_slots, 0.10, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is None, "Forced OFF slot should not be upgraded by price optimizer"
+
+
+def test_forced_slot_price_filling_skip():
+    """Cover line 1862: price-based filling skips forced slots."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=copy_command(CMD_IDLE),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=8000.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+    n_slots = 8
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    # Positive available = no solar, forces price-based filling path
+    power_avail = np.full(n_slots, 500.0, dtype=np.float64)
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    prices = np.array([0.05, 0.05, 0.10, 0.10, 0.15, 0.15, 0.20, 0.20], dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        time_slots=time_slots,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        do_use_available_power_only=False,
+    )
+    _, _, out_commands, _, _, _, _, _, _ = result
+    assert out_commands[0] is None, "Forced OFF slot should not be filled by price-based filling"
+
+
+def test_forced_slot_adapt_repartition_skip():
+    """Cover line 1147: adapt_repartition skips forced slots."""
+    now = datetime.now(tz=pytz.UTC)
+    end = now + timedelta(hours=2)
+    load = _FakeLoadForCoverage(
+        num_max_on_off=4,
+        current_command=LoadCommand(command="on", power_consign=1000),
+        last_state_change_time=now - timedelta(seconds=60),
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now, load=load,
+        power_steps=[LoadCommand(command="on", power_consign=500),
+                     LoadCommand(command="on", power_consign=1000)],
+        support_auto=False,
+        end_of_constraint=end,
+        target_value=2000.0,
+        current_value=1000.0,
+        type=CONSTRAINT_TYPE_FILLER,
+    )
+    n_slots = 4
+    time_slots = [now + timedelta(minutes=15 * i) for i in range(n_slots + 1)]
+    durations = np.full(n_slots, SOLVER_STEP_S, dtype=np.float64)
+    existing_commands = [
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+        LoadCommand(command="on", power_consign=1000),
+    ]
+
+    _, _, changed, _, out_commands, out_delta = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=n_slots - 1,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=now,
+        time_slots=time_slots,
+    )
+    assert out_delta[0] == 0.0, "Forced slot 0 should not be modified"

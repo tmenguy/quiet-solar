@@ -1524,6 +1524,103 @@ class TestUseSavedExtraDeviceInfo:
         load.use_saved_extra_device_info(stored)
         assert load.num_on_off == 4
 
+    def test_restore_last_state_change_time_present(self):
+        """Line 390: restore last_state_change_time from stored ISO string."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        stored = {
+            "num_on_off": 2,
+            "last_state_change_time": "2024-06-01T10:00:00+00:00",
+        }
+        load.use_saved_extra_device_info(stored)
+        assert load.last_state_change_time == datetime.fromisoformat("2024-06-01T10:00:00+00:00")
+
+    def test_restore_last_state_change_time_absent(self):
+        """Line 392: last_state_change_time not in stored -> None."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        stored = {"num_on_off": 0}
+        load.use_saved_extra_device_info(stored)
+        assert load.last_state_change_time is None
+
+    def test_restore_last_check_update_present(self):
+        """Line 396: restore last_check_update from stored ISO string."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        stored = {
+            "num_on_off": 0,
+            "last_check_update": "2024-06-01T12:30:00+00:00",
+        }
+        load.use_saved_extra_device_info(stored)
+        assert load.last_check_update == datetime.fromisoformat("2024-06-01T12:30:00+00:00")
+
+    def test_restore_last_check_update_absent(self):
+        """Line 398: last_check_update not in stored -> None."""
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        stored = {"num_on_off": 0}
+        load.use_saved_extra_device_info(stored)
+        assert load.last_check_update is None
+
+
+# =========================================================================
+# Coverage: get_first_unlocked_slot_index (lines 412-414)
+# =========================================================================
+
+
+class TestGetFirstUnlockedSlotIndex:
+    """Test get_first_unlocked_slot_index with various conditions."""
+
+    def test_returns_0_when_num_max_on_off_is_none(self):
+        """Line 411: num_max_on_off is None -> return 0."""
+        now = datetime.now(tz=pytz.UTC)
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = None
+        time_slots = [now + timedelta(minutes=15 * i) for i in range(5)]
+        assert load.get_first_unlocked_slot_index(time_slots) == 0
+
+    def test_returns_0_when_last_state_change_time_is_none(self):
+        """Line 411: last_state_change_time is None -> return 0."""
+        now = datetime.now(tz=pytz.UTC)
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 4
+        load.last_state_change_time = None
+        time_slots = [now + timedelta(minutes=15 * i) for i in range(5)]
+        assert load.get_first_unlocked_slot_index(time_slots) == 0
+
+    def test_returns_correct_index_within_hold_period(self):
+        """Lines 412-414: unlock_time falls between slots -> correct bisect."""
+        now = datetime.now(tz=pytz.UTC)
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 4
+        # Changed 5 min ago; hysteresis is 10 min -> unlock at now+5min
+        load.last_state_change_time = now - timedelta(seconds=300)
+        time_slots = [now + timedelta(minutes=15 * i) for i in range(5)]
+        idx = load.get_first_unlocked_slot_index(time_slots)
+        # unlock_time = now + 300s = now + 5min, first slot >= that is slot 1 (at now+15min)
+        assert idx == 1
+
+    def test_returns_len_when_all_slots_locked(self):
+        """Lines 412-414: all time_slots before unlock_time -> len(time_slots)."""
+        now = datetime.now(tz=pytz.UTC)
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 4
+        load.last_state_change_time = now
+        # All slots within 10 min hysteresis
+        time_slots = [now + timedelta(seconds=60 * i) for i in range(5)]
+        idx = load.get_first_unlocked_slot_index(time_slots)
+        assert idx == len(time_slots)
+
+    def test_returns_0_when_hold_period_elapsed(self):
+        """Lines 412-414: last_state_change_time long ago -> 0."""
+        now = datetime.now(tz=pytz.UTC)
+        load = MinimalTestLoad(name="TestLoad")
+        load.num_max_on_off = 4
+        load.last_state_change_time = now - timedelta(hours=1)
+        time_slots = [now + timedelta(minutes=15 * i) for i in range(5)]
+        idx = load.get_first_unlocked_slot_index(time_slots)
+        assert idx == 0
+
 
 # =========================================================================
 # Coverage: lines 469-470 - launch_command stacking
