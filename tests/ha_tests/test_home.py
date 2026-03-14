@@ -1540,6 +1540,7 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     person_selected = HashablePerson(
         name="Person Selected",
         preferred_car=None,
+        authorized_cars=["Car Selected"],
         update_person_forecast=MagicMock(return_value=(None, None)),
         get_authorized_cars=MagicMock(return_value=[]),
         notify_of_forecast_if_needed=AsyncMock(),
@@ -1547,6 +1548,7 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     person_preferred = HashablePerson(
         name="Person Preferred",
         preferred_car="Car Preferred",
+        authorized_cars=["Car Preferred"],
         update_person_forecast=MagicMock(return_value=(None, None)),
         get_authorized_cars=MagicMock(return_value=[]),
         notify_of_forecast_if_needed=AsyncMock(),
@@ -1555,6 +1557,7 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     person_authorized = HashablePerson(
         name="Person Authorized",
         preferred_car=None,
+        authorized_cars=["Car Authorized"],
         update_person_forecast=MagicMock(return_value=(None, None)),
         get_authorized_cars=MagicMock(return_value=[car_authorized]),
         notify_of_forecast_if_needed=AsyncMock(),
@@ -2056,3 +2059,97 @@ async def test_update_loads_constraints_resets_daily_on_day_change(
     await home.update_loads_constraints(time_now)
 
     assert load.num_on_off == 0
+
+
+async def test_home_allocation_clears_stale_unauthorized_manual_assignment(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Allocation clears a manual car->person assignment when person is not authorized (home.py:2222-2228)."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    class HashablePerson(SimpleNamespace):
+        __hash__ = object.__hash__
+
+    # Person exists but is NOT authorized for the car
+    person_stale = HashablePerson(
+        name="Stale Person",
+        preferred_car=None,
+        authorized_cars=[],  # car not in authorized list
+        update_person_forecast=MagicMock(return_value=(None, None)),
+        get_authorized_cars=MagicMock(return_value=[]),
+        notify_of_forecast_if_needed=AsyncMock(),
+    )
+
+    car_stale = SimpleNamespace(
+        name="Stale Car",
+        current_forecasted_person=None,
+        user_selected_person_name_for_car="Stale Person",
+        car_is_invited=False,
+        charger=_FakeCharger(),
+        ha_entities={},
+    )
+
+    home._cars = [car_stale]
+    home._persons = [person_stale]
+
+    result = await home.compute_and_set_best_persons_cars_allocations(
+        time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
+        force_update=True,
+        do_notify=True,
+    )
+
+    # The stale manual assignment should have been cleared
+    assert car_stale.user_selected_person_name_for_car is None
+
+
+async def test_home_allocation_rejects_unauthorized_hungarian_assignment(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Allocation rejects unauthorized pair from Hungarian algorithm when raw_energy==0.0 (home.py:2314-2319)."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    class HashablePerson(SimpleNamespace):
+        __hash__ = object.__hash__
+
+    person = HashablePerson(
+        name="Person X",
+        preferred_car=None,
+        authorized_cars=["Car X"],
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 15, 18, 0, tzinfo=pytz.UTC), 50.0)),
+        get_authorized_cars=MagicMock(return_value=[]),  # returns no authorized cars -> raw_energy stays 0.0
+        notify_of_forecast_if_needed=AsyncMock(),
+    )
+
+    car = SimpleNamespace(
+        name="Car X",
+        current_forecasted_person=None,
+        user_selected_person_name_for_car=None,
+        car_is_invited=False,
+        charger=_FakeCharger(),
+        ha_entities={},
+    )
+
+    home._cars = [car]
+    home._persons = [person]
+
+    # raw_energy will be all zeros (person.get_authorized_cars returns [])
+    # hungarian_algorithm will still return {0: 0} assigning person to car
+    # The code should reject it because raw_energy[0, 0] == 0.0
+    result = await home.compute_and_set_best_persons_cars_allocations(
+        time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
+        force_update=True,
+        do_notify=True,
+    )
+
+    # Car should NOT have the person assigned
+    assert car.current_forecasted_person is None

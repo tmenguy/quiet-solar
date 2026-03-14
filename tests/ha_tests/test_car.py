@@ -955,12 +955,13 @@ async def test_car_set_user_person_for_car_updates_other_cars(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
-    mock_person = MagicMock()
-    mock_person.name = "Person A"
-    data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
-
     car1_device = hass.data[DOMAIN].get(car1_entry.entry_id)
     car2_device = hass.data[DOMAIN].get(car2_entry.entry_id)
+
+    mock_person = MagicMock()
+    mock_person.name = "Person A"
+    mock_person.authorized_cars = [car1_device.name, car2_device.name]
+    data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
     car2_device.user_selected_person_name_for_car = "Person A"
 
     await car1_device.set_user_person_for_car("Person A")

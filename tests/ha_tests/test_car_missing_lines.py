@@ -48,6 +48,8 @@ from custom_components.quiet_solar.const import (
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_PREFERRED_CAR,
 )
 from custom_components.quiet_solar.ha_model.car import (
     MIN_CHARGE_POWER_W,
@@ -924,6 +926,7 @@ async def test_set_user_person_triggers_charger_update(
 
     mock_person = MagicMock()
     mock_person.name = "NewPerson"
+    mock_person.authorized_cars = [car.name]
     data_handler.home._persons = [mock_person]
     data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
 
@@ -970,3 +973,124 @@ async def test_get_max_charge_limit_float_state(
     # int("85.5") raises ValueError → exception caught, returns None
     result = car.get_max_charge_limit()
     assert result is None
+
+
+# ===========================================================================
+# Authorization check coverage: _is_person_authorized_for_car, _fix_user_selected_person_from_forecast,
+# device_post_home_init unauthorized branch, set_user_person_for_car unauthorized branch
+# ===========================================================================
+
+
+async def test_is_person_authorized_for_car_no_home(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """_is_person_authorized_for_car returns True when home is None (line 275)."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="auth_nohome")
+    car.home = None
+    assert car._is_person_authorized_for_car("AnyPerson") is True
+
+
+async def test_fix_user_selected_person_from_forecast_unauthorized(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """_fix_user_selected_person_from_forecast skips assignment for unauthorized person (line 288)."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="fix_unauth")
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+
+    mock_person = MagicMock()
+    mock_person.name = "UnauthorizedPerson"
+    mock_person.authorized_cars = []  # car not authorized
+    data_handler.home._persons = [mock_person]
+
+    car.current_forecasted_person = mock_person
+    car.user_selected_person_name_for_car = None
+
+    car._fix_user_selected_person_from_forecast()
+    assert car.user_selected_person_name_for_car is None
+
+
+async def test_device_post_home_init_clears_unauthorized_person(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """device_post_home_init clears user_selected_person when person is not authorized (lines 256-261)."""
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_unauth_init",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_unauth_init",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create a person that does NOT authorize this car
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_PERSON_CONFIG, "name": "Unauthorized Person", CONF_PERSON_AUTHORIZED_CARS: [], CONF_PERSON_PREFERRED_CAR: ""},
+        entry_id="person_unauth_init",
+        title="person: Unauthorized Person",
+        unique_id="quiet_solar_person_unauth_init",
+    )
+    person_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(person_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    car_device.use_saved_extra_device_info(
+        {
+            "user_selected_person_name_for_car": "Unauthorized Person",
+            "current_forecasted_person_name_from_boot": "Unauthorized Person",
+        }
+    )
+
+    car_device.device_post_home_init(datetime.now(tz=pytz.UTC))
+
+    # Person exists but is not authorized for this car -> cleared
+    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.current_forecasted_person is None
+
+
+async def test_set_user_person_for_car_rejects_unauthorized(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """set_user_person_for_car rejects an unauthorized person (lines 347-351)."""
+    from .const import MOCK_CAR_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_CAR_CONFIG, "name": "Auth Test Car"},
+        entry_id="car_set_unauth",
+        title="car: Auth Test Car",
+        unique_id="quiet_solar_car_set_unauth",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car = hass.data[DOMAIN].get(car_entry.entry_id)
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
+
+    mock_person = MagicMock()
+    mock_person.name = "BadPerson"
+    mock_person.authorized_cars = []  # car not in authorized list
+    data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
+
+    car.user_selected_person_name_for_car = None
+    await car.set_user_person_for_car("BadPerson")
+
+    # Should be rejected, value unchanged
+    assert car.user_selected_person_name_for_car is None

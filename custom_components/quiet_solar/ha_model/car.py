@@ -275,7 +275,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True  # can't validate without home context
         person = self.home.get_person_by_name(person_name)
         if person is None:
-            return False
+            return True  # person not registered in home, can't validate
         return self.name in person.authorized_cars
 
     def _fix_user_selected_person_from_forecast(self):
