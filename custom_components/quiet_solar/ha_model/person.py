@@ -405,9 +405,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                                                     MultiStepsPowerLoadConstraintChargePercent):
                                 ct_target_soc = usable_ct.target_value
 
-                            # the user should be fixed ... for whom the car is charging, no need to recompute assignements
+                            # fixate the person on the car once notified, so the allocation doesn't flip
                             if person_ct is not None or force_ct is not None or user_ct is not None:
-                                predicted_car._user_selected_person_name_for_car = self.name
+                                predicted_car._fix_user_selected_person_from_forecast()
 
                             car_curr_str = ""
                             if current_soc is not None:
