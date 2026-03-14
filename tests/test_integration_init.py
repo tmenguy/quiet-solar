@@ -159,7 +159,8 @@ async def test_async_unload_entry_no_device(hass: HomeAssistant, mock_config_ent
     """Test unload entry when device doesn't exist."""
     result = await async_unload_entry(hass, mock_config_entry)
 
-    assert result is False
+    # No device to unload — should succeed (return True) to avoid FAILED_UNLOAD state
+    assert result is True
 
 
 @pytest.mark.asyncio
@@ -407,13 +408,21 @@ async def test_remove_device_charger_no_detach_when_no_car(hass: HomeAssistant):
     mock_charger.detach_car.assert_not_called()
 
 
+def _set_entry_state(entry, state):
+    """Force-set entry state bypassing the read-only guard."""
+    object.__setattr__(entry, "state", state)
+
+
 @pytest.mark.asyncio
 async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
     """Test reloading all quiet solar entries."""
+    from homeassistant.config_entries import ConfigEntryState
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
     entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.LOADED)
 
     hass.data.setdefault(DOMAIN, {})["entry1"] = MagicMock()
     hass.data[DOMAIN]["entry2"] = MagicMock()
@@ -432,10 +441,13 @@ async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_async_reload_quiet_solar_except_one(hass: HomeAssistant):
     """Test reloading entries except specified one."""
+    from homeassistant.config_entries import ConfigEntryState
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
     entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.LOADED)
 
     with patch.object(
         hass.config_entries, "async_unload", new_callable=AsyncMock
@@ -451,10 +463,13 @@ async def test_async_reload_quiet_solar_except_one(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
     """Test that reload continues even if individual entries fail."""
+    from homeassistant.config_entries import ConfigEntryState
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
     entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.LOADED)
 
     with patch.object(
         hass.config_entries,
@@ -466,6 +481,31 @@ async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
         await async_reload_quiet_solar(hass)
 
         assert mock_unload.call_count == 2
+        assert mock_reload.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_reload_quiet_solar_skips_non_loaded_entries(hass: HomeAssistant):
+    """Test that reload skips entries not in LOADED state (e.g. FAILED_UNLOAD)."""
+    from homeassistant.config_entries import ConfigEntryState
+    entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
+    entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
+    entry1.add_to_hass(hass)
+    entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.FAILED_UNLOAD)
+
+    with patch.object(
+        hass.config_entries, "async_unload", new_callable=AsyncMock
+    ) as mock_unload, patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        await async_reload_quiet_solar(hass)
+
+        # Only entry1 should be unloaded; entry2 is skipped due to FAILED_UNLOAD state
+        assert mock_unload.call_count == 1
+        mock_unload.assert_called_with("entry1")
+        # Both should still be reloaded
         assert mock_reload.call_count == 2
 
 

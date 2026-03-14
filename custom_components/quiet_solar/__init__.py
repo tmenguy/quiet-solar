@@ -44,10 +44,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None):
+    from homeassistant.config_entries import ConfigEntryState
     # Then reload the entire integration by getting all entries and reloading them
     entries = hass.config_entries.async_entries(DOMAIN)
     for entry in entries:
         if except_for_entry_id is not None and except_for_entry_id == entry.entry_id:
+            continue
+        # Only attempt unload on entries that are currently loaded
+        if entry.state is not ConfigEntryState.LOADED:
+            _LOGGER.debug(
+                "Skipping unload of entry %s (%s) — state is %s",
+                entry.entry_id, entry.title, entry.state,
+            )
             continue
         try:
             await hass.config_entries.async_unload(entry.entry_id)
@@ -190,20 +198,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     data_handler = hass.data[DOMAIN].get(DATA_HANDLER)
-    if data_handler and entry.entry_id in hass.data[DOMAIN]:
-        device = hass.data[DOMAIN][entry.entry_id]
-        platforms = device.get_platforms()
+    if not data_handler or entry.entry_id not in hass.data[DOMAIN]:
+        # Nothing to unload — treat as success so HA doesn't mark FAILED_UNLOAD
+        return True
 
-        if device.home:
-            device.home.remove_device(device)
+    device = hass.data[DOMAIN][entry.entry_id]
+    platforms = device.get_platforms()
 
-        if platforms:
-            unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
-            if unload_ok:
-                hass.data[DOMAIN].pop(entry.entry_id)
-                return True
-    
-    return False
+    if device.home:
+        device.home.remove_device(device)
+
+    # if not platforms: # can't happen
+        # No platforms to unload — just clean up and succeed
+    #    hass.data[DOMAIN].pop(entry.entry_id)
+    #    return True
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id)
+    return unload_ok
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the config entry, unless flagged as a data-only save."""
