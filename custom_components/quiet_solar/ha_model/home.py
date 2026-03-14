@@ -2218,6 +2218,14 @@ class QSHome(QSDynamicGroup):
 
                 p_per = self.get_person_by_name(car.user_selected_person_name_for_car)
                 if p_per is not None:
+                    if car.name not in p_per.authorized_cars:
+                        _LOGGER.warning(
+                            "get_best_persons_cars_allocations: clearing stale manual assignment "
+                            "Car:%s -> Person:%s (not authorized)",
+                            car.name, p_per.name,
+                        )
+                        car.user_selected_person_name_for_car = None
+                        continue
                     self._last_persons_car_allocation[car.name] = p_per
                     covered_persons.add(p_per.name)
                     covered_cars.add(car.name)
@@ -2260,6 +2268,19 @@ class QSHome(QSDynamicGroup):
             else:
                 raw_energy, E_max = self._build_raw_energy_matrix(p_s, c_s, c_name_to_index, time)
 
+                # Log the raw energy matrix for diagnosis
+                person_names = [p[0].name for p in p_s]
+                car_names = [c.name for c in c_s]
+                for pi, pname in enumerate(person_names):
+                    row_str = ", ".join(
+                        f"{car_names[ci]}={raw_energy[pi, ci]:.1f}"
+                        for ci in range(len(car_names))
+                    )
+                    _LOGGER.debug(
+                        "get_best_persons_cars_allocations: raw_energy[%s] = [%s]",
+                        pname, row_str,
+                    )
+
                 costs_energy = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_KWH)
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
@@ -2288,6 +2309,14 @@ class QSHome(QSDynamicGroup):
 
                 result_energy = {}
                 for person_index, car_index in assignment.items():
+                    # raw_energy == 0.0 means unauthorized pair — skip it
+                    if raw_energy[person_index, car_index] == 0.0:
+                        _LOGGER.warning(
+                            "get_best_persons_cars_allocations: REJECTING unauthorized assignment "
+                            "Car:%s -> Person:%s",
+                            c_s[car_index].name, p_s[person_index][0].name,
+                        )
+                        continue
                     car = c_s[car_index]
                     person, p_leave_time, p_mileage = p_s[person_index]
                     result_energy[car.name] = person
