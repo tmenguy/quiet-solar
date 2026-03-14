@@ -989,11 +989,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
 
                 if need_dampening_redisplay:
-                    #self.hass.config_entries.async_update_entry(
-                    #    self.config_entry, data=user_input, options=self.config_entry.options
-                    #)
-                    # or more simply:
-                    self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
+                    # Merge with existing data to preserve runtime-saved measured values
+                    merged = dict(self.config_entry.data)
+                    merged.update(user_input)
+                    self.hass.config_entries.async_update_entry(self.config_entry, data=merged)
                     return await self.async_step_car({"force_dampening": True})
 
                 r =  await self.async_entry_next(user_input, TYPE)
@@ -1360,7 +1359,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         user_input.get(CONF_CLIMATE_HVAC_MODE_OFF) is None or
                         user_input.get(CONF_CLIMATE_HVAC_MODE_ON) is None):
                     # we need to force to come back to reselect the hvac modes
-                    self.config_entry.data = user_input
+                    # Merge with existing data to preserve runtime-saved measured values
+                    merged = dict(self.config_entry.data)
+                    merged.update(user_input)
+                    self.config_entry.data = merged
                     return await self.async_step_climate({"force_climate": True})
 
 
@@ -1569,8 +1571,12 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
 
     async def _async_entry_next(self, data):
         """Handle the next step based on user input."""
+        # Merge with existing data to preserve runtime-saved measured values
+        # (e.g. measured_power, measured_charge_X, measured_car_custom_power_charge_values)
+        merged = dict(self.config_entry.data)
+        merged.update(data)
         self.hass.config_entries.async_update_entry(
-            self.config_entry, data=data, options=self.config_entry.options, title=self.get_entry_title(data)
+            self.config_entry, data=merged, options=self.config_entry.options, title=self.get_entry_title(merged)
         )
 
         # always reset everything to be sure all is well set
