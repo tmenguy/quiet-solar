@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytz
 
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.car import QSCar
@@ -56,9 +57,10 @@ class _FakeCar:
         deficit = (mileage - self._remaining_km) * KWH_PER_KM
         return (False, 40.0, 80.0, deficit)
 
-    # Bind the real set_user_person_for_car from QSCar so we exercise the
-    # actual override + reallocation logic (not a simplified version).
+    # Bind real methods from QSCar so we exercise the actual logic.
     set_user_person_for_car = QSCar.set_user_person_for_car
+    _is_person_authorized_for_car = QSCar._is_person_authorized_for_car
+    _fix_user_selected_person_from_forecast = QSCar._fix_user_selected_person_from_forecast
 
 
 class _FakePerson:
@@ -246,7 +248,9 @@ class TestPersonSwapNotification:
 
         This exercises lines 2350-2352 (new person on a swapped car).
         """
-        leave = datetime.now(timezone.utc).replace(hour=7, minute=30) + timedelta(days=1)
+        time_now = datetime(2026, 3, 15, 23, 00, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+        #leave = datetime.now(timezone.utc).replace(hour=7, minute=30) + timedelta(days=1)
 
         car_a = _FakeCar("CarA", remaining_km=80, has_charger=False)
         car_b = _FakeCar("CarB", remaining_km=40, has_charger=False)
@@ -265,7 +269,7 @@ class TestPersonSwapNotification:
         home = _FakeHome([car_a, car_b], [person_x, person_y])
 
         # Step 1: PersonX needs 70km -> only CarA covers -> CarA->PersonX, CarB->PersonY
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
         assert _person_name(car_a) == "PersonX"
         assert _person_name(car_b) == "PersonY"
 
@@ -282,7 +286,7 @@ class TestPersonSwapNotification:
 
         _FakePerson.notify_of_forecast_if_needed = _capture_notify
         try:
-            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
         finally:
             _FakePerson.notify_of_forecast_if_needed = orig_notify
 

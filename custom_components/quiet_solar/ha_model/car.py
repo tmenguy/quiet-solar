@@ -252,6 +252,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if person is None:
                         self.user_selected_person_name_for_car = None
                         self.current_forecasted_person = None
+                    elif not self._is_person_authorized_for_car(self.user_selected_person_name_for_car):
+                        _LOGGER.warning(
+                            "device_post_home_init: Car:%s clearing stale Person:%s (not authorized)",
+                            self.name, self.user_selected_person_name_for_car,
+                        )
+                        self.user_selected_person_name_for_car = None
+                        self.current_forecasted_person = None
                     else:
                         self.current_forecasted_person = person
         # Try to bootstrap efficiency from history at startup (best-effort, non-blocking)
@@ -261,6 +268,27 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
         except Exception as e:
             _LOGGER.error("device_post_home_init: exception for boostrap efficiency device: %s %s", self.name, e, exc_info=True, stack_info=True)
+
+    def _is_person_authorized_for_car(self, person_name: str) -> bool:
+        """Check if a person is authorized to drive this car."""
+        if self.home is None:
+            return True  # can't validate without home context
+        person = self.home.get_person_by_name(person_name)
+        if person is None:
+            return False
+        return self.name in person.authorized_cars
+
+    def _fix_user_selected_person_from_forecast(self):
+        """Set user_selected_person_name_for_car from current_forecasted_person, with authorization check."""
+        if self.current_forecasted_person is None:
+            return
+        if self._is_person_authorized_for_car(self.current_forecasted_person.name):
+            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+        else:
+            _LOGGER.warning(
+                "Car:%s skipping auto-assignment of Person:%s (not authorized)",
+                self.name, self.current_forecasted_person.name,
+            )
 
     def get_car_person_readable_forecast_mileage(self):
 
@@ -315,6 +343,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if p_per is None:
                 _LOGGER.error(f"set_user_person_for_car: WRONG PERSON OPTION PASSED {option}" )
                 option = FORCE_CAR_NO_PERSON_ATTACHED
+            elif not self._is_person_authorized_for_car(option):
+                _LOGGER.warning(
+                    "set_user_person_for_car: Car:%s Person:%s not authorized, ignoring",
+                    self.name, option,
+                )
+                return
 
         new_value = option
 
@@ -527,8 +561,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 
         # fix the person name ... for whom the car is charging
-        if self.current_forecasted_person is not None:
-            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+        self._fix_user_selected_person_from_forecast()
 
         if self.charger is None:
             return False
@@ -1442,8 +1475,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
 
         # fix the person name ... for whom the car is charging
-        if self.current_forecasted_person is not None:
-            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+        self._fix_user_selected_person_from_forecast()
 
         self.do_next_charge_time = end_charge
         # start_time = end_charge
@@ -1468,8 +1500,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def user_add_default_charge(self):
 
         # fix the person name ... for whom the car is charging
-        if self.current_forecasted_person is not None:
-            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+        self._fix_user_selected_person_from_forecast()
 
         if self.can_add_default_charge():
 
@@ -1493,8 +1524,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.can_force_a_charge_now():
 
             # fix the person name ... for whom the car is charging
-            if self.current_forecasted_person is not None:
-                self.user_selected_person_name_for_car = self.current_forecasted_person.name
+            self._fix_user_selected_person_from_forecast()
 
             self.do_force_next_charge = True
             self.do_next_charge_time = None
@@ -1548,8 +1578,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def user_set_next_charge_target(self, value: int | float | str):
 
         # fix the person name ... for whom the car is charging
-        if self.current_forecasted_person is not None:
-            self.user_selected_person_name_for_car = self.current_forecasted_person.name
+        self._fix_user_selected_person_from_forecast()
 
         do_update = await self.convert_auto_constraint_to_manual_if_needed()
 
