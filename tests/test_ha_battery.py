@@ -1,50 +1,48 @@
 """Tests for QSBattery class in ha_model/battery.py."""
+
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
 from datetime import datetime
-import pytz
+from unittest.mock import MagicMock, patch
 
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
-    SERVICE_TURN_ON,
-    SERVICE_TURN_OFF,
     ATTR_ENTITY_ID,
     CONF_NAME,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
+    CONF_BATTERY_CHARGE_FROM_GRID_SWITCH,
+    CONF_BATTERY_CHARGE_PERCENT_SENSOR,
+    CONF_BATTERY_IS_DC_COUPLED,
+    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
+    CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
+    CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+    DATA_HANDLER,
+    DOMAIN,
+)
 from custom_components.quiet_solar.ha_model.battery import QSBattery
 from custom_components.quiet_solar.home_model.commands import (
-    LoadCommand,
-    CMD_ON,
-    CMD_IDLE,
     CMD_AUTO_GREEN_ONLY,
+    CMD_FORCE_CHARGE,
     CMD_GREEN_CHARGE_AND_DISCHARGE,
     CMD_GREEN_CHARGE_ONLY,
-    CMD_FORCE_CHARGE,
+    CMD_IDLE,
+    CMD_ON,
+    LoadCommand,
     copy_command,
 )
-
-from custom_components.quiet_solar.const import (
-    CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
-    CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
-    CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
-    CONF_BATTERY_CHARGE_PERCENT_SENSOR,
-    CONF_BATTERY_CHARGE_FROM_GRID_SWITCH,
-    CONF_BATTERY_IS_DC_COUPLED,
-    CONF_BATTERY_CAPACITY,
-    CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
-    CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
-    DOMAIN,
-    DATA_HANDLER,
-)
-
 from tests.factories import create_minimal_home_model
 
 
@@ -386,9 +384,9 @@ class TestQSBatteryExecuteCommand:
     @pytest.mark.asyncio
     async def test_execute_command_success(self, hass, battery):
         """Test successful command execution."""
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
         time = datetime.now(pytz.UTC)
 
         result = await battery.execute_command(time, CMD_ON)
@@ -396,33 +394,25 @@ class TestQSBatteryExecuteCommand:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_execute_command_green_charge_only(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_execute_command_green_charge_only(self, hass, battery, recorded_service_calls):
         """Test execute_command with green charge only."""
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
         time = datetime.now(pytz.UTC)
 
         result = await battery.execute_command(time, CMD_GREEN_CHARGE_ONLY)
 
         assert result is False
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
-        assert any(
-            c[2].get("value") == 0
-            for c in calls
-            if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
-        )
+        assert any(c[2].get("value") == 0 for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge")
 
     @pytest.mark.asyncio
-    async def test_execute_command_force_charge(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_execute_command_force_charge(self, hass, battery, recorded_service_calls):
         """Test execute_command with force charge."""
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
         time = datetime.now(pytz.UTC)
         command = copy_command(CMD_FORCE_CHARGE, power_consign=3000)
 
@@ -464,9 +454,9 @@ class TestQSBatteryProbeIfCommandSet:
     @pytest.mark.asyncio
     async def test_probe_command_matches(self, hass, battery):
         """Test probe_if_command_set when command matches current state."""
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
         time = datetime.now(pytz.UTC)
 
         result = await battery.probe_if_command_set(time, CMD_ON)
@@ -476,9 +466,9 @@ class TestQSBatteryProbeIfCommandSet:
     @pytest.mark.asyncio
     async def test_probe_command_does_not_match(self, hass, battery):
         """Test probe_if_command_set when command doesn't match."""
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
         time = datetime.now(pytz.UTC)
 
         result = await battery.probe_if_command_set(time, CMD_GREEN_CHARGE_ONLY)
@@ -488,9 +478,9 @@ class TestQSBatteryProbeIfCommandSet:
     @pytest.mark.asyncio
     async def test_probe_switch_unavailable(self, hass, battery):
         """Test probe_if_command_set when switch is unavailable."""
-        await _async_set_state(hass,"switch.charge_from_grid", STATE_UNAVAILABLE)
-        await _async_set_state(hass,"number.max_discharge", "5000")
-        await _async_set_state(hass,"number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", STATE_UNAVAILABLE)
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
         time = datetime.now(pytz.UTC)
 
         result = await battery.probe_if_command_set(time, CMD_ON)
@@ -500,9 +490,9 @@ class TestQSBatteryProbeIfCommandSet:
     @pytest.mark.asyncio
     async def test_probe_discharge_number_unavailable(self, hass, battery):
         """Test probe_if_command_set when discharge number is unavailable."""
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
-        await _async_set_state(hass,"number.max_discharge", STATE_UNKNOWN)
-        await _async_set_state(hass,"number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", STATE_UNKNOWN)
+        await _async_set_state(hass, "number.max_charge", "5000")
         time = datetime.now(pytz.UTC)
 
         result = await battery.probe_if_command_set(time, CMD_ON)
@@ -534,11 +524,9 @@ class TestQSBatteryGridCharging:
         )
 
     @pytest.mark.asyncio
-    async def test_set_charge_from_grid_enable(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_charge_from_grid_enable(self, hass, battery, recorded_service_calls):
         """Test enabling grid charging."""
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
         battery.is_charge_from_grid_current = False
 
         await battery.set_charge_from_grid(True)
@@ -548,11 +536,9 @@ class TestQSBatteryGridCharging:
         assert calls[0][0] == Platform.SWITCH
 
     @pytest.mark.asyncio
-    async def test_set_charge_from_grid_disable(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_charge_from_grid_disable(self, hass, battery, recorded_service_calls):
         """Test disabling grid charging."""
-        await _async_set_state(hass,"switch.charge_from_grid", "on")
+        await _async_set_state(hass, "switch.charge_from_grid", "on")
         battery.is_charge_from_grid_current = True
 
         await battery.set_charge_from_grid(False)
@@ -581,7 +567,7 @@ class TestQSBatteryGridCharging:
     @pytest.mark.asyncio
     async def test_is_charge_from_grid_enabled(self, hass, battery):
         """Test is_charge_from_grid returns True when switch is on."""
-        await _async_set_state(hass,"switch.charge_from_grid", "on")
+        await _async_set_state(hass, "switch.charge_from_grid", "on")
 
         result = await battery.is_charge_from_grid()
 
@@ -590,7 +576,7 @@ class TestQSBatteryGridCharging:
     @pytest.mark.asyncio
     async def test_is_charge_from_grid_disabled(self, hass, battery):
         """Test is_charge_from_grid returns False when switch is off."""
-        await _async_set_state(hass,"switch.charge_from_grid", "off")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
 
         result = await battery.is_charge_from_grid()
 
@@ -599,7 +585,7 @@ class TestQSBatteryGridCharging:
     @pytest.mark.asyncio
     async def test_is_charge_from_grid_unavailable(self, hass, battery):
         """Test is_charge_from_grid returns None when switch is unavailable."""
-        await _async_set_state(hass,"switch.charge_from_grid", STATE_UNAVAILABLE)
+        await _async_set_state(hass, "switch.charge_from_grid", STATE_UNAVAILABLE)
 
         result = await battery.is_charge_from_grid()
 
@@ -644,7 +630,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_discharging_power_valid(self, hass, battery):
         """Test get_max_discharging_power with valid numeric state."""
-        await _async_set_state(hass,"number.max_discharge", "3000")
+        await _async_set_state(hass, "number.max_discharge", "3000")
 
         result = battery.get_max_discharging_power()
 
@@ -653,7 +639,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_discharging_power_unavailable(self, hass, battery):
         """Test get_max_discharging_power when unavailable."""
-        await _async_set_state(hass,"number.max_discharge", STATE_UNAVAILABLE)
+        await _async_set_state(hass, "number.max_discharge", STATE_UNAVAILABLE)
 
         result = battery.get_max_discharging_power()
 
@@ -662,7 +648,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_discharging_power_unknown(self, hass, battery):
         """Test get_max_discharging_power when unknown."""
-        await _async_set_state(hass,"number.max_discharge", STATE_UNKNOWN)
+        await _async_set_state(hass, "number.max_discharge", STATE_UNKNOWN)
 
         result = battery.get_max_discharging_power()
 
@@ -671,7 +657,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_discharging_power_invalid_string(self, hass, battery):
         """Test get_max_discharging_power with invalid string."""
-        await _async_set_state(hass,"number.max_discharge", "not_a_number")
+        await _async_set_state(hass, "number.max_discharge", "not_a_number")
 
         result = battery.get_max_discharging_power()
 
@@ -688,7 +674,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_charging_power_valid(self, hass, battery):
         """Test get_max_charging_power with valid numeric state."""
-        await _async_set_state(hass,"number.max_charge", "4000")
+        await _async_set_state(hass, "number.max_charge", "4000")
 
         result = battery.get_max_charging_power()
 
@@ -697,7 +683,7 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_charging_power_unavailable(self, hass, battery):
         """Test get_max_charging_power when unavailable."""
-        await _async_set_state(hass,"number.max_charge", STATE_UNAVAILABLE)
+        await _async_set_state(hass, "number.max_charge", STATE_UNAVAILABLE)
 
         result = battery.get_max_charging_power()
 
@@ -706,18 +692,16 @@ class TestQSBatteryPowerManagement:
     @pytest.mark.asyncio
     async def test_get_max_charging_power_invalid(self, hass, battery):
         """Test get_max_charging_power with invalid value."""
-        await _async_set_state(hass,"number.max_charge", "invalid")
+        await _async_set_state(hass, "number.max_charge", "invalid")
 
         result = battery.get_max_charging_power()
 
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_set_max_discharging_power(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_discharging_power(self, hass, battery, recorded_service_calls):
         """Test setting max discharging power."""
-        await _async_set_state(hass,"number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_discharge", "5000")
 
         await battery.set_max_discharging_power(3000)
 
@@ -726,22 +710,18 @@ class TestQSBatteryPowerManagement:
         assert calls[0][2]["value"] == 3000
 
     @pytest.mark.asyncio
-    async def test_set_max_discharging_power_no_change(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_discharging_power_no_change(self, hass, battery, recorded_service_calls):
         """Test set_max_discharging_power when value already set."""
-        await _async_set_state(hass,"number.max_discharge", "3000")
+        await _async_set_state(hass, "number.max_discharge", "3000")
 
         await battery.set_max_discharging_power(3000)
 
         assert len(recorded_service_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_set_max_discharging_power_clamped_max(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_discharging_power_clamped_max(self, hass, battery, recorded_service_calls):
         """Test set_max_discharging_power clamped to max."""
-        await _async_set_state(hass,"number.max_discharge", "0")
+        await _async_set_state(hass, "number.max_discharge", "0")
 
         await battery.set_max_discharging_power(10000)
 
@@ -750,11 +730,9 @@ class TestQSBatteryPowerManagement:
         assert calls[0][2]["value"] == 5000
 
     @pytest.mark.asyncio
-    async def test_set_max_charging_power(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_charging_power(self, hass, battery, recorded_service_calls):
         """Test setting max charging power."""
-        await _async_set_state(hass,"number.max_charge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
 
         await battery.set_max_charging_power(4000)
 
@@ -862,9 +840,7 @@ class TestQSBatteryDCCoupled:
         battery_hass_data,
     ):
         """Test DC coupled with inverter clamp."""
-        battery_home.get_current_over_clamp_production_power = MagicMock(
-            return_value=500.0
-        )
+        battery_home.get_current_over_clamp_production_power = MagicMock(return_value=500.0)
         battery = QSBattery(
             hass=hass,
             config_entry=battery_config_entry,
@@ -935,7 +911,7 @@ class TestQSBatteryDischarge:
     async def test_battery_can_discharge_true(self, hass, battery):
         """Test battery_can_discharge returns True when discharge possible."""
         battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=50.0)
-        await _async_set_state(hass,"number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_discharge", "5000")
 
         result = battery.battery_can_discharge()
 
@@ -945,7 +921,7 @@ class TestQSBatteryDischarge:
     async def test_battery_can_discharge_false_zero_power(self, hass, battery):
         """Test battery_can_discharge returns False when max discharge is 0."""
         battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=50.0)
-        await _async_set_state(hass,"number.max_discharge", "0")
+        await _async_set_state(hass, "number.max_discharge", "0")
 
         result = battery.battery_can_discharge()
 
@@ -955,19 +931,17 @@ class TestQSBatteryDischarge:
     async def test_battery_can_discharge_empty(self, hass, battery):
         """Test battery_can_discharge when battery is empty."""
         battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=0.0)
-        await _async_set_state(hass,"number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_discharge", "5000")
 
         result = battery.battery_can_discharge()
 
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_battery_get_current_possible_max_discharge_power(
-        self, hass, battery
-    ):
+    async def test_battery_get_current_possible_max_discharge_power(self, hass, battery):
         """Test battery_get_current_possible_max_discharge_power."""
         battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=50.0)
-        await _async_set_state(hass,"number.max_discharge", "3000")
+        await _async_set_state(hass, "number.max_discharge", "3000")
 
         result = battery.battery_get_current_possible_max_discharge_power()
 
@@ -1061,9 +1035,7 @@ class TestQSBatterySetMaxChargingPowerEdge:
         )
 
     @pytest.mark.asyncio
-    async def test_set_max_charging_power_no_op_same_value(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_charging_power_no_op_same_value(self, hass, battery, recorded_service_calls):
         """Line 231/241: set_max_charging_power is a no-op when value equals current."""
         await _async_set_state(hass, "number.max_charge", "4000")
 
@@ -1072,9 +1044,7 @@ class TestQSBatterySetMaxChargingPowerEdge:
         assert len(recorded_service_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_set_max_charging_power_no_arg_returns_early(
-        self, hass, battery, recorded_service_calls
-    ):
+    async def test_set_max_charging_power_no_arg_returns_early(self, hass, battery, recorded_service_calls):
         """Line 231: set_max_charging_power() with no argument (power=None) returns early."""
         await _async_set_state(hass, "number.max_charge", "4000")
 
@@ -1083,9 +1053,7 @@ class TestQSBatterySetMaxChargingPowerEdge:
         assert len(recorded_service_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_set_max_charging_power_exception_caught(
-        self, hass, battery
-    ):
+    async def test_set_max_charging_power_exception_caught(self, hass, battery):
         """Lines 253-254: set_max_charging_power catches exception from service call."""
         from homeassistant.core import ServiceRegistry
 

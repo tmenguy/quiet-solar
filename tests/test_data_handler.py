@@ -1,23 +1,21 @@
 """Tests for QSDataHandler."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
-
-from homeassistant.const import Platform, CONF_NAME
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.const import DOMAIN, DEVICE_TYPE, CONF_HOME_VOLTAGE, CONF_IS_3P
+from custom_components.quiet_solar.const import DEVICE_TYPE, DOMAIN
 from custom_components.quiet_solar.data_handler import QSDataHandler
-from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+from custom_components.quiet_solar.ha_model.home import QSHome
 from tests.factories import create_minimal_home_model
-from tests.test_helpers import create_mock_device
 from tests.ha_tests.const import MOCK_CHARGER_CONFIG
 
 
@@ -56,7 +54,7 @@ async def test_async_add_entry_device_before_home(data_handler, mock_charger_con
     """Test adding device entry before home caches it."""
     # MOCK_CHARGER_CONFIG already includes DEVICE_TYPE
     await data_handler.async_add_entry(mock_charger_config_entry)
-    
+
     # Device should be cached, not added yet
     assert data_handler.home is None
     assert mock_charger_config_entry in data_handler._cached_config_entries
@@ -68,10 +66,10 @@ async def test_async_update_loads_delegates_to_home(data_handler):
     mock_home = create_minimal_home_model()
     mock_home.update_loads = AsyncMock()
     data_handler.home = mock_home
-    
+
     test_time = datetime.now(pytz.UTC)
     await data_handler.async_update_loads(test_time)
-    
+
     mock_home.update_loads.assert_called_once_with(test_time)
 
 
@@ -81,10 +79,10 @@ async def test_async_update_all_states_delegates_to_home(data_handler):
     mock_home = create_minimal_home_model()
     mock_home.update_all_states = AsyncMock()
     data_handler.home = mock_home
-    
+
     test_time = datetime.now(pytz.UTC)
     await data_handler.async_update_all_states(test_time)
-    
+
     mock_home.update_all_states.assert_called_once_with(test_time)
 
 
@@ -94,10 +92,10 @@ async def test_async_update_forecast_probers_delegates_to_home(data_handler):
     mock_home = create_minimal_home_model()
     mock_home.update_forecast_probers = AsyncMock()
     data_handler.home = mock_home
-    
+
     test_time = datetime.now(pytz.UTC)
     await data_handler.async_update_forecast_probers(test_time)
-    
+
     mock_home.update_forecast_probers.assert_called_once_with(test_time)
 
 
@@ -106,7 +104,7 @@ async def test_data_handler_stores_entry_in_hass_data(data_handler, mock_charger
     """Test that devices are stored in hass.data."""
     # Just verify caching works (won't create device without home)
     await data_handler.async_add_entry(mock_charger_config_entry)
-    
+
     assert mock_charger_config_entry in data_handler._cached_config_entries
 
 
@@ -150,13 +148,16 @@ async def test_async_add_entry_rehydrates_cached_entries(hass: HomeAssistant):
     cached_device.config_entry = cached_entry
     cached_device.config_entry_initialized = False
 
-    with patch(
-        "custom_components.quiet_solar.data_handler.create_device_from_type",
-        side_effect=[home_device, cached_device],
-    ), patch.object(
-        hass.config_entries,
-        "async_forward_entry_setups",
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "custom_components.quiet_solar.data_handler.create_device_from_type",
+            side_effect=[home_device, cached_device],
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new_callable=AsyncMock,
+        ),
     ):
         await data_handler.async_add_entry(home_entry)
 

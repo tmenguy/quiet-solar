@@ -2,70 +2,43 @@
 Integration-style tests for charger.py focusing on complex methods.
 Tests for check_load_activity_and_constraints, ensure_correct_state, and related methods.
 """
+
 import unittest
-from unittest.mock import MagicMock, Mock, patch, AsyncMock, PropertyMock
-from datetime import datetime, timedelta, time as dt_time
-import pytz
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
-import asyncio
+import pytz
 
-from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
-
-from custom_components.quiet_solar.ha_model.home import QSHome
-from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
+from custom_components.quiet_solar.const import (
+    CHARGER_NO_CAR_CONNECTED,
+    CONF_CHARGER_CONSUMPTION,
+    CONF_CHARGER_MAX_CHARGE,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
+    CONF_CHARGER_MIN_CHARGE,
+    CONF_CHARGER_PLUGGED,
+    CONF_CHARGER_STATUS_SENSOR,
+    CONF_IS_3P,
+    CONF_MONO_PHASE,
+    DATA_HANDLER,
+    DOMAIN,
+)
 from custom_components.quiet_solar.ha_model.charger import (
-    QSChargerWallbox,
-    QSChargerOCPP,
+    CHARGER_BOOT_TIME_DATA_EXPIRATION_S,
+    QSChargerGeneric,
     QSChargerGroup,
     QSChargerStatus,
     QSStateCmd,
-    QSChargerStates,
-    QSChargerGeneric,
-    CHARGER_CHECK_STATE_WINDOW_S,
-    CHARGER_ADAPTATION_WINDOW_S,
-    CHARGER_BOOT_TIME_DATA_EXPIRATION_S,
 )
-from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_GREEN_ONLY,
-    CMD_AUTO_GREEN_CAP,
-    CMD_AUTO_GREEN_CONSIGN,
-    CMD_AUTO_PRICE,
-    CMD_ON,
-    CMD_OFF,
     LoadCommand,
-    copy_command
-)
-from custom_components.quiet_solar.const import (
-    CONF_DYN_GROUP_MAX_PHASE_AMPS,
-    CONF_MONO_PHASE,
-    CONF_CHARGER_DEVICE_WALLBOX,
-    CONF_CHARGER_DEVICE_OCPP,
-    CONF_CHARGER_MIN_CHARGE,
-    CONF_CHARGER_MAX_CHARGE,
-    CONF_CHARGER_CONSUMPTION,
-    CONF_CHARGER_STATUS_SENSOR,
-    CONF_CHARGER_PLUGGED,
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
-    CONF_CHARGER_PAUSE_RESUME_SWITCH,
-    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
-    CONF_CHARGER_REBOOT_BUTTON,
-    CONF_IS_3P,
-    DOMAIN,
-    DATA_HANDLER,
-    CHARGER_NO_CAR_CONNECTED,
-    CAR_CHARGE_TYPE_NOT_CHARGING,
-    CAR_CHARGE_TYPE_NOT_PLUGGED,
-    FORCE_CAR_NO_CHARGER_CONNECTED,
-    CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGER_MAX_CHARGE,
-    CONF_CAR_BATTERY_CAPACITY,
+    copy_command,
 )
 from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
-    DATETIME_MAX_UTC
 )
 from tests.factories import create_minimal_home_model
 
@@ -76,11 +49,7 @@ def create_mock_hass():
     hass.states = MagicMock()
     hass.states.get = MagicMock(return_value=None)
     hass.services = MagicMock()
-    hass.data = {
-        DOMAIN: {
-            DATA_HANDLER: MagicMock()
-        }
-    }
+    hass.data = {DOMAIN: {DATA_HANDLER: MagicMock()}}
     return hass
 
 
@@ -121,7 +90,7 @@ def create_charger_generic(hass, home, name="TestCharger", **extra_config):
     }
     config.update(extra_config)
 
-    with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+    with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
         charger = QSChargerGeneric(**config)
 
     return charger
@@ -153,11 +122,13 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         mock_car.user_selected_person_name_for_car = "TestPerson"
         self.charger.car = mock_car
 
-        with patch.object(self.charger, 'is_not_plugged', return_value=True), \
-             patch.object(self.charger, 'is_plugged', return_value=False), \
-             patch.object(self.charger, 'is_charger_unavailable', return_value=False), \
-             patch.object(self.charger, 'probe_for_possible_needed_reboot', return_value=False), \
-             patch.object(self.charger, 'set_charging_num_phases', new_callable=AsyncMock) as mock_set_phases:
+        with (
+            patch.object(self.charger, "is_not_plugged", return_value=True),
+            patch.object(self.charger, "is_plugged", return_value=False),
+            patch.object(self.charger, "is_charger_unavailable", return_value=False),
+            patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False),
+            patch.object(self.charger, "set_charging_num_phases", new_callable=AsyncMock) as mock_set_phases,
+        ):
             mock_set_phases.return_value = False
 
             result = await self.charger.check_load_activity_and_constraints(time)
@@ -170,8 +141,10 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         time = datetime.now(pytz.UTC)
         self.charger._boot_time = time - timedelta(seconds=5)  # Just booted
 
-        with patch.object(self.charger, 'is_charger_unavailable', return_value=False), \
-             patch.object(self.charger, 'probe_for_possible_needed_reboot', return_value=False):
+        with (
+            patch.object(self.charger, "is_charger_unavailable", return_value=False),
+            patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False),
+        ):
             result = await self.charger.check_load_activity_and_constraints(time)
 
         # Should return False during boot window
@@ -184,11 +157,13 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         # Set up the boot time to be expired
         self.charger._boot_time = time - timedelta(seconds=CHARGER_BOOT_TIME_DATA_EXPIRATION_S + 100)
 
-        with patch.object(self.charger, 'is_not_plugged', return_value=False), \
-             patch.object(self.charger, 'is_plugged', return_value=True), \
-             patch.object(self.charger, 'is_charger_unavailable', return_value=False), \
-             patch.object(self.charger, 'probe_for_possible_needed_reboot', return_value=False), \
-             patch.object(self.charger, 'get_best_car', return_value=None):
+        with (
+            patch.object(self.charger, "is_not_plugged", return_value=False),
+            patch.object(self.charger, "is_plugged", return_value=True),
+            patch.object(self.charger, "is_charger_unavailable", return_value=False),
+            patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False),
+            patch.object(self.charger, "get_best_car", return_value=None),
+        ):
             result = await self.charger.check_load_activity_and_constraints(time)
 
         self.assertTrue(result)
@@ -225,14 +200,16 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         )
         self.charger._constraints = [percent_constraint]
 
-        with patch.object(self.charger, "is_not_plugged", return_value=False), \
-             patch.object(self.charger, "is_plugged", return_value=True), \
-             patch.object(self.charger, "is_charger_unavailable", return_value=False), \
-             patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False), \
-             patch.object(self.charger, "get_best_car", return_value=mock_car), \
-             patch.object(self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"), \
-             patch.object(self.charger, "set_live_constraints"), \
-             patch.object(self.charger, "push_live_constraint", return_value=False):
+        with (
+            patch.object(self.charger, "is_not_plugged", return_value=False),
+            patch.object(self.charger, "is_plugged", return_value=True),
+            patch.object(self.charger, "is_charger_unavailable", return_value=False),
+            patch.object(self.charger, "probe_for_possible_needed_reboot", return_value=False),
+            patch.object(self.charger, "get_best_car", return_value=mock_car),
+            patch.object(self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"),
+            patch.object(self.charger, "set_live_constraints"),
+            patch.object(self.charger, "push_live_constraint", return_value=False),
+        ):
             await self.charger.check_load_activity_and_constraints(time)
 
         expected_initial = 0.2 * car_battery_capacity
@@ -316,14 +293,16 @@ class TestUpdatePowerSteps(unittest.TestCase):
         mock_car.get_charge_power_per_phase_A.return_value = (
             [0, 0, 0, 0, 0, 0, 1380, 1610, 1840, 2070, 2300, 2530, 2760, 2990, 3220, 3450, 3680] + [3680] * 20,
             6,
-            16
+            16,
         )
         self.charger.car = mock_car
 
-        with patch.object(self.charger, 'can_do_3_to_1_phase_switch', return_value=False), \
-             patch.object(type(self.charger), 'physical_3p', new_callable=PropertyMock) as mock_3p, \
-             patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
-             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
+        with (
+            patch.object(self.charger, "can_do_3_to_1_phase_switch", return_value=False),
+            patch.object(type(self.charger), "physical_3p", new_callable=PropertyMock) as mock_3p,
+            patch.object(type(self.charger), "min_charge", new_callable=PropertyMock) as mock_min,
+            patch.object(type(self.charger), "max_charge", new_callable=PropertyMock) as mock_max,
+        ):
             mock_3p.return_value = True
             mock_min.return_value = 6
             mock_max.return_value = 16
@@ -375,7 +354,7 @@ class TestGetBestCar(unittest.TestCase):
         self.charger.user_attached_car_name = None
         self.home._cars = []
 
-        with patch.object(self.charger, 'is_plugged', return_value=False):
+        with patch.object(self.charger, "is_plugged", return_value=False):
             result = self.charger.get_best_car(time)
 
         self.assertEqual(result, mock_boot_car)
@@ -396,13 +375,10 @@ class TestIsCarCharged(unittest.TestCase):
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=True)
 
         current_charge = 50.0  # Only at 50%
-        target_charge = 80.0   # Target is 80%
+        target_charge = 80.0  # Target is 80%
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # Car stopped asking = charged, result should be target value
@@ -417,10 +393,7 @@ class TestIsCarCharged(unittest.TestCase):
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         self.assertTrue(result)
@@ -434,10 +407,7 @@ class TestIsCarCharged(unittest.TestCase):
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # Current > target means constraint is met
@@ -451,10 +421,7 @@ class TestIsCarCharged(unittest.TestCase):
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # Current < target, not charged yet
@@ -466,13 +433,10 @@ class TestIsCarCharged(unittest.TestCase):
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
 
         current_charge = 100.0  # Sensor says 100%
-        target_charge = 100.0   # Target is 100%
+        target_charge = 100.0  # Target is 100%
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # For 100% target, car must stop asking current to be considered charged
@@ -484,14 +448,11 @@ class TestIsCarCharged(unittest.TestCase):
         """Test that 100% target is met when car stops asking."""
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=True)
 
-        current_charge = 98.0   # Sensor says 98%
-        target_charge = 100.0   # Target is 100%
+        current_charge = 98.0  # Sensor says 98%
+        target_charge = 100.0  # Target is 100%
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # Car stopped asking = fully charged
@@ -506,10 +467,7 @@ class TestIsCarCharged(unittest.TestCase):
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=True
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
         # With None current, can't determine if charged
@@ -521,7 +479,7 @@ class TestIsCarCharged(unittest.TestCase):
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
 
         # Tolerance is typically small (e.g., 2%)
-        current_charge = 79.0   # Just 1% below target
+        current_charge = 79.0  # Just 1% below target
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
@@ -529,7 +487,7 @@ class TestIsCarCharged(unittest.TestCase):
             current_charge=current_charge,
             target_charge=target_charge,
             is_target_percent=True,
-            accept_bigger_tolerance=True
+            accept_bigger_tolerance=True,
         )
 
         # Within tolerance, should be considered charged
@@ -540,7 +498,7 @@ class TestIsCarCharged(unittest.TestCase):
         """Test is_car_charged with accept_bigger_tolerance when outside tolerance."""
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
 
-        current_charge = 70.0   # 10% below target
+        current_charge = 70.0  # 10% below target
         target_charge = 80.0
 
         result, final_value = self.charger.is_car_charged(
@@ -548,7 +506,7 @@ class TestIsCarCharged(unittest.TestCase):
             current_charge=current_charge,
             target_charge=target_charge,
             is_target_percent=True,
-            accept_bigger_tolerance=True
+            accept_bigger_tolerance=True,
         )
 
         # Outside tolerance, not charged
@@ -558,14 +516,11 @@ class TestIsCarCharged(unittest.TestCase):
         """Test is_car_charged in Wh mode (not percent)."""
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=False)
 
-        current_charge = 50000.0   # 50 kWh
-        target_charge = 50000.0    # Target 50 kWh
+        current_charge = 50000.0  # 50 kWh
+        target_charge = 50000.0  # Target 50 kWh
 
         result, final_value = self.charger.is_car_charged(
-            self.time,
-            current_charge=current_charge,
-            target_charge=target_charge,
-            is_target_percent=False
+            self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=False
         )
 
         self.assertTrue(result)
@@ -676,7 +631,7 @@ class TestChargerGroupDynHandle(unittest.IsolatedAsyncioTestCase):
         """Test dyn_handle with no actionable chargers."""
         time = datetime.now(pytz.UTC)
 
-        with patch.object(self.charger_group, 'ensure_correct_state', new_callable=AsyncMock) as mock_ensure:
+        with patch.object(self.charger_group, "ensure_correct_state", new_callable=AsyncMock) as mock_ensure:
             mock_ensure.return_value = ([], None)
 
             await self.charger_group.dyn_handle(time)
@@ -695,8 +650,10 @@ class TestChargerGroupDynHandle(unittest.IsolatedAsyncioTestCase):
 
         self.charger_group.remaining_budget_to_apply = [mock_cs]
 
-        with patch.object(self.charger_group, 'ensure_correct_state', new_callable=AsyncMock) as mock_ensure, \
-             patch.object(self.charger_group, 'apply_budgets', new_callable=AsyncMock) as mock_apply:
+        with (
+            patch.object(self.charger_group, "ensure_correct_state", new_callable=AsyncMock) as mock_ensure,
+            patch.object(self.charger_group, "apply_budgets", new_callable=AsyncMock) as mock_apply,
+        ):
             mock_ensure.return_value = ([mock_cs], time - timedelta(seconds=60))
 
             await self.charger_group.dyn_handle(time)
@@ -794,6 +751,7 @@ class TestQSChargerStatusConsignValues(unittest.TestCase):
         self.status.current_active_phase_number = 3
 
         mock_car = MagicMock()
+
         # Return different power steps for 1p and 3p
         def mock_get_charge_power(is_3p):
             if is_3p:
@@ -804,10 +762,12 @@ class TestQSChargerStatusConsignValues(unittest.TestCase):
         mock_car.get_charge_power_per_phase_A = MagicMock(side_effect=mock_get_charge_power)
         self.charger.car = mock_car
 
-        with patch.object(self.charger, 'can_do_3_to_1_phase_switch', return_value=True), \
-             patch.object(self.charger, '_get_amps_from_power_steps', return_value=16), \
-             patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
-             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
+        with (
+            patch.object(self.charger, "can_do_3_to_1_phase_switch", return_value=True),
+            patch.object(self.charger, "_get_amps_from_power_steps", return_value=16),
+            patch.object(type(self.charger), "min_charge", new_callable=PropertyMock) as mock_min,
+            patch.object(type(self.charger), "max_charge", new_callable=PropertyMock) as mock_max,
+        ):
             mock_min.return_value = 6
             mock_max.return_value = 32
 
@@ -869,5 +829,5 @@ class TestQSChargerGenericPlatforms(unittest.TestCase):
         self.assertIn(self.charger._default_generic_car, attached)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

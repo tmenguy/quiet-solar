@@ -1,24 +1,22 @@
 """Additional tests for quiet_solar home.py to improve coverage to 91%+."""
 
-import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pytest
 import pytz
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
     DATA_HANDLER,
+    DOMAIN,
 )
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -547,7 +545,6 @@ async def test_home_internal_lists(
 #            2886-2954) - via unit-level tests on QSSolarHistoryVals
 # =============================================================================
 
-import numpy as np
 from unittest.mock import PropertyMock
 
 
@@ -660,9 +657,7 @@ async def test_home_non_controlled_consumption_sensor_getter(
     home = data_handler.home
 
     time = datetime.now(tz=pytz.UTC)
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test_consumption", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test_consumption", time=time)
     assert result is None or isinstance(result, tuple)
 
 
@@ -671,7 +666,7 @@ async def test_home_power_derivation_with_solar_and_battery(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test power derivation with solar and battery configured."""
-    from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
+    from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -702,9 +697,7 @@ async def test_home_power_derivation_with_solar_and_battery(
     home = data_handler.home
 
     time = datetime.now(tz=pytz.UTC)
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test_consumption", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test_consumption", time=time)
     assert result is None or isinstance(result, tuple)
 
 
@@ -733,9 +726,7 @@ async def test_home_power_with_controlled_loads_disabled(
     home = data_handler.home
 
     time = datetime.now(tz=pytz.UTC)
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test_consumption", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test_consumption", time=time)
     assert result is None or isinstance(result, tuple)
 
 
@@ -772,7 +763,7 @@ def test_qs_solar_history_vals_get_values_none():
 
 def test_qs_solar_history_vals_get_values_wrap_around():
     """Lines 3534-3535: _get_values with wrap-around ring buffer."""
-    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS
+    from custom_components.quiet_solar.ha_model.home import BUFFER_SIZE_IN_INTERVALS, QSSolarHistoryVals
 
     forecast = MagicMock()
     forecast.home = MagicMock()
@@ -780,7 +771,7 @@ def test_qs_solar_history_vals_get_values_wrap_around():
     forecast.storage_path = "/tmp/test_qs"
     vals = QSSolarHistoryVals(entity_id="sensor.test", forecast=forecast)
     vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
-    vals.values[0][BUFFER_SIZE_IN_INTERVALS - 5:] = 100
+    vals.values[0][BUFFER_SIZE_IN_INTERVALS - 5 :] = 100
     vals.values[0][:3] = 200
     start_idx = BUFFER_SIZE_IN_INTERVALS - 5
     end_idx = 2
@@ -820,7 +811,8 @@ def test_qs_solar_history_vals_read_value_no_file():
 async def test_qs_solar_history_vals_save_no_hass():
     """Lines 3544-3546: save_values with no hass."""
     import tempfile
-    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS
+
+    from custom_components.quiet_solar.ha_model.home import BUFFER_SIZE_IN_INTERVALS, QSSolarHistoryVals
 
     forecast = MagicMock()
     forecast.home = MagicMock()
@@ -911,7 +903,7 @@ def test_qs_solar_history_vals_xcorr_max_pearson_valid():
 
 def test_qs_solar_history_vals_get_range_score_bad_history():
     """Lines 3173-3174: _get_range_score returns [] for bad history."""
-    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS
+    from custom_components.quiet_solar.ha_model.home import BUFFER_SIZE_IN_INTERVALS, QSSolarHistoryVals
 
     forecast = MagicMock()
     forecast.home = MagicMock()
@@ -936,9 +928,7 @@ def test_qs_solar_history_vals_get_predicted_data_none_values():
     vals = QSSolarHistoryVals(entity_id="sensor.test", forecast=forecast)
     vals.values = None
     scores = [(100, 0.5, 1.0, 2.0, 3.0, 4.0)]
-    result = vals._get_predicted_data(
-        future_needed_in_hours=24, now_idx=50, now_days=1, scores=scores
-    )
+    result = vals._get_predicted_data(future_needed_in_hours=24, now_idx=50, now_days=1, scores=scores)
     assert result is None or result == (None, None)
 
 
@@ -1109,9 +1099,9 @@ async def test_home_off_grid_mode_option(
 ) -> None:
     """Test async_set_off_grid_mode_option for force modes."""
     from custom_components.quiet_solar.const import (
+        OFF_GRID_MODE_AUTO,
         OFF_GRID_MODE_FORCE_OFF_GRID,
         OFF_GRID_MODE_FORCE_ON_GRID,
-        OFF_GRID_MODE_AUTO,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -1134,7 +1124,7 @@ async def test_home_topology_with_multiple_loads(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Lines 1660-1664: _set_topology handles loads already in groups."""
-    from .const import MOCK_CHARGER_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1192,6 +1182,7 @@ async def test_home_persons_cars_no_person_attached(
 
     for car in home._cars:
         from custom_components.quiet_solar.const import FORCE_CAR_NO_PERSON_ATTACHED
+
         car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
 
     result = await home.compute_and_set_best_persons_cars_allocations()
@@ -1247,7 +1238,7 @@ async def test_home_compute_off_grid_from_entity_state(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test _compute_off_grid_from_entity_state with various states."""
-    from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+    from homeassistant.const import STATE_UNKNOWN
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1324,7 +1315,7 @@ def _make_mock_init_success(time):
     Successive calls return narrowing time ranges so that the s > strt and
     e < end boundary updates (e.g. lines 2818, 2820) are exercised.
     """
-    from custom_components.quiet_solar.ha_model.home import BUFFER_SIZE_IN_INTERVALS, BEGINING_OF_TIME
+    from custom_components.quiet_solar.ha_model.home import BEGINING_OF_TIME, BUFFER_SIZE_IN_INTERVALS
 
     call_counter = [0]
 
@@ -1345,15 +1336,18 @@ async def test_reset_forecasts_solar_active_power_success(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2818, 2820: solar inverter init SUCCEEDS."""
-    from .const import MOCK_SOLAR_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
-        entry_id="solar_success_test", title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_success_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
         unique_id="qs_solar_success_test",
     )
     solar_entry.add_to_hass(hass)
@@ -1381,14 +1375,16 @@ async def test_reset_forecasts_solar_input_only_success(
     Uses a solar config with ONLY input power (no active power) so the elif
     at line 2821 is reached.
     """
-    from .const import MOCK_SOLAR_INPUT_ONLY_CONFIG, MOCK_SOLAR_INPUT_ONLY_ENTRY_ID
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_SOLAR_INPUT_ONLY_CONFIG, MOCK_SOLAR_INPUT_ONLY_ENTRY_ID
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_INPUT_ONLY_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_SOLAR_INPUT_ONLY_CONFIG,
         entry_id=MOCK_SOLAR_INPUT_ONLY_ENTRY_ID,
         title=f"solar: {MOCK_SOLAR_INPUT_ONLY_CONFIG['name']}",
         unique_id="qs_solar_input_only_success_test",
@@ -1416,15 +1412,18 @@ async def test_reset_forecasts_solar_active_power_fail(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2815: solar inverter active power init FAILS."""
-    from .const import MOCK_SOLAR_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
-        entry_id="solar_fail_test", title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_fail_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
         unique_id="qs_solar_fail_test",
     )
     solar_entry.add_to_hass(hass)
@@ -1460,14 +1459,16 @@ async def test_reset_forecasts_solar_input_only_fail(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2826: solar input-only init FAILS."""
-    from .const import MOCK_SOLAR_INPUT_ONLY_CONFIG, MOCK_SOLAR_INPUT_ONLY_ENTRY_ID
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_SOLAR_INPUT_ONLY_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_INPUT_ONLY_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_SOLAR_INPUT_ONLY_CONFIG,
         entry_id="solar_input_fail_test",
         title=f"solar: {MOCK_SOLAR_INPUT_ONLY_CONFIG['name']}",
         unique_id="qs_solar_input_only_fail_test",
@@ -1531,14 +1532,16 @@ async def test_reset_forecasts_bfs_with_piloted_device(
     Injects a mock piloted device with a power sensor into a charger's
     devices_to_pilot so ha_entity_to_read gets a non-None key.
     """
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
         entry_id="charger_bfs_piloted_test",
         title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
         unique_id="qs_charger_bfs_piloted_test",
@@ -1568,14 +1571,16 @@ async def test_reset_forecasts_bfs_disabled_load(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2886: disabled loads skipped in _all_loads iteration."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
         entry_id="charger_bfs_disabled_test",
         title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
         unique_id="qs_charger_bfs_disabled_test",
@@ -1600,14 +1605,16 @@ async def test_reset_forecasts_bfs_disabled_device_in_children(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2898: disabled device in _childrens BFS queue."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
         entry_id="charger_bfs_dev_disabled_test",
         title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
         unique_id="qs_charger_bfs_dev_disabled_test",
@@ -1632,14 +1639,16 @@ async def test_reset_forecasts_bfs_auto_boosted_load(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2911: load_is_auto_to_be_boosted skipped in BFS."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
         entry_id="charger_bfs_boosted_test",
         title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
         unique_id="qs_charger_bfs_boosted_test",
@@ -1665,14 +1674,16 @@ async def test_reset_forecasts_bfs_onoff_switch_entity(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2921-2922: OnOff device with switch_entity in BFS."""
-    from .const import MOCK_ON_OFF_DURATION_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_ON_OFF_DURATION_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     onoff_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_ON_OFF_DURATION_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_ON_OFF_DURATION_CONFIG,
         entry_id="onoff_bfs_switch_test",
         title=f"on_off: {MOCK_ON_OFF_DURATION_CONFIG['name']}",
         unique_id="qs_onoff_bfs_switch_test",
@@ -1694,14 +1705,16 @@ async def test_reset_forecasts_bfs_dynamic_group(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2902-2907: DynamicGroup in BFS without power sensor."""
-    from .const import MOCK_DYNAMIC_GROUP_CONFIG, MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_DYNAMIC_GROUP_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     group_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_DYNAMIC_GROUP_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_DYNAMIC_GROUP_CONFIG,
         entry_id="dyngroup_bfs_test",
         title=f"dynamic_group: {MOCK_DYNAMIC_GROUP_CONFIG['name']}",
         unique_id="qs_dyngroup_bfs_test",
@@ -1723,15 +1736,17 @@ async def test_reset_forecasts_bfs_dynamic_group_with_sensor(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2907: DynamicGroup in BFS WITH accurate_power_sensor."""
-    from .const import MOCK_DYNAMIC_GROUP_CONFIG
-    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
     from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
+    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_DYNAMIC_GROUP_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     group_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_DYNAMIC_GROUP_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_DYNAMIC_GROUP_CONFIG,
         entry_id="dyngroup_bfs_sensor_test",
         title=f"dynamic_group: {MOCK_DYNAMIC_GROUP_CONFIG['name']}",
         unique_id="qs_dyngroup_bfs_sensor_test",
@@ -1779,17 +1794,19 @@ async def test_reset_forecasts_bfs_load_init_fails(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2932-2933: load sensor init returns None during BFS."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals,
         BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
         entry_id="charger_bfs_fail_test",
         title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
         unique_id="qs_charger_bfs_fail_test",
@@ -1833,22 +1850,28 @@ async def test_power_derivation_dc_coupled_with_home_no_grid(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 1460-1463: DC-coupled battery, home_consumption present, no grid."""
-    from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
+    from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_dc_test",
-        title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="qs_solar_dc_test",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_dc_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="qs_solar_dc_test",
     )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
     await hass.async_block_till_done()
 
     battery_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_BATTERY_CONFIG, entry_id="bat_dc_test",
-        title=f"battery: {MOCK_BATTERY_CONFIG['name']}", unique_id="qs_bat_dc_test",
+        domain=DOMAIN,
+        data=MOCK_BATTERY_CONFIG,
+        entry_id="bat_dc_test",
+        title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
+        unique_id="qs_bat_dc_test",
     )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
@@ -1873,9 +1896,7 @@ async def test_power_derivation_dc_coupled_with_home_no_grid(
     hass.states.async_set("sensor.home_power_accurate", "2000", {"unit_of_measurement": "W"})
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        result = home.home_non_controlled_consumption_sensor_state_getter(
-            entity_id="sensor.test", time=time
-        )
+        result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 async def test_power_derivation_ac_coupled_no_inverter(
@@ -1883,8 +1904,9 @@ async def test_power_derivation_ac_coupled_no_inverter(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 1466-1468: AC-coupled battery, home_consumption present, no grid, no inverter."""
-    from .const import MOCK_BATTERY_CONFIG
     from custom_components.quiet_solar.const import CONF_BATTERY_IS_DC_COUPLED
+
+    from .const import MOCK_BATTERY_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1893,8 +1915,11 @@ async def test_power_derivation_ac_coupled_no_inverter(
     ac_battery_config[CONF_BATTERY_IS_DC_COUPLED] = False
 
     battery_entry = MockConfigEntry(
-        domain=DOMAIN, data=ac_battery_config, entry_id="bat_ac_test",
-        title=f"battery: {ac_battery_config['name']}", unique_id="qs_bat_ac_test",
+        domain=DOMAIN,
+        data=ac_battery_config,
+        entry_id="bat_ac_test",
+        title=f"battery: {ac_battery_config['name']}",
+        unique_id="qs_bat_ac_test",
     )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
@@ -1918,9 +1943,7 @@ async def test_power_derivation_ac_coupled_no_inverter(
     hass.states.async_set("sensor.home_power_ac", "2000", {"unit_of_measurement": "W"})
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        result = home.home_non_controlled_consumption_sensor_state_getter(
-            entity_id="sensor.test", time=time
-        )
+        result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 async def test_power_derivation_grid_present_dc_coupled_no_home_sensor(
@@ -1928,22 +1951,28 @@ async def test_power_derivation_grid_present_dc_coupled_no_home_sensor(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 1473-1477: DC-coupled, grid_consumption present, home_consumption=None."""
-    from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
+    from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_grid_dc_test",
-        title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="qs_solar_grid_dc_test",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_grid_dc_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="qs_solar_grid_dc_test",
     )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
     await hass.async_block_till_done()
 
     battery_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_BATTERY_CONFIG, entry_id="bat_grid_dc_test",
-        title=f"battery: {MOCK_BATTERY_CONFIG['name']}", unique_id="qs_bat_grid_dc_test",
+        domain=DOMAIN,
+        data=MOCK_BATTERY_CONFIG,
+        entry_id="bat_grid_dc_test",
+        title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
+        unique_id="qs_bat_grid_dc_test",
     )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
@@ -1957,9 +1986,7 @@ async def test_power_derivation_grid_present_dc_coupled_no_home_sensor(
     # Grid sensor present, no accurate_power_sensor -> home_consumption = None
     home.accurate_power_sensor = None
 
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 async def test_power_derivation_ac_coupled_grid_no_home(
@@ -1967,15 +1994,19 @@ async def test_power_derivation_ac_coupled_grid_no_home(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 1479-1484: AC-coupled, grid present, no home_consumption."""
-    from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
     from custom_components.quiet_solar.const import CONF_BATTERY_IS_DC_COUPLED
+
+    from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_ac_grid_test",
-        title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="qs_solar_ac_grid_test",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_ac_grid_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="qs_solar_ac_grid_test",
     )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
@@ -1984,8 +2015,11 @@ async def test_power_derivation_ac_coupled_grid_no_home(
     ac_battery_config = dict(MOCK_BATTERY_CONFIG)
     ac_battery_config[CONF_BATTERY_IS_DC_COUPLED] = False
     battery_entry = MockConfigEntry(
-        domain=DOMAIN, data=ac_battery_config, entry_id="bat_ac_grid_test",
-        title=f"battery: {ac_battery_config['name']}", unique_id="qs_bat_ac_grid_test",
+        domain=DOMAIN,
+        data=ac_battery_config,
+        entry_id="bat_ac_grid_test",
+        title=f"battery: {ac_battery_config['name']}",
+        unique_id="qs_bat_ac_grid_test",
     )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
@@ -1997,9 +2031,7 @@ async def test_power_derivation_ac_coupled_grid_no_home(
     time = datetime.now(tz=pytz.UTC)
     home.accurate_power_sensor = None
 
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 async def test_power_derivation_clamping_with_ac_battery(
@@ -2007,15 +2039,19 @@ async def test_power_derivation_clamping_with_ac_battery(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 1541-1544: max_available_home_power from AC-coupled battery."""
-    from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
     from custom_components.quiet_solar.const import CONF_BATTERY_IS_DC_COUPLED
+
+    from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     solar_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_clamp_test",
-        title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="qs_solar_clamp_test",
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_clamp_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="qs_solar_clamp_test",
     )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
@@ -2024,8 +2060,11 @@ async def test_power_derivation_clamping_with_ac_battery(
     ac_battery_config = dict(MOCK_BATTERY_CONFIG)
     ac_battery_config[CONF_BATTERY_IS_DC_COUPLED] = False
     battery_entry = MockConfigEntry(
-        domain=DOMAIN, data=ac_battery_config, entry_id="bat_clamp_test",
-        title=f"battery: {ac_battery_config['name']}", unique_id="qs_bat_clamp_test",
+        domain=DOMAIN,
+        data=ac_battery_config,
+        entry_id="bat_clamp_test",
+        title=f"battery: {ac_battery_config['name']}",
+        unique_id="qs_bat_clamp_test",
     )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
@@ -2044,9 +2083,7 @@ async def test_power_derivation_clamping_with_ac_battery(
         return original_get(entity_id, tolerance_seconds=tolerance_seconds, time=time)
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        result = home.home_non_controlled_consumption_sensor_state_getter(
-            entity_id="sensor.test", time=time
-        )
+        result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 async def test_power_derivation_controlled_load_disabled_and_piloted(
@@ -2060,8 +2097,11 @@ async def test_power_derivation_controlled_load_disabled_and_piloted(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_ctrl_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_ctrl_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_ctrl_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_ctrl_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -2076,9 +2116,7 @@ async def test_power_derivation_controlled_load_disabled_and_piloted(
     for load in home._all_loads:
         load._enabled = False
 
-    result = home.home_non_controlled_consumption_sensor_state_getter(
-        entity_id="sensor.test", time=time
-    )
+    result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
 
 # ---------------------------------------------------------------------------
@@ -2095,24 +2133,29 @@ async def test_compute_mileage_full_flow_with_mocked_history(
     Mocks load_from_history to return GPS states that produce not-home segments,
     then patches get_car_mileage_on_period_km to return actual distances.
     """
+
     from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
-    from custom_components.quiet_solar.ha_model.device import load_from_history
-    from custom_components.quiet_solar.ha_model.home import get_time_from_state
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_mileage_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_mileage_test",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_mileage_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_mileage_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_mileage_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_mileage_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_mileage_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_mileage_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -2158,8 +2201,10 @@ async def test_compute_mileage_full_flow_with_mocked_history(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=15.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=15.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
     assert isinstance(result, dict)
 
@@ -2180,8 +2225,11 @@ async def test_off_grid_skips_disabled_loads(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_offgrid_skip_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_offgrid_skip_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_offgrid_skip_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_offgrid_skip_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -2246,8 +2294,11 @@ async def test_topology_load_already_in_correct_group(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_topo_same_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_topo_same_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_topo_same_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_topo_same_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -2277,8 +2328,11 @@ async def test_topology_load_in_different_group(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_topo_diff_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_topo_diff_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_topo_diff_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_topo_diff_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -2313,16 +2367,22 @@ async def test_persons_cars_user_selected_person_not_covered(
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_user_sel2_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_user_sel2_test",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_user_sel2_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_user_sel2_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_user_sel2_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_user_sel2_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_user_sel2_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_user_sel2_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -2349,20 +2409,22 @@ async def test_dashboard_section_with_named_section(
     hass: HomeAssistant,
 ) -> None:
     """Cover line 303: dashboard_section with named section."""
-    from .const import MOCK_HOME_CONFIG
     from custom_components.quiet_solar.const import (
-        CONF_DASHBOARD_SECTION_NAME,
         CONF_DASHBOARD_SECTION_ICON,
+        CONF_DASHBOARD_SECTION_NAME,
     )
+
+    from .const import MOCK_HOME_CONFIG
 
     config_with_sections = dict(MOCK_HOME_CONFIG)
     config_with_sections[f"{CONF_DASHBOARD_SECTION_NAME}_0"] = "My Section (2)"
     config_with_sections[f"{CONF_DASHBOARD_SECTION_ICON}_0"] = "mdi:flash"
 
     entry = MockConfigEntry(
-        domain=DOMAIN, data=config_with_sections,
+        domain=DOMAIN,
+        data=config_with_sections,
         entry_id="home_sections_test",
-        title=f"home: Test Home Sections",
+        title="home: Test Home Sections",
         unique_id="qs_home_sections_test",
     )
     entry.add_to_hass(hass)
@@ -2385,8 +2447,11 @@ async def test_recompute_people_historical_data_no_time(
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_recomp_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_recomp_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_recomp_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_recomp_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -2422,8 +2487,8 @@ def test_xcorr_max_pearson_short_lag_skipped():
 def test_store_and_flush_extend_ring_buffer():
     """Cover line 3628: extend_but_not_cover_idx with ring buffer wrapping."""
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals,
         BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     forecast = MagicMock()
@@ -2448,9 +2513,10 @@ def test_store_and_flush_extend_ring_buffer():
 async def test_save_values_exception_handling():
     """Cover lines 3544-3546: save_values numpy write failure."""
     import tempfile
+
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals,
         BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     forecast = MagicMock()
@@ -2495,8 +2561,9 @@ async def test_finish_setup_non_abstract_device_update_error(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 1854: update_states raises for a non-AbstractDevice element."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.home_model.load import AbstractDevice
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -2518,6 +2585,7 @@ async def test_finish_setup_non_abstract_device_update_error(
     class _BadDevice:
         config_entry_initialized = True
         qs_enable_device = True
+
         async def update_states(self, time):
             raise RuntimeError("forced test error")
 
@@ -2542,8 +2610,9 @@ async def test_update_loads_do_solve(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2586: 'DO SOLVE' log when force_solve fires."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSHomeMode
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -2578,13 +2647,15 @@ async def test_update_loads_do_solve(
     mock_solver.solve.return_value = ([], None)
 
     time = datetime.now(tz=pytz.UTC)
-    with patch.object(home, "finish_setup", new_callable=AsyncMock, return_value=True), \
-         patch.object(home, "finish_off_grid_switch", new_callable=AsyncMock, return_value=(True, False)), \
-         patch.object(home, "update_loads_constraints", new_callable=AsyncMock), \
-         patch.object(home, "check_loads_commands", new_callable=AsyncMock), \
-         patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", return_value=mock_solver), \
-         patch.object(home, "compute_non_controlled_forecast", new_callable=AsyncMock, return_value=[]), \
-         patch.object(home, "get_solar_from_current_forecast", return_value=[]):
+    with (
+        patch.object(home, "finish_setup", new_callable=AsyncMock, return_value=True),
+        patch.object(home, "finish_off_grid_switch", new_callable=AsyncMock, return_value=(True, False)),
+        patch.object(home, "update_loads_constraints", new_callable=AsyncMock),
+        patch.object(home, "check_loads_commands", new_callable=AsyncMock),
+        patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", return_value=mock_solver),
+        patch.object(home, "compute_non_controlled_forecast", new_callable=AsyncMock, return_value=[]),
+        patch.object(home, "get_solar_from_current_forecast", return_value=[]),
+    ):
         await home.update_loads(time)
 
     assert home._last_solve_done == time
@@ -2598,8 +2669,9 @@ async def test_check_loads_commands_max_relaunch_exceeded(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2511: max relaunch exceeded in check_loads_commands."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSHomeMode
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -2640,8 +2712,9 @@ async def test_power_derivation_no_solar_ac_battery_max_discharge(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 1544: max_available_home_power = max_battery_discharge when no solar, AC battery."""
-    from .const import MOCK_BATTERY_CONFIG
     from custom_components.quiet_solar.const import CONF_BATTERY_IS_DC_COUPLED
+
+    from .const import MOCK_BATTERY_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -2677,9 +2750,7 @@ async def test_power_derivation_no_solar_ac_battery_max_discharge(
     home.accurate_power_sensor = None
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        result = home.home_non_controlled_consumption_sensor_state_getter(
-            entity_id="sensor.test", time=time
-        )
+        result = home.home_non_controlled_consumption_sensor_state_getter(entity_id="sensor.test", time=time)
 
     await hass.config_entries.async_unload(battery_entry.entry_id)
     await hass.async_block_till_done()
@@ -2754,8 +2825,10 @@ async def test_mileage_person_no_not_home_segments(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=25.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=25.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -2837,8 +2910,10 @@ async def test_mileage_all_person_segments_before_start(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=30.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=30.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -2919,8 +2994,10 @@ async def test_mileage_default_person_min_update(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=10.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=10.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -2936,8 +3013,9 @@ async def test_allocation_energy_optimal_over_preferred(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2323-2324: energy-optimal assignment used when preferred is too costly."""
-    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
     from custom_components.quiet_solar.ha_model.home import PREFERRED_CAR_ENERGY_THRESHOLD_KWH
+
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -2945,8 +3023,11 @@ async def test_allocation_energy_optimal_over_preferred(
     car1_config = dict(MOCK_CAR_CONFIG)
     car1_config["name"] = "Car Alpha"
     car1_entry = MockConfigEntry(
-        domain=DOMAIN, data=car1_config, entry_id="car_alpha_test",
-        title="car: Car Alpha", unique_id="qs_car_alpha_test",
+        domain=DOMAIN,
+        data=car1_config,
+        entry_id="car_alpha_test",
+        title="car: Car Alpha",
+        unique_id="qs_car_alpha_test",
     )
     car1_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car1_entry.entry_id)
@@ -2955,8 +3036,11 @@ async def test_allocation_energy_optimal_over_preferred(
     car2_config = dict(MOCK_CAR_CONFIG)
     car2_config["name"] = "Car Beta"
     car2_entry = MockConfigEntry(
-        domain=DOMAIN, data=car2_config, entry_id="car_beta_test",
-        title="car: Car Beta", unique_id="qs_car_beta_test",
+        domain=DOMAIN,
+        data=car2_config,
+        entry_id="car_beta_test",
+        title="car: Car Beta",
+        unique_id="qs_car_beta_test",
     )
     car2_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car2_entry.entry_id)
@@ -2967,8 +3051,11 @@ async def test_allocation_energy_optimal_over_preferred(
     person1_config["person_authorized_cars"] = ["Car Alpha", "Car Beta"]
     person1_config["person_preferred_car"] = "Car Alpha"
     person1_entry = MockConfigEntry(
-        domain=DOMAIN, data=person1_config, entry_id="person_one_test",
-        title="person: Person One", unique_id="qs_person_one_test",
+        domain=DOMAIN,
+        data=person1_config,
+        entry_id="person_one_test",
+        title="person: Person One",
+        unique_id="qs_person_one_test",
     )
     person1_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person1_entry.entry_id)
@@ -2981,8 +3068,11 @@ async def test_allocation_energy_optimal_over_preferred(
     person2_config["person_preferred_car"] = "Car Beta"
     hass.states.async_set("person.test_person_2", "home", {})
     person2_entry = MockConfigEntry(
-        domain=DOMAIN, data=person2_config, entry_id="person_two_test",
-        title="person: Person Two", unique_id="qs_person_two_test",
+        domain=DOMAIN,
+        data=person2_config,
+        entry_id="person_two_test",
+        title="person: Person Two",
+        unique_id="qs_person_two_test",
     )
     person2_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person2_entry.entry_id)
@@ -3001,9 +3091,7 @@ async def test_allocation_energy_optimal_over_preferred(
         car.ha_entities = {}
 
     for person in home._persons:
-        person.update_person_forecast = MagicMock(
-            return_value=(time + timedelta(hours=8), 100.0)
-        )
+        person.update_person_forecast = MagicMock(return_value=(time + timedelta(hours=8), 100.0))
         person.notify_of_forecast_if_needed = AsyncMock()
 
     huge_diff = PREFERRED_CAR_ENERGY_THRESHOLD_KWH + 100.0
@@ -3052,7 +3140,8 @@ async def test_qs_solar_history_vals_bad_value_in_current_interval(
 ) -> None:
     """Cover line 3855: bad value but is_time_in_current_interval is True → pass."""
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN,
+        BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -3069,6 +3158,7 @@ async def test_qs_solar_history_vals_bad_value_in_current_interval(
     vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
     from custom_components.quiet_solar.ha_model.home import BEGINING_OF_TIME
+
     base = BEGINING_OF_TIME + timedelta(days=100, hours=5, minutes=5)
     vals.add_value(base - timedelta(minutes=1), 100.0)
 
@@ -3092,8 +3182,10 @@ async def test_qs_solar_history_vals_bad_value_in_current_interval(
 
     vals._init_done = False
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock),
+    ):
         await vals.init(base, for_reset=False)
 
 
@@ -3145,9 +3237,7 @@ async def test_map_location_path_none_time_and_unknown_state(
         make_state(start + timedelta(minutes=5), home_lat + 0.0001, home_lon + 0.0001, "home"),
     ]
 
-    gps_segments, seg1_not_home, seg2_not_home = home.map_location_path(
-        states_1, states_2, start=start, end=end
-    )
+    gps_segments, seg1_not_home, seg2_not_home = home.map_location_path(states_1, states_2, start=start, end=end)
 
     assert isinstance(gps_segments, list)
     assert isinstance(seg1_not_home, list)
@@ -3164,16 +3254,22 @@ async def test_mileage_seg_start_none_skipped(
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_615_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_615_test",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_615_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_615_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_615_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_615_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_615_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_615_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -3212,8 +3308,10 @@ async def test_mileage_seg_start_none_skipped(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=0.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=0.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -3235,8 +3333,11 @@ async def test_finish_setup_non_abstract_device_exception(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_1854_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_1854_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_1854_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_1854_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -3308,9 +3409,7 @@ async def test_consumption_derivation_dc_coupled_no_inverter(
         return original_fn(entity_id, tolerance_seconds=tolerance_seconds, time=time)
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        home.home_non_controlled_consumption_sensor_state_getter(
-            "sensor.test", time
-        )
+        home.home_non_controlled_consumption_sensor_state_getter("sensor.test", time)
 
     assert home.grid_consumption_power == -2000.0
 
@@ -3368,9 +3467,7 @@ async def test_consumption_derivation_ac_coupled_battery_only(
         return None
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        home.home_non_controlled_consumption_sensor_state_getter(
-            "sensor.test", time
-        )
+        home.home_non_controlled_consumption_sensor_state_getter("sensor.test", time)
 
     assert home.grid_consumption_power == 0 - 1500.0 - 500.0
 
@@ -3382,9 +3479,7 @@ async def test_consumption_derivation_ac_coupled_battery_only(
         return None
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor_2):
-        home.home_non_controlled_consumption_sensor_state_getter(
-            "sensor.test", time
-        )
+        home.home_non_controlled_consumption_sensor_state_getter("sensor.test", time)
 
     assert home.home_consumption == 0 - 300.0 - 500.0
 
@@ -3405,8 +3500,11 @@ async def test_consumption_skip_disabled_device(
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_disabled_cov",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_disabled_cov",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_disabled_cov",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_disabled_cov",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -3431,9 +3529,7 @@ async def test_consumption_skip_disabled_device(
         return None
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        home.home_non_controlled_consumption_sensor_state_getter(
-            "sensor.test", time
-        )
+        home.home_non_controlled_consumption_sensor_state_getter("sensor.test", time)
 
     assert home.home_non_controlled_consumption == 2000.0
     assert home.grid_consumption_power == -500.0
@@ -3483,9 +3579,7 @@ async def test_max_available_power_battery_no_solar(
         return original_fn(entity_id, tolerance_seconds=tolerance_seconds, time=time)
 
     with patch.object(home, "get_sensor_latest_possible_valid_value", side_effect=mock_get_sensor):
-        home.home_non_controlled_consumption_sensor_state_getter(
-            "sensor.test", time
-        )
+        home.home_non_controlled_consumption_sensor_state_getter("sensor.test", time)
 
     assert home.home_available_power is not None
     assert home.home_available_power > 0
@@ -3509,8 +3603,11 @@ async def test_car_allocation_no_forecasted_person_skip(
     car1_config = dict(MOCK_CAR_CONFIG)
     car1_config["name"] = "CarInvited"
     car1_entry = MockConfigEntry(
-        domain=DOMAIN, data=car1_config, entry_id="car_invited_skip",
-        title="car: CarInvited", unique_id="qs_car_invited_skip",
+        domain=DOMAIN,
+        data=car1_config,
+        entry_id="car_invited_skip",
+        title="car: CarInvited",
+        unique_id="qs_car_invited_skip",
     )
     car1_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car1_entry.entry_id)
@@ -3519,8 +3616,11 @@ async def test_car_allocation_no_forecasted_person_skip(
     car2_config = dict(MOCK_CAR_CONFIG)
     car2_config["name"] = "CarAlreadyAssigned"
     car2_entry = MockConfigEntry(
-        domain=DOMAIN, data=car2_config, entry_id="car_already_assigned",
-        title="car: CarAlreadyAssigned", unique_id="qs_car_already_assigned",
+        domain=DOMAIN,
+        data=car2_config,
+        entry_id="car_already_assigned",
+        title="car: CarAlreadyAssigned",
+        unique_id="qs_car_already_assigned",
     )
     car2_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car2_entry.entry_id)
@@ -3530,8 +3630,11 @@ async def test_car_allocation_no_forecasted_person_skip(
     person_config["name"] = "PersonSkipTest"
     person_config["person_authorized_cars"] = ["CarInvited", "CarAlreadyAssigned"]
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=person_config, entry_id="person_skip_test",
-        title="person: PersonSkipTest", unique_id="qs_person_skip_test",
+        domain=DOMAIN,
+        data=person_config,
+        entry_id="person_skip_test",
+        title="person: PersonSkipTest",
+        unique_id="qs_person_skip_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -3556,9 +3659,7 @@ async def test_car_allocation_no_forecasted_person_skip(
     for p in home._persons:
         p.update_person_forecast = MagicMock(return_value=(time + timedelta(hours=8), 50.0))
 
-    result = await home.compute_and_set_best_persons_cars_allocations(
-        time=time, force_update=True, do_notify=False
-    )
+    result = await home.compute_and_set_best_persons_cars_allocations(time=time, force_update=True, do_notify=False)
 
     assert car_inv.car_is_invited is True
     assert isinstance(result, dict)
@@ -3597,7 +3698,9 @@ def test_qs_solar_history_vals_get_range_score_pearson_mismatch():
     """Cover lines 3173-3174: _get_range_score returns [] when c_vals/p_vals
     length mismatches num_ok_vals during pearson correlation."""
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, _sanitize_idx,
+        BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
+        _sanitize_idx,
     )
 
     mock_forecast = MagicMock()
@@ -3629,8 +3732,8 @@ def test_qs_solar_history_vals_get_range_score_pearson_mismatch():
 def test_qs_solar_history_vals_negative_index_wrap():
     """Cover line 3775: try_prev_idx wraps to values.shape[1] - 1 when < 0."""
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, INTERVALS_MN,
-        NUM_INTERVALS_PER_DAY,
+        BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     mock_forecast = MagicMock()
@@ -3666,7 +3769,8 @@ async def test_solar_history_vals_float_conversion_error(
 ) -> None:
     """Cover lines 3838-3841: float() conversion fails for a state value → value=None."""
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS,
+        BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -3694,8 +3798,10 @@ async def test_solar_history_vals_float_conversion_error(
 
     vals._init_done = False
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_bad), \
-         patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_bad),
+        patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock),
+    ):
         await vals.init(time, for_reset=False)
 
 
@@ -3704,15 +3810,19 @@ async def test_update_loads_do_solve_with_solar(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover line 2586: DO SOLVE log with solar_plant having max output power."""
-    from .const import MOCK_CHARGER_CONFIG
     from custom_components.quiet_solar.ha_model.home import QSHomeMode
+
+    from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     charger_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_solve_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="qs_charger_solve_test",
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_solve_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_solve_test",
     )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
@@ -3741,12 +3851,14 @@ async def test_update_loads_do_solve_with_solar(
     mock_solver_instance = MagicMock()
     mock_solver_instance.solve = MagicMock(return_value=([], []))
 
-    with patch.object(home, "finish_off_grid_switch", new_callable=AsyncMock, return_value=(True, False)), \
-         patch.object(home, "update_loads_constraints", new_callable=AsyncMock), \
-         patch.object(home, "check_loads_commands", new_callable=AsyncMock, return_value=True), \
-         patch.object(home, "compute_non_controlled_forecast", new_callable=AsyncMock, return_value=[]), \
-         patch.object(home, "get_solar_from_current_forecast", return_value=[]), \
-         patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", return_value=mock_solver_instance):
+    with (
+        patch.object(home, "finish_off_grid_switch", new_callable=AsyncMock, return_value=(True, False)),
+        patch.object(home, "update_loads_constraints", new_callable=AsyncMock),
+        patch.object(home, "check_loads_commands", new_callable=AsyncMock, return_value=True),
+        patch.object(home, "compute_non_controlled_forecast", new_callable=AsyncMock, return_value=[]),
+        patch.object(home, "get_solar_from_current_forecast", return_value=[]),
+        patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", return_value=mock_solver_instance),
+    ):
         await home.update_loads(time)
 
     assert home._last_solve_done == time
@@ -3770,16 +3882,22 @@ async def test_mileage_person_segments_all_before_start_with_start_time_reset(
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_665_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_665_test",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_665_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_665_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_665_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_665_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_665_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_665_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -3799,7 +3917,9 @@ async def test_mileage_person_segments_all_before_start_with_start_time_reset(
 
     def make_state(t, lat, lon, state_val="not_home"):
         return SimpleNamespace(
-            last_changed=t, last_updated=t, state=state_val,
+            last_changed=t,
+            last_updated=t,
+            state=state_val,
             attributes={"latitude": lat, "longitude": lon},
         )
 
@@ -3821,8 +3941,10 @@ async def test_mileage_person_segments_all_before_start_with_start_time_reset(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_665), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=20.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_665),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=20.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -3845,16 +3967,22 @@ async def test_prepare_data_for_dump_person_positions_none(
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_dump_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_dump_test",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_dump_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_dump_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_dump_test",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_dump_test",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_dump_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_dump_test",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -3897,8 +4025,10 @@ async def test_solar_history_vals_bad_state_same_interval(
     is_time_in_current_interval -> True -> the 'pass' on line 3855.
     """
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, BEGINING_OF_TIME,
+        BEGINING_OF_TIME,
+        BUFFER_SIZE_IN_INTERVALS,
         INTERVALS_MN,
+        QSSolarHistoryVals,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -3918,9 +4048,7 @@ async def test_solar_history_vals_bad_state_same_interval(
     time_now_idx = vals.get_utc_time_from_index(now_idx, now_days)
 
     valid_values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
-    prev_idx, prev_days = vals.get_index_from_time(
-        time_now_idx - timedelta(minutes=INTERVALS_MN)
-    )
+    prev_idx, prev_days = vals.get_index_from_time(time_now_idx - timedelta(minutes=INTERVALS_MN))
     valid_values[0][prev_idx] = 500
     valid_values[1][prev_idx] = prev_days
 
@@ -3937,9 +4065,11 @@ async def test_solar_history_vals_bad_state_same_interval(
     async def mock_load_history(h, entity_id, s, e, no_attributes=True):
         return [good_state, bad_state]
 
-    with patch.object(vals, "read_values_async", new_callable=AsyncMock, return_value=valid_values), \
-         patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock):
+    with (
+        patch.object(vals, "read_values_async", new_callable=AsyncMock, return_value=valid_values),
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock),
+    ):
         await vals.init(time, for_reset=False)
 
 
@@ -3953,8 +4083,10 @@ async def test_solar_history_vals_init_wrap_index_zero(
     step produces try_prev_idx=-1, which wraps to the last buffer slot.
     """
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, BEGINING_OF_TIME,
+        BEGINING_OF_TIME,
         BUFFER_SIZE_DAYS,
+        BUFFER_SIZE_IN_INTERVALS,
+        QSSolarHistoryVals,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -3980,9 +4112,11 @@ async def test_solar_history_vals_init_wrap_index_zero(
     async def mock_load_history(h, entity_id, s, e, no_attributes=True):
         return []
 
-    with patch.object(vals, "read_values_async", new_callable=AsyncMock, return_value=valid_values), \
-         patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history), \
-         patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock):
+    with (
+        patch.object(vals, "read_values_async", new_callable=AsyncMock, return_value=valid_values),
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history),
+        patch("custom_components.quiet_solar.ha_model.home.aiofiles.os.makedirs", new_callable=AsyncMock),
+    ):
         await vals.init(time, for_reset=False)
 
 
@@ -3994,6 +4128,7 @@ async def test_dump_person_car_data_pickle_save(
     """Cover lines 1952-1953: _pickle_save writes data via pickle.dump."""
     import pickle
     from os.path import join
+
     from custom_components.quiet_solar.ha_model.home import (
         MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
     )
@@ -4032,16 +4167,22 @@ async def test_mileage_person_only_pre_start_segments(
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_pre_665",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_pre_665",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_pre_665",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_pre_665",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_pre_665",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_pre_665",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_pre_665",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_pre_665",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
@@ -4061,7 +4202,9 @@ async def test_mileage_person_only_pre_start_segments(
 
     def make_state(t, lat, lon, state_val="not_home"):
         return SimpleNamespace(
-            last_changed=t, last_updated=t, state=state_val,
+            last_changed=t,
+            last_updated=t,
+            state=state_val,
             attributes={"latitude": lat, "longitude": lon},
         )
 
@@ -4084,8 +4227,10 @@ async def test_mileage_person_only_pre_start_segments(
             return car_states
         return person_states
 
-    with patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_pre), \
-         patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=20.0):
+    with (
+        patch("custom_components.quiet_solar.ha_model.home.load_from_history", mock_load_history_pre),
+        patch.object(car, "get_car_mileage_on_period_km", new_callable=AsyncMock, return_value=20.0),
+    ):
         result = await home._compute_mileage_for_period_per_person(start, end)
 
     assert isinstance(result, dict)
@@ -4109,8 +4254,11 @@ async def test_get_range_score_mismatched_check_vals(
     exceed the count of positive entries, triggering the guard.
     """
     from custom_components.quiet_solar.ha_model.home import (
-        QSSolarHistoryVals, BUFFER_SIZE_IN_INTERVALS, BEGINING_OF_TIME,
-        INTERVALS_MN, NUM_INTERVAL_PER_HOUR,
+        BEGINING_OF_TIME,
+        BUFFER_SIZE_IN_INTERVALS,
+        INTERVALS_MN,
+        NUM_INTERVAL_PER_HOUR,
+        QSSolarHistoryVals,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -4145,13 +4293,14 @@ async def test_get_range_score_mismatched_check_vals(
         vals.values[1][idx] = past_days
 
     current_values = np.array([100 + i for i in range(n)], dtype=np.int32)
-    current_ok_vales = np.array(
-        [2 if i % 2 == 0 else 1 for i in range(n)], dtype=np.int32
-    )
+    current_ok_vales = np.array([2 if i % 2 == 0 else 1 for i in range(n)], dtype=np.int32)
 
     result = vals._get_range_score(
-        current_values, current_ok_vales, start_idx,
-        past_delta=past_delta, num_score=3,
+        current_values,
+        current_ok_vales,
+        start_idx,
+        past_delta=past_delta,
+        num_score=3,
     )
 
     assert result == []
@@ -4168,15 +4317,20 @@ async def test_allocation_force_no_person_fallback(
     so the second loop sets current_forecasted_person = None and continues.
     """
     import logging
-    from .const import MOCK_CAR_CONFIG
+
     from custom_components.quiet_solar.const import FORCE_CAR_NO_PERSON_ATTACHED
+
+    from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     car_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_force_2356",
-        title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="qs_car_force_2356",
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_force_2356",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="qs_car_force_2356",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
@@ -4217,16 +4371,22 @@ async def test_allocation_user_selected_person_fallback(
 
     car_a_data = {**MOCK_CAR_CONFIG, "name": "Car A"}
     car_a_entry = MockConfigEntry(
-        domain=DOMAIN, data=car_a_data, entry_id="car_a_2360",
-        title="car: Car A", unique_id="qs_car_a_2360",
+        domain=DOMAIN,
+        data=car_a_data,
+        entry_id="car_a_2360",
+        title="car: Car A",
+        unique_id="qs_car_a_2360",
     )
     car_a_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_a_entry.entry_id)
     await hass.async_block_till_done()
 
     person_entry = MockConfigEntry(
-        domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_2360",
-        title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="qs_person_2360",
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_2360",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="qs_person_2360",
     )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)

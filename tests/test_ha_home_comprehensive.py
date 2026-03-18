@@ -8,61 +8,57 @@ This test file targets the 51% -> 80%+ coverage gap by testing:
 - Off-grid mode handling
 - Dashboard section generation
 """
+
 from __future__ import annotations
 
 import datetime
+from datetime import time as dt_time
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
-from datetime import timedelta, time as dt_time
-
-from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
-    CONF_NAME,
-)
 import pytz
-import numpy as np
-
-from custom_components.quiet_solar.ha_model.home import (
-    QSHome,
-    QSHomeMode,
-    QSforecastValueSensor,
-    get_time_from_state,
-    _segments_weak_sub_on_main_overlap,
-    _segments_strong_overlap,
-    MAX_SENSOR_HISTORY_S,
-    HOME_PERSON_CAR_MIN_SEGMENT_S,
-    HOME_PERSON_CAR_MIN_OVERLAP_S,
+from homeassistant.const import (
+    CONF_NAME,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
 )
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_HOME_VOLTAGE,
-    CONF_IS_3P,
     CONF_GRID_POWER_SENSOR,
     CONF_GRID_POWER_SENSOR_INVERTED,
-    CONF_HOME_PEAK_PRICE,
-    CONF_HOME_OFF_PEAK_PRICE,
-    CONF_HOME_START_OFF_PEAK_RANGE_1,
     CONF_HOME_END_OFF_PEAK_RANGE_1,
+    CONF_HOME_OFF_PEAK_PRICE,
+    CONF_HOME_PEAK_PRICE,
+    CONF_HOME_START_OFF_PEAK_RANGE_1,
+    CONF_HOME_VOLTAGE,
     CONF_OFF_GRID_ENTITY,
-    CONF_OFF_GRID_STATE_VALUE,
     CONF_OFF_GRID_INVERTED,
+    CONF_OFF_GRID_STATE_VALUE,
+    DOMAIN,
     OFF_GRID_MODE_AUTO,
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
 )
-
-from homeassistant.core import HomeAssistant
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from custom_components.quiet_solar.ha_model.home import (
+    QSforecastValueSensor,
+    QSHome,
+    QSHomeMode,
+    _segments_strong_overlap,
+    _segments_weak_sub_on_main_overlap,
+    get_time_from_state,
+)
 
 
 class MockLazyState:
     """Mock LazyState for testing."""
 
-    def __init__(self, entity_id: str, state: str, attributes: dict | None = None, last_updated: datetime.datetime | None = None):
+    def __init__(
+        self, entity_id: str, state: str, attributes: dict | None = None, last_updated: datetime.datetime | None = None
+    ):
         self.entity_id = entity_id
         self.state = state
         self.attributes = attributes or {}
@@ -89,11 +85,15 @@ def home_hass_data(hass: HomeAssistant) -> None:
 @pytest.fixture
 async def home_zone_state(hass: HomeAssistant, home_hass_data: None) -> None:
     """Set zone.home state for home tests."""
-    set_result = hass.states.async_set("zone.home", "zoning", {
-        "latitude": 48.8566,
-        "longitude": 2.3522,
-        "radius": 100.0,
-    })
+    set_result = hass.states.async_set(
+        "zone.home",
+        "zoning",
+        {
+            "latitude": 48.8566,
+            "longitude": 2.3522,
+            "radius": 100.0,
+        },
+    )
     if set_result is not None:
         await set_result
 
@@ -116,6 +116,7 @@ async def home(hass: HomeAssistant, home_config_entry: MockConfigEntry, home_zon
 # Tests for get_time_from_state helper function
 # ============================================================================
 
+
 class TestGetTimeFromState:
     """Test the get_time_from_state helper function."""
 
@@ -136,12 +137,7 @@ class TestGetTimeFromState:
         """Test with datetime in attributes override."""
         base_time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
         attr_time = datetime.datetime(2024, 6, 15, 13, 0, 0, tzinfo=pytz.UTC)
-        state = MockLazyState(
-            "sensor.test",
-            "50",
-            attributes={"last_updated": attr_time},
-            last_updated=base_time
-        )
+        state = MockLazyState("sensor.test", "50", attributes={"last_updated": attr_time}, last_updated=base_time)
 
         result = get_time_from_state(state)
         assert result == attr_time
@@ -150,10 +146,7 @@ class TestGetTimeFromState:
         """Test with ISO string in attributes."""
         base_time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
         state = MockLazyState(
-            "sensor.test",
-            "50",
-            attributes={"last_updated": "2024-06-15T14:00:00+00:00"},
-            last_updated=base_time
+            "sensor.test", "50", attributes={"last_updated": "2024-06-15T14:00:00+00:00"}, last_updated=base_time
         )
 
         result = get_time_from_state(state)
@@ -164,12 +157,7 @@ class TestGetTimeFromState:
     def test_get_time_from_state_with_unknown_attribute(self):
         """Test with 'unknown' string in attributes."""
         base_time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
-        state = MockLazyState(
-            "sensor.test",
-            "50",
-            attributes={"last_updated": "unknown"},
-            last_updated=base_time
-        )
+        state = MockLazyState("sensor.test", "50", attributes={"last_updated": "unknown"}, last_updated=base_time)
 
         result = get_time_from_state(state)
         # Should fall back to last_updated
@@ -178,12 +166,7 @@ class TestGetTimeFromState:
     def test_get_time_from_state_with_none_attribute(self):
         """Test with 'none' string in attributes."""
         base_time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
-        state = MockLazyState(
-            "sensor.test",
-            "50",
-            attributes={"last_updated": "None"},
-            last_updated=base_time
-        )
+        state = MockLazyState("sensor.test", "50", attributes={"last_updated": "None"}, last_updated=base_time)
 
         result = get_time_from_state(state)
         assert result == base_time
@@ -192,6 +175,7 @@ class TestGetTimeFromState:
 # ============================================================================
 # Tests for segment overlap functions
 # ============================================================================
+
 
 class TestSegmentOverlap:
     """Test segment overlap detection functions."""
@@ -254,10 +238,7 @@ class TestSegmentOverlap:
         # One large segment in list 1
         segments_1 = [(now, now + timedelta(hours=3))]
         # Two segments in list 2 that both overlap with the single segment in list 1
-        segments_2 = [
-            (now, now + timedelta(hours=1)),
-            (now + timedelta(hours=2), now + timedelta(hours=3))
-        ]
+        segments_2 = [(now, now + timedelta(hours=1)), (now + timedelta(hours=2), now + timedelta(hours=3))]
 
         result = _segments_strong_overlap(segments_1, segments_2, min_overlap=0)
         # Should reject because segment_1[0] overlaps with multiple segment_2 entries
@@ -267,6 +248,7 @@ class TestSegmentOverlap:
 # ============================================================================
 # Tests for QSforecastValueSensor
 # ============================================================================
+
 
 class TestQSforecastValueSensor:
     """Test forecast value sensor probing."""
@@ -338,6 +320,7 @@ class TestQSforecastValueSensor:
 # ============================================================================
 # Tests for QSHome initialization
 # ============================================================================
+
 
 class TestQSHomeInit:
     """Test QSHome initialization."""
@@ -419,6 +402,7 @@ class TestQSHomeInit:
 # Tests for QSHome device management
 # ============================================================================
 
+
 class TestQSHomeDeviceManagement:
     """Test QSHome device management methods."""
 
@@ -457,6 +441,7 @@ class TestQSHomeDeviceManagement:
 # Tests for QSHome GPS path mapping
 # ============================================================================
 
+
 class TestQSHomeMapLocationPath:
     """Test map_location_path method for GPS tracking."""
 
@@ -466,9 +451,7 @@ class TestQSHomeMapLocationPath:
         start = now - timedelta(hours=1)
         end = now
 
-        gps_segments, person_not_home, car_not_home = home.map_location_path(
-            [], [], start=start, end=end
-        )
+        gps_segments, person_not_home, car_not_home = home.map_location_path([], [], start=start, end=end)
 
         assert gps_segments == []
         assert person_not_home == []
@@ -482,21 +465,29 @@ class TestQSHomeMapLocationPath:
 
         # Create states at home
         states_1 = [
-            MockLazyState("device_tracker.person", "home", {
-                "latitude": 48.8566,
-                "longitude": 2.3522,
-            }, last_updated=start + timedelta(minutes=10)),
+            MockLazyState(
+                "device_tracker.person",
+                "home",
+                {
+                    "latitude": 48.8566,
+                    "longitude": 2.3522,
+                },
+                last_updated=start + timedelta(minutes=10),
+            ),
         ]
         states_2 = [
-            MockLazyState("device_tracker.car", "home", {
-                "latitude": 48.8566,
-                "longitude": 2.3522,
-            }, last_updated=start + timedelta(minutes=10)),
+            MockLazyState(
+                "device_tracker.car",
+                "home",
+                {
+                    "latitude": 48.8566,
+                    "longitude": 2.3522,
+                },
+                last_updated=start + timedelta(minutes=10),
+            ),
         ]
 
-        gps_segments, person_not_home, car_not_home = home.map_location_path(
-            states_1, states_2, start=start, end=end
-        )
+        gps_segments, person_not_home, car_not_home = home.map_location_path(states_1, states_2, start=start, end=end)
 
         # Should have no not-home segments
         assert person_not_home == []
@@ -510,23 +501,36 @@ class TestQSHomeMapLocationPath:
 
         # Create states: home -> not_home -> home
         states_1 = [
-            MockLazyState("device_tracker.person", "home", {
-                "latitude": 48.8566,
-                "longitude": 2.3522,
-            }, last_updated=start + timedelta(minutes=10)),
-            MockLazyState("device_tracker.person", "work", {
-                "latitude": 48.9000,
-                "longitude": 2.4000,
-            }, last_updated=start + timedelta(minutes=30)),
-            MockLazyState("device_tracker.person", "home", {
-                "latitude": 48.8566,
-                "longitude": 2.3522,
-            }, last_updated=start + timedelta(minutes=90)),
+            MockLazyState(
+                "device_tracker.person",
+                "home",
+                {
+                    "latitude": 48.8566,
+                    "longitude": 2.3522,
+                },
+                last_updated=start + timedelta(minutes=10),
+            ),
+            MockLazyState(
+                "device_tracker.person",
+                "work",
+                {
+                    "latitude": 48.9000,
+                    "longitude": 2.4000,
+                },
+                last_updated=start + timedelta(minutes=30),
+            ),
+            MockLazyState(
+                "device_tracker.person",
+                "home",
+                {
+                    "latitude": 48.8566,
+                    "longitude": 2.3522,
+                },
+                last_updated=start + timedelta(minutes=90),
+            ),
         ]
 
-        gps_segments, person_not_home, car_not_home = home.map_location_path(
-            states_1, [], start=start, end=end
-        )
+        gps_segments, person_not_home, car_not_home = home.map_location_path(states_1, [], start=start, end=end)
 
         # Should have one not-home segment for person
         assert len(person_not_home) == 1
@@ -537,6 +541,7 @@ class TestQSHomeMapLocationPath:
 # ============================================================================
 # Tests for QSHome home mode and off-grid
 # ============================================================================
+
 
 class TestQSHomeMode:
     """Test home mode handling."""
@@ -565,6 +570,7 @@ class TestQSHomeMode:
 # ============================================================================
 # Tests for QSHome mileage computation
 # ============================================================================
+
 
 class TestQSHomeMileageComputation:
     """Test mileage computation methods."""
@@ -595,7 +601,9 @@ class TestQSHomeMileageComputation:
         start = now - timedelta(hours=24)
         end = now
 
-        with patch("custom_components.quiet_solar.ha_model.home.load_from_history", new_callable=AsyncMock) as mock_load:
+        with patch(
+            "custom_components.quiet_solar.ha_model.home.load_from_history", new_callable=AsyncMock
+        ) as mock_load:
             result = await home._compute_mileage_for_period_per_person(start, end)
 
         # load_from_history should not be called for invited cars
@@ -606,6 +614,7 @@ class TestQSHomeMileageComputation:
 # ============================================================================
 # Tests for QSHome person-car allocation
 # ============================================================================
+
 
 class TestQSHomePersonCarAllocation:
     """Test person-car allocation algorithms."""
@@ -647,6 +656,7 @@ class TestQSHomePersonCarAllocation:
 # Tests for QSHome sensor state getters
 # ============================================================================
 
+
 class TestQSHomeSensorGetters:
     """Test sensor state getter methods."""
 
@@ -655,9 +665,7 @@ class TestQSHomeSensorGetters:
         home.home_consumption = 1500.0
         time = datetime.datetime.now(pytz.UTC)
 
-        result = home.home_consumption_sensor_state_getter(
-            home.home_consumption_sensor, time
-        )
+        result = home.home_consumption_sensor_state_getter(home.home_consumption_sensor, time)
 
         # Result is (time, value, attrs) where value could be a float or tuple
         if result is not None:
@@ -675,9 +683,7 @@ class TestQSHomeSensorGetters:
         home.home_consumption = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = home.home_consumption_sensor_state_getter(
-            home.home_consumption_sensor, time
-        )
+        result = home.home_consumption_sensor_state_getter(home.home_consumption_sensor, time)
 
         assert result is None
 
@@ -686,9 +692,7 @@ class TestQSHomeSensorGetters:
         home.home_available_power = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = home.home_available_power_sensor_state_getter(
-            home.home_available_power_sensor, time
-        )
+        result = home.home_available_power_sensor_state_getter(home.home_available_power_sensor, time)
 
         assert result is None
 
@@ -697,9 +701,7 @@ class TestQSHomeSensorGetters:
         home.grid_consumption_power = None
         time = datetime.datetime.now(pytz.UTC)
 
-        result = home.grid_consumption_power_sensor_state_getter(
-            home.grid_consumption_power_sensor, time
-        )
+        result = home.grid_consumption_power_sensor_state_getter(home.grid_consumption_power_sensor, time)
 
         assert result is None
 
@@ -826,11 +828,7 @@ class TestQSforecastValueSensor:
         mock_getter = MagicMock(return_value=(None, None))
         mock_getter_now = MagicMock(return_value=(None, None))
 
-        probers = QSforecastValueSensor.get_probers(
-            mock_getter,
-            mock_getter_now,
-            {"1h": 3600, "2h": 7200}
-        )
+        probers = QSforecastValueSensor.get_probers(mock_getter, mock_getter_now, {"1h": 3600, "2h": 7200})
 
         assert "1h" in probers
         assert "2h" in probers
@@ -842,7 +840,10 @@ class TestQSforecastValueSensor:
         mock_getter_now = MagicMock(return_value=(datetime.datetime.now(pytz.UTC), 100.0))
 
         prober = QSforecastValueSensor(
-            "now", 0, mock_getter, mock_getter_now  # delta = 0
+            "now",
+            0,
+            mock_getter,
+            mock_getter_now,  # delta = 0
         )
         time = datetime.datetime.now(pytz.UTC)
 
@@ -856,7 +857,10 @@ class TestQSforecastValueSensor:
         mock_getter = MagicMock(return_value=(future_time, 200.0))
 
         prober = QSforecastValueSensor(
-            "1h", 3600, mock_getter, None  # 1 hour delta
+            "1h",
+            3600,
+            mock_getter,
+            None,  # 1 hour delta
         )
 
         result = prober.push_and_get(time)
@@ -1269,9 +1273,7 @@ class TestOffGridAutoDetection:
             mock_set.assert_called_with(False, False)
 
     @pytest.mark.asyncio
-    async def test_sensor_state_change_matches_triggers_off_grid(
-        self, hass: HomeAssistant, home_with_sensor_off_grid
-    ):
+    async def test_sensor_state_change_matches_triggers_off_grid(self, hass: HomeAssistant, home_with_sensor_off_grid):
         """Sensor changing to match value triggers off-grid."""
         home = home_with_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1284,9 +1286,7 @@ class TestOffGridAutoDetection:
             mock_set.assert_called_with(True, False)
 
     @pytest.mark.asyncio
-    async def test_sensor_state_change_no_match_restores_on_grid(
-        self, hass: HomeAssistant, home_with_sensor_off_grid
-    ):
+    async def test_sensor_state_change_no_match_restores_on_grid(self, hass: HomeAssistant, home_with_sensor_off_grid):
         """Sensor changing from matching to non-matching value restores on-grid."""
         home = home_with_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1304,9 +1304,7 @@ class TestOffGridAutoDetection:
             mock_set.assert_called_with(False, False)
 
     @pytest.mark.asyncio
-    async def test_switch_inverted_state_change(
-        self, hass: HomeAssistant, home_with_switch_inverted
-    ):
+    async def test_switch_inverted_state_change(self, hass: HomeAssistant, home_with_switch_inverted):
         """Switch inverted: 'off' triggers off-grid, 'on' restores on-grid."""
         home = home_with_switch_inverted
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1326,9 +1324,7 @@ class TestOffGridAutoDetection:
             mock_set.assert_called_with(False, False)
 
     @pytest.mark.asyncio
-    async def test_force_mode_overrides_entity_state(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_force_mode_overrides_entity_state(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """Force off-grid mode ignores entity state."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
@@ -1412,9 +1408,7 @@ class TestOffGridAutoDetection:
             assert "URGENT" in call_args[1]["title"] or "URGENT" in call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_off_grid_to_on_grid_notifies_restored(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_off_grid_to_on_grid_notifies_restored(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """Transitioning from off-grid back to on-grid sends a restoration notification."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1434,9 +1428,7 @@ class TestOffGridAutoDetection:
             assert "restored" in call_args[1]["title"].lower() or "restored" in call_args[0][0].lower()
 
     @pytest.mark.asyncio
-    async def test_full_cycle_notifies_both_transitions(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_full_cycle_notifies_both_transitions(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """A full on->off->on grid cycle produces exactly 2 notifications (one per transition)."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1454,14 +1446,17 @@ class TestOffGridAutoDetection:
 
             assert mock_notify.call_count == 2
             # First call: off-grid alert
-            assert "URGENT" in mock_notify.call_args_list[0][1]["title"] or "URGENT" in mock_notify.call_args_list[0][0][0]
+            assert (
+                "URGENT" in mock_notify.call_args_list[0][1]["title"] or "URGENT" in mock_notify.call_args_list[0][0][0]
+            )
             # Second call: restoration
-            assert "restored" in mock_notify.call_args_list[1][1]["title"].lower() or "restored" in mock_notify.call_args_list[1][0][0].lower()
+            assert (
+                "restored" in mock_notify.call_args_list[1][1]["title"].lower()
+                or "restored" in mock_notify.call_args_list[1][0][0].lower()
+            )
 
     @pytest.mark.asyncio
-    async def test_no_notification_when_state_unchanged(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_no_notification_when_state_unchanged(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """No notification when real off-grid state does not actually change."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO
@@ -1484,9 +1479,7 @@ class TestOffGridAutoDetection:
             assert mock_notify.call_count == 4
 
     @pytest.mark.asyncio
-    async def test_notify_all_mobile_apps_calls_services(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_notify_all_mobile_apps_calls_services(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """async_notify_all_mobile_apps discovers and calls all mobile_app services."""
         home = home_with_binary_sensor_off_grid
 
@@ -1520,9 +1513,7 @@ class TestOffGridAutoDetection:
         assert len(calls_email) == 0
 
     @pytest.mark.asyncio
-    async def test_notify_all_mobile_apps_no_services(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_notify_all_mobile_apps_no_services(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """async_notify_all_mobile_apps does nothing when no mobile_app services exist."""
         home = home_with_binary_sensor_off_grid
 

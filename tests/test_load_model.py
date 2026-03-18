@@ -1,4 +1,5 @@
 """Tests for home_model/load.py - Load device functionality."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -7,37 +8,37 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytz
 
-from tests.factories import create_minimal_home_model
+from custom_components.quiet_solar.const import (
+    CONF_DEVICE_EFFICIENCY,
+    CONF_IS_3P,
+    CONF_MONO_PHASE,
+    CONF_NUM_MAX_ON_OFF,
+    CONF_POWER,
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    DASHBOARD_NO_SECTION,
+)
+from custom_components.quiet_solar.home_model.commands import (
+    CMD_CST_IDLE,
+    CMD_CST_OFF,
+    CMD_CST_ON,
+    CMD_IDLE,
+    CMD_OFF,
+    CMD_ON,
+    LoadCommand,
+)
+from custom_components.quiet_solar.home_model.constraints import (
+    DATETIME_MAX_UTC,
+    DATETIME_MIN_UTC,
+    MultiStepsPowerLoadConstraint,
+)
 from custom_components.quiet_solar.home_model.load import (
     AbstractDevice,
     AbstractLoad,
     extract_name_and_index_from_dashboard_section_option,
     map_section_selected_name_in_section_list,
 )
-from custom_components.quiet_solar.home_model.commands import (
-    LoadCommand,
-    CMD_CST_OFF,
-    CMD_CST_ON,
-    CMD_CST_IDLE,
-    CMD_OFF,
-    CMD_ON,
-    CMD_IDLE,
-)
-from custom_components.quiet_solar.home_model.constraints import (
-    MultiStepsPowerLoadConstraint,
-    DATETIME_MAX_UTC,
-    DATETIME_MIN_UTC,
-)
-from custom_components.quiet_solar.const import (
-    CONF_POWER,
-    CONF_DEVICE_EFFICIENCY,
-    CONF_IS_3P,
-    CONF_MONO_PHASE,
-    DASHBOARD_NO_SECTION,
-    CONF_NUM_MAX_ON_OFF,
-    CONSTRAINT_TYPE_FILLER_AUTO,
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-)
+from tests.factories import create_minimal_home_model
 
 
 class _CommandLoad(AbstractLoad):
@@ -63,6 +64,7 @@ class _ProbeSetCommandLoad(_CommandLoad):
 # =============================================================================
 # Helper function to create real LoadConstraints
 # =============================================================================
+
 
 def create_real_constraint(
     load,
@@ -106,6 +108,7 @@ def create_real_constraint(
 # =============================================================================
 # Test Helper Functions
 # =============================================================================
+
 
 def test_extract_name_and_index_simple_name():
     """Test extracting name without index."""
@@ -320,7 +323,6 @@ def test_is_load_has_command_now_or_coming():
     assert load.is_load_has_a_command_now_or_coming(datetime.now(pytz.UTC)) is True
 
 
-
 @pytest.mark.asyncio
 async def test_launch_command_handles_execute_error():
     """Test launch_command handles execute_command error."""
@@ -362,6 +364,7 @@ async def test_launch_command_probe_already_set():
 # =============================================================================
 # Test AbstractDevice
 # =============================================================================
+
 
 class TestAbstractDevice:
     """Test AbstractDevice class."""
@@ -481,6 +484,7 @@ class TestAbstractDevice:
 # Test AbstractLoad
 # =============================================================================
 
+
 class TestAbstractLoad:
     """Test AbstractLoad class."""
 
@@ -521,12 +525,13 @@ class TestAbstractLoad:
         """Test load can store constraints."""
         load = self.create_load()
 
-        assert hasattr(load, '_constraints')
+        assert hasattr(load, "_constraints")
 
 
 # =============================================================================
 # Test LoadCommand
 # =============================================================================
+
 
 def test_cmd_off_is_off():
     """Test CMD_OFF is considered off."""
@@ -584,6 +589,7 @@ def test_cmd_idle_command():
 # =============================================================================
 # Test AbstractDevice Phase Calculations
 # =============================================================================
+
 
 class TestAbstractDevicePhaseCalculations:
     """Test phase-related methods in AbstractDevice."""
@@ -718,6 +724,7 @@ class TestAbstractDevicePhaseCalculations:
 # Test AbstractDevice Commands and Constraints
 # =============================================================================
 
+
 class TestAbstractDeviceCommands:
     """Test command-related methods in AbstractDevice."""
 
@@ -851,6 +858,7 @@ class TestAbstractDeviceCommands:
 # Test AbstractLoad Specific
 # =============================================================================
 
+
 class TestAbstractLoadConstraints:
     """Test constraint-related methods in AbstractLoad."""
 
@@ -982,10 +990,10 @@ class TestAbstractLoadConstraints:
 # =============================================================================
 
 from custom_components.quiet_solar.home_model.load import (
+    TestLoad,
     align_time_series_and_values,
     get_slots_from_time_series,
     get_value_from_time_series,
-    TestLoad,
 )
 
 
@@ -1077,10 +1085,7 @@ class TestGetSlotsFromTimeSeries:
 
     def test_empty_series(self):
         """Test with empty time series."""
-        result = get_slots_from_time_series(
-            [],
-            datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC)
-        )
+        result = get_slots_from_time_series([], datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC))
         assert result == []
 
     def test_single_slot_at_time(self):
@@ -1119,10 +1124,7 @@ class TestGetValueFromTimeSeries:
 
     def test_empty_series(self):
         """Test with empty time series."""
-        time, value, exact, idx = get_value_from_time_series(
-            [],
-            datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC)
-        )
+        time, value, exact, idx = get_value_from_time_series([], datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC))
         assert time is None
         assert value is None
         assert exact is False
@@ -1130,10 +1132,7 @@ class TestGetValueFromTimeSeries:
 
     def test_none_series(self):
         """Test with None time series."""
-        time, value, exact, idx = get_value_from_time_series(
-            None,
-            datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC)
-        )
+        time, value, exact, idx = get_value_from_time_series(None, datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC))
         assert time is None
         assert value is None
 
@@ -1211,9 +1210,7 @@ class TestGetValueFromTimeSeries:
             ratio = d1 / d2
             return (t, v1[1] + ratio * (v2[1] - v1[1]))
 
-        result_time, value, exact, idx = get_value_from_time_series(
-            series, target, interpolation_operation=interpolate
-        )
+        result_time, value, exact, idx = get_value_from_time_series(series, target, interpolation_operation=interpolate)
         assert value == pytest.approx(50.0, rel=0.01)
 
 
@@ -1227,15 +1224,7 @@ class TestTestLoad:
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
 
-        load = TestLoad(
-            name="Test",
-            device_type="test",
-            min_p=1000,
-            max_p=2000,
-            min_a=5,
-            max_a=10,
-            home=mock_home
-        )
+        load = TestLoad(name="Test", device_type="test", min_p=1000, max_p=2000, min_a=5, max_a=10, home=mock_home)
 
         assert load.min_p == 1000
         assert load.max_p == 2000
@@ -1249,13 +1238,7 @@ class TestTestLoad:
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
 
-        load = TestLoad(
-            name="Test",
-            device_type="test",
-            min_p=1000,
-            max_p=2000,
-            home=mock_home
-        )
+        load = TestLoad(name="Test", device_type="test", min_p=1000, max_p=2000, home=mock_home)
 
         min_p, max_p = load.get_min_max_power()
         assert min_p == 1000
@@ -1375,6 +1358,7 @@ class TestPilotedDevice:
 # =============================================================================
 # Test AbstractDevice Storage
 # =============================================================================
+
 
 class TestAbstractDeviceStorage:
     """Test storage-related methods in AbstractDevice."""
@@ -1510,6 +1494,7 @@ class TestCheckCommands:
         # Override probe to return None
         async def probe_none(time, cmd):
             return None
+
         load.probe_if_command_set = probe_none
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1526,6 +1511,7 @@ class TestCheckCommands:
 
         async def probe_none(time, cmd):
             return None
+
         load.probe_if_command_set = probe_none
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1590,12 +1576,13 @@ class TestForceRelaunchCommand:
         load.running_command_num_relaunch = 0
 
         # Track relaunch count before and during execution
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         # Mock both execute_command and probe_if_command_set to return False
-        with patch.object(load, 'execute_command', new=AsyncMock(return_value=False)), \
-             patch.object(load, 'probe_if_command_set', new=AsyncMock(return_value=False)):
-
+        with (
+            patch.object(load, "execute_command", new=AsyncMock(return_value=False)),
+            patch.object(load, "probe_if_command_set", new=AsyncMock(return_value=False)),
+        ):
             time_now = datetime.now(tz=pytz.UTC)
             await load.force_relaunch_command(time_now)
 
@@ -1608,12 +1595,13 @@ class TestForceRelaunchCommand:
         load.running_command = CMD_ON
         load.running_command_last_launch = None
 
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         # Mock both execute_command and probe_if_command_set to return False
-        with patch.object(load, 'execute_command', new=AsyncMock(return_value=False)), \
-             patch.object(load, 'probe_if_command_set', new=AsyncMock(return_value=False)):
-
+        with (
+            patch.object(load, "execute_command", new=AsyncMock(return_value=False)),
+            patch.object(load, "probe_if_command_set", new=AsyncMock(return_value=False)),
+        ):
             time_now = datetime.now(tz=pytz.UTC)
             await load.force_relaunch_command(time_now)
 
@@ -1627,6 +1615,7 @@ class TestForceRelaunchCommand:
 
         async def execute_true(time, cmd):
             return True
+
         load.execute_command = execute_true
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1643,6 +1632,7 @@ class TestForceRelaunchCommand:
 
         async def execute_raises(time, cmd):
             raise ValueError("Test error")
+
         load.execute_command = execute_raises
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1701,6 +1691,7 @@ class TestDoProbeStateChange:
 
         async def mock_on_state_change(time, change_type):
             notified.append(change_type)
+
         load.on_device_state_change = mock_on_state_change
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1720,6 +1711,7 @@ class TestDoProbeStateChange:
 
         async def mock_on_state_change(time, change_type):
             notified.append(change_type)
+
         load.on_device_state_change = mock_on_state_change
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -1740,8 +1732,10 @@ class TestDoProbeStateChange:
         old_hash = load._last_hash_state
 
         notified = []
+
         async def mock_on_state_change(time, change_type):
             notified.append(change_type)
+
         load.on_device_state_change = mock_on_state_change
 
         # Second call with same state
@@ -1754,6 +1748,7 @@ class TestDoProbeStateChange:
 # =============================================================================
 # Test _match_ct
 # =============================================================================
+
 
 class TestMatchCt:
     """Test _match_ct method."""
@@ -1845,6 +1840,7 @@ class TestMatchCt:
 # Test clean_constraints_for_load_param_and_if_same_key_same_value_info
 # =============================================================================
 
+
 class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
     """Test clean_constraints_for_load_param_and_info method."""
 
@@ -1903,19 +1899,13 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
     def test_clean_constraints_with_load_info_matching(self):
         """Test constraints with matching load_info are kept."""
         load = self.create_load()
-        ct1 = self.create_constraint(
-            load,
-            load_param="car_A",
-            load_info={"charger": "charger_1"}
-        )
+        ct1 = self.create_constraint(load, load_param="car_A", load_info={"charger": "charger_1"})
         load._constraints = [ct1]
         load._last_completed_constraint = None
 
         time_now = datetime.now(tz=pytz.UTC)
         result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
-            time_now,
-            "car_A",
-            {"charger": "charger_1"}
+            time_now, "car_A", {"charger": "charger_1"}
         )
 
         assert result is True
@@ -1925,11 +1915,7 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
     def test_clean_constraints_with_load_info_conflicting(self):
         """Test constraints with conflicting load_info are removed."""
         load = self.create_load()
-        ct1 = self.create_constraint(
-            load,
-            load_param="car_A",
-            load_info={"charger": "charger_1"}
-        )
+        ct1 = self.create_constraint(load, load_param="car_A", load_info={"charger": "charger_1"})
         load._constraints = [ct1]
         load._last_completed_constraint = None
 
@@ -1937,7 +1923,7 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
         result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
             time_now,
             "car_A",
-            {"charger": "charger_2"}  # Different charger
+            {"charger": "charger_2"},  # Different charger
         )
 
         assert result is True  # Found bad constraint
@@ -1980,13 +1966,10 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
 
         time_now = datetime.now(tz=pytz.UTC)
         result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
-            time_now,
-            "car_A",
-            for_full_reset=False
+            time_now, "car_A", for_full_reset=False
         )
 
         assert result is False  # No bad constraints found
-
 
 
 # =============================================================================
@@ -2042,6 +2025,7 @@ class TestAckCompletedConstraint:
 
         async def mock_on_state_change(time, change_type):
             notified.append(change_type)
+
         load.on_device_state_change = mock_on_state_change
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -2054,6 +2038,7 @@ class TestAckCompletedConstraint:
 # =============================================================================
 # Test get_active_state_hash
 # =============================================================================
+
 
 class TestGetActiveStateHash:
     """Test get_active_state_hash method."""
@@ -2204,9 +2189,16 @@ class TestSetLiveConstraints:
 
         return AbstractLoad(**defaults)
 
-    def create_constraint(self, load, end_time, start_time=None, target_value=100.0,
-                          current_value=0.0, constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
-                          from_user=False):
+    def create_constraint(
+        self,
+        load,
+        end_time,
+        start_time=None,
+        target_value=100.0,
+        current_value=0.0,
+        constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        from_user=False,
+    ):
         """Create a real constraint."""
         return create_real_constraint(
             load=load,
@@ -2255,7 +2247,7 @@ class TestSetLiveConstraints:
         # Should be sorted by end_time
         if len(load._constraints) >= 2:
             for i in range(len(load._constraints) - 1):
-                assert load._constraints[i].end_of_constraint <= load._constraints[i+1].end_of_constraint
+                assert load._constraints[i].end_of_constraint <= load._constraints[i + 1].end_of_constraint
 
     def test_set_live_constraints_removes_met_constraints(self):
         """Test met constraints are removed."""
@@ -2266,13 +2258,13 @@ class TestSetLiveConstraints:
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             target_value=100.0,
-            current_value=100.0  # Met
+            current_value=100.0,  # Met
         )
         ct2 = self.create_constraint(
             load,
             datetime(2026, 1, 22, 14, 0, tzinfo=pytz.UTC),
             target_value=100.0,
-            current_value=0.0  # Not met
+            current_value=0.0,  # Not met
         )
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -2292,8 +2284,7 @@ class TestSetLiveConstraints:
         load.set_live_constraints(time_now, [ct1, ct2])
 
         # Only one infinite should remain
-        infinite_count = sum(1 for c in load._constraints
-                           if c.end_of_constraint == DATETIME_MAX_UTC)
+        infinite_count = sum(1 for c in load._constraints if c.end_of_constraint == DATETIME_MAX_UTC)
         assert infinite_count <= 1
 
     def test_set_live_constraints_handles_as_fast_as_possible(self):
@@ -2304,20 +2295,16 @@ class TestSetLiveConstraints:
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-            target_value=100.0
+            target_value=100.0,
         )
         ct_fast2 = self.create_constraint(
             load,
             datetime(2026, 1, 22, 14, 0, tzinfo=pytz.UTC),
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             target_value=200.0,
-            from_user=True  # Higher score
+            from_user=True,  # Higher score
         )
-        ct_normal = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 16, 0, tzinfo=pytz.UTC),
-            target_value=300.0
-        )
+        ct_normal = self.create_constraint(load, datetime(2026, 1, 22, 16, 0, tzinfo=pytz.UTC), target_value=300.0)
 
         time_now = datetime.now(tz=pytz.UTC)
         load.set_live_constraints(time_now, [ct_fast1, ct_fast2, ct_normal])
@@ -2341,8 +2328,7 @@ class TestSetLiveConstraints:
         load.set_live_constraints(time_now, [ct1, ct2, ct3])
 
         # Only highest score should remain for same end time
-        count_same_end = sum(1 for c in load._constraints
-                           if c.end_of_constraint == same_end)
+        count_same_end = sum(1 for c in load._constraints if c.end_of_constraint == same_end)
         assert count_same_end <= 1
 
     def test_set_live_constraints_multiple_clusters(self):
@@ -2397,6 +2383,7 @@ class TestSetLiveConstraints:
 # Test push_live_constraint
 # =============================================================================
 
+
 class TestPushLiveConstraint:
     """Test push_live_constraint method."""
 
@@ -2418,9 +2405,15 @@ class TestPushLiveConstraint:
 
         return AbstractLoad(**defaults)
 
-    def create_constraint(self, load, end_time, target_value=100.0,
-                          current_value=0.0, constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
-                          from_user=False):
+    def create_constraint(
+        self,
+        load,
+        end_time,
+        target_value=100.0,
+        current_value=0.0,
+        constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+        from_user=False,
+    ):
         """Create a real constraint."""
         return create_real_constraint(
             load=load,
@@ -2472,19 +2465,11 @@ class TestPushLiveConstraint:
         """Test constraint same as completed is rejected."""
         load = self.create_load()
 
-        completed = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0
-        )
+        completed = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
         load._last_completed_constraint = completed
         load._constraints = []
 
-        new_ct = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0
-        )
+        new_ct = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
 
         time_now = datetime.now(tz=pytz.UTC)
         result = load.push_live_constraint(time_now, new_ct)
@@ -2496,20 +2481,12 @@ class TestPushLiveConstraint:
         load = self.create_load()
 
         # Two constraints with identical parameters will have eq_no_current = True
-        existing = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0
-        )
+        existing = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
         load._constraints = [existing]
         load._last_completed_constraint = None
 
         # Same constraint parameters
-        new_ct = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0
-        )
+        new_ct = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
 
         time_now = datetime.now(tz=pytz.UTC)
         result = load.push_live_constraint(time_now, new_ct)
@@ -2521,10 +2498,7 @@ class TestPushLiveConstraint:
         load = self.create_load()
 
         existing = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0,
-            current_value=50.0
+            load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0, current_value=50.0
         )
         load._constraints = [existing]
         load._last_completed_constraint = None
@@ -2534,7 +2508,7 @@ class TestPushLiveConstraint:
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             target_value=200.0,  # Different target = different score
             current_value=0.0,
-            from_user=True  # Higher score
+            from_user=True,  # Higher score
         )
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -2546,18 +2520,14 @@ class TestPushLiveConstraint:
         """Test constraint with same end and same score is rejected."""
         load = self.create_load()
 
-        existing = self.create_constraint(
-            load,
-            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0
-        )
+        existing = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
         load._constraints = [existing]
         load._last_completed_constraint = None
 
         new_ct = self.create_constraint(
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=100.0  # Same target = same score
+            target_value=100.0,  # Same target = same score
         )
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -2573,7 +2543,7 @@ class TestPushLiveConstraint:
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-            target_value=100.0
+            target_value=100.0,
         )
         load._constraints = [existing]
         load._last_completed_constraint = None
@@ -2583,7 +2553,7 @@ class TestPushLiveConstraint:
             datetime(2026, 1, 22, 14, 0, tzinfo=pytz.UTC),  # Different end
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             target_value=200.0,
-            from_user=True  # Higher score
+            from_user=True,  # Higher score
         )
 
         time_now = datetime.now(tz=pytz.UTC)
@@ -2595,6 +2565,7 @@ class TestPushLiveConstraint:
 # =============================================================================
 # Test update_live_constraints
 # =============================================================================
+
 
 class TestUpdateLiveConstraints:
     """Test update_live_constraints method."""
@@ -2679,7 +2650,7 @@ class TestUpdateLiveConstraints:
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             time_now=self.BASE_TIME,
             target_value=100.0,
-            current_value=100.0  # Met
+            current_value=100.0,  # Met
         )
         load._constraints = [ct]
         load._last_completed_constraint = None
@@ -2700,7 +2671,7 @@ class TestUpdateLiveConstraints:
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
             time_now=self.BASE_TIME,
             target_value=100.0,
-            current_value=50.0
+            current_value=50.0,
         )
         load._constraints = [ct]
         load._last_completed_constraint = None
@@ -2715,6 +2686,7 @@ class TestUpdateLiveConstraints:
 # =============================================================================
 # Test mark_current_constraint_has_done
 # =============================================================================
+
 
 class TestMarkCurrentConstraintHasDone:
     """Test mark_current_constraint_has_done method."""
@@ -2738,8 +2710,7 @@ class TestMarkCurrentConstraintHasDone:
 
         return AbstractLoad(**defaults)
 
-    def create_constraint(self, load, end_time=None, target_value=100.0,
-                          current_value=50.0):
+    def create_constraint(self, load, end_time=None, target_value=100.0, current_value=50.0):
         """Create a real constraint."""
         if end_time is None:
             end_time = datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC)
@@ -2755,11 +2726,7 @@ class TestMarkCurrentConstraintHasDone:
         """Test mark_current_constraint_has_done sets current_value to target."""
         load = self.create_load()
 
-        ct = self.create_constraint(
-            load,
-            target_value=100.0,
-            current_value=50.0
-        )
+        ct = self.create_constraint(load, target_value=100.0, current_value=50.0)
         load._constraints = [ct]
         load._last_completed_constraint = None
 
@@ -2781,6 +2748,7 @@ class TestMarkCurrentConstraintHasDone:
 # =============================================================================
 # Test AbstractLoad Storage Methods (update_to_be_saved_extra_device_info and use_saved_extra_device_info)
 # =============================================================================
+
 
 class TestAbstractLoadStorage:
     """Test AbstractLoad storage methods for extra device info."""
@@ -3024,11 +2992,7 @@ class TestPilotedDevice:
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
 
-        device = PilotedDevice(
-            name="Test Piloted Device",
-            home=mock_home,
-            **{CONF_POWER: 2000.0}
-        )
+        device = PilotedDevice(name="Test Piloted Device", home=mock_home, **{CONF_POWER: 2000.0})
         return device
 
     def test_is_piloted_device_activated_no_clients(self, piloted_device):
@@ -3201,11 +3165,7 @@ class TestAbstractLoadExtendedCoverage:
         mock_home.is_off_grid = MagicMock(return_value=False)
         mock_home.dashboard_sections = None
 
-        return _CommandLoad(
-            name="Test Load",
-            home=mock_home,
-            **{CONF_POWER: 1000.0}
-        )
+        return _CommandLoad(name="Test Load", home=mock_home, **{CONF_POWER: 1000.0})
 
     def test_push_agenda_constraints_removes_old_agenda(self, basic_load):
         """Test push_agenda_constraints removes unmatched agenda constraints (lines 779-790)."""
@@ -3218,11 +3178,7 @@ class TestAbstractLoadExtendedCoverage:
 
         # Push new agenda constraints that don't match
         new_constraints = [
-            create_real_constraint(
-                basic_load,
-                time_now=time_now,
-                end_time=time_now + timedelta(hours=5)
-            )
+            create_real_constraint(basic_load, time_now=time_now, end_time=time_now + timedelta(hours=5))
         ]
 
         result = basic_load.push_agenda_constraints(time_now, new_constraints)
@@ -3265,9 +3221,7 @@ class TestAbstractLoadExtendedCoverage:
     async def test_do_run_check_disabled(self, basic_load):
         """Test do_run_check_load_activity_and_constraints when disabled (lines 829-830)."""
         basic_load.qs_enable_device = False
-        result = await basic_load.do_run_check_load_activity_and_constraints(
-            datetime.now(pytz.UTC)
-        )
+        result = await basic_load.do_run_check_load_activity_and_constraints(datetime.now(pytz.UTC))
         assert result is False
 
     @pytest.mark.asyncio
@@ -3275,9 +3229,7 @@ class TestAbstractLoadExtendedCoverage:
         """Test do_run_check_load_activity_and_constraints when not initialized (lines 831-832)."""
         basic_load.qs_enable_device = True
         basic_load.externally_initialized_constraints = False
-        result = await basic_load.do_run_check_load_activity_and_constraints(
-            datetime.now(pytz.UTC)
-        )
+        result = await basic_load.do_run_check_load_activity_and_constraints(datetime.now(pytz.UTC))
         assert result is False
 
     @pytest.mark.asyncio
@@ -3335,9 +3287,7 @@ class TestTimeSeriesUtilities:
         """Test get_value_from_time_series with empty data."""
         from custom_components.quiet_solar.home_model.load import get_value_from_time_series
 
-        time, value, found, idx = get_value_from_time_series(
-            [], datetime.now(pytz.UTC)
-        )
+        time, value, found, idx = get_value_from_time_series([], datetime.now(pytz.UTC))
 
         assert found is False
         assert value is None
@@ -3368,9 +3318,7 @@ class TestTimeSeriesUtilities:
         ]
 
         # Query for last element time
-        result_time, value, found, idx = get_value_from_time_series(
-            data, time + timedelta(hours=1)
-        )
+        result_time, value, found, idx = get_value_from_time_series(data, time + timedelta(hours=1))
 
         assert found is True
         assert value == 200.0
@@ -3540,9 +3488,7 @@ class TestAbstractDeviceExtended:
         """Test async_get_info_from_storage with data (lines 216-218)."""
         stored_info = {"num_on_off": 6}  # Use even number to avoid adjustment
 
-        await basic_device.async_get_info_from_storage(
-            datetime.now(pytz.UTC), stored_info
-        )
+        await basic_device.async_get_info_from_storage(datetime.now(pytz.UTC), stored_info)
 
         assert basic_device.num_on_off == 6
 
@@ -3580,4 +3526,3 @@ class TestAbstractDeviceExtended:
 
         # Odd numbers should be decremented by 1
         assert basic_device.num_on_off == 4
-

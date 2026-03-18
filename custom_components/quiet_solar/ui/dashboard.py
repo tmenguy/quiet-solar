@@ -4,27 +4,26 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-import yaml
 import aiofiles
 import aiofiles.os
-
+import yaml
 from awesomeversion import AwesomeVersion
 from homeassistant.components import frontend
 from homeassistant.components.lovelace import dashboard as lovelace_dashboard
+
+# LOVELACE_DATA was introduced as a HassKey in HA 2025.2+; fall back to string
 from homeassistant.components.lovelace.const import (
     CONF_ICON,
     CONF_REQUIRE_ADMIN,
     CONF_SHOW_IN_SIDEBAR,
     CONF_TITLE,
     CONF_URL_PATH,
+    LOVELACE_DATA,
     MODE_STORAGE,
 )
-
-# LOVELACE_DATA was introduced as a HassKey in HA 2025.2+; fall back to string
-from homeassistant.components.lovelace.const import LOVELACE_DATA
-
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
-from homeassistant.const import CONF_MODE, __version__ as HAVERSION
+from homeassistant.const import CONF_MODE
+from homeassistant.const import __version__ as HAVERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers.storage import Store
@@ -118,17 +117,13 @@ def _make_lovelace_config(dashboard_def: dict[str, Any]) -> dict[str, Any]:
 
 async def _async_load_tracking(hass: HomeAssistant) -> dict[str, Any] | None:
     """Load our tracking storage (returns None on first install)."""
-    store: Store[dict[str, Any]] = Store(
-        hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY
-    )
+    store: Store[dict[str, Any]] = Store(hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY)
     return await store.async_load()
 
 
 async def _async_save_dashboard_tracking(hass: HomeAssistant) -> None:
     """Persist which dashboards we created so we can restore them on restart."""
-    store: Store[dict[str, Any]] = Store(
-        hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY
-    )
+    store: Store[dict[str, Any]] = Store(hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY)
     await store.async_save({"dashboards": [d["id"] for d in ALL_DASHBOARDS]})
 
 
@@ -182,17 +177,13 @@ async def async_restore_dashboards_and_update_resources(
                 continue
 
             config = _make_lovelace_config(dashboard_def)
-            lovelace_data.dashboards[url_path] = (
-                lovelace_dashboard.LovelaceStorage(hass, config)
-            )
+            lovelace_data.dashboards[url_path] = lovelace_dashboard.LovelaceStorage(hass, config)
 
             try:
                 _register_panel(hass, dashboard_def)
                 _LOGGER.info("Restored dashboard panel: %s", url_path)
             except ValueError:
-                _LOGGER.warning(
-                    "Failed to register panel for dashboard %s", url_path
-                )
+                _LOGGER.warning("Failed to register panel for dashboard %s", url_path)
 
     # --- Always refresh JS card resources ---
     await async_update_resources(hass)
@@ -210,9 +201,7 @@ async def async_unregister_dashboards(hass: HomeAssistant) -> None:
             lovelace_store = lovelace_data.dashboards.pop(url_path)
             await lovelace_store.async_delete()
 
-    tracking_store: Store[dict[str, Any]] = Store(
-        hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY
-    )
+    tracking_store: Store[dict[str, Any]] = Store(hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY)
     await tracking_store.async_remove()
 
 
@@ -221,7 +210,7 @@ async def async_unregister_dashboards(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def async_auto_generate_if_first_install(home: "QSHome") -> None:
+async def async_auto_generate_if_first_install(home: QSHome) -> None:
     """Generate dashboards automatically when the integration is installed
     for the first time (i.e. no tracking data exists yet).
 
@@ -235,9 +224,7 @@ async def async_auto_generate_if_first_install(home: "QSHome") -> None:
         _LOGGER.debug("Dashboards already generated, skipping auto-generation")
         return
 
-    _LOGGER.info(
-        "First install detected – auto-generating Quiet Solar dashboards"
-    )
+    _LOGGER.info("First install detected – auto-generating Quiet Solar dashboards")
     await generate_dashboard_yaml(home)
 
 
@@ -289,6 +276,7 @@ async def _async_register_or_update_dashboard(
 def _generate_qs_tag() -> str:
     """Generate a cache-busting tag from the current epoch."""
     import time
+
     return str(int(time.time()))
 
 
@@ -368,8 +356,11 @@ async def _async_copy_and_register_resources(
                 )
         elif await aiofiles.os.path.isdir(src):
             await _async_copy_and_register_resources(
-                src, dst,
-                f"{namespace}/{entry}", tag, handler,
+                src,
+                dst,
+                f"{namespace}/{entry}",
+                tag,
+                handler,
             )
 
 
@@ -388,7 +379,11 @@ async def async_update_resources(hass: HomeAssistant) -> None:
 
     try:
         await _async_copy_and_register_resources(
-            _RESOURCES_DIR, resources_dst, namespace, tag, handler,
+            _RESOURCES_DIR,
+            resources_dst,
+            namespace,
+            tag,
+            handler,
         )
         _LOGGER.debug("Dashboard JS resources updated")
     except FileNotFoundError:
@@ -403,23 +398,23 @@ async def async_update_resources(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 
 
-def generate_dashboard_resource_qs_tag(home: "QSHome") -> str:
+def generate_dashboard_resource_qs_tag(home: QSHome) -> str:
     """Generate a cache-busting tag (legacy wrapper)."""
     return _generate_qs_tag()
 
 
-def generate_dashboard_resource_namespace(home: "QSHome") -> str:
+def generate_dashboard_resource_namespace(home: QSHome) -> str:
     """Return the URL namespace (legacy wrapper)."""
     return _resource_namespace()
 
 
-def _get_resource_handler(home: "QSHome") -> ResourceStorageCollection | None:
+def _get_resource_handler(home: QSHome) -> ResourceStorageCollection | None:
     """Return the lovelace ResourceStorageCollection (legacy wrapper)."""
     return _get_resource_handler_from_hass(home.hass)
 
 
 async def update_resource(
-    home: "QSHome",
+    home: QSHome,
     resources: ResourceStorageCollection,
     raw_name: str,
     url: str,
@@ -433,7 +428,7 @@ async def update_resource(
 # ---------------------------------------------------------------------------
 
 
-async def generate_dashboard_yaml(home: "QSHome") -> None:
+async def generate_dashboard_yaml(home: QSHome) -> None:
     """Render Jinja2 templates and push the result into Lovelace storage.
 
     The templates produce YAML which is parsed to a dict and saved directly
@@ -449,9 +444,7 @@ async def generate_dashboard_yaml(home: "QSHome") -> None:
         template_path = os.path.join(base_dir, dashboard_def["template_filename"])
 
         # Read the Jinja2 template (blocking I/O → executor)
-        template_content: str = await hass.async_add_executor_job(
-            _read_text_file, template_path
-        )
+        template_content: str = await hass.async_add_executor_job(_read_text_file, template_path)
 
         # Render with the HA template engine (gives access to all HA helpers)
         tpl = Template(template_content, hass)
@@ -460,7 +453,8 @@ async def generate_dashboard_yaml(home: "QSHome") -> None:
         except TemplateError as err:
             _LOGGER.error(
                 "Template error in %s: %s",
-                dashboard_def["template_filename"], err,
+                dashboard_def["template_filename"],
+                err,
                 exc_info=True,
             )
             raise
@@ -471,7 +465,8 @@ async def generate_dashboard_yaml(home: "QSHome") -> None:
         except yaml.YAMLError as err:
             _LOGGER.error(
                 "YAML parse error for %s: %s",
-                dashboard_def["template_filename"], err,
+                dashboard_def["template_filename"],
+                err,
                 exc_info=True,
             )
             raise
@@ -484,9 +479,7 @@ async def generate_dashboard_yaml(home: "QSHome") -> None:
             continue
 
         # Push into a storage-mode Lovelace dashboard
-        await _async_register_or_update_dashboard(
-            hass, dashboard_def, lovelace_config
-        )
+        await _async_register_or_update_dashboard(hass, dashboard_def, lovelace_config)
 
     # Remember that dashboards exist so we can restore them on next restart
     await _async_save_dashboard_tracking(hass)

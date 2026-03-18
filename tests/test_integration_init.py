@@ -1,30 +1,29 @@
 """Tests for quiet_solar __init__.py integration setup."""
+
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from homeassistant.const import Platform, CONF_NAME
+from homeassistant.const import CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar import (
+    async_reload_entry,
+    async_reload_quiet_solar,
     async_setup,
     async_setup_entry,
     async_unload_entry,
-    async_reload_entry,
-    async_reload_quiet_solar,
-    register_reload_service,
     register_ocpp_notification_listener,
+    register_reload_service,
 )
-from custom_components.quiet_solar.const import DOMAIN, DATA_HANDLER, DEVICE_TYPE
+from custom_components.quiet_solar.const import DATA_HANDLER, DOMAIN
 from custom_components.quiet_solar.data_handler import QSDataHandler
 from tests.factories import create_minimal_home_model
-from tests.test_helpers import create_mock_device
 from tests.ha_tests.const import MOCK_HOME_CONFIG
+from tests.test_helpers import create_mock_device
 
 
 @pytest.fixture(autouse=True)
@@ -102,9 +101,7 @@ async def test_async_setup_entry_creates_data_handler(hass: HomeAssistant, mock_
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_reuses_existing_data_handler(
-    hass: HomeAssistant, mock_home_config_entry
-):
+async def test_async_setup_entry_reuses_existing_data_handler(hass: HomeAssistant, mock_home_config_entry):
     """Test setup entry reuses existing data handler."""
     hass.data.setdefault(DOMAIN, {})
     existing_handler = QSDataHandler(hass)
@@ -119,13 +116,14 @@ async def test_async_setup_entry_reuses_existing_data_handler(
 
 
 @pytest.mark.asyncio
-async def test_async_setup_entry_registers_update_listener(
-    hass: HomeAssistant, mock_home_config_entry
-):
+async def test_async_setup_entry_registers_update_listener(hass: HomeAssistant, mock_home_config_entry):
     """Test that update listener is registered."""
-    with patch.object(QSDataHandler, "async_add_entry", new_callable=AsyncMock), patch.object(
-        mock_home_config_entry, "async_on_unload", wraps=mock_home_config_entry.async_on_unload
-    ) as mock_on_unload:
+    with (
+        patch.object(QSDataHandler, "async_add_entry", new_callable=AsyncMock),
+        patch.object(
+            mock_home_config_entry, "async_on_unload", wraps=mock_home_config_entry.async_on_unload
+        ) as mock_on_unload,
+    ):
         await async_setup_entry(hass, mock_home_config_entry)
 
         # async_setup_entry registers intervals via async_on_unload
@@ -144,9 +142,7 @@ async def test_async_unload_entry_removes_device(hass: HomeAssistant, mock_confi
     hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
     hass.data[DOMAIN][DATA_HANDLER] = MagicMock()
 
-    with patch.object(
-        hass.config_entries, "async_unload_platforms", new_callable=AsyncMock, return_value=True
-    ):
+    with patch.object(hass.config_entries, "async_unload_platforms", new_callable=AsyncMock, return_value=True):
         result = await async_unload_entry(hass, mock_config_entry)
 
         assert result is True
@@ -166,9 +162,7 @@ async def test_async_unload_entry_no_device(hass: HomeAssistant, mock_config_ent
 @pytest.mark.asyncio
 async def test_async_reload_entry(hass: HomeAssistant, mock_config_entry):
     """Test reload entry."""
-    with patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload:
         await async_reload_entry(hass, mock_config_entry)
 
         mock_reload.assert_called_once_with(mock_config_entry.entry_id)
@@ -183,9 +177,7 @@ async def test_async_reload_entry_skipped_when_flagged(hass: HomeAssistant, mock
     skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
     skip_set.add(mock_config_entry.entry_id)
 
-    with patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload:
         await async_reload_entry(hass, mock_config_entry)
 
         mock_reload.assert_not_called()
@@ -202,9 +194,7 @@ async def test_async_reload_entry_not_skipped_for_other_entries(hass: HomeAssist
     skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
     skip_set.add("some_other_entry_id")
 
-    with patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload:
         await async_reload_entry(hass, mock_config_entry)
 
         mock_reload.assert_called_once_with(mock_config_entry.entry_id)
@@ -221,9 +211,7 @@ async def test_async_reload_entry_skip_flag_consumed_once(hass: HomeAssistant, m
     skip_set = hass.data[DOMAIN].setdefault(DATA_SKIP_RELOAD_ENTRY_IDS, set())
     skip_set.add(mock_config_entry.entry_id)
 
-    with patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload:
         await async_reload_entry(hass, mock_config_entry)
         mock_reload.assert_not_called()
 
@@ -236,9 +224,7 @@ async def test_async_reload_entry_no_skip_set_at_all(hass: HomeAssistant, mock_c
     """Test reload works normally when DATA_SKIP_RELOAD_ENTRY_IDS was never created."""
     hass.data.setdefault(DOMAIN, {})
 
-    with patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload:
         await async_reload_entry(hass, mock_config_entry)
 
         mock_reload.assert_called_once_with(mock_config_entry.entry_id)
@@ -249,7 +235,6 @@ async def test_save_entry_data_no_reload_sets_skip_flag(hass: HomeAssistant, moc
     """Test that save_entry_data_no_reload sets the skip flag before updating entry."""
     from custom_components.quiet_solar.const import DATA_SKIP_RELOAD_ENTRY_IDS
     from custom_components.quiet_solar.ha_model.device import HADeviceMixin
-    from custom_components.quiet_solar.home_model.load import AbstractDevice
 
     hass.data.setdefault(DOMAIN, {})
 
@@ -315,6 +300,7 @@ async def test_remove_device_car_detaches_from_charger(hass: HomeAssistant):
     mock_home._all_devices = []
 
     from custom_components.quiet_solar.ha_model.home import QSHome
+
     QSHome.remove_device(mock_home, mock_car)
 
     mock_charger.detach_car.assert_called_once()
@@ -349,6 +335,7 @@ async def test_remove_device_car_no_detach_when_not_attached(hass: HomeAssistant
     mock_home._all_devices = []
 
     from custom_components.quiet_solar.ha_model.home import QSHome
+
     QSHome.remove_device(mock_home, mock_car)
 
     mock_charger.detach_car.assert_not_called()
@@ -378,6 +365,7 @@ async def test_remove_device_charger_detaches_car(hass: HomeAssistant):
     mock_home._all_devices = []
 
     from custom_components.quiet_solar.ha_model.home import QSHome
+
     QSHome.remove_device(mock_home, mock_charger)
 
     mock_charger.detach_car.assert_called_once()
@@ -403,6 +391,7 @@ async def test_remove_device_charger_no_detach_when_no_car(hass: HomeAssistant):
     mock_home._all_devices = []
 
     from custom_components.quiet_solar.ha_model.home import QSHome
+
     QSHome.remove_device(mock_home, mock_charger)
 
     mock_charger.detach_car.assert_not_called()
@@ -417,6 +406,7 @@ def _set_entry_state(entry, state):
 async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
     """Test reloading all quiet solar entries."""
     from homeassistant.config_entries import ConfigEntryState
+
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
@@ -427,11 +417,10 @@ async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
     hass.data.setdefault(DOMAIN, {})["entry1"] = MagicMock()
     hass.data[DOMAIN]["entry2"] = MagicMock()
 
-    with patch.object(
-        hass.config_entries, "async_unload", new_callable=AsyncMock
-    ) as mock_unload, patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock) as mock_unload,
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
         await async_reload_quiet_solar(hass)
 
         assert mock_unload.call_count == 2
@@ -442,6 +431,7 @@ async def test_async_reload_quiet_solar_all_entries(hass: HomeAssistant):
 async def test_async_reload_quiet_solar_except_one(hass: HomeAssistant):
     """Test reloading entries except specified one."""
     from homeassistant.config_entries import ConfigEntryState
+
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
@@ -449,11 +439,10 @@ async def test_async_reload_quiet_solar_except_one(hass: HomeAssistant):
     _set_entry_state(entry1, ConfigEntryState.LOADED)
     _set_entry_state(entry2, ConfigEntryState.LOADED)
 
-    with patch.object(
-        hass.config_entries, "async_unload", new_callable=AsyncMock
-    ) as mock_unload, patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock) as mock_unload,
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
         await async_reload_quiet_solar(hass, except_for_entry_id="entry1")
 
         assert mock_unload.call_count == 1
@@ -464,6 +453,7 @@ async def test_async_reload_quiet_solar_except_one(hass: HomeAssistant):
 async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
     """Test that reload continues even if individual entries fail."""
     from homeassistant.config_entries import ConfigEntryState
+
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
@@ -471,13 +461,14 @@ async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
     _set_entry_state(entry1, ConfigEntryState.LOADED)
     _set_entry_state(entry2, ConfigEntryState.LOADED)
 
-    with patch.object(
-        hass.config_entries,
-        "async_unload",
-        side_effect=[Exception("Test error"), None],
-    ) as mock_unload, patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_unload",
+            side_effect=[Exception("Test error"), None],
+        ) as mock_unload,
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
         await async_reload_quiet_solar(hass)
 
         assert mock_unload.call_count == 2
@@ -488,6 +479,7 @@ async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
 async def test_async_reload_quiet_solar_skips_non_loaded_entries(hass: HomeAssistant):
     """Test that reload skips entries not in LOADED state (e.g. FAILED_UNLOAD)."""
     from homeassistant.config_entries import ConfigEntryState
+
     entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
     entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
     entry1.add_to_hass(hass)
@@ -495,11 +487,10 @@ async def test_async_reload_quiet_solar_skips_non_loaded_entries(hass: HomeAssis
     _set_entry_state(entry1, ConfigEntryState.LOADED)
     _set_entry_state(entry2, ConfigEntryState.FAILED_UNLOAD)
 
-    with patch.object(
-        hass.config_entries, "async_unload", new_callable=AsyncMock
-    ) as mock_unload, patch.object(
-        hass.config_entries, "async_reload", new_callable=AsyncMock
-    ) as mock_reload:
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock) as mock_unload,
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
         await async_reload_quiet_solar(hass)
 
         # Only entry1 should be unloaded; entry2 is skipped due to FAILED_UNLOAD state
@@ -544,9 +535,7 @@ async def test_ocpp_notification_forwards_to_chargers(hass: HomeAssistant):
     mock_handler.home = mock_home
     hass.data[DOMAIN][DATA_HANDLER] = mock_handler
 
-    with patch(
-        "custom_components.quiet_solar._is_notification_for_charger", return_value=True
-    ):
+    with patch("custom_components.quiet_solar._is_notification_for_charger", return_value=True):
         register_ocpp_notification_listener(hass)
 
         hass.bus.async_fire(
@@ -611,9 +600,7 @@ async def test_ocpp_notification_matches_device_registry(hass: HomeAssistant):
     device_registry = MagicMock()
     device_registry.async_get.side_effect = _get_device
 
-    with patch(
-        "homeassistant.helpers.device_registry.async_get", return_value=device_registry
-    ):
+    with patch("homeassistant.helpers.device_registry.async_get", return_value=device_registry):
         register_ocpp_notification_listener(hass)
 
         hass.bus.async_fire(

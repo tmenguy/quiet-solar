@@ -4,52 +4,39 @@ Focuses on exercising untested code paths with real QS objects,
 minimal mocking, and meaningful assertions.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pytest
 import pytz
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
     CONF_HOME_PEAK_PRICE,
-    CONF_HOME_OFF_PEAK_PRICE,
-    CONF_HOME_START_OFF_PEAK_RANGE_1,
-    CONF_HOME_END_OFF_PEAK_RANGE_1,
-    CONF_HOME_START_OFF_PEAK_RANGE_2,
-    CONF_HOME_END_OFF_PEAK_RANGE_2,
+    DATA_HANDLER,
+    DOMAIN,
 )
-
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.home import (
-    QSHome,
-    QSHomeMode,
-    QSHomeConsumptionHistoryAndForecast,
-    QSSolarHistoryVals,
-    QSforecastValueSensor,
-    get_time_from_state,
-    _segments_weak_sub_on_main_overlap,
-    _segments_strong_overlap,
     BUFFER_SIZE_IN_INTERVALS,
-    NUM_INTERVALS_PER_DAY,
-    BEGINING_OF_TIME,
-    _sanitize_idx,
     INTERVALS_MN,
     NUM_INTERVAL_PER_HOUR,
-    BUFFER_SIZE_DAYS,
-    POWER_ALIGNMENT_TOLERANCE_S,
+    NUM_INTERVALS_PER_DAY,
+    QSforecastValueSensor,
+    QSHomeConsumptionHistoryAndForecast,
+    QSHomeMode,
+    QSSolarHistoryVals,
+    _sanitize_idx,
+    _segments_strong_overlap,
+    _segments_weak_sub_on_main_overlap,
+    get_time_from_state,
 )
 from custom_components.quiet_solar.ha_model.solar import QSSolar
-from custom_components.quiet_solar.home_model.commands import CMD_IDLE, LoadCommand
-from custom_components.quiet_solar.ha_model.device import HADeviceMixin
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -57,6 +44,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 # ========================================================================
 # Helper to set up home entry quickly
 # ========================================================================
+
 
 async def _get_home(hass, entry):
     """Set up home entry and return the QSHome object."""
@@ -308,16 +296,14 @@ class TestQSforecastValueSensor:
 
     def test_get_probers_creates_multiple(self):
         """get_probers creates the expected number of sensors."""
+
         def getter(t):
             return (t, 100.0)
 
         def getter_now(t):
             return (t, 200.0)
 
-        probers = QSforecastValueSensor.get_probers(
-            getter, getter_now,
-            {"1h": 3600, "2h": 7200, "now": 0}
-        )
+        probers = QSforecastValueSensor.get_probers(getter, getter_now, {"1h": 3600, "2h": 7200, "now": 0})
         assert len(probers) == 3
         assert "1h" in probers
         assert "2h" in probers
@@ -334,7 +320,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_tariffs_off_grid_returns_zero(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid mode returns 0.0 tariff. Covers line 1138."""
         home = await _get_home(hass, home_config_entry)
@@ -346,7 +334,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_tariffs_no_off_peak_returns_peak_price(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No off-peak price returns peak price as scalar. Covers line 1140-1141."""
         home = await _get_home(hass, home_config_entry)
@@ -359,7 +349,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_tariffs_with_off_peak_ranges(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """With off-peak ranges configured, returns a list of tariff segments. Covers lines 1146-1176."""
         home = await _get_home(hass, home_config_entry)
@@ -381,7 +373,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_today_off_peak_ranges_zero_price(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Zero off-peak price returns empty ranges. Covers line 1072."""
         home = await _get_home(hass, home_config_entry)
@@ -393,7 +387,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_today_off_peak_ranges_equal_start_end(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Equal start and end should skip the range. Covers line 1088."""
         home = await _get_home(hass, home_config_entry)
@@ -409,7 +405,9 @@ class TestHomeTariffMethods:
 
     @pytest.mark.asyncio
     async def test_get_tariff_with_off_peak(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """get_tariff with ranges returns off-peak when within range. Covers line 1112."""
         home = await _get_home(hass, home_config_entry)
@@ -436,7 +434,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_off_grid_get_home_max_static_phase_amps_no_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid with no solar returns static amp. Covers line 906-912."""
         home = await _get_home(hass, home_config_entry)
@@ -448,7 +448,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_off_grid_get_home_max_static_phase_amps_with_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid with solar limits to solar max phase amps. Covers line 910."""
         home = await _get_home(hass, home_config_entry)
@@ -464,7 +466,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_off_grid_get_home_max_phase_amps_with_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid max phase amps with battery discharge. Covers lines 915-944."""
         home = await _get_home(hass, home_config_entry)
@@ -486,7 +490,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_off_grid_dyn_group_max_phase_current_mono(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid mono-phase distributes amps to one phase. Covers lines 960-961."""
         home = await _get_home(hass, home_config_entry)
@@ -509,7 +515,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_off_grid_dyn_group_max_phase_current_for_budget_mono(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid budget mono-phase. Covers lines 982-983."""
         home = await _get_home(hass, home_config_entry)
@@ -529,21 +537,23 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_finish_off_grid_switch_no_pending(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No pending switch returns (True, False). Covers line 2122-2123."""
         home = await _get_home(hass, home_config_entry)
         home._switch_to_off_grid_launched = None
 
-        finished, just_switched = await home.finish_off_grid_switch(
-            datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
-        )
+        finished, just_switched = await home.finish_off_grid_switch(datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC))
         assert finished is True
         assert just_switched is False
 
     @pytest.mark.asyncio
     async def test_finish_off_grid_switch_timeout(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """After 3 min timeout, returns (True, True). Covers lines 2125-2127."""
         home = await _get_home(hass, home_config_entry)
@@ -557,7 +567,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_finish_off_grid_switch_loads_not_ready(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Loads not ready returns (False, False). Covers lines 2129-2135."""
         home = await _get_home(hass, home_config_entry)
@@ -581,7 +593,9 @@ class TestHomeOffGridMode:
 
     @pytest.mark.asyncio
     async def test_finish_off_grid_switch_all_loads_ok(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """All loads OK returns (True, True). Covers lines 2131-2133."""
         home = await _get_home(hass, home_config_entry)
@@ -615,7 +629,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_current_over_clamp_production_power_with_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Solar production exceeds max output. Covers lines 1379-1382."""
         home = await _get_home(hass, home_config_entry)
@@ -628,20 +644,24 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_current_over_clamp_no_excess(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Solar production under max output returns 0. Covers line 1382."""
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="test_solar_production")
         home.physical_solar_plant.solar_production = 3000.0
-        home.physical_solar_plant.solar_max_output_power_value = 5000.
+        home.physical_solar_plant.solar_max_output_power_value = 5000.0
 
         result = home.get_current_over_clamp_production_power()
         assert result == 0.0
 
     @pytest.mark.asyncio
     async def test_get_current_maximum_production_output_dc_coupled(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """DC-coupled battery + solar. Covers lines 1401-1405."""
         home = await _get_home(hass, home_config_entry)
@@ -659,7 +679,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_current_maximum_production_dc_coupled_under_max(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """DC-coupled where solar+battery < max_output. Covers line 1402-1403."""
         home = await _get_home(hass, home_config_entry)
@@ -676,7 +698,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_current_maximum_production_ac_coupled(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """AC-coupled: solar_max + battery_max. Covers line 1407."""
         home = await _get_home(hass, home_config_entry)
@@ -693,7 +717,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_solar_from_current_forecast_no_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No solar returns (None, None). Covers line 1060."""
         home = await _get_home(hass, home_config_entry)
@@ -705,7 +731,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_solar_from_current_forecast_list_no_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No solar returns empty list. Covers line 1065."""
         home = await _get_home(hass, home_config_entry)
@@ -717,7 +745,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_grid_active_power_values(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Covers line 1411-1412."""
         home = await _get_home(hass, home_config_entry)
@@ -727,7 +757,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_available_power_values(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Covers line 1414-1415."""
         home = await _get_home(hass, home_config_entry)
@@ -737,7 +769,9 @@ class TestHomeProductionConsumption:
 
     @pytest.mark.asyncio
     async def test_get_grid_consumption_power_values(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Covers line 1418-1419."""
         home = await _get_home(hass, home_config_entry)
@@ -756,14 +790,18 @@ class TestHomeDeviceManagement:
 
     @pytest.mark.asyncio
     async def test_add_and_remove_car(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Add and remove a car. Covers lines 1500-1556."""
         from .const import MOCK_CAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
 
         car_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CAR_CONFIG,
             entry_id="car_mgmt_test",
             title=f"car: {MOCK_CAR_CONFIG['name']}",
             unique_id="quiet_solar_car_mgmt_test",
@@ -780,7 +818,9 @@ class TestHomeDeviceManagement:
 
     @pytest.mark.asyncio
     async def test_remove_device_self_noop(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Removing home from itself is a no-op. Covers line 1543-1545."""
         home = await _get_home(hass, home_config_entry)
@@ -789,7 +829,9 @@ class TestHomeDeviceManagement:
 
     @pytest.mark.asyncio
     async def test_add_disabled_device(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Add and remove disabled device."""
         home = await _get_home(hass, home_config_entry)
@@ -808,7 +850,9 @@ class TestHomeDeviceManagement:
 
     @pytest.mark.asyncio
     async def test_get_person_by_name_none_input(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Passing None returns None. Covers line 1194-1195."""
         home = await _get_home(hass, home_config_entry)
@@ -825,7 +869,9 @@ class TestHomeSensorGetters:
 
     @pytest.mark.asyncio
     async def test_home_consumption_sensor_state_getter_none(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Returns None when home_consumption is None."""
         home = await _get_home(hass, home_config_entry)
@@ -835,7 +881,9 @@ class TestHomeSensorGetters:
 
     @pytest.mark.asyncio
     async def test_home_consumption_sensor_state_getter_with_value(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Returns tuple when home_consumption has a value."""
         home = await _get_home(hass, home_config_entry)
@@ -846,7 +894,9 @@ class TestHomeSensorGetters:
 
     @pytest.mark.asyncio
     async def test_home_available_power_sensor_state_getter_none(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Returns None when home_available_power is None."""
         home = await _get_home(hass, home_config_entry)
@@ -856,7 +906,9 @@ class TestHomeSensorGetters:
 
     @pytest.mark.asyncio
     async def test_grid_consumption_power_sensor_state_getter(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Returns tuple when grid_consumption_power has a value."""
         home = await _get_home(hass, home_config_entry)
@@ -876,7 +928,9 @@ class TestHomeFinishSetup:
 
     @pytest.mark.asyncio
     async def test_finish_setup_already_completed(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Already initialized returns True immediately. Covers line 1626-1627."""
         home = await _get_home(hass, home_config_entry)
@@ -886,7 +940,9 @@ class TestHomeFinishSetup:
 
     @pytest.mark.asyncio
     async def test_finish_setup_no_devices(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No devices returns False. Covers line 1630-1631."""
         home = await _get_home(hass, home_config_entry)
@@ -906,7 +962,9 @@ class TestCheckLoadsCommands:
 
     @pytest.mark.asyncio
     async def test_check_loads_commands_off_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """OFF mode returns True. Covers line 2139-2143."""
         home = await _get_home(hass, home_config_entry)
@@ -916,7 +974,9 @@ class TestCheckLoadsCommands:
 
     @pytest.mark.asyncio
     async def test_check_loads_commands_sensors_only_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """SENSORS_ONLY mode returns True."""
         home = await _get_home(hass, home_config_entry)
@@ -926,10 +986,11 @@ class TestCheckLoadsCommands:
 
     @pytest.mark.asyncio
     async def test_check_loads_commands_charger_only_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """CHARGER_ONLY uses only chargers. Covers line 2155-2156."""
-        from .const import MOCK_CHARGER_CONFIG
         home = await _get_home(hass, home_config_entry)
         home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY.value
         home._init_completed = True
@@ -946,7 +1007,9 @@ class TestCheckLoadsCommands:
 
     @pytest.mark.asyncio
     async def test_check_loads_commands_not_finished_setup(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Not-finished-setup returns False. Covers lines 2145-2147."""
         home = await _get_home(hass, home_config_entry)
@@ -958,7 +1021,9 @@ class TestCheckLoadsCommands:
 
     @pytest.mark.asyncio
     async def test_check_loads_commands_relaunch_stale(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Stale command triggers relaunch. Covers lines 2165-2167."""
         home = await _get_home(hass, home_config_entry)
@@ -989,7 +1054,9 @@ class TestUpdateLoads:
 
     @pytest.mark.asyncio
     async def test_update_loads_off_mode_returns_early(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """OFF mode returns early. Covers line 2178-2182."""
         home = await _get_home(hass, home_config_entry)
@@ -998,7 +1065,9 @@ class TestUpdateLoads:
 
     @pytest.mark.asyncio
     async def test_update_loads_not_finished_setup(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Not finished setup returns early. Covers lines 2184-2186."""
         home = await _get_home(hass, home_config_entry)
@@ -1009,7 +1078,9 @@ class TestUpdateLoads:
 
     @pytest.mark.asyncio
     async def test_update_loads_charger_only_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """CHARGER_ONLY mode only processes chargers. Covers line 2193-2194."""
         home = await _get_home(hass, home_config_entry)
@@ -1040,7 +1111,9 @@ class TestUpdateLoads:
 
     @pytest.mark.asyncio
     async def test_update_loads_off_grid_not_finished(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Off-grid switch not finished skips update. Covers lines 2188-2191."""
         home = await _get_home(hass, home_config_entry)
@@ -1072,15 +1145,18 @@ class TestHomeDashboardAndInit:
 
     @pytest.mark.asyncio
     async def test_price_peak_zero_clamped(
-        self, hass: HomeAssistant,
+        self,
+        hass: HomeAssistant,
     ):
         """price_peak <= 0 is clamped to 0.2. Covers line 267-268."""
         from .const import MOCK_HOME_CONFIG
+
         config = dict(MOCK_HOME_CONFIG)
         config[CONF_HOME_PEAK_PRICE] = -1.0
 
         entry = MockConfigEntry(
-            domain=DOMAIN, data=config,
+            domain=DOMAIN,
+            data=config,
             entry_id="price_zero_test",
             title="home: Test Home",
             unique_id="quiet_solar_price_zero_test",
@@ -1092,16 +1168,19 @@ class TestHomeDashboardAndInit:
 
     @pytest.mark.asyncio
     async def test_dashboard_section_parsing_icon_only(
-        self, hass: HomeAssistant,
+        self,
+        hass: HomeAssistant,
     ):
         """Dashboard section with only icon (no name) gets auto-name. Covers lines 285-291."""
         from .const import MOCK_HOME_CONFIG
+
         config = dict(MOCK_HOME_CONFIG)
         config["dashboard_section_name_0"] = None
         config["dashboard_section_icon_0"] = "mdi:car"
 
         entry = MockConfigEntry(
-            domain=DOMAIN, data=config,
+            domain=DOMAIN,
+            data=config,
             entry_id="dash_icon_test",
             title="home: Test Home",
             unique_id="quiet_solar_dash_icon_test",
@@ -1235,13 +1314,9 @@ class TestQSSolarHistoryVals:
 
         hv._last_forecast_update_time = datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC)
         # Within same interval
-        assert hv.update_current_forecast_if_needed(
-            datetime(2026, 2, 10, 14, 5, tzinfo=pytz.UTC)
-        ) is False
+        assert hv.update_current_forecast_if_needed(datetime(2026, 2, 10, 14, 5, tzinfo=pytz.UTC)) is False
         # After interval
-        assert hv.update_current_forecast_if_needed(
-            datetime(2026, 2, 10, 14, 20, tzinfo=pytz.UTC)
-        ) is True
+        assert hv.update_current_forecast_if_needed(datetime(2026, 2, 10, 14, 20, tzinfo=pytz.UTC)) is True
 
     def test_get_values_wrap_around(self):
         """_get_values handles ring-buffer wrap-around. Covers lines 3186-3197."""
@@ -1356,7 +1431,9 @@ class TestNonControlledConsumptionGetter:
 
     @pytest.mark.asyncio
     async def test_with_only_grid_no_solar_no_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Grid only, no solar/battery. Covers lines 1276, 1298-1302."""
         home = await _get_home(hass, home_config_entry)
@@ -1388,7 +1465,9 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     @pytest.mark.asyncio
     async def test_init_forecasts_creates_history_vals(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """init_forecasts creates home_non_controlled_consumption. Covers lines 2405-2411."""
         home = await _get_home(hass, home_config_entry)
@@ -1404,7 +1483,9 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     @pytest.mark.asyncio
     async def test_init_forecasts_during_reset(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """During reset, returns False. Covers line 2411."""
         home = await _get_home(hass, home_config_entry)
@@ -1455,7 +1536,10 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     @pytest.mark.asyncio
     async def test_dump_for_debug_no_consumption(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry, tmp_path,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+        tmp_path,
     ):
         """dump_for_debug with no consumption is a no-op. Covers line 2401."""
         home = await _get_home(hass, home_config_entry)
@@ -1466,7 +1550,10 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     @pytest.mark.asyncio
     async def test_dump_for_debug_with_consumption(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry, tmp_path,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+        tmp_path,
     ):
         """dump_for_debug saves the file. Covers lines 2401-2403."""
         home = await _get_home(hass, home_config_entry)
@@ -1620,7 +1707,9 @@ class TestMapLocationPath:
 
     @pytest.mark.asyncio
     async def test_map_location_path_empty_states(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Empty state lists return empty results."""
         home = await _get_home(hass, home_config_entry)
@@ -1630,16 +1719,16 @@ class TestMapLocationPath:
         home.radius = 100
 
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            [], [], now, now + timedelta(hours=2)
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path([], [], now, now + timedelta(hours=2))
         assert segments == []
         assert s1_not_home == []
         assert s2_not_home == []
 
     @pytest.mark.asyncio
     async def test_map_location_path_with_home_states(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """States at home produce no 'close' segments."""
         home = await _get_home(hass, home_config_entry)
@@ -1653,22 +1742,24 @@ class TestMapLocationPath:
         states = []
         for i in range(5):
             t = now + timedelta(minutes=i * 10)
-            states.append(SimpleNamespace(
-                last_updated=t,
-                state="home",
-                attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
-                entity_id="device_tracker.test",
-            ))
+            states.append(
+                SimpleNamespace(
+                    last_updated=t,
+                    state="home",
+                    attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
+                    entity_id="device_tracker.test",
+                )
+            )
 
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, states, now, now + timedelta(hours=2)
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, states, now, now + timedelta(hours=2))
         # All at home, so positions near home are filtered
         assert s1_not_home == []
 
     @pytest.mark.asyncio
     async def test_map_location_path_not_home_segments(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """States away from home create not-home segments. Covers lines 724-754."""
         home = await _get_home(hass, home_config_entry)
@@ -1680,39 +1771,45 @@ class TestMapLocationPath:
 
         states = []
         # First at home
-        states.append(SimpleNamespace(
-            last_updated=now,
-            state="home",
-            attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
-            entity_id="device_tracker.test",
-        ))
+        states.append(
+            SimpleNamespace(
+                last_updated=now,
+                state="home",
+                attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
+                entity_id="device_tracker.test",
+            )
+        )
         # Then away
         for i in range(1, 4):
             t = now + timedelta(minutes=i * 15)
-            states.append(SimpleNamespace(
-                last_updated=t,
-                state="not_home",
-                attributes={"latitude": 49.0 + i * 0.1, "longitude": 3.0 + i * 0.1, "source": "gps"},
-                entity_id="device_tracker.test",
-            ))
+            states.append(
+                SimpleNamespace(
+                    last_updated=t,
+                    state="not_home",
+                    attributes={"latitude": 49.0 + i * 0.1, "longitude": 3.0 + i * 0.1, "source": "gps"},
+                    entity_id="device_tracker.test",
+                )
+            )
         # Back home
-        states.append(SimpleNamespace(
-            last_updated=now + timedelta(hours=1),
-            state="home",
-            attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
-            entity_id="device_tracker.test",
-        ))
+        states.append(
+            SimpleNamespace(
+                last_updated=now + timedelta(hours=1),
+                state="home",
+                attributes={"latitude": 48.8566, "longitude": 2.3522, "source": "gps"},
+                entity_id="device_tracker.test",
+            )
+        )
 
         end = now + timedelta(hours=2)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
         # Should have detected a not-home segment
         assert len(s1_not_home) == 1
 
     @pytest.mark.asyncio
     async def test_map_location_path_unknown_state(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Unknown/unavailable states are skipped. Covers lines 706-709."""
         home = await _get_home(hass, home_config_entry)
@@ -1737,9 +1834,7 @@ class TestMapLocationPath:
             ),
         ]
 
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, now + timedelta(hours=1)
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, now + timedelta(hours=1))
         assert segments == []
 
 
@@ -1753,7 +1848,9 @@ class TestUpdateLoadsConstraints:
 
     @pytest.mark.asyncio
     async def test_update_loads_constraints_off_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """OFF mode returns early. Covers line 1674-1678."""
         home = await _get_home(hass, home_config_entry)
@@ -1762,7 +1859,9 @@ class TestUpdateLoadsConstraints:
 
     @pytest.mark.asyncio
     async def test_update_loads_constraints_sensors_only(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """SENSORS_ONLY mode returns early."""
         home = await _get_home(hass, home_config_entry)
@@ -1780,7 +1879,9 @@ class TestHomePersonMethods:
 
     @pytest.mark.asyncio
     async def test_compute_person_needed_time_and_date(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """_compute_person_needed_time_and_date returns correct structure."""
         home = await _get_home(hass, home_config_entry)
@@ -1796,7 +1897,9 @@ class TestHomePersonMethods:
 
     @pytest.mark.asyncio
     async def test_get_best_persons_cars_allocations_empty(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No persons/cars returns empty dict."""
         home = await _get_home(hass, home_config_entry)
@@ -1806,7 +1909,9 @@ class TestHomePersonMethods:
 
     @pytest.mark.asyncio
     async def test_recompute_people_historical_data_no_persons(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Recompute with no persons should not crash."""
         home = await _get_home(hass, home_config_entry)
@@ -1824,7 +1929,9 @@ class TestGetDevicesForDashboardSection:
 
     @pytest.mark.asyncio
     async def test_no_matching_section(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No devices match the section."""
         home = await _get_home(hass, home_config_entry)
@@ -1843,7 +1950,9 @@ class TestUpdateAllStates:
 
     @pytest.mark.asyncio
     async def test_update_all_states_off_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """OFF mode returns early. Covers line 2086-2089."""
         home = await _get_home(hass, home_config_entry)
@@ -1852,7 +1961,9 @@ class TestUpdateAllStates:
 
     @pytest.mark.asyncio
     async def test_update_all_states_none_mode(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """None mode returns early."""
         home = await _get_home(hass, home_config_entry)
@@ -2051,7 +2162,7 @@ class TestQSSolarHistoryValsCornerCases:
         # get_value_from_time_series handles None
         try:
             result_time, result_val = hv.get_value_from_current_forecast(t)
-        except (TypeError, AttributeError):
+        except TypeError, AttributeError:
             pass  # Expected if _current_forecast is None
 
     def test_get_utc_time_from_index_wrap_around(self):
@@ -2133,8 +2244,11 @@ class TestQSSolarHistoryValsCornerCases:
 
         # ---- num_score=6 → exercises indices 0,1,2,3,4 + else ----
         result = hv._get_range_score(
-            current_values, current_ok, start_idx,
-            past_delta=past_delta, num_score=6,
+            current_values,
+            current_ok,
+            start_idx,
+            past_delta=past_delta,
+            num_score=6,
         )
 
         # result should be [past_delta, rmse, mean_ratio, pearson_S, mean_bias, mean_abs, 0.0]
@@ -2182,8 +2296,11 @@ class TestQSSolarHistoryValsCornerCases:
 
         # ---- Also verify num_score=1 returns just [past_delta, rmse] ----
         result_1 = hv._get_range_score(
-            current_values, current_ok, start_idx,
-            past_delta=past_delta, num_score=1,
+            current_values,
+            current_ok,
+            start_idx,
+            past_delta=past_delta,
+            num_score=1,
         )
         assert len(result_1) == 2
         assert result_1[0] == past_delta
@@ -2260,7 +2377,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_no_solar_no_battery_grid_only(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Grid only: home_consumption = 0 - grid.  Covers 1298-1302."""
         home = await _get_home(hass, home_config_entry)
@@ -2281,13 +2400,17 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_no_solar_with_battery_charge(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No solar, battery present: solar_prod_minus_bat = 0 - battery_charge.  Covers line 1275-1276."""
         from .const import MOCK_BATTERY_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_ncc_1",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_ncc_1",
@@ -2313,16 +2436,20 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_active_power_returns_value(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """solar_inverter_active_power returns value → solar_production_minus_battery is set.
 
         Covers the main solar path (line 1251-1253) and solar_production derivation (1269-1273).
         """
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_1",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_1",
@@ -2350,21 +2477,26 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_input_power_fallback(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """solar_inverter_active_power returns None → falls back to solar_inverter_input_active_power.
 
         Covers lines 1255-1256, 1261-1265, 1267-1268.
         """
-        from .const import MOCK_SOLAR_CONFIG
         from custom_components.quiet_solar.const import CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR
+
+        from .const import MOCK_SOLAR_CONFIG
+
         # Config with input power sensor but not active
         sol_cfg = dict(MOCK_SOLAR_CONFIG)
         sol_cfg[CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR] = "sensor.solar_input_power"
 
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=sol_cfg,
+            domain=DOMAIN,
+            data=sol_cfg,
             entry_id="sol_ncc_2",
             title=f"solar: {sol_cfg['name']}",
             unique_id="quiet_solar_sol_ncc_2",
@@ -2394,21 +2526,26 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_input_with_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Input power + battery → solar_prod_minus_bat = production - battery.
 
         Covers lines 1262-1263 (solar_production_minus_battery = solar_production - battery_charge).
         """
-        from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
         from custom_components.quiet_solar.const import CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR
+
+        from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
+
         sol_cfg = dict(MOCK_SOLAR_CONFIG)
         sol_cfg[CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR] = "sensor.solar_input_power2"
 
         home = await _get_home(hass, home_config_entry)
         # battery
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_ncc_2",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_ncc_2",
@@ -2418,7 +2555,8 @@ class TestNonControlledConsumptionBranches:
         await hass.async_block_till_done()
         # solar
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=sol_cfg,
+            domain=DOMAIN,
+            data=sol_cfg,
             entry_id="sol_ncc_3",
             title=f"solar: {sol_cfg['name']}",
             unique_id="quiet_solar_sol_ncc_3",
@@ -2451,20 +2589,25 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_prod_minus_bat_none_and_solar_prod_only(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """solar_production_minus_battery remains None, solar_production only.
 
         Covers line 1264-1265 (elif solar_production is not None → assign directly).
         """
-        from .const import MOCK_SOLAR_CONFIG
         from custom_components.quiet_solar.const import CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR
+
+        from .const import MOCK_SOLAR_CONFIG
+
         sol_cfg = dict(MOCK_SOLAR_CONFIG)
         sol_cfg[CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR] = "sensor.solar_input3"
 
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=sol_cfg,
+            domain=DOMAIN,
+            data=sol_cfg,
             entry_id="sol_ncc_4",
             title=f"solar: {sol_cfg['name']}",
             unique_id="quiet_solar_sol_ncc_4",
@@ -2493,18 +2636,22 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_active_with_battery_sets_production(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """solar_inverter_active_power present, battery present: derive solar_production.
 
         Covers line 1269-1273 (solar_production_minus_battery not None,
         solar_production is None → set from spb + battery_charge).
         """
-        from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
+        from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
 
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_ncc_3",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_ncc_3",
@@ -2514,7 +2661,8 @@ class TestNonControlledConsumptionBranches:
         await hass.async_block_till_done()
 
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_5",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_5",
@@ -2545,7 +2693,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_no_grid_no_consumption_returns_none(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Neither grid nor home_consumption available → sets everything to None."""
         home = await _get_home(hass, home_config_entry)
@@ -2564,13 +2714,16 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_with_controlled_children(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Controlled loads subtract from home_consumption.
 
         Covers lines 1310-1332 (controlled consumption iteration).
         """
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = None
         home.physical_battery = None
@@ -2578,7 +2731,8 @@ class TestNonControlledConsumptionBranches:
 
         # Add a charger as a child load
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_ncc_1",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_ncc_1",
@@ -2599,16 +2753,20 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_available_power_clamped(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """available_power exceeding production gets clamped.
 
         Covers lines 1344-1361 (clamping logic).
         """
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_clamp",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_clamp",
@@ -2619,7 +2777,6 @@ class TestNonControlledConsumptionBranches:
 
         home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
-
 
         home.solar_plant.solar_max_output_power_value = 1000.0
         _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 300.0)
@@ -2635,17 +2792,20 @@ class TestNonControlledConsumptionBranches:
         assert result is not None
         assert home.home_available_power == pytest.approx(210.0, rel=0.01)
 
-
     @pytest.mark.asyncio
     async def test_available_power_clamped_with_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Clamping with battery present. Covers lines 1350-1351, 1355-1356."""
-        from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
+        from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
 
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_ncc_clamp",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_ncc_clamp",
@@ -2655,7 +2815,8 @@ class TestNonControlledConsumptionBranches:
         await hass.async_block_till_done()
 
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_clamp2",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_clamp2",
@@ -2679,7 +2840,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_both_solar_sensors_derive_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Both solar sensors present, battery_charge None → derive battery_charge.
 
@@ -2709,9 +2872,11 @@ class TestNonControlledConsumptionBranches:
         code path we CAN cover instead and test solar_production assignment logic.
         """
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_derive",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_derive",
@@ -2737,16 +2902,20 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_solar_active_no_battery_production_equals_minus_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """solar_prod_minus_bat set, solar_prod None, no battery → production = spb.
 
         Covers line 1272-1273 (solar_production = solar_production_minus_battery).
         """
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_ncc_nobat",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_ncc_nobat",
@@ -2771,7 +2940,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_accurate_power_sensor_derives_grid(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """accurate_power_sensor gives home_consumption, derive grid.
 
@@ -2804,7 +2975,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_accurate_power_no_solar_derives_grid_zero(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """accurate_power_sensor, solar_prod_minus_bat = 0 → grid = 0 - home.
 
@@ -2833,7 +3006,9 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_home_consumption_from_grid_no_solar(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """No accurate sensor, no solar: home = 0 - grid.
 
@@ -2855,13 +3030,16 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_controlled_loads_subtracted(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Children with power subtract from home consumption.
 
         Covers lines 1310-1319 (controlled consumption loop over _childrens).
         """
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = None
         home.physical_battery = None
@@ -2869,7 +3047,8 @@ class TestNonControlledConsumptionBranches:
 
         # Set up charger
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_ncc_ctrl",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_ncc_ctrl",
@@ -2883,7 +3062,7 @@ class TestNonControlledConsumptionBranches:
 
         # The charger is a child of home; inject a power reading for it
         charger = home._chargers[0]
-        if hasattr(charger, '_get_power_measure') and charger._get_power_measure() is not None:
+        if hasattr(charger, "_get_power_measure") and charger._get_power_measure() is not None:
             _inject_sensor_value(charger, charger._get_power_measure(), now, 1000.0)
 
         result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
@@ -2896,20 +3075,24 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_disabled_children_skipped(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Disabled children are skipped in controlled consumption.
 
         Covers line 1313-1314.
         """
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = None
         home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_ncc_dis",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_ncc_dis",
@@ -2930,20 +3113,24 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_piloted_devices_power_subtracted(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Loads with devices_to_pilot add piloted device power to controlled consumption.
 
         Covers lines 1320-1332 (piloted_sets loop and power accumulation).
         """
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = None
         home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_ncc_pilot",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_ncc_pilot",
@@ -2975,20 +3162,24 @@ class TestNonControlledConsumptionBranches:
 
     @pytest.mark.asyncio
     async def test_piloted_devices_disabled_load_skipped(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Disabled loads' piloted devices are skipped.
 
         Covers lines 1322-1323 (load disabled → continue).
         """
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
         home.physical_solar_plant = None
         home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_ncc_pildis",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_ncc_pildis",
@@ -3025,7 +3216,9 @@ class TestMapLocationPathExtraBranches:
 
     @pytest.mark.asyncio
     async def test_map_location_path_close_segments_merged(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Segments close in time get merged. Covers lines 845-859."""
         home = await _get_home(hass, home_config_entry)
@@ -3043,23 +3236,25 @@ class TestMapLocationPathExtraBranches:
             # Both far from home, close to each other
             lat = 49.5 + (i % 2) * 0.001  # tiny variation
             lon = 3.5 + (i % 2) * 0.001
-            states_1.append(SimpleNamespace(
-                last_updated=t,
-                state="not_home",
-                attributes={"latitude": lat, "longitude": lon, "source": "gps"},
-                entity_id="device_tracker.path1",
-            ))
-            states_2.append(SimpleNamespace(
-                last_updated=t + timedelta(seconds=30),
-                state="not_home",
-                attributes={"latitude": lat + 0.0001, "longitude": lon + 0.0001, "source": "gps"},
-                entity_id="device_tracker.path2",
-            ))
+            states_1.append(
+                SimpleNamespace(
+                    last_updated=t,
+                    state="not_home",
+                    attributes={"latitude": lat, "longitude": lon, "source": "gps"},
+                    entity_id="device_tracker.path1",
+                )
+            )
+            states_2.append(
+                SimpleNamespace(
+                    last_updated=t + timedelta(seconds=30),
+                    state="not_home",
+                    attributes={"latitude": lat + 0.0001, "longitude": lon + 0.0001, "source": "gps"},
+                    entity_id="device_tracker.path2",
+                )
+            )
 
         end = now + timedelta(hours=2)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states_1, states_2, now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states_1, states_2, now, end)
         # Should have at least one segment where paths are close
         # and not-home segments for both
         assert len(s1_not_home) >= 1
@@ -3067,7 +3262,9 @@ class TestMapLocationPathExtraBranches:
 
     @pytest.mark.asyncio
     async def test_map_location_path_home_far_from_zone(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Detected home position far from zone gets overridden. Covers lines 764-770."""
         home = await _get_home(hass, home_config_entry)
@@ -3088,14 +3285,14 @@ class TestMapLocationPathExtraBranches:
         ]
 
         end = now + timedelta(hours=1)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
         # Should not crash, home position gets overridden
 
     @pytest.mark.asyncio
     async def test_map_location_path_time_past_end(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """States with time > end get clamped. Covers line 703-704."""
         home = await _get_home(hass, home_config_entry)
@@ -3115,14 +3312,14 @@ class TestMapLocationPathExtraBranches:
             ),
         ]
 
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
         # Time should be clamped to end
 
     @pytest.mark.asyncio
     async def test_map_location_path_state_error_handled(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """State with bad attributes is handled gracefully. Covers lines 747-748."""
         home = await _get_home(hass, home_config_entry)
@@ -3142,14 +3339,14 @@ class TestMapLocationPathExtraBranches:
         ]
 
         end = now + timedelta(hours=1)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
         # Should handle ValueError gracefully
 
     @pytest.mark.asyncio
     async def test_map_location_path_no_lat_lon(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """State without lat/lon attributes. Covers lines 698, 720."""
         home = await _get_home(hass, home_config_entry)
@@ -3169,13 +3366,13 @@ class TestMapLocationPathExtraBranches:
         ]
 
         end = now + timedelta(hours=1)
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
 
     @pytest.mark.asyncio
     async def test_map_location_path_duplicate_time(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Duplicate timestamps are skipped. Covers line 700-701."""
         home = await _get_home(hass, home_config_entry)
@@ -3202,13 +3399,13 @@ class TestMapLocationPathExtraBranches:
             ),
         ]
 
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
 
     @pytest.mark.asyncio
     async def test_map_location_path_open_not_home_at_end(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Open not-home segment at end gets closed. Covers lines 752-754."""
         home = await _get_home(hass, home_config_entry)
@@ -3223,16 +3420,16 @@ class TestMapLocationPathExtraBranches:
         states = []
         for i in range(5):
             t = now + timedelta(minutes=i * 15)
-            states.append(SimpleNamespace(
-                last_updated=t,
-                state="not_home",
-                attributes={"latitude": 49.0 + i * 0.01, "longitude": 3.0, "source": "gps"},
-                entity_id="device_tracker.test",
-            ))
+            states.append(
+                SimpleNamespace(
+                    last_updated=t,
+                    state="not_home",
+                    attributes={"latitude": 49.0 + i * 0.01, "longitude": 3.0, "source": "gps"},
+                    entity_id="device_tracker.test",
+                )
+            )
 
-        segments, s1_not_home, s2_not_home = home.map_location_path(
-            states, [], now, end
-        )
+        segments, s1_not_home, s2_not_home = home.map_location_path(states, [], now, end)
         # Open not-home segment should be closed at end
         assert len(s1_not_home) == 1
         assert s1_not_home[0][1] == end
@@ -3254,13 +3451,15 @@ def _make_lazy_states(entity_id, start, end, interval_s=900, base_value=500.0, v
     i = 0
     while t <= end:
         val = base_value + (i % 10) * variation
-        states.append(SimpleNamespace(
-            entity_id=entity_id,
-            state=str(val),
-            last_changed=t,
-            last_updated=t,
-            attributes={"unit_of_measurement": "W"},
-        ))
+        states.append(
+            SimpleNamespace(
+                entity_id=entity_id,
+                state=str(val),
+                last_changed=t,
+                last_updated=t,
+                attributes={"unit_of_measurement": "W"},
+            )
+        )
         t += timedelta(seconds=interval_s)
         i += 1
     return states
@@ -3276,7 +3475,9 @@ class TestResetForecasts:
 
     @pytest.mark.asyncio
     async def test_full_reset_with_solar_battery_charger(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Full reset with solar + battery + charger: exercises the happy-path
         through reset_forecasts lines 2431-2676.
@@ -3285,13 +3486,14 @@ class TestResetForecasts:
         grid init (2496-2519), controlled loads BFS (2530-2600),
         buffer cleanup (2608-2655), final save (2658-2666).
         """
-        from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG, MOCK_CHARGER_CONFIG
+        from .const import MOCK_BATTERY_CONFIG, MOCK_CHARGER_CONFIG, MOCK_SOLAR_CONFIG
 
         home = await _get_home(hass, home_config_entry)
 
         # Add battery
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_reset_1",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_reset_1",
@@ -3302,7 +3504,8 @@ class TestResetForecasts:
 
         # Add solar
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_SOLAR_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_SOLAR_CONFIG,
             entry_id="sol_reset_1",
             title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
             unique_id="quiet_solar_sol_reset_1",
@@ -3313,7 +3516,8 @@ class TestResetForecasts:
 
         # Add charger
         ch_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_CHARGER_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
             entry_id="ch_reset_1",
             title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
             unique_id="quiet_solar_ch_reset_1",
@@ -3348,9 +3552,13 @@ class TestResetForecasts:
 
         # The non-controlled consumption entity
         from custom_components.quiet_solar.const import FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+
         ncc_states = _make_lazy_states(
             FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
-            history_start, now, base_value=800, variation=60,
+            history_start,
+            now,
+            base_value=800,
+            variation=60,
         )
 
         # Map entity_id -> states
@@ -3372,7 +3580,6 @@ class TestResetForecasts:
             return [s for s in states if start_time <= s.last_changed <= end_time]
 
         forecast = home._consumption_forecast
-        
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -3387,7 +3594,9 @@ class TestResetForecasts:
 
     @pytest.mark.asyncio
     async def test_full_reset_no_solar_no_battery(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Full reset with only grid sensor: no solar, no battery.
 
@@ -3406,9 +3615,13 @@ class TestResetForecasts:
         grid_states = _make_lazy_states(grid_sensor, history_start, now, base_value=-800, variation=50)
 
         from custom_components.quiet_solar.const import FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+
         ncc_states = _make_lazy_states(
             FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
-            history_start, now, base_value=600, variation=40,
+            history_start,
+            now,
+            base_value=600,
+            variation=40,
         )
 
         state_map = {
@@ -3435,7 +3648,9 @@ class TestResetForecasts:
 
     @pytest.mark.asyncio
     async def test_full_reset_bad_battery_init(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Battery init returns (None, None) → is_one_bad=True, skip everything.
 
@@ -3447,7 +3662,8 @@ class TestResetForecasts:
         home.physical_solar_plant = None
 
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_reset_bad",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_reset_bad",
@@ -3475,16 +3691,22 @@ class TestResetForecasts:
 
     @pytest.mark.asyncio
     async def test_light_reset(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Light reset path: init + save only. Covers lines 2668-2673."""
         home = await _get_home(hass, home_config_entry)
         now = datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC)
 
         from custom_components.quiet_solar.const import FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+
         ncc_states = _make_lazy_states(
             FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
-            now - timedelta(days=3), now, base_value=400, variation=30,
+            now - timedelta(days=3),
+            now,
+            base_value=400,
+            variation=30,
         )
 
         hass.states.async_set(FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, "100", {"unit_of_measurement": "W"})
@@ -3511,19 +3733,23 @@ class TestResetForecasts:
 
     @pytest.mark.asyncio
     async def test_full_reset_solar_input_power_path(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry,
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
     ):
         """Solar with input_active_power (no active_power) + battery:
         exercises the solar_inverter_input fallback (2477-2489).
         """
-        from .const import MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG
         from custom_components.quiet_solar.const import CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR
+
+        from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
         home = await _get_home(hass, home_config_entry)
 
         # Battery
         bat_entry = MockConfigEntry(
-            domain=DOMAIN, data=MOCK_BATTERY_CONFIG,
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
             entry_id="bat_reset_inp",
             title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
             unique_id="quiet_solar_bat_reset_inp",
@@ -3537,7 +3763,8 @@ class TestResetForecasts:
         sol_cfg[CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR] = "sensor.solar_input_reset"
         # Remove active power so active_power is set but we'll make it None
         sol_entry = MockConfigEntry(
-            domain=DOMAIN, data=sol_cfg,
+            domain=DOMAIN,
+            data=sol_cfg,
             entry_id="sol_reset_inp",
             title=f"solar: {sol_cfg['name']}",
             unique_id="quiet_solar_sol_reset_inp",
@@ -3566,7 +3793,10 @@ class TestResetForecasts:
             grid_sensor: _make_lazy_states(grid_sensor, history_start, now, base_value=-300, variation=50),
             FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER: _make_lazy_states(
                 FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
-                history_start, now, base_value=700, variation=40,
+                history_start,
+                now,
+                base_value=700,
+                variation=40,
             ),
         }
         for eid in state_map:
@@ -3617,7 +3847,9 @@ class TestQSSolarForecastPaths:
     def test_compute_now_forecast_happy_path(self):
         """Full happy path. Covers lines 3103-3168."""
         hv, now, idx, days = self._make_hv_with_data(10)
-        result = hv.compute_now_forecast(time_now=now, history_in_hours=24, future_needed_in_hours=6, set_as_current=True)
+        result = hv.compute_now_forecast(
+            time_now=now, history_in_hours=24, future_needed_in_hours=6, set_as_current=True
+        )
         assert isinstance(result, list)
         assert len(result) > 0
         assert result[-1][0] >= now
@@ -3625,10 +3857,14 @@ class TestQSSolarForecastPaths:
 
     def test_compute_now_forecast_no_scores(self):
         """Empty buffer → no scores. Covers lines 2778-2780."""
-        forecast = MagicMock(); forecast.home = None; forecast.storage_path = "/tmp"
+        forecast = MagicMock()
+        forecast.home = None
+        forecast.storage_path = "/tmp"
         hv = QSSolarHistoryVals(forecast=forecast, entity_id="s")
         hv.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
-        result = hv.compute_now_forecast(time_now=datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC), history_in_hours=24, future_needed_in_hours=6)
+        result = hv.compute_now_forecast(
+            time_now=datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC), history_in_hours=24, future_needed_in_hours=6
+        )
         assert result == []
 
     def test_get_predicted_data_bad_overlap(self):
@@ -3639,13 +3875,17 @@ class TestQSSolarForecastPaths:
     def test_get_predicted_data_concatenation(self):
         """Multiple valid scores get concatenated. Covers lines 2934-2936."""
         hv, now, idx, days = self._make_hv_with_data(10)
-        fv, pd = hv._get_predicted_data(48, idx, days, [[NUM_INTERVALS_PER_DAY, 10.0], [NUM_INTERVALS_PER_DAY * 2, 15.0]])
+        fv, pd = hv._get_predicted_data(
+            48, idx, days, [[NUM_INTERVALS_PER_DAY, 10.0], [NUM_INTERVALS_PER_DAY * 2, 15.0]]
+        )
         if fv is not None:
             assert len(fv) > 0
 
     def test_get_range_score_past_none(self):
         """values=None → []. Covers lines 2793-2797."""
-        forecast = MagicMock(); forecast.home = None; forecast.storage_path = "/tmp"
+        forecast = MagicMock()
+        forecast.home = None
+        forecast.storage_path = "/tmp"
         hv = QSSolarHistoryVals(forecast=forecast, entity_id="s")
         hv.values = None
         assert hv._get_range_score(np.array([100.0, 200.0]), np.ones(2, dtype=np.int32), 0, past_delta=96) == []
@@ -3690,8 +3930,10 @@ class TestQSSolarForecastPaths:
         hv.values[1][prev_slot] = days
 
         result = hv.compute_now_forecast(
-            time_now=now, history_in_hours=24,
-            future_needed_in_hours=6, set_as_current=False,
+            time_now=now,
+            history_in_hours=24,
+            future_needed_in_hours=6,
+            set_as_current=False,
         )
         # Should still produce a forecast (prev_val fills the gap)
         assert isinstance(result, list)
@@ -3708,8 +3950,10 @@ class TestHomeGaps96:
         """
         home = await _get_home(hass, home_config_entry)
         home.price_off_peak = 0.10 / 1000.0
-        home.tariff_start_1 = "06:00"; home.tariff_end_1 = "06:00"  # equal!
-        home.tariff_start_2 = None; home.tariff_end_2 = None
+        home.tariff_start_1 = "06:00"
+        home.tariff_end_1 = "06:00"  # equal!
+        home.tariff_start_2 = None
+        home.tariff_end_2 = None
         t = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
         result = home.get_tariff(t, t + timedelta(hours=1))
         assert result == home.price_peak
@@ -3722,8 +3966,10 @@ class TestHomeGaps96:
         """
         home = await _get_home(hass, home_config_entry)
         home.price_off_peak = 0.10 / 1000.0
-        home.tariff_start_1 = "06:00"; home.tariff_end_1 = "06:00"
-        home.tariff_start_2 = None; home.tariff_end_2 = None
+        home.tariff_start_1 = "06:00"
+        home.tariff_end_1 = "06:00"
+        home.tariff_start_2 = None
+        home.tariff_end_2 = None
         t = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
         result = home.get_tariffs(t, t + timedelta(hours=24))
         assert result == home.price_peak
@@ -3739,8 +3985,10 @@ class TestHomeGaps96:
         home = await _get_home(hass, home_config_entry)
         home.price_off_peak = 0.10 / 1000.0
         # Wide off-peak range: 01:00-05:00 local
-        home.tariff_start_1 = "01:00"; home.tariff_end_1 = "05:00"
-        home.tariff_start_2 = None; home.tariff_end_2 = None
+        home.tariff_start_1 = "01:00"
+        home.tariff_end_1 = "05:00"
+        home.tariff_start_2 = None
+        home.tariff_end_2 = None
 
         # Verify ranges are produced
         t = datetime(2026, 2, 10, 15, 0, tzinfo=pytz.UTC)
@@ -3761,8 +4009,10 @@ class TestHomeGaps96:
         home = await _get_home(hass, home_config_entry)
         home.price_off_peak = 0.10 / 1000.0
         # Off-peak 01:00-05:00 local = ~00:00-04:00 UTC (CET)
-        home.tariff_start_1 = "01:00"; home.tariff_end_1 = "05:00"
-        home.tariff_start_2 = "13:00"; home.tariff_end_2 = "16:00"
+        home.tariff_start_1 = "01:00"
+        home.tariff_end_1 = "05:00"
+        home.tariff_start_2 = "13:00"
+        home.tariff_end_2 = "16:00"
 
         # Start at 01:00 UTC — which is within the first off-peak range (00:00-04:00 UTC)
         # This means curr_start (00:00) < start_time (01:00) → line 1168 fires
@@ -3783,8 +4033,11 @@ class TestHomeGaps96:
     async def test_finish_setup_succeeds(self, hass: HomeAssistant, home_config_entry: ConfigEntry):
         """Covers line 1663."""
         from .const import MOCK_CHARGER_CONFIG
+
         home = await _get_home(hass, home_config_entry)
-        ch_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="ch_fs", title="charger: T", unique_id="qs_ch_fs")
+        ch_entry = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="ch_fs", title="charger: T", unique_id="qs_ch_fs"
+        )
         ch_entry.add_to_hass(hass)
         await hass.config_entries.async_setup(ch_entry.entry_id)
         await hass.async_block_till_done()
@@ -3796,11 +4049,20 @@ class TestHomeGaps96:
     async def test_topology_piloted_device(self, hass: HomeAssistant, home_config_entry: ConfigEntry):
         """Covers lines 1488-1489."""
         from .const import MOCK_CHARGER_CONFIG, MOCK_HEAT_PUMP_CONFIG
+
         home = await _get_home(hass, home_config_entry)
-        hp_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_HEAT_PUMP_CONFIG, entry_id="hp_t", title="hp: T", unique_id="qs_hp_t")
-        hp_entry.add_to_hass(hass); await hass.config_entries.async_setup(hp_entry.entry_id); await hass.async_block_till_done()
-        ch_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="ch_t", title="charger: T", unique_id="qs_ch_t")
-        ch_entry.add_to_hass(hass); await hass.config_entries.async_setup(ch_entry.entry_id); await hass.async_block_till_done()
+        hp_entry = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_HEAT_PUMP_CONFIG, entry_id="hp_t", title="hp: T", unique_id="qs_hp_t"
+        )
+        hp_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(hp_entry.entry_id)
+        await hass.async_block_till_done()
+        ch_entry = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="ch_t", title="charger: T", unique_id="qs_ch_t"
+        )
+        ch_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(ch_entry.entry_id)
+        await hass.async_block_till_done()
         hp = hass.data[DOMAIN].get(hp_entry.entry_id)
         charger = home._chargers[0]
         charger.piloted_device_name = hp.name
@@ -3812,9 +4074,14 @@ class TestHomeGaps96:
     async def test_remove_dynamic_group(self, hass: HomeAssistant, home_config_entry: ConfigEntry):
         """Covers lines 1590-1591."""
         from .const import MOCK_DYNAMIC_GROUP_CONFIG
+
         home = await _get_home(hass, home_config_entry)
-        dg_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_DYNAMIC_GROUP_CONFIG, entry_id="dg_r", title="dg: T", unique_id="qs_dg_r")
-        dg_entry.add_to_hass(hass); await hass.config_entries.async_setup(dg_entry.entry_id); await hass.async_block_till_done()
+        dg_entry = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_DYNAMIC_GROUP_CONFIG, entry_id="dg_r", title="dg: T", unique_id="qs_dg_r"
+        )
+        dg_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(dg_entry.entry_id)
+        await hass.async_block_till_done()
         dg = hass.data[DOMAIN].get(dg_entry.entry_id)
         assert dg in home._all_dynamic_groups
         home.remove_device(dg)
@@ -3826,32 +4093,53 @@ class TestHomeGaps96:
         home = await _get_home(hass, home_config_entry)
         home.home_mode = QSHomeMode.HOME_MODE_ON.value
         home._init_completed = True
-        home.physical_battery = None; home.physical_solar_plant = None
+        home.physical_battery = None
+        home.physical_solar_plant = None
         t = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
         home._switch_to_off_grid_launched = t - timedelta(minutes=5)
-        load = MagicMock(); load.name = "l"; load.qs_enable_device = True
-        load.check_commands = AsyncMock(return_value=(timedelta(0), True)); load.running_command_num_relaunch = 0
-        load.is_load_active = MagicMock(return_value=False); load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
+        load = MagicMock()
+        load.name = "l"
+        load.qs_enable_device = True
+        load.check_commands = AsyncMock(return_value=(timedelta(0), True))
+        load.running_command_num_relaunch = 0
+        load.is_load_active = MagicMock(return_value=False)
+        load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
         load.get_current_active_constraint = MagicMock(return_value=None)
-        load.launch_command = AsyncMock(); load.do_probe_state_change = AsyncMock()
-        home._all_loads = [load]; home._chargers = []; home._commands = []; home._battery_commands = None
+        load.launch_command = AsyncMock()
+        load.do_probe_state_change = AsyncMock()
+        home._all_loads = [load]
+        home._chargers = []
+        home._commands = []
+        home._battery_commands = None
         await home.update_loads(t)
 
     @pytest.mark.asyncio
     async def test_solar_forecast_getter_with_solar(self, hass: HomeAssistant, home_config_entry: ConfigEntry):
         """Covers line 1060."""
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
-        se = MockConfigEntry(domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="sf_g", title="solar: T", unique_id="qs_sf_g")
-        se.add_to_hass(hass); await hass.config_entries.async_setup(se.entry_id); await hass.async_block_till_done()
-        assert isinstance(home.get_solar_from_current_forecast_getter(datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)), tuple)
+        se = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="sf_g", title="solar: T", unique_id="qs_sf_g"
+        )
+        se.add_to_hass(hass)
+        await hass.config_entries.async_setup(se.entry_id)
+        await hass.async_block_till_done()
+        assert isinstance(
+            home.get_solar_from_current_forecast_getter(datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)), tuple
+        )
 
     @pytest.mark.asyncio
     async def test_solar_forecast_list_with_solar(self, hass: HomeAssistant, home_config_entry: ConfigEntry):
         """Covers line 1065."""
         from .const import MOCK_SOLAR_CONFIG
+
         home = await _get_home(hass, home_config_entry)
-        se = MockConfigEntry(domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="sf_l", title="solar: T", unique_id="qs_sf_l")
-        se.add_to_hass(hass); await hass.config_entries.async_setup(se.entry_id); await hass.async_block_till_done()
+        se = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="sf_l", title="solar: T", unique_id="qs_sf_l"
+        )
+        se.add_to_hass(hass)
+        await hass.config_entries.async_setup(se.entry_id)
+        await hass.async_block_till_done()
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
         assert isinstance(home.get_solar_from_current_forecast(now, now + timedelta(hours=24)), list)

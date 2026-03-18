@@ -1,38 +1,34 @@
 """Tests for QSCar in ha_model/car.py."""
+
 from __future__ import annotations
 
-import datetime
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import timedelta
-
-from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-import pytz
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.ha_model.car import QSCar, MIN_CHARGE_POWER_W
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
+    CONF_CAR_BATTERY_CAPACITY,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
+    CONF_CAR_CHARGE_PERCENT_SENSOR,
+    CONF_CAR_CHARGER_MAX_CHARGE,
+    CONF_CAR_CHARGER_MIN_CHARGE,
+    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
+    CONF_CAR_ESTIMATED_RANGE_SENSOR,
+    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
+    CONF_CAR_IS_INVITED,
+    CONF_CAR_ODOMETER_SENSOR,
     CONF_CAR_PLUGGED,
     CONF_CAR_TRACKER,
-    CONF_CAR_CHARGE_PERCENT_SENSOR,
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
-    CONF_CAR_BATTERY_CAPACITY,
-    CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGER_MAX_CHARGE,
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
-    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
-    CONF_CAR_IS_INVITED,
+    DATA_HANDLER,
+    DOMAIN,
     MAX_POSSIBLE_AMPERAGE,
-    CONF_CAR_ODOMETER_SENSOR,
-    CONF_CAR_ESTIMATED_RANGE_SENSOR,
 )
-
+from custom_components.quiet_solar.ha_model.car import QSCar
 from tests.factories import create_minimal_home_model
 
 
@@ -67,11 +63,11 @@ def test_init_minimal(hass: HomeAssistant, car_config_entry, car_home):
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+        },
+    )
 
     assert car.name == "Test Car"
     assert car.car_tracker == "device_tracker.car"
@@ -84,16 +80,16 @@ def test_init_with_all_sensors(hass: HomeAssistant, car_config_entry, car_home):
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_CAR_PLUGGED: "binary_sensor.car_plugged",
-                CONF_CAR_CHARGE_PERCENT_SENSOR: "sensor.car_soc",
-                CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: "number.car_max_soc",
-                CONF_CAR_ODOMETER_SENSOR: "sensor.car_odometer",
-                CONF_CAR_ESTIMATED_RANGE_SENSOR: "sensor.car_range",
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_PLUGGED: "binary_sensor.car_plugged",
+            CONF_CAR_CHARGE_PERCENT_SENSOR: "sensor.car_soc",
+            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: "number.car_max_soc",
+            CONF_CAR_ODOMETER_SENSOR: "sensor.car_odometer",
+            CONF_CAR_ESTIMATED_RANGE_SENSOR: "sensor.car_range",
+        },
+    )
 
     assert car.car_plugged == "binary_sensor.car_plugged"
     assert car.car_charge_percent_sensor == "sensor.car_soc"
@@ -108,12 +104,12 @@ def test_init_with_battery_capacity(hass: HomeAssistant, car_config_entry, car_h
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_CAR_BATTERY_CAPACITY: 75000,  # 75 kWh
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_BATTERY_CAPACITY: 75000,  # 75 kWh
+        },
+    )
 
     assert car.car_battery_capacity == 75000
 
@@ -124,13 +120,13 @@ def test_init_with_charger_limits(hass: HomeAssistant, car_config_entry, car_hom
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_CAR_CHARGER_MIN_CHARGE: 6,
-                CONF_CAR_CHARGER_MAX_CHARGE: 16,
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 16,
+        },
+    )
 
     assert car.car_charger_min_charge == 6
     assert car.car_charger_max_charge == 16
@@ -142,13 +138,13 @@ def test_init_with_default_charge(hass: HomeAssistant, car_config_entry, car_hom
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_DEFAULT_CAR_CHARGE: 80.0,
-                CONF_MINIMUM_OK_CAR_CHARGE: 20.0,
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_DEFAULT_CAR_CHARGE: 80.0,
+            CONF_MINIMUM_OK_CAR_CHARGE: 20.0,
+        },
+    )
 
     assert car.car_default_charge == 80.0
     assert car.car_minimum_ok_charge == 20.0
@@ -160,12 +156,12 @@ def test_init_invited_car(hass: HomeAssistant, car_config_entry, car_home):
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Guest Car",
-                CONF_CAR_TRACKER: "device_tracker.guest_car",
-                CONF_CAR_IS_INVITED: True,
-            }
-        )
+        **{
+            CONF_NAME: "Guest Car",
+            CONF_CAR_TRACKER: "device_tracker.guest_car",
+            CONF_CAR_IS_INVITED: True,
+        },
+    )
 
     assert car.car_is_invited is True
 
@@ -176,11 +172,11 @@ def test_init_creates_amp_to_power_tables(hass: HomeAssistant, car_config_entry,
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+        },
+    )
 
     # Should have tables for 1p and 3p
     assert len(car.amp_to_power_1p) == MAX_POSSIBLE_AMPERAGE
@@ -193,11 +189,11 @@ def test_init_theoretical_power_calculation(hass: HomeAssistant, car_config_entr
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+        },
+    )
 
     # For 10A at 230V
     assert car.theoretical_amp_to_power_1p[10] == pytest.approx(2300.0, abs=10)
@@ -210,18 +206,18 @@ def test_init_with_custom_power_values_1p(hass: HomeAssistant, car_config_entry,
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_CAR_CHARGER_MIN_CHARGE: 6,
-                CONF_CAR_CHARGER_MAX_CHARGE: 16,
-                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
-                CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: False,
-                "charge_6": 1200,
-                "charge_10": 2100,
-                "charge_16": 3500,
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 16,
+            CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: False,
+            "charge_6": 1200,
+            "charge_10": 2100,
+            "charge_16": 3500,
+        },
+    )
 
     assert car.car_use_custom_power_charge_values is True
     assert car.car_is_custom_power_charge_values_3p is False
@@ -236,18 +232,18 @@ def test_init_with_custom_power_values_3p(hass: HomeAssistant, car_config_entry,
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-            **{
-                CONF_NAME: "Test Car",
-                CONF_CAR_TRACKER: "device_tracker.car",
-                CONF_CAR_CHARGER_MIN_CHARGE: 6,
-                CONF_CAR_CHARGER_MAX_CHARGE: 16,
-                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
-                CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
-                "charge_6": 4000,
-                "charge_10": 7000,
-                "charge_16": 11000,
-            }
-        )
+        **{
+            CONF_NAME: "Test Car",
+            CONF_CAR_TRACKER: "device_tracker.car",
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 16,
+            CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P: True,
+            "charge_6": 4000,
+            "charge_10": 7000,
+            "charge_16": 11000,
+        },
+    )
 
     assert car.car_is_custom_power_charge_values_3p is True
     assert car.customized_amp_to_power_3p[6] == 4000
@@ -267,15 +263,13 @@ def car_with_charge_percent(hass: HomeAssistant, car_config_entry, car_home):
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_CHARGE_PERCENT_SENSOR: "sensor.car_soc",
             CONF_CAR_BATTERY_CAPACITY: 75000,
-        }
+        },
     )
 
 
 def test_get_car_charge_percent_valid(car_with_charge_percent):
     """Test get_car_charge_percent with valid value."""
-    car_with_charge_percent.get_sensor_latest_possible_valid_value = MagicMock(
-        return_value=80.0
-    )
+    car_with_charge_percent.get_sensor_latest_possible_valid_value = MagicMock(return_value=80.0)
 
     result = car_with_charge_percent.get_car_charge_percent()
 
@@ -284,9 +278,7 @@ def test_get_car_charge_percent_valid(car_with_charge_percent):
 
 def test_get_car_charge_percent_none(car_with_charge_percent):
     """Test get_car_charge_percent with None value."""
-    car_with_charge_percent.get_sensor_latest_possible_valid_value = MagicMock(
-        return_value=None
-    )
+    car_with_charge_percent.get_sensor_latest_possible_valid_value = MagicMock(return_value=None)
 
     result = car_with_charge_percent.get_car_charge_percent()
 
@@ -308,7 +300,7 @@ def test_car_plugged_sensor_configured(hass: HomeAssistant, car_config_entry, ca
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_PLUGGED: "binary_sensor.car_plugged",
-        }
+        },
     )
     assert car.car_plugged == "binary_sensor.car_plugged"
 
@@ -323,7 +315,7 @@ def test_car_has_plugged_check(hass: HomeAssistant, car_config_entry, car_home):
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_PLUGGED: "binary_sensor.car_plugged",
-        }
+        },
     )
     assert hasattr(car, "is_car_plugged")
 
@@ -334,7 +326,7 @@ def test_car_tracker_configured(hass: HomeAssistant, car_config_entry, car_home)
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"}
+        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"},
     )
     assert car.car_tracker == "device_tracker.car"
 
@@ -345,7 +337,7 @@ def test_car_has_location_methods(hass: HomeAssistant, car_config_entry, car_hom
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"}
+        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"},
     )
     assert hasattr(car, "get_car_coordinates")
     assert hasattr(car, "is_car_home")
@@ -363,7 +355,7 @@ def car_amp_to_power(hass: HomeAssistant, car_config_entry, car_home):
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_CHARGER_MIN_CHARGE: 6,
             CONF_CAR_CHARGER_MAX_CHARGE: 32,
-        }
+        },
     )
 
 
@@ -397,7 +389,7 @@ def test_charge_percent_steps_parsed(hass: HomeAssistant, car_config_entry, car_
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             "car_charge_percent_max_number_steps": "50, 80, 90",
-        }
+        },
     )
     assert 50 in car.car_charge_percent_max_number_steps
     assert 80 in car.car_charge_percent_max_number_steps
@@ -415,13 +407,10 @@ def test_charge_percent_steps_sorted(hass: HomeAssistant, car_config_entry, car_
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             "car_charge_percent_max_number_steps": "90, 50, 80",
-        }
+        },
     )
     for i in range(len(car.car_charge_percent_max_number_steps) - 1):
-        assert (
-            car.car_charge_percent_max_number_steps[i]
-            <= car.car_charge_percent_max_number_steps[i + 1]
-        )
+        assert car.car_charge_percent_max_number_steps[i] <= car.car_charge_percent_max_number_steps[i + 1]
 
 
 def test_charge_percent_steps_invalid(hass: HomeAssistant, car_config_entry, car_home):
@@ -434,14 +423,12 @@ def test_charge_percent_steps_invalid(hass: HomeAssistant, car_config_entry, car
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             "car_charge_percent_max_number_steps": "abc, 50, xyz",
-        }
+        },
     )
     assert car.car_charge_percent_max_number_steps == []
 
 
-def test_charge_percent_steps_empty_string(
-    hass: HomeAssistant, car_config_entry, car_home
-):
+def test_charge_percent_steps_empty_string(hass: HomeAssistant, car_config_entry, car_home):
     """Test charge percent steps with empty string."""
     car = QSCar(
         hass=hass,
@@ -451,7 +438,7 @@ def test_charge_percent_steps_empty_string(
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             "car_charge_percent_max_number_steps": "",
-        }
+        },
     )
     assert car.car_charge_percent_max_number_steps == []
 
@@ -466,7 +453,7 @@ def test_charger_min_charge_clamped(hass: HomeAssistant, car_config_entry, car_h
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_CHARGER_MIN_CHARGE: -5,  # Negative
-        }
+        },
     )
     assert car.car_charger_min_charge == 0
 
@@ -481,7 +468,7 @@ def test_charger_max_charge_clamped(hass: HomeAssistant, car_config_entry, car_h
             CONF_NAME: "Test Car",
             CONF_CAR_TRACKER: "device_tracker.car",
             CONF_CAR_CHARGER_MAX_CHARGE: 32,  # A reasonable value
-        }
+        },
     )
     assert car.car_charger_max_charge >= 0
     assert isinstance(car.car_charger_max_charge, int)
@@ -493,20 +480,18 @@ def test_do_force_next_charge_default(hass: HomeAssistant, car_config_entry, car
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"}
+        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"},
     )
     assert car.do_force_next_charge is False
 
 
-def test_do_force_next_charge_can_be_set(
-    hass: HomeAssistant, car_config_entry, car_home
-):
+def test_do_force_next_charge_can_be_set(hass: HomeAssistant, car_config_entry, car_home):
     """Test do_force_next_charge can be set."""
     car = QSCar(
         hass=hass,
         config_entry=car_config_entry,
         home=car_home,
-        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"}
+        **{CONF_NAME: "Test Car", CONF_CAR_TRACKER: "device_tracker.car"},
     )
     car.do_force_next_charge = True
     assert car.do_force_next_charge is True

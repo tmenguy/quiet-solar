@@ -1,35 +1,44 @@
 import logging
-from datetime import datetime
-from datetime import timedelta
-import numpy.typing as npt
+from datetime import datetime, timedelta
+
 import numpy as np
+import numpy.typing as npt
 import pytz
 
-from .battery import Battery
-from .constraints import LoadConstraint, DATETIME_MAX_UTC
-from .home_utils import get_average_time_series, add_amps
-from .load import AbstractLoad
-from .commands import LoadCommand, copy_command, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE, \
-    CMD_GREEN_CHARGE_ONLY, merge_commands, CMD_AUTO_GREEN_CAP, CMD_AUTO_GREEN_ONLY, copy_command_and_change_type, \
-    CMD_FORCE_CHARGE
 from ..const import SOLVER_STEP_S
+from .battery import Battery
+from .commands import (
+    CMD_AUTO_GREEN_CAP,
+    CMD_AUTO_GREEN_ONLY,
+    CMD_FORCE_CHARGE,
+    CMD_GREEN_CHARGE_AND_DISCHARGE,
+    CMD_GREEN_CHARGE_ONLY,
+    CMD_IDLE,
+    LoadCommand,
+    copy_command,
+    copy_command_and_change_type,
+    merge_commands,
+)
+from .constraints import DATETIME_MAX_UTC, LoadConstraint
+from .home_utils import add_amps, get_average_time_series
+from .load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
-class PeriodSolver(object):
 
-    def __init__(self,
-                 start_time: datetime | None = None,
-                 end_time: datetime | None = None,
-                 tariffs: list[tuple[timedelta, float]] | float | None = None,
-                 actionable_loads: list[AbstractLoad] = None,
-                 battery: Battery | None = None,
-                 pv_forecast: list[tuple[datetime, float]] = None,
-                 unavoidable_consumption_forecast: list[tuple[datetime, float]] = None,
-                 step_s: timedelta = timedelta(seconds=SOLVER_STEP_S),
-                 max_inverter_dc_to_ac_power = None,
-                 ) -> None:
-
+class PeriodSolver:
+    def __init__(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        tariffs: list[tuple[timedelta, float]] | float | None = None,
+        actionable_loads: list[AbstractLoad] = None,
+        battery: Battery | None = None,
+        pv_forecast: list[tuple[datetime, float]] = None,
+        unavoidable_consumption_forecast: list[tuple[datetime, float]] = None,
+        step_s: timedelta = timedelta(seconds=SOLVER_STEP_S),
+        max_inverter_dc_to_ac_power=None,
+    ) -> None:
         """
         :param start_time: datetime: The start time of the period to solve.
         :param end_time: datetime: The end time of the day.
@@ -63,7 +72,7 @@ class PeriodSolver(object):
         self._max_inverter_dc_to_ac_power = max_inverter_dc_to_ac_power
 
         if not tariffs:
-            self._tariffs = [(start_time, 0.2/1000.0)]
+            self._tariffs = [(start_time, 0.2 / 1000.0)]
         elif isinstance(tariffs, float):
             self._tariffs = [(start_time, tariffs)]
         elif len(tariffs) == 1:
@@ -71,7 +80,7 @@ class PeriodSolver(object):
         else:
             self._tariffs = tariffs
 
-        self._prices_ordered_values : list[float] = sorted(list(set([ p[1] for p in self._tariffs])))
+        self._prices_ordered_values: list[float] = sorted(list(set([p[1] for p in self._tariffs])))
 
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
         self._time_slots, self._active_constraints = self.create_time_slots(self._start_time, self._end_time)
@@ -81,7 +90,9 @@ class PeriodSolver(object):
 
         # fill the battery if we do have some production clamping at inverter level
         if self._battery is not None:
-            self._battery_charge_power_by_inverter_AC_clamping = self._battery_get_charging_power(for_production_clamping=True)[0]
+            self._battery_charge_power_by_inverter_AC_clamping = self._battery_get_charging_power(
+                for_production_clamping=True
+            )[0]
             # reduce the available power to what is really available for the home: it is clamped by the maximum capacity of the inverter
             self._available_power = self._available_power + self._battery_charge_power_by_inverter_AC_clamping
 
@@ -92,17 +103,16 @@ class PeriodSolver(object):
         if pv_forecast is None:
             _LOGGER.warning("PeriodSolver: NO SOLAR FORECAST FROM INPUT")
         else:
-            s  = sum([v for t,v in pv_forecast])
+            s = sum([v for t, v in pv_forecast])
             if s == 0.0:
                 _LOGGER.warning("PeriodSolver: NO AVAILABLE SOLAR 0 SUM")
 
         if unavoidable_consumption_forecast is None:
             _LOGGER.warning("PeriodSolver: NO UA FORECAST FROM INPUT")
         else:
-            s  = sum([v for t,v in unavoidable_consumption_forecast])
+            s = sum([v for t, v in unavoidable_consumption_forecast])
             if s == 0.0:
                 _LOGGER.warning("PeriodSolver: NO AVAILABLE UA 0 SUM")
-
 
         if np.sum(self._available_power) == 0.0:
             _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER 0 SUM")
@@ -114,8 +124,9 @@ class PeriodSolver(object):
         self._loads_energy_and_time_consumption_for_test = None
         self._constraints_for_test = None
 
-
-    def create_time_slots(self, start_time: datetime, end_time: datetime) -> tuple[list[datetime], list[LoadConstraint]]:
+    def create_time_slots(
+        self, start_time: datetime, end_time: datetime
+    ) -> tuple[list[datetime], list[LoadConstraint]]:
         """
         Create the time slots for the forecast.
 
@@ -127,7 +138,7 @@ class PeriodSolver(object):
             list: A list of time slots.
         """
 
-        #gather all anchor point first:
+        # gather all anchor point first:
         anchors = set()
         anchors.add(start_time)
         anchors.add(end_time)
@@ -135,10 +146,8 @@ class PeriodSolver(object):
             if tariff[0] >= start_time and tariff[0] <= end_time:
                 anchors.add(tariff[0])
 
-
         active_constraints = []
         for load in self._loads:
-
             constraints = load.get_for_solver_constraints(start_time, end_time)
             for constraint in constraints:
                 if constraint.end_of_constraint != DATETIME_MAX_UTC and constraint.end_of_constraint <= end_time:
@@ -147,29 +156,29 @@ class PeriodSolver(object):
 
         core_anchors = sorted(list(anchors))
 
-        for i in range(len(core_anchors)-1):
+        for i in range(len(core_anchors) - 1):
             begin_slot = core_anchors[i]
-            end_slot = core_anchors[i+1]
+            end_slot = core_anchors[i + 1]
             slots_s = (end_slot - begin_slot).total_seconds()
 
             num_slots = int(slots_s // self._step_s)
 
             if num_slots > 0:
                 left_over = slots_s % self._step_s
-                if left_over < self._step_s//3:
-                    #merge the last one with the previous one
+                if left_over < self._step_s // 3:
+                    # merge the last one with the previous one
                     num_slots -= 1
 
                 for j in range(num_slots):
-                    anchors.add(begin_slot + timedelta(seconds=(j+1)*self._step_s))
+                    anchors.add(begin_slot + timedelta(seconds=(j + 1) * self._step_s))
 
         anchors = sorted(list(anchors))
 
         return anchors, active_constraints
 
-    def create_power_slots(self, anchors: list[datetime]) -> tuple[npt.NDArray[np.float64],
-                                                             npt.NDArray[np.float64],
-                                                             npt.NDArray[np.float64]]:
+    def create_power_slots(
+        self, anchors: list[datetime]
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Create the power slots for the forecast.
 
@@ -179,32 +188,34 @@ class PeriodSolver(object):
         Returns:
             list: A list of power slots.
         """
-        prices :npt.NDArray[np.float64]  = np.zeros(len(anchors)-1, dtype=np.float64)
-        durations_s: npt.NDArray[np.float64] = np.zeros(len(anchors)-1, dtype=np.float64)
-        available_power: npt.NDArray[np.float64] = np.zeros(len(anchors)-1, dtype=np.float64)
+        prices: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
+        durations_s: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
+        available_power: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
 
-        #anchors contain start stop and everything needed to create the slots
+        # anchors contain start stop and everything needed to create the slots
         i_tariff = 0
-        i_ua = -1 #the latest entry used in the previous slot
+        i_ua = -1  # the latest entry used in the previous slot
         i_pv = -1
 
-        for i in range(len(anchors)-1):
+        for i in range(len(anchors) - 1):
             begin_slot = anchors[i]
-            end_slot = anchors[i+1]
+            end_slot = anchors[i + 1]
 
             slots_s = (end_slot - begin_slot).total_seconds()
-            durations_s[i] =  slots_s
+            durations_s[i] = slots_s
 
             # by construction slots have been computed to be inside core anchors ie always inside the same tariff
             # < end_slot and not <= end_slot because we don't want to get the next tarif as the slot is inside
-            while i_tariff < len(self._tariffs)-1 and self._tariffs[i_tariff+1][0] < end_slot:
+            while i_tariff < len(self._tariffs) - 1 and self._tariffs[i_tariff + 1][0] < end_slot:
                 i_tariff += 1
 
             prices[i] = self._tariffs[i_tariff][1]
 
-            #now compute the best power for the slots
+            # now compute the best power for the slots
             i_ua, ua_power = self._power_slot_from_forecast(self._ua_forecast, begin_slot, end_slot, i_ua)
-            i_pv, pv_power = self._power_slot_from_forecast(self._pv_forecast, begin_slot, end_slot, i_pv, geometric_smoothing=True) #solar prediction can be smoothed a bit
+            i_pv, pv_power = self._power_slot_from_forecast(
+                self._pv_forecast, begin_slot, end_slot, i_pv, geometric_smoothing=True
+            )  # solar prediction can be smoothed a bit
 
             available_power[i] = ua_power - pv_power
 
@@ -217,8 +228,7 @@ class PeriodSolver(object):
 
         prev_end = last_end
         # <= end_slot and not < end_slot because an exact value on the end of the slot has to be counted "in"
-        while (last_end < len(forecast) - 1 and
-               forecast[last_end + 1][0] <= end_slot):
+        while last_end < len(forecast) - 1 and forecast[last_end + 1][0] <= end_slot:
             last_end += 1
         # get all the power data in the slot:
         power_series = []
@@ -228,9 +238,11 @@ class PeriodSolver(object):
             elif forecast[prev_end][0] < begin_slot and prev_end < len(forecast) - 1:
                 adapted_power = forecast[prev_end][1]
                 if geometric_smoothing:
-                    adapted_power += ((forecast[prev_end + 1][1] - forecast[prev_end][1]) *
-                                      (begin_slot - forecast[prev_end][0]).total_seconds() /
-                                      (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds())
+                    adapted_power += (
+                        (forecast[prev_end + 1][1] - forecast[prev_end][1])
+                        * (begin_slot - forecast[prev_end][0]).total_seconds()
+                        / (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds()
+                    )
                 power_series.append((begin_slot, adapted_power))
         for j in range(prev_end + 1, last_end + 1):
             power_series.append((forecast[j][0], forecast[j][1]))
@@ -239,9 +251,11 @@ class PeriodSolver(object):
         if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
             adapted_power = forecast[last_end][1]
             if geometric_smoothing:
-                adapted_power += ((forecast[last_end + 1][1] - forecast[last_end][1]) *
-                                  (end_slot - forecast[last_end][0]).total_seconds() /
-                                  (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds())
+                adapted_power += (
+                    (forecast[last_end + 1][1] - forecast[last_end][1])
+                    * (end_slot - forecast[last_end][0]).total_seconds()
+                    / (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds()
+                )
             power_series.append((end_slot, adapted_power))
 
         if len(power_series) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
@@ -249,9 +263,9 @@ class PeriodSolver(object):
 
         return last_end, get_average_time_series(power_series, geometric_mean=geometric_smoothing)
 
-
-
-    def _merge_commands_slots_for_load(self, loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False):
+    def _merge_commands_slots_for_load(
+        self, loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False
+    ):
 
         if new_command_list is None:
             return
@@ -266,10 +280,9 @@ class PeriodSolver(object):
         existing_cmds: list[LoadCommand | None] = loads.get(load, None)
 
         if existing_cmds is None:
-            existing_cmds = [None]*len(new_command_list)
+            existing_cmds = [None] * len(new_command_list)
 
         for s in range(len(new_command_list)):
-
             new_cmd = new_command_list[s]
 
             prev_cmd = existing_cmds[s]
@@ -314,8 +327,9 @@ class PeriodSolver(object):
 
         loads[load] = existing_cmds
 
-
-    def _battery_get_charging_power(self, limited_discharge_per_price = None, existing_battery_commands = None, for_production_clamping=False):
+    def _battery_get_charging_power(
+        self, limited_discharge_per_price=None, existing_battery_commands=None, for_production_clamping=False
+    ):
 
         available_power_list = self._available_power
         max_inverter_dc_to_ac_power = self._max_inverter_dc_to_ac_power
@@ -331,7 +345,6 @@ class PeriodSolver(object):
         excess_solar_energy = 0
 
         if self._battery:
-
             init_battery_charge = self._battery.current_charge
             if init_battery_charge is None:
                 init_battery_charge = self._battery.get_value_empty()
@@ -339,13 +352,16 @@ class PeriodSolver(object):
             prev_battery_charge = init_battery_charge
 
             for i in range(len(available_power_list)):
-
                 charging_power = 0.0
                 consumption_power = 0.0
 
                 if for_production_clamping:
                     # if available power negative : we do have some production/solar available power
-                    if max_inverter_dc_to_ac_power is not None and  0.0-available_power_list[i] > max_inverter_dc_to_ac_power and self._battery.is_dc_coupled:
+                    if (
+                        max_inverter_dc_to_ac_power is not None
+                        and 0.0 - available_power_list[i] > max_inverter_dc_to_ac_power
+                        and self._battery.is_dc_coupled
+                    ):
                         # what is above the inverter limit will be overcharged in the battery if it is an hybrid + battery setup
                         available_power = available_power_list[i] + max_inverter_dc_to_ac_power
                     else:
@@ -361,14 +377,15 @@ class PeriodSolver(object):
                 if for_production_clamping is False and self._battery_charge_power_by_inverter_AC_clamping is not None:
                     clamped_charge_power = self._battery_charge_power_by_inverter_AC_clamping[i]
 
-
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     # clamped_charge_power was part already of the force charge computation
-                    charging_power = self._battery.get_best_charge_power(battery_commands[i].power_consign,
-                                                                         float(self._solar_production[i]),
-                                                                         max_inverter_dc_to_ac_power,
-                                                                         float(self._durations_s[i]),
-                                                                         current_charge=prev_battery_charge)
+                    charging_power = self._battery.get_best_charge_power(
+                        battery_commands[i].power_consign,
+                        float(self._solar_production[i]),
+                        max_inverter_dc_to_ac_power,
+                        float(self._durations_s[i]),
+                        current_charge=prev_battery_charge,
+                    )
                     if charging_power <= 0.0:
                         charging_power = 0.0
                         consumption_power = 0.0
@@ -377,13 +394,14 @@ class PeriodSolver(object):
                 else:
                     battery_available_power = float(available_power) - float(clamped_charge_power)
                     if battery_available_power < 0.0:
-
                         # charge
-                        charging_power = self._battery.get_best_charge_power(0.0 - float(battery_available_power),
-                                                                             float(self._solar_production[i]),
-                                                                             max_inverter_dc_to_ac_power,
-                                                                             float(self._durations_s[i]),
-                                                                             current_charge=prev_battery_charge)
+                        charging_power = self._battery.get_best_charge_power(
+                            0.0 - float(battery_available_power),
+                            float(self._solar_production[i]),
+                            max_inverter_dc_to_ac_power,
+                            float(self._durations_s[i]),
+                            current_charge=prev_battery_charge,
+                        )
                         if charging_power <= 0.0:
                             charging_power = 0.0
                             consumption_power = 0.0
@@ -391,18 +409,19 @@ class PeriodSolver(object):
                             consumption_power = charging_power - clamped_charge_power
 
                     elif battery_available_power > 0.0:
-
                         if battery_commands[i].is_like(CMD_GREEN_CHARGE_ONLY):
                             # in this one discharge is forbidden
                             charging_power = clamped_charge_power
                             consumption_power = 0.0
                         else:
                             # discharge....
-                            charging_power = self._battery.get_best_discharge_power(float(battery_available_power),
-                                                                                    float(self._solar_production[i]),
-                                                                                    max_inverter_dc_to_ac_power,
-                                                                                    float(self._durations_s[i]),
-                                                                                    current_charge=float(prev_battery_charge))
+                            charging_power = self._battery.get_best_discharge_power(
+                                float(battery_available_power),
+                                float(self._solar_production[i]),
+                                max_inverter_dc_to_ac_power,
+                                float(self._durations_s[i]),
+                                current_charge=float(prev_battery_charge),
+                            )
                             if charging_power > 0:
                                 charging_power = 0.0 - charging_power
                                 consumption_power = charging_power
@@ -413,7 +432,6 @@ class PeriodSolver(object):
                 battery_ext_consumption_power[i] = consumption_power
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
 
-
                 if limited_discharge_per_price is not None:
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
                     if limit_discharge is not None:
@@ -423,7 +441,9 @@ class PeriodSolver(object):
                             charging_power = max(0.0, charging_power)
                             battery_commands[i] = copy_command(CMD_GREEN_CHARGE_ONLY)
 
-                        limited_discharge_per_price[self._prices[i]] = max(0.0, limit_discharge + min(charged_energy, 0.0))
+                        limited_discharge_per_price[self._prices[i]] = max(
+                            0.0, limit_discharge + min(charged_energy, 0.0)
+                        )
 
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     battery_commands[i].power_consign = max(charging_power, battery_commands[i].power_consign)
@@ -431,25 +451,32 @@ class PeriodSolver(object):
                     battery_commands[i].power_consign = charging_power
 
                 if charged_energy < 0.0:
-                    prices_discharged_energy_buckets[self._prices[i]] = prices_discharged_energy_buckets.get(
-                        self._prices[i], 0.0) - charged_energy
+                    prices_discharged_energy_buckets[self._prices[i]] = (
+                        prices_discharged_energy_buckets.get(self._prices[i], 0.0) - charged_energy
+                    )
 
-                grid_nrj = (((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0)
+                grid_nrj = ((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0
                 if grid_nrj > 0:
                     # we will ask it from the grid:
                     remaining_grid_energy += grid_nrj
-                    prices_remaining_grid_energy_buckets[self._prices[i]] = prices_remaining_grid_energy_buckets.get(
-                        self._prices[i], 0.0) + grid_nrj
+                    prices_remaining_grid_energy_buckets[self._prices[i]] = (
+                        prices_remaining_grid_energy_buckets.get(self._prices[i], 0.0) + grid_nrj
+                    )
                 elif grid_nrj < 0:
                     excess_solar_energy = excess_solar_energy - grid_nrj
-
 
                 battery_charge[i] = prev_battery_charge + charged_energy
                 prev_battery_charge = battery_charge[i]
 
-
-        return battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy
-
+        return (
+            battery_ext_consumption_power,
+            battery_charge,
+            battery_commands,
+            prices_discharged_energy_buckets,
+            prices_remaining_grid_energy_buckets,
+            excess_solar_energy,
+            remaining_grid_energy,
+        )
 
     def _prepare_battery_segmentation(self, over_budget=0.2):
 
@@ -458,13 +485,22 @@ class PeriodSolver(object):
 
         num_slots = len(self._available_power)
         # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
-        battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+        (
+            battery_ext_consumption_power,
+            battery_charge,
+            battery_commands,
+            prices_discharged_energy_buckets,
+            prices_remaining_grid_energy_buckets,
+            excess_solar_energy,
+            remaining_grid_energy,
+        ) = self._battery_get_charging_power()
 
         empty_segments = [[None, num_slots - 1]]
         for i in range(num_slots):
-
             current_charge = float(battery_charge[i])
-            if self._battery.is_value_empty(current_charge*(1.0 - over_budget)): # be a bit pessimistic here too ... 20%
+            if self._battery.is_value_empty(
+                current_charge * (1.0 - over_budget)
+            ):  # be a bit pessimistic here too ... 20%
                 if empty_segments[-1][0] is None:
                     empty_segments[-1][0] = i
                 empty_segments[-1][1] = i
@@ -476,7 +512,8 @@ class PeriodSolver(object):
             empty_segments.pop()
 
         if len(empty_segments) == 0 or (
-                len(empty_segments) == 1 and (empty_segments[0][0] == 0 and empty_segments[0][1] == num_slots - 1)):
+            len(empty_segments) == 1 and (empty_segments[0][0] == 0 and empty_segments[0][1] == num_slots - 1)
+        ):
             # not empty segments, so we can use the battery as we want ... or all empty we can do nothing
             pass
         else:
@@ -489,20 +526,30 @@ class PeriodSolver(object):
                 # compute what is consumed from the grid in those empty segments ... to try to get it back by consuming less before
                 # the empty segments
                 for i in range(s[0], s[1] + 1):
-                    energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_ext_consumption_power[i]) * self._durations_s[i] / 3600.0
+                    energy_to_get_back[s_idx] += (
+                        max(0.0, self._available_power[i] + battery_ext_consumption_power[i])
+                        * self._durations_s[i]
+                        / 3600.0
+                    )
 
                 if s_idx == 0:
                     if s[0] > 0:
                         segments_to_shave[s_idx] = [0, s[0] - 1]
                 else:
-                    if empty_segments[s_idx - 1][1] < num_slots - 1: # by construction should never happen, only for the last segment
+                    if (
+                        empty_segments[s_idx - 1][1] < num_slots - 1
+                    ):  # by construction should never happen, only for the last segment
                         segments_to_shave[s_idx] = [empty_segments[s_idx - 1][1] + 1, s[0] - 1]
 
                 # compute what is consumed from the grid in those segments before the empty segment ... to know how much we can reclaim
                 # only take what is still asked from the grid, not what is charged in the battery
                 if segments_to_shave[s_idx] is not None:
                     for i in range(segments_to_shave[s_idx][0], segments_to_shave[s_idx][1] + 1):
-                        energy_to_get_back[s_idx] += max(0.0, self._available_power[i] + battery_ext_consumption_power[i]) * self._durations_s[i] / 3600.0
+                        energy_to_get_back[s_idx] += (
+                            max(0.0, self._available_power[i] + battery_ext_consumption_power[i])
+                            * self._durations_s[i]
+                            / 3600.0
+                        )
 
             for s_idx in range(len(segments_to_shave)):
                 s = segments_to_shave[s_idx]
@@ -515,35 +562,54 @@ class PeriodSolver(object):
                 if init_battery_charge is None:
                     init_battery_charge = self._battery.get_value_empty()
 
-                reclaim_energy = self._battery.get_value_full() - (1.0 - over_budget)*min(float(battery_charge[to_shave_segment[0]]), init_battery_charge)
-                reclaim_energy = min(reclaim_energy, energy_to_get_back[s_idx])*(1.0+over_budget)
+                reclaim_energy = self._battery.get_value_full() - (1.0 - over_budget) * min(
+                    float(battery_charge[to_shave_segment[0]]), init_battery_charge
+                )
+                reclaim_energy = min(reclaim_energy, energy_to_get_back[s_idx]) * (1.0 + over_budget)
                 reclaim_energy = min(self._battery.get_value_full(), reclaim_energy)
 
-                _LOGGER.info(f"_prepare_battery_segmentation: at {self._time_slots[empty_segments[s_idx][0]]} battery is expected to be empty")
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: need to reclaim {reclaim_energy} Wh from {self._time_slots[to_shave_segment[0]]} to {self._time_slots[to_shave_segment[1]]}")
+                    f"_prepare_battery_segmentation: at {self._time_slots[empty_segments[s_idx][0]]} battery is expected to be empty"
+                )
+                _LOGGER.info(
+                    f"_prepare_battery_segmentation: need to reclaim {reclaim_energy} Wh from {self._time_slots[to_shave_segment[0]]} to {self._time_slots[to_shave_segment[1]]}"
+                )
 
-                max_charge_in_segment = np.max(battery_charge[to_shave_segment[0]:to_shave_segment[1]+1]) + energy_to_get_back[s_idx]
+                max_charge_in_segment = (
+                    np.max(battery_charge[to_shave_segment[0] : to_shave_segment[1] + 1]) + energy_to_get_back[s_idx]
+                )
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: raw computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)")
+                    f"_prepare_battery_segmentation: raw computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)"
+                )
 
-                max_charge_in_segment = np.max(battery_charge[to_shave_segment[0]:to_shave_segment[1] + 1]) + reclaim_energy
+                max_charge_in_segment = (
+                    np.max(battery_charge[to_shave_segment[0] : to_shave_segment[1] + 1]) + reclaim_energy
+                )
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: 2nd computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)")
+                    f"_prepare_battery_segmentation: 2nd computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)"
+                )
 
                 energy_delta = -reclaim_energy
                 break
 
         return to_shave_segment, energy_delta
 
-
-    def _constraints_delta(self, energy_delta, constraints, constraints_evolution, constraints_bounds, actions, seg_start, seg_end, allow_change_state=True):
+    def _constraints_delta(
+        self,
+        energy_delta,
+        constraints,
+        constraints_evolution,
+        constraints_bounds,
+        actions,
+        seg_start,
+        seg_end,
+        allow_change_state=True,
+    ):
 
         solved = False
         has_changed = False
 
         if energy_delta != 0:
-
             if energy_delta > 0:
                 # more consumption, start with the more important ones
                 constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
@@ -554,18 +620,21 @@ class PeriodSolver(object):
 
             orig_energy_delta = energy_delta
 
-
             if energy_delta > 0:
                 _LOGGER.info(
-                    f"_constraints_delta: trying to consume more: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
+                    f"_constraints_delta: trying to consume more: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[f'{c.load.name} {score_c}' for c, score_c in constraints]}"
+                )
             else:
                 _LOGGER.info(
-                    f"_constraints_delta: trying to reclaim: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[ f"{c.load.name} {score_c}" for c, score_c in constraints]}")
+                    f"_constraints_delta: trying to reclaim: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[f'{c.load.name} {score_c}' for c, score_c in constraints]}"
+                )
             load_to_re_adapt = set()
 
             for ci, _ in constraints:
                 out_c = constraints_evolution[ci]
-                first_slot, last_slot, first_change_slot, last_change_slot = constraints_bounds.get(ci, (None, None, None, None))
+                first_slot, last_slot, first_change_slot, last_change_slot = constraints_bounds.get(
+                    ci, (None, None, None, None)
+                )
 
                 if first_slot is None or last_slot is None:
                     _LOGGER.warning(f"_constraints_delta: constraint {ci} has no bounds, skipping")
@@ -586,30 +655,34 @@ class PeriodSolver(object):
 
                 # energy_delta can be negative or positive, negative means reduce the consumed energy by the constraint
                 init_energy_delta = energy_delta
-                out_c_adapted, solved, has_changes, energy_delta, out_commands_adapted, out_delta_power = out_c.adapt_repartition(
-                    first_slot=st,
-                    last_slot=nd,
-                    energy_delta=energy_delta,
-                    power_slots_duration_s=self._durations_s,
-                    existing_commands=out_commands,
-                    allow_change_state=allow_change_state,
-                    time=self._start_time,
-                    allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False,
-                    time_slots=self._time_slots)
+                out_c_adapted, solved, has_changes, energy_delta, out_commands_adapted, out_delta_power = (
+                    out_c.adapt_repartition(
+                        first_slot=st,
+                        last_slot=nd,
+                        energy_delta=energy_delta,
+                        power_slots_duration_s=self._durations_s,
+                        existing_commands=out_commands,
+                        allow_change_state=allow_change_state,
+                        time=self._start_time,
+                        allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False,
+                        time_slots=self._time_slots,
+                    )
+                )
                 if has_changes:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
+                        f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}"
+                    )
                     has_changed = True
                     constraints_evolution[ci] = out_c_adapted
                     self._available_power = self._available_power + out_delta_power
                     self._merge_commands_slots_for_load(actions, ci, st, nd, out_commands_adapted, prio_on_new=True)
                 else:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}")
+                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}"
+                    )
 
                 if ci.support_auto:
                     load_to_re_adapt.add(ci.load)
-
 
                 if solved:
                     break
@@ -621,7 +694,7 @@ class PeriodSolver(object):
                     has_cap = False
 
                     for load in load_to_re_adapt:
-                        cmds = actions.get(load,None)
+                        cmds = actions.get(load, None)
                         if cmds is not None:
                             cmd = cmds[i]
                             if cmd is not None and cmd.is_like(CMD_AUTO_GREEN_CAP):
@@ -642,49 +715,60 @@ class PeriodSolver(object):
 
         return solved, has_changed, energy_delta
 
+    def _allocate_constraints(
+        self,
+        constraints,
+        always_use_available_only_power,
+        constraints_evolution,
+        constraints_bounds,
+        actions,
+        additional_energy_to_deplete=0.0,
+        max_power_to_deplete=0.0,
+    ):
 
-    def _allocate_constraints(self,
-                              constraints,
-                              always_use_available_only_power,
-                              constraints_evolution,
-                              constraints_bounds,
-                              actions,
-                              additional_energy_to_deplete=0.0,
-                              max_power_to_deplete=0.0):
-
-        constraints= sorted(constraints, key=lambda x: x[1], reverse=True)
+        constraints = sorted(constraints, key=lambda x: x[1], reverse=True)
 
         # we should consume the battery first for the mandatory constraints
         remaining_additional_energy_to_deplete = additional_energy_to_deplete
 
-        for ci , _ in constraints:
-
-            c = constraints_evolution.get(ci,ci)
+        for ci, _ in constraints:
+            c = constraints_evolution.get(ci, ci)
             if additional_energy_to_deplete >= 0.0:
                 remaining_additional_energy_to_deplete = 0.0
 
-            out_c, is_solved, out_commands, out_power, first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact, remaining_additional_energy_to_deplete = c.compute_best_period_repartition(
+            (
+                out_c,
+                is_solved,
+                out_commands,
+                out_power,
+                first_slot,
+                last_slot,
+                min_idx_with_energy_impact,
+                max_idx_with_energy_impact,
+                remaining_additional_energy_to_deplete,
+            ) = c.compute_best_period_repartition(
                 do_use_available_power_only=always_use_available_only_power or not c.is_mandatory,
-                prices = self._prices,
-                power_slots_duration_s = self._durations_s,
-                power_available_power = self._available_power,
-                prices_ordered_values = self._prices_ordered_values,
-                time_slots = self._time_slots,
-                additional_available_energy_to_deplete= remaining_additional_energy_to_deplete,
-                max_power_to_deplete = max_power_to_deplete
+                prices=self._prices,
+                power_slots_duration_s=self._durations_s,
+                power_available_power=self._available_power,
+                prices_ordered_values=self._prices_ordered_values,
+                time_slots=self._time_slots,
+                additional_available_energy_to_deplete=remaining_additional_energy_to_deplete,
+                max_power_to_deplete=max_power_to_deplete,
             )
             constraints_evolution[ci] = out_c
             constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
             self._available_power = self._available_power + out_power
             self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
 
-    def _get_power_from_commands(self, loads: dict[AbstractLoad, list[LoadCommand]]) -> tuple[npt.NDArray[np.float64], dict]:
+    def _get_power_from_commands(
+        self, loads: dict[AbstractLoad, list[LoadCommand]]
+    ) -> tuple[npt.NDArray[np.float64], dict]:
 
         out_power = np.zeros(len(self._available_power), dtype=np.float64)
         out_loads_consumption = {}
 
         if len(loads) > 0:
-
             piloted_device_set = set()
             for load in self._loads:
                 piloted_device_set.update(load.devices_to_pilot)
@@ -694,7 +778,6 @@ class PeriodSolver(object):
                 pd.prepare_slots_for_piloted_device_budget(len(self._available_power))
 
             for s in range(len(self._available_power)):
-
                 power = 0.0
 
                 for load, commands in loads.items():
@@ -717,9 +800,9 @@ class PeriodSolver(object):
 
         return out_power, out_loads_consumption
 
-
-
-    def solve(self, is_off_grid=False, with_self_test=False) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
+    def solve(
+        self, is_off_grid=False, with_self_test=False
+    ) -> tuple[list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]], list[tuple[datetime, LoadCommand]]]:
         """
         Solve the day for the given loads and constraints.
 
@@ -748,7 +831,6 @@ class PeriodSolver(object):
         if with_self_test:
             available_power_init = self._available_power.copy()
 
-
         if self._loads and len(self._loads) > 0:
             home = self._loads[0].home
             # prepare available amps in teh group graph
@@ -764,9 +846,9 @@ class PeriodSolver(object):
                     pd.prepare_slots_for_piloted_device_budget(len(self._available_power))
 
         else:
-            _LOGGER.info(f"solve: NO LOADS!")
+            _LOGGER.info("solve: NO LOADS!")
 
-        #ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
+        # ordering constraints: what are the mandatory constraints that can be filled "quickly" and easily compared to now and their expiration date
 
         num_slots = len(self._durations_s)
 
@@ -784,26 +866,37 @@ class PeriodSolver(object):
             # but as we are in off grid : now way we can use grid power
             always_use_available_only_power = True
 
-
         if is_off_grid:
             if self._battery is not None:
-                battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+                (
+                    battery_ext_consumption_power,
+                    battery_charge,
+                    battery_commands,
+                    prices_discharged_energy_buckets,
+                    prices_remaining_grid_energy_buckets,
+                    excess_solar_energy,
+                    remaining_grid_energy,
+                ) = self._battery_get_charging_power()
                 battery_min = np.min(battery_charge)
-                if self._battery.is_value_empty(battery_min*0.8):
+                if self._battery.is_value_empty(battery_min * 0.8):
                     max_power_to_deplete = 0.0
                     additional_energy_to_deplete = 0.0
                 else:
-                    additional_energy_to_deplete = 0.0 - (0.8*battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it, 80% of battery usage
+                    additional_energy_to_deplete = 0.0 - (
+                        0.8 * battery_min - self._battery.get_value_empty()
+                    )  # in Wh, negative value to consume it, 80% of battery usage
                     max_power_to_deplete = self._battery.get_max_discharging_power()
 
         # we can use battery depletion only there
-        self._allocate_constraints(constraints=constraints,
-                                   always_use_available_only_power=always_use_available_only_power,
-                                   constraints_evolution=constraints_evolution,
-                                   constraints_bounds=constraints_bounds,
-                                   actions=actions,
-                                   additional_energy_to_deplete=additional_energy_to_deplete,
-                                   max_power_to_deplete=max_power_to_deplete)
+        self._allocate_constraints(
+            constraints=constraints,
+            always_use_available_only_power=always_use_available_only_power,
+            constraints_evolution=constraints_evolution,
+            constraints_bounds=constraints_bounds,
+            actions=actions,
+            additional_energy_to_deplete=additional_energy_to_deplete,
+            max_power_to_deplete=max_power_to_deplete,
+        )
 
         constraints = []
         for c in self._active_constraints:
@@ -811,7 +904,6 @@ class PeriodSolver(object):
                 constraints.append((c, c.score(self._start_time)))
 
         if len(constraints) > 0 and self._battery is not None:
-
             # we have some spots where we need grid energy...so we consume perhaps too much already with the non-mandatory constraints
             # (even the mandatory in case of off grid) segment battery usage by spots where the battery will be empty, and try to cap the commands sent
             # for non-mandatory constraints, we will try to cap the commands sent to the battery so it can charge more
@@ -823,31 +915,32 @@ class PeriodSolver(object):
                 to_shave_segment, energy_delta = self._prepare_battery_segmentation()
 
                 if to_shave_segment is None:
-                    _LOGGER.info(
-                        f"solve: No segment to shave for battery low points")
+                    _LOGGER.info("solve: No segment to shave for battery low points")
                     break
                 else:
-
                     # now we need to get the commands that are coming from the non-mandatory constraints
                     # and try to limit them so the battery can charge more and reclaim energy_to_get_back[s_idx] in the process
                     # to not ask anything from the grid
-                    solved, has_changed, energy_delta = self._constraints_delta(energy_delta,
-                                                                                constraints,
-                                                                                constraints_evolution,
-                                                                                constraints_bounds,
-                                                                                actions,
-                                                                                to_shave_segment[0],
-                                                                                to_shave_segment[1])
+                    solved, has_changed, energy_delta = self._constraints_delta(
+                        energy_delta,
+                        constraints,
+                        constraints_evolution,
+                        constraints_bounds,
+                        actions,
+                        to_shave_segment[0],
+                        to_shave_segment[1],
+                    )
 
                     if has_changed:
                         _LOGGER.info(
-                            f"solve: cap succeeded in saving some battery, left to save: {energy_delta} Wh {solved} / {has_changed}")
+                            f"solve: cap succeeded in saving some battery, left to save: {energy_delta} Wh {solved} / {has_changed}"
+                        )
 
                     if solved or has_changed is False:
                         _LOGGER.info(
-                            f"solve: cap no more constraints to adapt, energy left to save: {energy_delta} Wh {solved} / {has_changed}")
+                            f"solve: cap no more constraints to adapt, energy left to save: {energy_delta} Wh {solved} / {has_changed}"
+                        )
                         break
-
 
         # try to see the best way of using the battery to cover the consumption at the best price, first by maximizing reuse
         battery_commands = None
@@ -855,7 +948,6 @@ class PeriodSolver(object):
         battery_ext_consumption_power = None
 
         if self._battery is not None:
-
             # the battery commands are:
             # - CMD_GREEN_CHARGE_AND_DISCHARGE: charge on solar only (not from grid) discharge when needed
             # - CMD_GREEN_CHARGE_ONLY: do not discharge the battery, charge at maximum from solar
@@ -868,10 +960,20 @@ class PeriodSolver(object):
             # if not enough remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
             # if the battery "not used energy" from this pass is
 
-            battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power()
+            (
+                battery_ext_consumption_power,
+                battery_charge,
+                battery_commands,
+                prices_discharged_energy_buckets,
+                prices_remaining_grid_energy_buckets,
+                excess_solar_energy,
+                remaining_grid_energy,
+            ) = self._battery_get_charging_power()
 
-            #the goal is to lower as much as possible the remaining_grid_energy ... by, if possible, discharging more in the "high" prices and less in the low prices
-            if remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1: # 100Wh hum or use a bit of a buffer here for uncertainty?
+            # the goal is to lower as much as possible the remaining_grid_energy ... by, if possible, discharging more in the "high" prices and less in the low prices
+            if (
+                remaining_grid_energy <= 100 or len(self._prices_ordered_values) <= 1
+            ):  # 100Wh hum or use a bit of a buffer here for uncertainty?
                 # fantastic we do nothing
                 pass
             else:
@@ -879,8 +981,9 @@ class PeriodSolver(object):
                 # not optimal but will work pretty well in practice
                 limited_discharge_per_price = {}
                 have_an_optim = False
-                for price_idx in range(len(self._prices_ordered_values) - 1, 0, -1): # no need to go to the least expensive
-
+                for price_idx in range(
+                    len(self._prices_ordered_values) - 1, 0, -1
+                ):  # no need to go to the least expensive
                     price = self._prices_ordered_values[price_idx]
                     energy_to_cover = prices_remaining_grid_energy_buckets.get(price, 0.0)
 
@@ -890,25 +993,32 @@ class PeriodSolver(object):
                         # we have some energy to cover
                         # take the least expensive energy to cover first
                         for sub_price_idx in range(0, price_idx):
-
                             sub_price = self._prices_ordered_values[sub_price_idx]
                             energy_can_still_be_discharged = prices_discharged_energy_buckets.get(sub_price, 0.0)
                             if energy_can_still_be_discharged > 0.0:
                                 # we have some energy to cover
                                 if energy_can_still_be_discharged >= energy_to_cover:
-                                    _LOGGER.info(f"solve: Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}")
+                                    _LOGGER.info(
+                                        f"solve: Battery: partial price cover {energy_to_cover} < {energy_can_still_be_discharged}"
+                                    )
                                     # we can cover it
                                     energy_can_still_be_discharged = energy_can_still_be_discharged - energy_to_cover
                                     energy_to_cover = 0
 
                                 else:
-                                    _LOGGER.info(f"solve: Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}")
+                                    _LOGGER.info(
+                                        f"solve: Battery: complete price cover {energy_to_cover} > {energy_can_still_be_discharged}"
+                                    )
                                     energy_can_still_be_discharged = 0
                                     energy_to_cover -= energy_can_still_be_discharged
 
                                 limited_discharge_per_price[sub_price] = energy_can_still_be_discharged
                                 have_an_optim = True
-                                prices_remaining_grid_energy_buckets[sub_price] = prices_remaining_grid_energy_buckets.get(sub_price, 0.0) + prices_discharged_energy_buckets.get(sub_price, 0.0) - energy_can_still_be_discharged
+                                prices_remaining_grid_energy_buckets[sub_price] = (
+                                    prices_remaining_grid_energy_buckets.get(sub_price, 0.0)
+                                    + prices_discharged_energy_buckets.get(sub_price, 0.0)
+                                    - energy_can_still_be_discharged
+                                )
 
                             prices_discharged_energy_buckets[sub_price] = energy_can_still_be_discharged
 
@@ -916,7 +1026,15 @@ class PeriodSolver(object):
                                 break
 
                 if have_an_optim is True:
-                    battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
+                    (
+                        battery_ext_consumption_power,
+                        battery_charge,
+                        battery_commands,
+                        prices_discharged_energy_buckets,
+                        prices_remaining_grid_energy_buckets,
+                        excess_solar_energy,
+                        remaining_grid_energy,
+                    ) = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
 
             # now we have the best battery commands for the period
             self._available_power = self._available_power + battery_ext_consumption_power
@@ -944,15 +1062,15 @@ class PeriodSolver(object):
         #             additional_energy_to_deplete = 0.0 - (battery_min - self._battery.get_value_empty())  # in Wh, negative value to consume it
         #             max_power_to_deplete = self._battery.get_max_discharging_power()
 
-
-        self._allocate_constraints(constraints=constraints,
-                                   always_use_available_only_power=True,
-                                   constraints_evolution=constraints_evolution,
-                                   constraints_bounds=constraints_bounds,
-                                   actions=actions,
-                                   additional_energy_to_deplete=additional_energy_to_deplete,
-                                   max_power_to_deplete=max_power_to_deplete)
-
+        self._allocate_constraints(
+            constraints=constraints,
+            always_use_available_only_power=True,
+            constraints_evolution=constraints_evolution,
+            constraints_bounds=constraints_bounds,
+            actions=actions,
+            additional_energy_to_deplete=additional_energy_to_deplete,
+            max_power_to_deplete=max_power_to_deplete,
+        )
 
         if self._battery is not None and battery_charge is not None:
             # We may have a path here if we still do have some surplus and battery is full : we may be ok to
@@ -960,26 +1078,29 @@ class PeriodSolver(object):
             # the battery could fill itself back with solar and we won't give back anything to the grid
             energy_given_back_to_grid = 0.0
 
-            #limit this to the next 6 hours
+            # limit this to the next 6 hours
             duration_s = 0.0
             first_surplus_index = None
             last_surplus_index = None
             for i in range(num_slots):
                 if self._available_power[i] < 0.0 and self._battery.is_value_full(battery_charge[i]):
-                    energy_given_back_to_grid += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0)
+                    energy_given_back_to_grid += (self._available_power[i] * float(self._durations_s[i])) / 3600.0
                     if first_surplus_index is None:
                         first_surplus_index = i
                     last_surplus_index = i
 
                 duration_s += self._durations_s[i]
-                if duration_s > 6*3600:
+                if duration_s > 6 * 3600:
                     break
 
             if energy_given_back_to_grid < 0.0 and first_surplus_index is not None:
+                energy_to_be_spent = min(
+                    self._battery.get_value_full(), (0.0 - energy_given_back_to_grid)
+                )  # try to reuse estimated energy given back to the grid, so we can try to force some loads to consume more
 
-                energy_to_be_spent = min(self._battery.get_value_full() , (0.0-energy_given_back_to_grid)) # try to reuse estimated energy given back to the grid, so we can try to force some loads to consume more
-
-                probe_window_start = first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
+                probe_window_start = (
+                    first_surplus_index  # we may want to grab before the battery is full, take 1 or 2 hours
+                )
 
                 if first_surplus_index > 0:
                     duration_s = 0.0
@@ -995,7 +1116,9 @@ class PeriodSolver(object):
                 nrj_to_recharge = energy_to_be_spent
                 for i in range(last_surplus_index, -1, -1):
                     if self._available_power[i] < 0.0:
-                        nrj_to_recharge += ((self._available_power[i] * float(self._durations_s[i])) / 3600.0) # self._available_power[i] negative
+                        nrj_to_recharge += (
+                            self._available_power[i] * float(self._durations_s[i])
+                        ) / 3600.0  # self._available_power[i] negative
                     probe_window_end = i
                     if nrj_to_recharge <= 0.0:
                         break
@@ -1007,7 +1130,8 @@ class PeriodSolver(object):
                     # this is only possible if the battery is full and we have some surplus
 
                     _LOGGER.info(
-                        f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh")
+                        f"solve:Estimated Energy given back to the grid for the next 6 hours: {energy_given_back_to_grid} Wh get back {energy_to_be_spent} Wh"
+                    )
 
                     # if possible we can bump any possible constraint has we know it is energy that we can use
                     # even if they are already met ? in fact the only issue would be to consume energy of a met constraint that has been met before the probe_window_start!
@@ -1020,7 +1144,9 @@ class PeriodSolver(object):
                         if is_off_grid and c.load.is_best_effort_only_load():
                             add_to_probe = False
                         else:
-                            first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = constraints_bounds.get(c, (None, None, -1, -1))
+                            first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact = (
+                                constraints_bounds.get(c, (None, None, -1, -1))
+                            )
                             add_to_probe = True
                             if c_now.is_constraint_met() and max_idx_with_energy_impact < probe_window_start:
                                 # we don't want to give a constraint some more energy AFTER it has been completed
@@ -1032,37 +1158,46 @@ class PeriodSolver(object):
                         all_c.append((c, c.score(self._start_time), c_now.is_constraint_met(), c.is_mandatory))
 
                     _LOGGER.info(
-                        f"solve:Estimated Energy given back all cts: {[f"{c.load.name} met:{met} mandatory:{mand} score:{score}" for c, score, met, mand in all_c]}")
+                        f"solve:Estimated Energy given back all cts: {[f'{c.load.name} met:{met} mandatory:{mand} score:{score}' for c, score, met, mand in all_c]}"
+                    )
 
                     if len(constraints) > 0:
-
                         while True:
-
                             # instead of surplus index I could go to first_surplus_index = 0 to start now to consume battery energy
                             # as we will get a lot more surplus ...
-                            solved, has_changed, energy_to_be_spent = self._constraints_delta(energy_to_be_spent,
-                                                                                              constraints,
-                                                                                              constraints_evolution,
-                                                                                              constraints_bounds,
-                                                                                              actions,
-                                                                                              probe_window_start,
-                                                                                              probe_window_end)
+                            solved, has_changed, energy_to_be_spent = self._constraints_delta(
+                                energy_to_be_spent,
+                                constraints,
+                                constraints_evolution,
+                                constraints_bounds,
+                                actions,
+                                probe_window_start,
+                                probe_window_end,
+                            )
                             if has_changed:
                                 _LOGGER.info(
-                                    f"solve: Surplus succeeded in consuming more for surplus {energy_to_be_spent} Wh {solved} / {has_changed}")
+                                    f"solve: Surplus succeeded in consuming more for surplus {energy_to_be_spent} Wh {solved} / {has_changed}"
+                                )
 
                             if solved or has_changed is False:
                                 _LOGGER.info(
-                                    f"solve: Surplus No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}")
+                                    f"solve: Surplus No more constraints to adapt, energy to be spent: {energy_to_be_spent} Wh {solved} / {has_changed}"
+                                )
                                 break
-
-
 
         # final battery
         if battery_commands is not None:
             # recompute all battery charge and so on after all the adaptation, so remove any discharge that could have been added
             self._available_power = self._available_power - battery_ext_consumption_power
-            battery_ext_consumption_power, battery_charge, battery_commands, prices_discharged_energy_buckets, prices_remaining_grid_energy_buckets, excess_solar_energy, remaining_grid_energy = self._battery_get_charging_power(existing_battery_commands=battery_commands)
+            (
+                battery_ext_consumption_power,
+                battery_charge,
+                battery_commands,
+                prices_discharged_energy_buckets,
+                prices_remaining_grid_energy_buckets,
+                excess_solar_energy,
+                remaining_grid_energy,
+            ) = self._battery_get_charging_power(existing_battery_commands=battery_commands)
             self._available_power = self._available_power + battery_ext_consumption_power
 
         # we have now all the constraints solved, and the battery commands computed
@@ -1070,10 +1205,10 @@ class PeriodSolver(object):
         # commands are to be sent as change of state for the load attached to the constraints
         output_cmds = []
 
-
         if with_self_test:
-
-            self._load_power_usage_for_test, self._loads_energy_and_time_consumption_for_test = self._get_power_from_commands(actions)
+            self._load_power_usage_for_test, self._loads_energy_and_time_consumption_for_test = (
+                self._get_power_from_commands(actions)
+            )
 
             res = available_power_init + self._load_power_usage_for_test
 
@@ -1089,10 +1224,11 @@ class PeriodSolver(object):
                 if c_out is not None:
                     self._constraints_for_test.append(c_out)
 
-
             max_diff = np.max(np.abs(res - ref))
             if max_diff > 1e-3:
-                _LOGGER.error(f"solve: SELF TEST FAILED max diff in available power after solving constraints: {max_diff} W")
+                _LOGGER.error(
+                    f"solve: SELF TEST FAILED max diff in available power after solving constraints: {max_diff} W"
+                )
                 raise Exception(f"SELF TEST FAILED max diff in available power after solving constraints: {max_diff} W")
 
         for load, command_list in actions.items():
@@ -1126,32 +1262,3 @@ class PeriodSolver(object):
 
         # cmds are correctly ordered by time for each load by construction
         return output_cmds, bcmd
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

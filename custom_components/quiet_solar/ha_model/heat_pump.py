@@ -13,6 +13,7 @@ class QSHeatPump(HADeviceMixin, PilotedDevice):
     """
     Class to manage a heat pump device.
     """
+
     conf_type_name = CONF_TYPE_NAME_QSHeatPump
 
     def get_platforms(self):

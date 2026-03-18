@@ -1,4 +1,5 @@
 """Tests for home_model/battery.py."""
+
 from __future__ import annotations
 
 from custom_components.quiet_solar.const import (

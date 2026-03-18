@@ -1,37 +1,33 @@
 """Extended tests for QSPerson class in ha_model/person.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import time as dt_time, timedelta
+from datetime import time as dt_time
+from datetime import timedelta
+from unittest.mock import MagicMock
 
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
-import pytz
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_PERSON_PERSON_ENTITY,
-    CONF_PERSON_TRACKER,
-    CONF_PERSON_AUTHORIZED_CARS,
-    CONF_PERSON_PREFERRED_CAR,
-    CONF_PERSON_NOTIFICATION_TIME,
     CONF_MOBILE_APP,
     CONF_MOBILE_APP_URL,
-    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
-    PERSON_NOTIFY_REASON_CHANGED_CAR,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    CONF_PERSON_TRACKER,
+    DATA_HANDLER,
+    DOMAIN,
 )
+from custom_components.quiet_solar.ha_model.person import QSPerson
 
 
 @pytest.fixture
@@ -388,6 +384,7 @@ class TestQSPersonAuthorizedCars:
 
         # Mock car objects
         from custom_components.quiet_solar.ha_model.car import QSCar
+
         mock_car1 = MagicMock(spec=QSCar)
         mock_car2 = MagicMock(spec=QSCar)
 
@@ -436,6 +433,7 @@ class TestQSPersonAuthorizedCars:
         )
 
         from custom_components.quiet_solar.ha_model.car import QSCar
+
         mock_car = MagicMock(spec=QSCar)
         person_home.get_car_by_name = MagicMock(return_value=mock_car)
 

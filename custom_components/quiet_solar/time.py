@@ -1,32 +1,31 @@
 import logging
 from dataclasses import dataclass
-from datetime import time as dt_time
 from datetime import datetime
+from datetime import time as dt_time
 
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
+from homeassistant.helpers.restore_state import RestoreEntity
 
-from .ha_model.bistate_duration import QSBiStateDuration
-from .ha_model.car import QSCar
-from .ha_model.charger import QSChargerGeneric
-
-
-from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
 )
+from .ha_model.bistate_duration import QSBiStateDuration
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerGeneric
+from .home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 from .entity import QSDeviceEntity
 
+
 @dataclass(frozen=True, kw_only=True)
 class QSTimeEntityDescription(TimeEntityDescription):
-    qs_default_option:str | None  = None
+    qs_default_option: str | None = None
 
 
 def create_ha_time_for_QSCharger(device: QSChargerGeneric):
@@ -38,6 +37,7 @@ def create_ha_time_for_QSCharger(device: QSChargerGeneric):
     )
     entities.append(QSBaseTime(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
+
 
 def create_ha_time_for_QSCar(device: QSCar):
     entities = []
@@ -61,6 +61,7 @@ def create_ha_time_for_QSBiStateDuration(device: QSBiStateDuration):
 
     return entities
 
+
 def create_ha_time(device: AbstractDevice):
     ret = []
 
@@ -75,6 +76,7 @@ def create_ha_time(device: AbstractDevice):
 
     return ret
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -84,7 +86,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_time(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_time(attached_device))
@@ -93,6 +94,7 @@ async def async_setup_entry(
             async_add_entities(entities)
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -100,10 +102,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry time: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry time: exception for device %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
+
 
 class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
     """Implementation of a Qs DateTime sensor."""
@@ -124,9 +128,7 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
 
         val = None
-        if ( last_state is not None
-            and last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
-        ):
+        if last_state is not None and last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             val = dt_time.fromisoformat(last_state.state)
 
         if val is None:
@@ -150,7 +152,7 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
         self.async_write_ha_state()
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
         val = getattr(self.device, self.entity_description.key)
 
@@ -161,4 +163,3 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
 
         self._attr_native_value = val
         self.async_write_ha_state()
-

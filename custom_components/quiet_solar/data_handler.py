@@ -1,34 +1,31 @@
-import logging
 import asyncio
-
-from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.event import async_track_time_interval
+import logging
 from datetime import datetime, timedelta
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_track_time_interval
+
+from .const import DEVICE_TYPE, DOMAIN
 from .entity import create_device_from_type
-from .const import (
-    DOMAIN,
-    DEVICE_TYPE
-)
 from .ui.dashboard import async_auto_generate_if_first_install
 
 _LOGGER = logging.getLogger(__name__)
 
 from .ha_model.home import QSHome
 
-#async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+# async def entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
 #    """Update listener.   Reload the data handler when the entry is updated.
 #     https://community.home-assistant.io/t/config-flow-how-to-update-an-existing-entity/522442/8 """
 #    await hass.config_entries.async_reload(entry.entry_id)
 
-class QSDataHandler:
 
+class QSDataHandler:
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize self."""
-        self.hass : HomeAssistant = hass
+        self.hass: HomeAssistant = hass
         self.home: QSHome | None = None
-        self._cached_config_entries :list[ConfigEntry] = []
+        self._cached_config_entries: list[ConfigEntry] = []
 
         self._load_update_scan_interval = 7
         self._refresh_states_interval = 4
@@ -38,8 +35,7 @@ class QSDataHandler:
         self._update_all_states_lock = asyncio.Lock()
         self._update_forecast_probers_lock = asyncio.Lock()
 
-
-    def _add_device(self, config_entry: ConfigEntry ):
+    def _add_device(self, config_entry: ConfigEntry):
         type = config_entry.data.get(DEVICE_TYPE)
         d = create_device_from_type(hass=self.hass, home=self.home, type=type, config_entry=config_entry)
         if d is None:
@@ -72,22 +68,17 @@ class QSDataHandler:
         else:
             config_entry_to_forward = [self._add_device(config_entry)]
 
-
         for d in config_entry_to_forward:
-
             platforms = d.get_platforms()
 
             if platforms:
-                await self.hass.config_entries.async_forward_entry_setups(
-                    d.config_entry, platforms
-                )
+                await self.hass.config_entries.async_forward_entry_setups(d.config_entry, platforms)
 
             d.config_entry_initialized = True
 
             # config_entry.async_on_unload(d.config_entry.add_update_listener(entry_update_listener))
 
         if do_home_register:
-
             config_entry.async_on_unload(
                 async_track_time_interval(
                     self.hass, self.async_update_loads, timedelta(seconds=self._load_update_scan_interval)
@@ -102,7 +93,9 @@ class QSDataHandler:
 
             config_entry.async_on_unload(
                 async_track_time_interval(
-                    self.hass, self.async_update_forecast_probers, timedelta(seconds=self._refresh_forecast_probers_interval)
+                    self.hass,
+                    self.async_update_forecast_probers,
+                    timedelta(seconds=self._refresh_forecast_probers_interval),
                 )
             )
 
@@ -112,10 +105,7 @@ class QSDataHandler:
             try:
                 await async_auto_generate_if_first_install(self.home)
             except Exception:
-                _LOGGER.warning(
-                    "Auto-generation of dashboards failed", exc_info=True
-                )
-
+                _LOGGER.warning("Auto-generation of dashboards failed", exc_info=True)
 
     async def async_update_loads(self, event_time: datetime) -> None:
         if self._update_loads_lock.locked():

@@ -1,37 +1,36 @@
 """Coverage-focused tests for QSPerson."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 from types import SimpleNamespace
 
 import pytest
 import pytz
-
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
     CONF_MOBILE_APP,
     CONF_MOBILE_APP_URL,
     CONF_PERSON_AUTHORIZED_CARS,
     CONF_PERSON_NOTIFICATION_TIME,
-    CONF_PERSON_PREFERRED_CAR,
     CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    DOMAIN,
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
-    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
+    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
-from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.home_model.constraints import (
     LoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
 )
-from homeassistant.const import Platform
 
 
 def _make_person(hass: HomeAssistant, **overrides) -> tuple[HomeAssistant, QSHome, QSPerson]:
@@ -70,14 +69,15 @@ def _make_car(hass: HomeAssistant, home: QSHome, name: str = "Test Car") -> QSCa
 
 def test_init_normalizes_mobile_app_and_notification_time(hass: HomeAssistant) -> None:
     """Test config normalization for mobile app and notification time."""
-    hass, home, person = _make_person(hass,
+    hass, home, person = _make_person(
+        hass,
         **{
             CONF_MOBILE_APP: "notify",
             CONF_MOBILE_APP_URL: "qs",
             CONF_PERSON_NOTIFICATION_TIME: "08:30:00",
             CONF_PERSON_AUTHORIZED_CARS: ["Car A"],
             CONF_PERSON_PREFERRED_CAR: "Car B",
-        }
+        },
     )
 
     assert person.mobile_app == "notify"
@@ -85,24 +85,27 @@ def test_init_normalizes_mobile_app_and_notification_time(hass: HomeAssistant) -
     assert person.notification_dt_time == dt_time(8, 30, 0)
     assert "Car B" in person.authorized_cars
 
-    _, _, person_empty = _make_person(hass,
+    _, _, person_empty = _make_person(
+        hass,
         **{
             CONF_MOBILE_APP_URL: "",
-        }
+        },
     )
     assert person_empty.mobile_app_url is None
 
-    _, _, person_root = _make_person(hass,
+    _, _, person_root = _make_person(
+        hass,
         **{
             CONF_MOBILE_APP_URL: "/",
-        }
+        },
     )
     assert person_root.mobile_app_url is None
 
-    _, _, person_prefixed = _make_person(hass,
+    _, _, person_prefixed = _make_person(
+        hass,
         **{
             CONF_MOBILE_APP_URL: "/already",
-        }
+        },
     )
     assert person_prefixed.mobile_app_url == "/already"
 
@@ -224,9 +227,7 @@ def test_compute_person_next_need_empty_prediction(hass: HomeAssistant) -> None:
 async def test_device_post_home_init_restores_history(hass: HomeAssistant) -> None:
     """Test state restoration from stored historical data."""
     hass, _, person = _make_person(hass)
-    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
-        entity_id="sensor.person_mileage_prediction"
-    )
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(entity_id="sensor.person_mileage_prediction")
 
     base = datetime(2026, 1, 10, 8, 0, tzinfo=pytz.UTC)
     entries = [
@@ -261,9 +262,7 @@ async def test_device_post_home_init_handles_malformed_entries(
 ) -> None:
     """Test malformed historical entries are skipped."""
     hass, _, person = _make_person(hass)
-    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
-        entity_id="sensor.person_mileage_prediction"
-    )
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(entity_id="sensor.person_mileage_prediction")
     now = datetime(2026, 1, 10, 8, 0, tzinfo=pytz.UTC)
 
     entries = [
@@ -296,9 +295,7 @@ async def test_device_post_home_init_handles_malformed_entries(
 async def test_device_post_home_init_warns_when_not_initialized(hass: HomeAssistant) -> None:
     """Test no-history state keeps initialization false."""
     hass, _, person = _make_person(hass)
-    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
-        entity_id="sensor.person_mileage_prediction"
-    )
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(entity_id="sensor.person_mileage_prediction")
     hass.states.async_set(
         "sensor.person_mileage_prediction",
         "ok",
@@ -312,9 +309,7 @@ async def test_device_post_home_init_warns_when_not_initialized(hass: HomeAssist
 async def test_device_post_home_init_handles_unknown_state(hass: HomeAssistant) -> None:
     """Test state restore when sensor is unknown."""
     hass, _, person = _make_person(hass)
-    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(
-        entity_id="sensor.person_mileage_prediction"
-    )
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(entity_id="sensor.person_mileage_prediction")
 
     person.historical_mileage_data = [
         (datetime(2026, 1, 1, tzinfo=pytz.UTC), 10.0, datetime(2026, 1, 1, 9, tzinfo=pytz.UTC), 3)
@@ -336,11 +331,12 @@ def test_get_forecast_readable_string_no_forecast(hass: HomeAssistant) -> None:
 
 def test_get_authorized_and_preferred_cars(hass: HomeAssistant) -> None:
     """Test retrieving authorized and preferred cars."""
-    hass, home, person = _make_person(hass,
+    hass, home, person = _make_person(
+        hass,
         **{
             CONF_PERSON_AUTHORIZED_CARS: ["Car A", "Missing"],
             CONF_PERSON_PREFERRED_CAR: "Car A",
-        }
+        },
     )
     car = _make_car(hass, home, name="Car A")
     authorized = person.get_authorized_cars()
@@ -384,11 +380,12 @@ async def test_notify_no_allocated_car(hass: HomeAssistant) -> None:
 @pytest.mark.asyncio
 async def test_notify_daily_reminder_no_charger_triggers_allocation(hass: HomeAssistant) -> None:
     """Test daily reminder triggers allocation when no charger."""
-    hass, home, person = _make_person(hass,
+    hass, home, person = _make_person(
+        hass,
         **{
             CONF_MOBILE_APP: "notify",
             CONF_PERSON_NOTIFICATION_TIME: "08:00:00",
-        }
+        },
     )
     person._last_forecast_notification_call_time = datetime(2026, 1, 14, 8, 0, tzinfo=pytz.UTC)
 

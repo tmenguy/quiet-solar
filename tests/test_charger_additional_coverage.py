@@ -1,4 +1,5 @@
 """Additional coverage tests for charger.py."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -6,10 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 import pytz
-
 from homeassistant.const import STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
+    CHARGER_NO_CAR_CONNECTED,
+    CONF_CHARGER_DEVICE_OCPP,
+    CONF_CHARGER_DEVICE_WALLBOX,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
     CONF_CHARGER_MIN_CHARGE,
@@ -18,27 +21,24 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
     CONF_IS_3P,
     CONF_MONO_PHASE,
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CHARGER_DEVICE_OCPP,
-    CONF_CHARGER_DEVICE_WALLBOX,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CHARGER_NO_CAR_CONNECTED,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_CHARGER_CONNECTED,
 )
 from custom_components.quiet_solar.ha_model.charger import (
+    QSChargerGeneric,
     QSChargerGroup,
     QSChargerOCPP,
     QSChargerStatus,
     QSChargerWallbox,
-    QSChargerGeneric,
     QSStateCmd,
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
     CMD_AUTO_GREEN_CAP,
-    CMD_AUTO_GREEN_ONLY,
     CMD_AUTO_GREEN_CONSIGN,
+    CMD_AUTO_GREEN_ONLY,
     CMD_AUTO_PRICE,
     copy_command,
 )
@@ -70,7 +70,9 @@ def create_mock_home(hass: MagicMock) -> MagicMock:
     return home
 
 
-def create_charger_generic(hass: MagicMock, home: MagicMock, name: str = "TestCharger", **extra_config) -> QSChargerGeneric:
+def create_charger_generic(
+    hass: MagicMock, home: MagicMock, name: str = "TestCharger", **extra_config
+) -> QSChargerGeneric:
     """Create a QSChargerGeneric instance for testing."""
     config_entry = MagicMock()
     config_entry.entry_id = f"test_entry_{name}"
@@ -214,10 +216,12 @@ def test_get_stable_dynamic_charge_status_green_cap() -> None:
     charger._expected_charge_state.set(True, datetime.now(pytz.UTC))
     charger.current_command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=0)
 
-    with patch.object(charger, "is_not_plugged", return_value=False), \
-         patch.object(charger, "is_charger_unavailable", return_value=False), \
-         patch.object(charger, "_probe_and_enforce_stopped_charge_command_state", return_value=False), \
-         patch.object(charger, "get_current_active_constraint", return_value=None):
+    with (
+        patch.object(charger, "is_not_plugged", return_value=False),
+        patch.object(charger, "is_charger_unavailable", return_value=False),
+        patch.object(charger, "_probe_and_enforce_stopped_charge_command_state", return_value=False),
+        patch.object(charger, "get_current_active_constraint", return_value=None),
+    ):
         cs = charger.get_stable_dynamic_charge_status(datetime.now(pytz.UTC))
 
     assert cs is not None
@@ -287,11 +291,13 @@ async def test_ensure_correct_state_success_path() -> None:
     charger._expected_num_active_phases.set(3, now)
     charger._expected_charge_state.set(True, now)
 
-    with patch.object(type(charger), "current_num_phases", new_callable=PropertyMock, return_value=3), \
-         patch.object(charger, "get_charging_current", return_value=10), \
-         patch.object(charger, "is_charge_enabled", return_value=True), \
-         patch.object(charger, "is_charge_disabled", return_value=False), \
-         patch.object(charger, "update_data_request", new_callable=AsyncMock):
+    with (
+        patch.object(type(charger), "current_num_phases", new_callable=PropertyMock, return_value=3),
+        patch.object(charger, "get_charging_current", return_value=10),
+        patch.object(charger, "is_charge_enabled", return_value=True),
+        patch.object(charger, "is_charge_disabled", return_value=False),
+        patch.object(charger, "update_data_request", new_callable=AsyncMock),
+    ):
         result = await charger._ensure_correct_state(now)
 
     assert result is True
@@ -329,12 +335,18 @@ async def test_constraint_update_value_callback_soc_paths() -> None:
     mock_group = MagicMock()
     mock_group.dyn_handle = AsyncMock()
 
-    with patch.object(charger, "_do_update_charger_state", new_callable=AsyncMock), \
-         patch.object(charger, "is_not_plugged", return_value=False), \
-         patch.object(charger, "get_device_real_energy", return_value=3000), \
-         patch.object(type(charger), "charger_group", new_callable=PropertyMock, return_value=mock_group):
-        percent_value, percent_done = await charger.constraint_update_value_callback_percent_soc(ct, now + timedelta(minutes=30))
-        energy_value, energy_done = await charger.constraint_update_value_callback_energy_soc(ct, now + timedelta(minutes=30))
+    with (
+        patch.object(charger, "_do_update_charger_state", new_callable=AsyncMock),
+        patch.object(charger, "is_not_plugged", return_value=False),
+        patch.object(charger, "get_device_real_energy", return_value=3000),
+        patch.object(type(charger), "charger_group", new_callable=PropertyMock, return_value=mock_group),
+    ):
+        percent_value, percent_done = await charger.constraint_update_value_callback_percent_soc(
+            ct, now + timedelta(minutes=30)
+        )
+        energy_value, energy_done = await charger.constraint_update_value_callback_energy_soc(
+            ct, now + timedelta(minutes=30)
+        )
 
     assert percent_value is not None
     assert energy_value is not None
@@ -578,9 +590,7 @@ async def test_check_load_activity_and_constraints_person_flow() -> None:
     car.can_use_charge_percent_constraints.return_value = True
     car.setup_car_charge_target_if_needed = AsyncMock(return_value=80)
     car.get_car_charge_percent.return_value = 50.0
-    car.get_best_person_next_need = AsyncMock(
-        return_value=(False, now + timedelta(hours=3), 60, person)
-    )
+    car.get_best_person_next_need = AsyncMock(return_value=(False, now + timedelta(hours=3), 60, person))
     car.do_force_next_charge = False
     car.do_next_charge_time = None
     car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
@@ -592,17 +602,19 @@ async def test_check_load_activity_and_constraints_person_flow() -> None:
     charger._constraints = []
     charger._auto_constraints_cleaned_at_user_reset = []
 
-    with patch.object(charger, "is_charger_unavailable", return_value=False), \
-         patch.object(charger, "probe_for_possible_needed_reboot", return_value=False), \
-         patch.object(charger, "is_not_plugged", return_value=False), \
-         patch.object(charger, "is_plugged", return_value=True), \
-         patch.object(charger, "get_best_car", return_value=car), \
-         patch.object(charger, "is_car_charged", return_value=(False, 50.0)), \
-         patch.object(charger, "push_agenda_constraints", return_value=True), \
-         patch.object(charger, "push_live_constraint", return_value=True), \
-         patch.object(charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"), \
-         patch.object(charger, "set_live_constraints"), \
-         patch.object(charger, "is_off_grid", return_value=False):
+    with (
+        patch.object(charger, "is_charger_unavailable", return_value=False),
+        patch.object(charger, "probe_for_possible_needed_reboot", return_value=False),
+        patch.object(charger, "is_not_plugged", return_value=False),
+        patch.object(charger, "is_plugged", return_value=True),
+        patch.object(charger, "get_best_car", return_value=car),
+        patch.object(charger, "is_car_charged", return_value=(False, 50.0)),
+        patch.object(charger, "push_agenda_constraints", return_value=True),
+        patch.object(charger, "push_live_constraint", return_value=True),
+        patch.object(charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"),
+        patch.object(charger, "set_live_constraints"),
+        patch.object(charger, "is_off_grid", return_value=False),
+    ):
         changed = await charger.check_load_activity_and_constraints(now)
 
     assert changed is True
@@ -786,8 +798,10 @@ async def test_ocpp_init_and_low_level_update_request() -> None:
     entity_reg = MagicMock()
     entity_reg.async_entries_for_device.return_value = [entry]
 
-    with patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg), \
-         patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg):
+    with (
+        patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg),
+        patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg),
+    ):
         charger = QSChargerOCPP(
             hass=hass,
             home=home,
@@ -827,8 +841,10 @@ def test_wallbox_low_level_checks() -> None:
     entity_reg = MagicMock()
     entity_reg.async_entries_for_device.return_value = [entry]
 
-    with patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg), \
-         patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg):
+    with (
+        patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg),
+        patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg),
+    ):
         charger = QSChargerWallbox(
             hass=hass,
             home=home,
@@ -854,4 +870,3 @@ def test_wallbox_low_level_checks() -> None:
     assert plugged is True
     assert plugged_time == state.last_updated
     assert charging is True
-

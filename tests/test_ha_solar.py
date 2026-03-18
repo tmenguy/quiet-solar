@@ -1,22 +1,22 @@
 """Tests for ha_model/solar.py - Solar device functionality."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    CONF_SOLAR_FORECAST_PROVIDER,
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
     CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR,
-    CONF_SOLAR_FORECAST_PROVIDER,
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
-    SOLCAST_SOLAR_DOMAIN,
-    OPEN_METEO_SOLAR_DOMAIN,
-    MAX_POWER_INFINITE,
     MAX_AMP_INFINITE,
+    MAX_POWER_INFINITE,
+    OPEN_METEO_SOLAR_DOMAIN,
+    SOLCAST_SOLAR_DOMAIN,
 )
 
 
@@ -55,8 +55,7 @@ class FakeSolarProvider:
 
     def get_forecast(self, start_time, end_time):
         """Get forecast for time range."""
-        return [(t, v) for t, v in self.solar_forecast
-                if (end_time is None or t < end_time) and t >= start_time]
+        return [(t, v) for t, v in self.solar_forecast if (end_time is None or t < end_time) and t >= start_time]
 
     def get_value_from_current_forecast(self, time):
         """Get value at specific time."""
@@ -76,46 +75,35 @@ def test_solar_init():
 
 def test_solar_with_forecast_provider_solcast():
     """Test solar with Solcast forecast provider."""
-    solar = FakeQSSolar(
-        **{CONF_SOLAR_FORECAST_PROVIDER: SOLCAST_SOLAR_DOMAIN}
-    )
+    solar = FakeQSSolar(**{CONF_SOLAR_FORECAST_PROVIDER: SOLCAST_SOLAR_DOMAIN})
 
     assert solar.solar_forecast_provider == SOLCAST_SOLAR_DOMAIN
 
 
 def test_solar_with_forecast_provider_openmeteo():
     """Test solar with OpenMeteo forecast provider."""
-    solar = FakeQSSolar(
-        **{CONF_SOLAR_FORECAST_PROVIDER: OPEN_METEO_SOLAR_DOMAIN}
-    )
+    solar = FakeQSSolar(**{CONF_SOLAR_FORECAST_PROVIDER: OPEN_METEO_SOLAR_DOMAIN})
 
     assert solar.solar_forecast_provider == OPEN_METEO_SOLAR_DOMAIN
 
 
 def test_solar_max_output_power():
     """Test solar max output power setting."""
-    solar = FakeQSSolar(
-        **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000}
-    )
+    solar = FakeQSSolar(**{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000})
 
     assert solar.solar_max_output_power_value == 5000
 
 
 def test_solar_max_phase_amps():
     """Test solar max phase amps setting."""
-    solar = FakeQSSolar(
-        **{CONF_SOLAR_MAX_PHASE_AMPS: 25.0}
-    )
+    solar = FakeQSSolar(**{CONF_SOLAR_MAX_PHASE_AMPS: 25.0})
 
     assert solar.solar_max_phase_amps == 25.0
 
 
 def test_solar_get_over_clamp_power_no_clamp():
     """Test over clamp power when production is below max."""
-    solar = FakeQSSolar(
-        solar_production=3000,
-        **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000}
-    )
+    solar = FakeQSSolar(solar_production=3000, **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000})
 
     over_clamp = solar.get_current_over_clamp_production_power()
     assert over_clamp == 0.0
@@ -123,10 +111,7 @@ def test_solar_get_over_clamp_power_no_clamp():
 
 def test_solar_get_over_clamp_power_with_clamp():
     """Test over clamp power when production exceeds max."""
-    solar = FakeQSSolar(
-        solar_production=6000,
-        **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000}
-    )
+    solar = FakeQSSolar(solar_production=6000, **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 5000})
 
     over_clamp = solar.get_current_over_clamp_production_power()
     assert over_clamp == 1000.0
@@ -134,10 +119,7 @@ def test_solar_get_over_clamp_power_with_clamp():
 
 def test_solar_get_over_clamp_power_infinite_max():
     """Test over clamp power with infinite max."""
-    solar = FakeQSSolar(
-        solar_production=10000,
-        **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: MAX_POWER_INFINITE}
-    )
+    solar = FakeQSSolar(solar_production=10000, **{CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: MAX_POWER_INFINITE})
 
     # With infinite max, should never clamp
     # But our fake implementation will still compare
@@ -224,10 +206,7 @@ def test_solar_inverter_sensors():
 
 def test_solar_production_values():
     """Test solar production values."""
-    solar = FakeQSSolar(
-        solar_production=5000,
-        solar_production_minus_battery=4500
-    )
+    solar = FakeQSSolar(solar_production=5000, solar_production_minus_battery=4500)
 
     assert solar.solar_production == 5000
     assert solar.solar_production_minus_battery == 4500
@@ -244,9 +223,7 @@ def test_solar_provider_domain():
 
 def test_solar_with_no_forecast_provider():
     """Test solar device without forecast provider."""
-    solar = FakeQSSolar(
-        **{CONF_SOLAR_FORECAST_PROVIDER: None}
-    )
+    solar = FakeQSSolar(**{CONF_SOLAR_FORECAST_PROVIDER: None})
 
     assert solar.solar_forecast_provider is None
     assert solar.solar_forecast_provider_handler is None

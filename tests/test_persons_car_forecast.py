@@ -1,32 +1,31 @@
 """Tests for person and car forecast computation."""
-import pickle
-import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch
-from pathlib import Path
+
 import json
+import pickle
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+import pytest
 import pytz
-
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     DOMAIN,
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
 )
+from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome, get_time_from_state
 from custom_components.quiet_solar.ha_model.person import QSPerson
-from custom_components.quiet_solar.ha_model.car import QSCar
-
 
 
 @dataclass
 class SimpleState:
     """Minimal stand-in for HA state objects used by tests."""
+
     entity_id: str
     state: str
     attributes: dict[str, Any]
@@ -34,7 +33,7 @@ class SimpleState:
     last_changed: datetime  # <-- add this
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "SimpleState":
+    def from_dict(d: dict[str, Any]) -> SimpleState:
         lu = datetime.fromisoformat(d["last_updated"])
         # If older JSON doesn't have last_changed, default it to last_updated
         lc_str = d.get("last_changed")
@@ -57,18 +56,20 @@ class SimpleState:
             "last_changed": self.last_changed.isoformat(),
         }
 
+
 def _state_to_simple_dict(s: Any) -> dict[str, Any]:
     # Prefer HA's last_changed if present; otherwise fall back to last_updated
-    last_updated = getattr(s, "last_updated")
+    last_updated = s.last_updated
     last_changed = getattr(s, "last_changed", None) or last_updated
 
     return SimpleState(
-        entity_id=getattr(s, "entity_id"),
+        entity_id=s.entity_id,
         state=str(getattr(s, "state", "")),
         attributes=dict(getattr(s, "attributes", None) or {}),
         last_updated=last_updated,
         last_changed=last_changed,
     ).to_dict()
+
 
 def _rebuild_state_list(lst: list[dict[str, Any]]) -> list[SimpleState]:
     return [SimpleState.from_dict(d) for d in lst]
@@ -98,6 +99,7 @@ def _convert_day_entry_to_json(day_entry: Any) -> list[Any]:
 
     return [start.isoformat(), end.isoformat(), car_out, person_out]
 
+
 def _rebuild_day_entry_from_json(day_entry: Any) -> tuple[datetime, datetime, list[Any], list[Any]]:
     start_s, end_s, car_data, person_data = day_entry
     start = datetime.fromisoformat(start_s)
@@ -124,6 +126,7 @@ def _rebuild_day_entry_from_json(day_entry: Any) -> tuple[datetime, datetime, li
 
     return (start, end, car_out, person_out)
 
+
 def convert_pickle_like_payload_to_json_payload(person_and_car_data: dict[str, Any]) -> dict[str, Any]:
     """One-time converter if you can still load the old pickle somewhere."""
     out: dict[str, Any] = {
@@ -138,6 +141,7 @@ def convert_pickle_like_payload_to_json_payload(person_and_car_data: dict[str, A
     }
     return out
 
+
 def rebuild_payload_from_json_payload(json_payload: dict[str, Any]) -> dict[str, Any]:
     """Rebuild the structure expected by tests, using SimpleState objects."""
     out: dict[str, Any] = {
@@ -151,6 +155,7 @@ def rebuild_payload_from_json_payload(json_payload: dict[str, Any]) -> dict[str,
         else None,
     }
     return out
+
 
 def _write_json_fixture_once(test_data_path: Path, *, force: bool = False) -> Path:
     """
@@ -179,6 +184,7 @@ def _write_json_fixture_once(test_data_path: Path, *, force: bool = False) -> Pa
         encoding="utf-8",
     )
     return json_file
+
 
 class TestPersonsCarForecast:
     """Test person and car forecast computation."""
@@ -271,9 +277,7 @@ class TestPersonsCarForecast:
             for person_entity_id, person_positions in person_data:
                 person_position_entity_matching[person_entity_id] = person_entity_id
 
-
             for car_name, car_positions, car_odos in car_data:
-
                 car_tracker = car_position_entity_matching.get(car_name, None)
                 if car_tracker is not None:
                     if car_tracker not in positions_for_car:
@@ -287,13 +291,11 @@ class TestPersonsCarForecast:
                         # sort it
                     positions_for_car[car_tracker].sort(key=lambda x: x[0])
 
-
                     key = (car_tracker, start, end)
                     car_positions_lookup[key] = car_positions
 
-                car_odometer_sensor = car_odos_entity_matching.get(car_name,None)
+                car_odometer_sensor = car_odos_entity_matching.get(car_name, None)
                 if car_odometer_sensor is not None:
-
                     if car_odometer_sensor not in odos_for_car:
                         odos_for_car[car_odometer_sensor] = []
 
@@ -325,7 +327,6 @@ class TestPersonsCarForecast:
             start, end, car_data, person_data = day_data
 
             for car_name, car_positions, car_odos in car_data:
-
                 car_tracker = car_position_entity_matching.get(car_name, None)
                 if car_tracker is not None:
                     key = (car_tracker, start, end)
@@ -339,8 +340,6 @@ class TestPersonsCarForecast:
             for person_entity_id, person_positions in person_data:
                 key = (person_entity_id, start, end)
                 person_positions_lookup[key] = person_positions
-
-
 
         async def mock_load_fn(hass, entity_id: str, start_time: datetime, end_time: datetime, no_attributes=True):
             """Mock load_from_history function that looks up data from pickle.
@@ -379,10 +378,10 @@ class TestPersonsCarForecast:
             if time_series is not None:
                 # use bisect to find proper start and end indices
                 from bisect import bisect_left, bisect_right
+
                 start_idx = bisect_left(time_series, start_time, key=lambda x: x[0])
                 end_idx = bisect_right(time_series, end_time, key=lambda x: x[0])
                 return [state for _, state in time_series[start_idx:end_idx]]
-
 
             # Default: return empty list if no match found
             return []
@@ -390,12 +389,7 @@ class TestPersonsCarForecast:
         return mock_load_fn
 
     @pytest.mark.asyncio
-    async def test_compute_and_store_person_car_forecasts(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_compute_and_store_person_car_forecasts(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test _compute_and_store_person_car_forecasts with real QSCar instances and real mileage computation."""
 
         # Get test time from pickle data
@@ -427,7 +421,7 @@ class TestPersonsCarForecast:
                     name=car_name,
                     car_tracker=car_tracker,
                     car_odometer_sensor=car_odometer_sensor,
-                    car_battery_capacity=50000
+                    car_battery_capacity=50000,
                 )
                 mock_home._cars.append(car)
 
@@ -437,41 +431,35 @@ class TestPersonsCarForecast:
                     hass=mock_home.hass,
                     home=mock_home,
                     config_entry=None,
-                    name=person_entity_id.split('.')[1],
+                    name=person_entity_id.split(".")[1],
                     person_person_entity=person_entity_id,
-                    person_authorized_cars=[car.name for car in mock_home._cars] if mock_home._cars else []
+                    person_authorized_cars=[car.name for car in mock_home._cars] if mock_home._cars else [],
                 )
                 mock_home._persons.append(person)
 
         # Patch load_from_history for both home and car modules
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             # Get local day UTC for testing
-            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = (
+                mock_home._compute_person_needed_time_and_date(test_time)
+            )
 
             # Run the method under test
             await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=0)
 
             # Verify that persons have been updated with mileage data
             for person in mock_home._persons:
-                assert isinstance(person, QSPerson), f"Person should be QSPerson instance"
+                assert isinstance(person, QSPerson), "Person should be QSPerson instance"
                 # Check if mileage history was updated (it may be empty if no valid data)
-                assert hasattr(person, 'historical_mileage_data'), "Person should have historical_mileage_data"
+                assert hasattr(person, "historical_mileage_data"), "Person should have historical_mileage_data"
                 # The data may be empty or populated depending on the actual data in the pickle
                 print(f"Person {person.name} has {len(person.historical_mileage_data)} mileage entries")
 
     @pytest.mark.asyncio
-    async def test_compute_mileage_for_period_per_person(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_compute_mileage_for_period_per_person(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test _compute_mileage_for_period_per_person with real QSCar instances (not mocked)."""
 
         # Get test time from pickle data
@@ -504,7 +492,7 @@ class TestPersonsCarForecast:
                 name=car_name,
                 car_tracker=car_tracker,
                 car_odometer_sensor=car_odometer_sensor,
-                car_battery_capacity=50000
+                car_battery_capacity=50000,
             )
             mock_home._cars.append(car)
 
@@ -514,19 +502,16 @@ class TestPersonsCarForecast:
                 hass=mock_home.hass,
                 home=mock_home,
                 config_entry=None,
-                name=person_entity_id.split('.')[1],
+                name=person_entity_id.split(".")[1],
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name for car in mock_home._cars]
+                person_authorized_cars=[car.name for car in mock_home._cars],
             )
             mock_home._persons.append(person)
 
         # Patch load_from_history for both modules but NOT _compute_mileage_for_period_per_person
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             # Call the method directly (not mocked)
             persons_mileage = await mock_home._compute_mileage_for_period_per_person(start, end)
@@ -588,12 +573,7 @@ class TestPersonsCarForecast:
         print(f"Test time: {person_and_car_data['time']}")
 
     @pytest.mark.asyncio
-    async def test_full_forecast_update_cycle(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_full_forecast_update_cycle(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test a complete forecast update cycle with multiple days using real QSCar instances."""
 
         # Setup
@@ -622,7 +602,7 @@ class TestPersonsCarForecast:
                 name=car_name,
                 car_tracker=car_tracker,
                 car_odometer_sensor=car_odometer_sensor,
-                car_battery_capacity=50000
+                car_battery_capacity=50000,
             )
             mock_home._cars.append(car)
 
@@ -631,30 +611,26 @@ class TestPersonsCarForecast:
                 hass=mock_home.hass,
                 home=mock_home,
                 config_entry=None,
-                name=person_entity_id.split('.')[1],
+                name=person_entity_id.split(".")[1],
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name for car in mock_home._cars]
+                person_authorized_cars=[car.name for car in mock_home._cars],
             )
             mock_home._persons.append(person)
 
         # Patch load_from_history for both modules
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             # Process multiple days
-            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = (
+                mock_home._compute_person_needed_time_and_date(test_time)
+            )
 
             # Process last 3 days (or fewer if less data available)
             num_days = min(3, len(per_day_data))
             for day_shift in range(num_days):
-                await mock_home._compute_and_store_person_car_forecasts(
-                    local_day_utc,
-                    day_shift=day_shift
-                )
+                await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=day_shift)
 
             # Verify all persons have accumulated history
             for person in mock_home._persons:
@@ -667,16 +643,12 @@ class TestPersonsCarForecast:
                 # Person should have at least some history if they used any cars
                 if len(person.authorized_cars) > 0:
                     # History could be empty if person never matched any car trips
-                    assert len(person.historical_mileage_data) >= 0, \
+                    assert len(person.historical_mileage_data) >= 0, (
                         f"Person {person.name} should have mileage history or empty list"
+                    )
 
     @pytest.mark.asyncio
-    async def test_person_mileage_prediction(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_person_mileage_prediction(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test that persons can predict next day mileage based on historical data with real QSCar instances."""
 
         test_time = person_and_car_data.get("time")
@@ -705,7 +677,7 @@ class TestPersonsCarForecast:
                 name=car_name,
                 car_tracker=car_tracker,
                 car_odometer_sensor=car_odometer_sensor,
-                car_battery_capacity=50000
+                car_battery_capacity=50000,
             )
             mock_home._cars.append(car)
 
@@ -714,30 +686,26 @@ class TestPersonsCarForecast:
                 hass=mock_home.hass,
                 home=mock_home,
                 config_entry=None,
-                name=person_entity_id.split('.')[1],
+                name=person_entity_id.split(".")[1],
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name for car in mock_home._cars]
+                person_authorized_cars=[car.name for car in mock_home._cars],
             )
             mock_home._persons.append(person)
 
         # Patch load_from_history for both modules
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             # Process multiple days to build history
-            local_day, local_day_shifted, local_day_utc, is_passed_limit = mock_home._compute_person_needed_time_and_date(test_time)
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = (
+                mock_home._compute_person_needed_time_and_date(test_time)
+            )
 
             # Process several days
             num_days = min(5, len(per_day_data))
             for day_shift in range(num_days):
-                await mock_home._compute_and_store_person_car_forecasts(
-                    local_day_utc,
-                    day_shift=day_shift
-                )
+                await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=day_shift)
 
             # Now test prediction functionality
             for person in mock_home._persons:
@@ -759,12 +727,7 @@ class TestPersonsCarForecast:
                         assert next_mileage >= 0
 
     @pytest.mark.asyncio
-    async def test_person_authorized_cars_matching(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_person_authorized_cars_matching(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test that person car matching works correctly with authorized cars using real QSCar instances."""
 
         test_time = person_and_car_data.get("time")
@@ -792,7 +755,7 @@ class TestPersonsCarForecast:
                 name=car_name,
                 car_tracker=car_tracker,
                 car_odometer_sensor=car_odometer_sensor,
-                car_battery_capacity=50000
+                car_battery_capacity=50000,
             )
             mock_home._cars.append(car)
             all_cars.append(car)
@@ -805,18 +768,15 @@ class TestPersonsCarForecast:
                 hass=mock_home.hass,
                 home=mock_home,
                 config_entry=None,
-                name=person_entity_id.split('.')[1],
+                name=person_entity_id.split(".")[1],
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[all_cars[0].name]  # Only authorize first car
+                person_authorized_cars=[all_cars[0].name],  # Only authorize first car
             )
             mock_home._persons.append(person)
 
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             persons_mileage = await mock_home._compute_mileage_for_period_per_person(start, end)
 
@@ -832,12 +792,7 @@ class TestPersonsCarForecast:
                 assert len(authorized_car_names) > 0
 
     @pytest.mark.asyncio
-    async def test_multiple_persons_same_car(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
-    ):
+    async def test_multiple_persons_same_car(self, mock_home, person_and_car_data, mock_load_from_history):
         """Test handling of multiple persons using the same car with real QSCar instances."""
 
         per_day_data = person_and_car_data.get("per_day", [])
@@ -866,7 +821,7 @@ class TestPersonsCarForecast:
             name=car_name,
             car_tracker=car_tracker,
             car_odometer_sensor=car_odometer_sensor,
-            car_battery_capacity=50000
+            car_battery_capacity=50000,
         )
         mock_home._cars.append(car)
 
@@ -879,7 +834,7 @@ class TestPersonsCarForecast:
                 config_entry=None,
                 name=f"{person_entity_id.split('.')[1]}_{i}",
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name]
+                person_authorized_cars=[car.name],
             )
             mock_home._persons.append(person)
             test_persons.append(person)
@@ -893,17 +848,14 @@ class TestPersonsCarForecast:
                 config_entry=None,
                 name=f"second_{person_entity_id.split('.')[1]}",
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name]
+                person_authorized_cars=[car.name],
             )
             mock_home._persons.append(person2)
             test_persons.append(person2)
 
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             persons_mileage = await mock_home._compute_mileage_for_period_per_person(start, end)
 
@@ -921,10 +873,7 @@ class TestPersonsCarForecast:
 
     @pytest.mark.asyncio
     async def test_process_all_14_days_with_stored_local_day_utc(
-        self,
-        mock_home,
-        person_and_car_data,
-        mock_load_from_history
+        self, mock_home, person_and_car_data, mock_load_from_history
     ):
         """Test processing all 14 days using the exact local_day_utc stored in pickle.
 
@@ -951,7 +900,7 @@ class TestPersonsCarForecast:
 
         # Create REAL QSCar instances (not mocks!) so get_car_mileage_on_period_km works properly
         # Extract the actual entity IDs from the pickle data
-        print(f"\nCreating real QSCar instances with actual entity IDs from pickle:")
+        print("\nCreating real QSCar instances with actual entity IDs from pickle:")
         time_now = datetime.now(tz=pytz.UTC)
 
         check_time = local_day_utc + timedelta(hours=12)
@@ -975,7 +924,7 @@ class TestPersonsCarForecast:
                 car_tracker=car_tracker,
                 car_odometer_sensor=car_odometer_sensor,
                 car_charge_percent_sensor=f"sensor.soc_{car_name.lower()}",
-                car_battery_capacity=50000  # Default capacity
+                car_battery_capacity=50000,  # Default capacity
             )
             mock_home.add_device(car)
             car._km_per_kwh = 6.0  # Set a default efficiency
@@ -1001,15 +950,15 @@ class TestPersonsCarForecast:
                 assert soc == cur_soc, f"Expected SOC {cur_soc}% for car {car.name}, got {soc}%"
 
         # Create real QSPerson instances
-        print(f"\nCreating real QSPerson instances:")
+        print("\nCreating real QSPerson instances:")
         for person_entity_id, _ in person_data:
             person = QSPerson(
                 hass=mock_home.hass,
                 home=mock_home,
                 config_entry=None,
-                name=person_entity_id.split('.')[1],
+                name=person_entity_id.split(".")[1],
                 person_person_entity=person_entity_id,
-                person_authorized_cars=[car.name for car in mock_home._cars]
+                person_authorized_cars=[car.name for car in mock_home._cars],
             )
             mock_home.add_device(person)
             print(f"  - {person.name}: authorized_cars={person.authorized_cars}")
@@ -1017,30 +966,29 @@ class TestPersonsCarForecast:
         # Patch load_from_history with our exact-matching mock
         # This will be used by both the home's _compute_mileage_for_period_per_person
         # AND by each car's get_car_mileage_on_period_km method
-        with patch(
-            'custom_components.quiet_solar.ha_model.home.load_from_history',
-            side_effect=mock_load_from_history
-        ), patch(
-            'custom_components.quiet_solar.ha_model.car.load_from_history',
-            side_effect=mock_load_from_history
+        with (
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", side_effect=mock_load_from_history),
+            patch("custom_components.quiet_solar.ha_model.car.load_from_history", side_effect=mock_load_from_history),
         ):
             # Process all days using the exact pattern from the code
             # for d in range(0, 14):
             #     await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
 
             num_days = min(MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, len(per_day_data))
-            print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days-1}:")
+            print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days - 1}:")
 
-            local_day_2, local_day_shifted_2, local_day_utc_2, is_passed = mock_home._compute_person_needed_time_and_date(time)
+            local_day_2, local_day_shifted_2, local_day_utc_2, is_passed = (
+                mock_home._compute_person_needed_time_and_date(time)
+            )
 
-            assert local_day_utc_2 == local_day_utc, \
+            assert local_day_utc_2 == local_day_utc, (
                 f"Computed local_day_utc {local_day_utc_2} does not match stored {local_day_utc}"
+            )
 
             for d in range(0, num_days):
                 print(f"  Processing day_shift={d}", end="")
                 await mock_home._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
                 print(" ✓")
-
 
             # check time
 
@@ -1061,38 +1009,48 @@ class TestPersonsCarForecast:
                     assert mileage is None
                 print(f"Person {person.name} next need at {check_time}: leave at {leave_time} for {mileage}km")
 
-
             # Allocation must run before get_best_person_next_need since it no
             # longer triggers allocation internally.
             await mock_home.compute_and_set_best_persons_cars_allocations(time=check_time, force_update=True)
 
             car_results = {}
             for car in mock_home._cars:
-                is_person_covered, next_usage_time, person_min_target_charge, person = await car.get_best_person_next_need(check_time)
-                print(f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}")
+                (
+                    is_person_covered,
+                    next_usage_time,
+                    person_min_target_charge,
+                    person,
+                ) = await car.get_best_person_next_need(check_time)
+                print(
+                    f"Car {car.name} best person next need at {check_time}: is_person_covered={is_person_covered}, next_usage_time={next_usage_time}, person_min_target_charge={person_min_target_charge}, person={person.name if person else None}"
+                )
                 car_results[car.name.lower()] = (is_person_covered, next_usage_time, person_min_target_charge, person)
 
             for car_key, (is_person_covered, next_usage_time, person_min_target_charge, person) in car_results.items():
                 if "tesla" in car_key:
-                    assert "arthur" in person.name.lower(), f"Expected arthur for Tesla, got {person.name if person else None}"
+                    assert "arthur" in person.name.lower(), (
+                        f"Expected arthur for Tesla, got {person.name if person else None}"
+                    )
                     assert int(person_min_target_charge) == 47
                     assert is_person_covered
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:30:00+00:00")
                 elif "twingo" in car_key:
-                    assert "thomas" in person.name.lower(), f"Expected thomas for Twingo, got {person.name if person else None}"
+                    assert "thomas" in person.name.lower(), (
+                        f"Expected thomas for Twingo, got {person.name if person else None}"
+                    )
                     assert int(person_min_target_charge) == 73
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 10:00:00+00:00")
                 elif "zoe" in car_key:
-                    assert "magali" in person.name.lower(), f"Expected magali for Zoe, got {person.name if person else None}"
+                    assert "magali" in person.name.lower(), (
+                        f"Expected magali for Zoe, got {person.name if person else None}"
+                    )
                     assert int(person_min_target_charge) == 41
                     assert is_person_covered is False
                     assert next_usage_time == datetime.fromisoformat("2025-11-15 09:00:00+00:00")
                 elif "buz" in car_key:
                     assert person is None, f"Expected no person for ID.buzz, got {person.name if person else None}"
                     assert person_min_target_charge is None
-
-
 
             # Verify all persons have accumulated history
             print("\n=== Results after processing all days ===")
@@ -1101,9 +1059,9 @@ class TestPersonsCarForecast:
                 print(f"  Total historical mileage entries: {len(person.historical_mileage_data)}")
 
                 if len(person.historical_mileage_data) > 0:
-                    print(f"  Mileage history details:")
+                    print("  Mileage history details:")
                     for day, mileage, leave_time, weekday in person.historical_mileage_data:
-                        weekday_name = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][weekday]
+                        weekday_name = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekday]
                         print(f"    {day.date()} ({weekday_name}): {mileage:.1f}km, leave at {leave_time.time()}")
 
                     # Calculate statistics
@@ -1113,8 +1071,9 @@ class TestPersonsCarForecast:
                     print(f"  Average daily mileage: {avg_mileage:.1f}km")
 
                     # Verify mileage values are realistic (from real odometer data)
-                    assert all(0 <= entry[1] <= 500 for entry in person.historical_mileage_data), \
+                    assert all(0 <= entry[1] <= 500 for entry in person.historical_mileage_data), (
                         "Mileage values should be realistic (0-500km per day)"
+                    )
 
                     # Verify history is sorted by date
                     dates = [entry[0] for entry in person.historical_mileage_data]
@@ -1130,7 +1089,7 @@ class TestPersonsCarForecast:
                         if next_mileage is not None:
                             assert 0 <= next_mileage <= 500, "Predicted mileage should be realistic"
                 else:
-                    print(f"  No mileage history (person may not have used any cars)")
+                    print("  No mileage history (person may not have used any cars)")
 
     @pytest.mark.asyncio
     async def test_pickle_data_integrity(self, person_and_car_data):
@@ -1145,9 +1104,9 @@ class TestPersonsCarForecast:
             if len(car_positions) > 0:
                 # Check first position has the expected structure
                 first_pos = car_positions[0]
-                if hasattr(first_pos, 'attributes'):
+                if hasattr(first_pos, "attributes"):
                     attrs = first_pos.attributes
-                    if attrs and 'latitude' in attrs and 'longitude' in attrs:
+                    if attrs and "latitude" in attrs and "longitude" in attrs:
                         has_gps_data = True
                         print(f"\nCar {car_name} has GPS data:")
                         print(f"  First position: lat={attrs.get('latitude')}, lon={attrs.get('longitude')}")
@@ -1165,5 +1124,3 @@ class TestPersonsCarForecast:
 
         # At least one car should have either GPS or odometer data
         assert has_gps_data or has_odo_data, "Test data should have GPS or odometer readings"
-
-

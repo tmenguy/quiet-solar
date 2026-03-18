@@ -1,27 +1,41 @@
 import logging
 from bisect import bisect_left
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 from operator import itemgetter
 from typing import Any
 
 import pytz
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
-from datetime import time as dt_time
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 
-from .car import QSCar
-from ..const import CONF_TYPE_NAME_QSPerson, CONF_PERSON_PERSON_ENTITY, CONF_PERSON_AUTHORIZED_CARS, \
-    CONF_PERSON_PREFERRED_CAR, CONF_PERSON_NOTIFICATION_TIME, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    CONF_PERSON_TRACKER, DEVICE_STATUS_CHANGE_NOTIFY, PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER, \
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS, PERSON_NOTIFY_REASON_CHANGED_CAR, CONF_MOBILE_APP, \
-    CONF_MOBILE_APP_URL
+from ..const import (
+    CONF_MOBILE_APP,
+    CONF_MOBILE_APP_URL,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    CONF_PERSON_TRACKER,
+    DEVICE_STATUS_CHANGE_NOTIFY,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    PERSON_NOTIFY_REASON_CHANGED_CAR,
+    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
+    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
+    CONF_TYPE_NAME_QSPerson,
+)
 from ..ha_model.device import HADeviceMixin
-from ..home_model.constraints import get_readable_date_string, LoadConstraint, \
-    MultiStepsPowerLoadConstraintChargePercent
+from ..home_model.constraints import (
+    LoadConstraint,
+    MultiStepsPowerLoadConstraintChargePercent,
+    get_readable_date_string,
+)
 from ..home_model.load import AbstractDevice
+from .car import QSCar
 
 _LOGGER = logging.getLogger(__name__)
 
-FORECAST_AUTO_REFRESH_RATE_S = 30*60 # 1 hours
+FORECAST_AUTO_REFRESH_RATE_S = 30 * 60  # 1 hours
+
 
 class QSPerson(HADeviceMixin, AbstractDevice):
     """
@@ -40,10 +54,10 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         self.preferred_car = None
         self.notification_time = None
 
-        self.authorized_cars : list[str] = kwargs.pop(CONF_PERSON_AUTHORIZED_CARS, [])
-        self.preferred_car  : str | None = kwargs.pop(CONF_PERSON_PREFERRED_CAR, None)
-        self.notification_time : str | None = kwargs.pop(CONF_PERSON_NOTIFICATION_TIME, None)
-        self.notification_dt_time : dt_time | None = None
+        self.authorized_cars: list[str] = kwargs.pop(CONF_PERSON_AUTHORIZED_CARS, [])
+        self.preferred_car: str | None = kwargs.pop(CONF_PERSON_PREFERRED_CAR, None)
+        self.notification_time: str | None = kwargs.pop(CONF_PERSON_NOTIFICATION_TIME, None)
+        self.notification_dt_time: dt_time | None = None
         if self.notification_time is not None:
             self.notification_dt_time = dt_time.fromisoformat(self.notification_time)
 
@@ -56,7 +70,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             self.mobile_app_url = None
         elif self.mobile_app_url == "/":
             self.mobile_app_url = None
-        elif self.mobile_app_url[0] != '/':
+        elif self.mobile_app_url[0] != "/":
             self.mobile_app_url = f"/{self.mobile_app_url}"
 
         mobile_app = self.mobile_app
@@ -67,23 +81,19 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         self.mobile_app = mobile_app
         self.mobile_app_url = mobile_app_url
 
-
         # everything is in local time, not UTC
-        self.historical_mileage_data : list[tuple[datetime,float,datetime, int]]= []
-        self.serializable_historical_data : list[dict] = []
-        self.predicted_mileage : float | None = None
-        self.predicted_leave_time : datetime | None = None
+        self.historical_mileage_data: list[tuple[datetime, float, datetime, int]] = []
+        self.serializable_historical_data: list[dict] = []
+        self.predicted_mileage: float | None = None
+        self.predicted_leave_time: datetime | None = None
 
         self.has_been_initialized = False
-        self._last_request_prediction_time : datetime | None = None
+        self._last_request_prediction_time: datetime | None = None
 
-        self._last_forecast_notification_call_time : datetime | None = None
+        self._last_forecast_notification_call_time: datetime | None = None
 
         # Attach state probes
-        self.attach_ha_state_to_probe(
-            self.person_entity_id,
-            is_numerical=False
-        )
+        self.attach_ha_state_to_probe(self.person_entity_id, is_numerical=False)
 
     def get_tracker_id(self) -> str | None:
         if self.person_tracker_id is not None:
@@ -91,14 +101,14 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         else:
             return self.person_entity_id
 
-    def should_recompute_history(self, time:datetime) -> bool:
+    def should_recompute_history(self, time: datetime) -> bool:
 
         if self.authorized_cars is None or len(self.authorized_cars) == 0:
             return False
 
         return not self.has_been_initialized
 
-    def add_to_mileage_history(self, day:datetime, mileage:float, leave_time:datetime) -> None:
+    def add_to_mileage_history(self, day: datetime, mileage: float, leave_time: datetime) -> None:
 
         if leave_time is None:
             _LOGGER.warning("add_to_mileage_history: Leave time not provided for person %s", self.name)
@@ -111,11 +121,15 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if len(self.historical_mileage_data) == 0:
             self.historical_mileage_data = [(day, mileage, leave_time, week_day)]
         elif day > self.historical_mileage_data[-1][0]:
-            self.historical_mileage_data.append( (day, mileage, leave_time, week_day) )
+            self.historical_mileage_data.append((day, mileage, leave_time, week_day))
         else:
             insert_idx = bisect_left(self.historical_mileage_data, day, key=itemgetter(0))
 
-            if insert_idx < len(self.historical_mileage_data) and insert_idx >= 0 and self.historical_mileage_data[insert_idx][0] == day:
+            if (
+                insert_idx < len(self.historical_mileage_data)
+                and insert_idx >= 0
+                and self.historical_mileage_data[insert_idx][0] == day
+            ):
                 # update existing entry
                 self.historical_mileage_data[insert_idx] = (day, mileage, leave_time, week_day)
                 return
@@ -123,7 +137,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             self.historical_mileage_data.insert(insert_idx, (day, mileage, leave_time, week_day))
 
         while True:
-            if len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS: # keeps only 2 weeks of data
+            if (
+                len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+            ):  # keeps only 2 weeks of data
                 self.historical_mileage_data.pop(0)
             else:
                 break
@@ -132,14 +148,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         serialized_hist_data = []
         for entry in self.historical_mileage_data:
-            serialized_hist_data.append({
-                "day": entry[0].isoformat(),
-                "mileage": entry[1],
-                "leave_time": entry[2].isoformat()
-            })
+            serialized_hist_data.append(
+                {"day": entry[0].isoformat(), "mileage": entry[1], "leave_time": entry[2].isoformat()}
+            )
         self.serializable_historical_data = serialized_hist_data
 
-    def _get_best_week_day_guess(self, week_day:int) -> tuple[float | None, dt_time | None]:
+    def _get_best_week_day_guess(self, week_day: int) -> tuple[float | None, dt_time | None]:
         """Get the best guess for mileage and leave time for a given weekday."""
         best_mileage = None
         best_leave_time = None
@@ -159,12 +173,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         return best_mileage, best_leave_time
 
-    def _compute_person_next_need(self, time:datetime) -> tuple[datetime | None, float | None]:
+    def _compute_person_next_need(self, time: datetime) -> tuple[datetime | None, float | None]:
 
         local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
 
         today_week_day = local_time.weekday()
-        tomorrow_week_day = (today_week_day +1) %7
+        tomorrow_week_day = (today_week_day + 1) % 7
 
         # all below is in local time
         predicted_mileage_today, predicted_leave_time_today = self._get_best_week_day_guess(today_week_day)
@@ -177,9 +191,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             if len(self.historical_mileage_data) > 0:
                 _LOGGER.warning(f"_compute_person_next_need: EMPTY PREDICTED_TIME for {self.name}")
         else:
-
             if predicted_leave_time_today is not None:
-                today_leave_time = datetime.combine(local_time.date(), predicted_leave_time_today, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+                today_leave_time = (
+                    datetime.combine(local_time.date(), predicted_leave_time_today, tzinfo=None)
+                    .replace(tzinfo=None)
+                    .astimezone(tz=pytz.UTC)
+                )
             else:
                 today_leave_time = None
 
@@ -187,14 +204,19 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.predicted_leave_time = today_leave_time
                 self.predicted_mileage = predicted_mileage_today
             elif predicted_leave_time_tomorrow is not None:
-                tomorrow_leave_time = datetime.combine(local_time.date() + timedelta(days=1),
-                                                       predicted_leave_time_tomorrow, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+                tomorrow_leave_time = (
+                    datetime.combine(local_time.date() + timedelta(days=1), predicted_leave_time_tomorrow, tzinfo=None)
+                    .replace(tzinfo=None)
+                    .astimezone(tz=pytz.UTC)
+                )
 
                 self.predicted_leave_time = tomorrow_leave_time
                 self.predicted_mileage = predicted_mileage_tomorrow
 
         if self.predicted_leave_time is not None:
-            _LOGGER.info(f"_compute_person_next_need: for {self.name} mileage: {self.predicted_mileage}km at {self.predicted_leave_time.time().isoformat()}")
+            _LOGGER.info(
+                f"_compute_person_next_need: for {self.name} mileage: {self.predicted_mileage}km at {self.predicted_leave_time.time().isoformat()}"
+            )
 
         return self.predicted_leave_time, self.predicted_mileage
 
@@ -252,17 +274,19 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                     leave_time_str = e.get("leave_time", None)
 
                     if day_str is None or mileage is None or leave_time_str is None:
-                        _LOGGER.warning(
-                            f"device_post_home_init: QSPerson {self.name} error in saved data {e}")
+                        _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error in saved data {e}")
                         continue
 
                     day = datetime.fromisoformat(day_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
                     leave_time = datetime.fromisoformat(leave_time_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
-                    self.add_to_mileage_history( day, float(mileage), leave_time )
+                    self.add_to_mileage_history(day, float(mileage), leave_time)
                 except Exception as ex:
-                    _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}", exc_info=True, stack_info=True)
-
+                    _LOGGER.warning(
+                        f"device_post_home_init: QSPerson {self.name} error parsing historical entry {e} : {ex}",
+                        exc_info=True,
+                        stack_info=True,
+                    )
 
             str_hist_data = ""
             for day, mileage, leave_time, week_day in self.historical_mileage_data:
@@ -274,7 +298,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
             today_week_day = local_time.weekday()
             tomorrow_week_day = (today_week_day + 1) % 7
-            _LOGGER.info(f"device_post_home_init: QSPerson {self.name} td/tw {today_week_day}/{tomorrow_week_day}: hist_data {str_hist_data}")
+            _LOGGER.info(
+                f"device_post_home_init: QSPerson {self.name} td/tw {today_week_day}/{tomorrow_week_day}: hist_data {str_hist_data}"
+            )
 
             # recompute those, no need to read
 
@@ -292,19 +318,23 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             if self.has_been_initialized is False:
                 _LOGGER.warning(f"device_post_home_init: QSPerson {self.name}: no initialization need compute")
 
-    def update_person_forecast(self, time:datetime| None = None, force_update:bool=False) -> tuple[datetime | None, float | None]:
+    def update_person_forecast(
+        self, time: datetime | None = None, force_update: bool = False
+    ) -> tuple[datetime | None, float | None]:
         if time is None:
             time = datetime.now(tz=pytz.UTC)
-        if self._last_request_prediction_time is None or \
-                (time - self._last_request_prediction_time).total_seconds() > FORECAST_AUTO_REFRESH_RATE_S or \
-                (self.predicted_leave_time is not None and self.predicted_leave_time < time) or \
-                force_update:
+        if (
+            self._last_request_prediction_time is None
+            or (time - self._last_request_prediction_time).total_seconds() > FORECAST_AUTO_REFRESH_RATE_S
+            or (self.predicted_leave_time is not None and self.predicted_leave_time < time)
+            or force_update
+        ):
             self._compute_person_next_need(time)
             self._last_request_prediction_time = time
 
         return self.predicted_leave_time, self.predicted_mileage
 
-    def get_forecast_readable_string(self, time:datetime| None = None) -> str:
+    def get_forecast_readable_string(self, time: datetime | None = None) -> str:
         """Get a human-readable string of the person's forecast."""
         self.update_person_forecast(time)
 
@@ -313,15 +343,17 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         else:
             return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True)}"
 
-
-    async def notify_of_forecast_if_needed(self, time: datetime | None = None,
-                                           notify_reason:str= PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
-                                           user_ct:LoadConstraint  |None=None,
-                                           force_ct:LoadConstraint |None=None,
-                                           person_ct:LoadConstraint|None=None):
+    async def notify_of_forecast_if_needed(
+        self,
+        time: datetime | None = None,
+        notify_reason: str = PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
+        user_ct: LoadConstraint | None = None,
+        force_ct: LoadConstraint | None = None,
+        person_ct: LoadConstraint | None = None,
+    ):
         """Notify the user of the forecasted mileage."""
         if self.mobile_app is None:
-            return # no mobile app configured
+            return  # no mobile app configured
 
         if time is None:
             time = datetime.now(tz=pytz.UTC).astimezone(tz=None)
@@ -333,10 +365,15 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         daily_notification = False
 
         if self.notification_dt_time and self._last_forecast_notification_call_time is not None:
-
             local_time = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            today_notify_utc = datetime.combine(local_time.date(), self.notification_dt_time, tzinfo=None).replace(tzinfo=None).astimezone(tz=pytz.UTC)
-            daily_notification = self._last_forecast_notification_call_time < today_notify_utc and time >= today_notify_utc
+            today_notify_utc = (
+                datetime.combine(local_time.date(), self.notification_dt_time, tzinfo=None)
+                .replace(tzinfo=None)
+                .astimezone(tz=pytz.UTC)
+            )
+            daily_notification = (
+                self._last_forecast_notification_call_time < today_notify_utc and time >= today_notify_utc
+            )
 
         for car in self.home._cars:
             if car.current_forecasted_person is not None:
@@ -358,7 +395,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             do_notify = True
 
         if do_notify:
-
             self.update_person_forecast(time)
 
             for car in self.home._cars:
@@ -368,7 +404,6 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         break
 
             if message is None and title is None:
-
                 # send notification
                 if self.predicted_mileage is None or self.predicted_leave_time is None:
                     if predicted_car is None:
@@ -376,7 +411,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         message = "Check in your Home Assistant to see which car you need."
                     else:
                         title = f"{predicted_car.name}: No Prediction for you for tomorrow"
-                        message = f"Check in your Home Assistant to see if there is what you need."
+                        message = "Check in your Home Assistant to see if there is what you need."
                 else:
                     prediction_time = get_readable_date_string(self.predicted_leave_time)
 
@@ -384,14 +419,18 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         title = "No allocated car !"
                         message = f"Tomorrow, you are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}."
                     else:
-
-                        is_covered, current_soc, needed_soc, diff_energy = predicted_car.get_adapt_target_percent_soc_to_reach_range_km(
-                            self.predicted_mileage, self.predicted_leave_time)
+                        is_covered, current_soc, needed_soc, diff_energy = (
+                            predicted_car.get_adapt_target_percent_soc_to_reach_range_km(
+                                self.predicted_mileage, self.predicted_leave_time
+                            )
+                        )
 
                         if is_covered:
                             title = f"{predicted_car.name}: OK, it is already ready!"
-                            message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                       f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip.")
+                            message = (
+                                f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                f" The {predicted_car.name} current charge is {current_soc:.0f}%, and should cover your trip."
+                            )
 
                         else:
                             usable_ct = None
@@ -401,8 +440,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                 usable_ct = user_ct
 
                             ct_target_soc = None
-                            if usable_ct is not None and isinstance(usable_ct,
-                                                                    MultiStepsPowerLoadConstraintChargePercent):
+                            if usable_ct is not None and isinstance(
+                                usable_ct, MultiStepsPowerLoadConstraintChargePercent
+                            ):
                                 ct_target_soc = usable_ct.target_value
 
                             # fixate the person on the car once notified, so the allocation doesn't flip
@@ -416,61 +456,78 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                                 car_curr_str = f"The {predicted_car.name} current charge is UNKNOWN, "
 
                             if ct_target_soc is not None:
-                                if (needed_soc is not None and ct_target_soc < needed_soc) or usable_ct.end_of_constraint > self.predicted_leave_time:
+                                if (
+                                    needed_soc is not None and ct_target_soc < needed_soc
+                                ) or usable_ct.end_of_constraint > self.predicted_leave_time:
                                     title = f"{predicted_car.name}: BEWARE it has a scheduled charge that WON'T cover your trip!"
                                     message = (
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time} , so need a {needed_soc}% charge\n"
-                                        f"{car_curr_str}the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}")
+                                        f"{car_curr_str}the scheduled charge will get it at {ct_target_soc:.0f}% : {get_readable_date_string(usable_ct.end_of_constraint)}"
+                                    )
 
                                 else:
                                     title = f"{predicted_car.name}: OK it has a scheduled charge that works!"
                                     message = (
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                        f"{car_curr_str}the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip.")
+                                        f"{car_curr_str}the scheduled charge will get it at {ct_target_soc:.0f}%, it will cover your trip."
+                                    )
 
                             else:
-
                                 if needed_soc is not None:
                                     needed_soc_str = f"{needed_soc:.0f}%"
                                 else:
                                     needed_soc_str = "UNKNOWN"
 
                                 if person_ct is not None:
-                                    if (needed_soc is not None and person_ct.target_value >= needed_soc) and person_ct.end_of_constraint <= self.predicted_leave_time:
+                                    if (
+                                        needed_soc is not None and person_ct.target_value >= needed_soc
+                                    ) and person_ct.end_of_constraint <= self.predicted_leave_time:
                                         title = f"{predicted_car.name}: Check it, I'll charge it for you!"
-                                        message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                                   f"{car_curr_str}I will charge it to {needed_soc_str} to cover your trip.")
+                                        message = (
+                                            f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                            f"{car_curr_str}I will charge it to {needed_soc_str} to cover your trip."
+                                        )
                                     else:
                                         title = f"{predicted_car.name}: BEWARE check what I've done"
-                                        message = (f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                                   f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip.")
+                                        message = (
+                                            f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
+                                            f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip."
+                                        )
                                 else:
                                     title = f"{predicted_car.name}: BEWARE your trip is not covered"
                                     message = (
                                         f"You are predicted to drive {int(self.predicted_mileage)}km, leaving: {prediction_time}.\n"
-                                        f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip.")
+                                        f"{car_curr_str}Charge it to {needed_soc_str} to cover your trip."
+                                    )
 
             if message is not None and title is not None:
-                _LOGGER.info(f"notify_of_forecast_if_needed: Notifying person {self.name} :reason {notify_reason} {title} / {message}")
-                await self.on_device_state_change(time, device_change_type=DEVICE_STATUS_CHANGE_NOTIFY, title=title, message=message)
-        
+                _LOGGER.info(
+                    f"notify_of_forecast_if_needed: Notifying person {self.name} :reason {notify_reason} {title} / {message}"
+                )
+                await self.on_device_state_change(
+                    time, device_change_type=DEVICE_STATUS_CHANGE_NOTIFY, title=title, message=message
+                )
+
         self._last_forecast_notification_call_time = time
 
     def get_person_mileage_serialized_prediction(self) -> tuple[Any | None, dict | None]:
         """Predict the person's mileage for the next day."""
         state_value = self.get_forecast_readable_string()
 
-        self.hass.create_task(self.notify_of_forecast_if_needed(), name="QSPerson notify_of_forecast task in get_person_mileage_serialized_prediction")
+        self.hass.create_task(
+            self.notify_of_forecast_if_needed(),
+            name="QSPerson notify_of_forecast task in get_person_mileage_serialized_prediction",
+        )
 
         serialized_leave_time = None
         if self.predicted_leave_time is not None:
             serialized_leave_time = self.predicted_leave_time.replace(tzinfo=pytz.UTC).astimezone(tz=None).isoformat()
 
-        return    state_value, {
+        return state_value, {
             "historical_data": self.serializable_historical_data,
             "predicted_mileage": self.predicted_mileage,
             "predicted_leave_time": serialized_leave_time,
-            "has_been_initialized" : self.has_been_initialized
+            "has_been_initialized": self.has_been_initialized,
         }
 
     def get_platforms(self):
@@ -488,6 +545,3 @@ class QSPerson(HADeviceMixin, AbstractDevice):
     def reset(self, keep_commands=False):
         """Reset the device state."""
         super().reset(keep_commands=keep_commands)
-
-
-

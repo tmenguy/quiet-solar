@@ -1,17 +1,16 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
+from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON, Platform
 
-from .bistate_duration import QSBiStateDuration
 from ..const import SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
-from ..home_model.commands import LoadCommand, CMD_ON, CMD_IDLE
-from homeassistant.const import Platform, SERVICE_TURN_ON, SERVICE_TURN_OFF
-
-
+from ..home_model.commands import CMD_IDLE, CMD_ON, LoadCommand
+from .bistate_duration import QSBiStateDuration
 
 _LOGGER = logging.getLogger(__name__)
-class QSOnOffDuration(QSBiStateDuration):
 
+
+class QSOnOffDuration(QSBiStateDuration):
     conf_type_name = CONF_TYPE_NAME_QSOnOffDuration
 
     def __init__(self, **kwargs):
@@ -27,11 +26,11 @@ class QSOnOffDuration(QSBiStateDuration):
         return SENSOR_CONSTRAINT_SENSOR_ON_OFF
 
     def get_select_translation_key(self) -> str | None:
-        """ return the translation key for the select """
+        """return the translation key for the select"""
         return "on_off_mode"
 
     # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command:LoadCommand, state:str|None) -> bool | None:
+    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
 
         if state is not None:
             if state == self.expected_state_from_command(CMD_IDLE):
@@ -50,8 +49,6 @@ class QSOnOffDuration(QSBiStateDuration):
 
         # exception catched above execute_command
         await self.hass.services.async_call(
-            domain=Platform.SWITCH,
-            service=action,
-            target={"entity_id": self.bistate_entity}
+            domain=Platform.SWITCH, service=action, target={"entity_id": self.bistate_entity}
         )
         return False

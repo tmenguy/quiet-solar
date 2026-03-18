@@ -3,40 +3,39 @@
 Each test targets specific uncovered lines. The test names include the
 line numbers they intend to cover.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from unittest.mock import MagicMock, patch
 
-import pytz
 import pytest
-
+import pytz
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     UnitOfElectricCurrent,
 )
-from custom_components.quiet_solar.ha_model.device import (
-    compute_energy_Wh_rieman_sum,
-    convert_current_to_amps,
-    get_median_sensor,
-    HADeviceMixin,
-    load_from_history,
-    DAMPENING_TIME_S,
-)
-from custom_components.quiet_solar.home_model.load import AbstractLoad, AbstractDevice
-from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_ON, CMD_CST_ON, CMD_IDLE
+
 from custom_components.quiet_solar.const import (
     COMMAND_BASED_POWER_SENSOR,
     CONF_ACCURATE_POWER_SENSOR,
     CONF_POWER,
-    SENSOR_CONSTRAINT_SENSOR,
     DEVICE_STATUS_CHANGE_CONSTRAINT,
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
+    SENSOR_CONSTRAINT_SENSOR,
 )
-from tests.conftest import FakeHass, FakeConfigEntry, FakeState
+from custom_components.quiet_solar.ha_model.device import (
+    DAMPENING_TIME_S,
+    HADeviceMixin,
+    compute_energy_Wh_rieman_sum,
+    convert_current_to_amps,
+    load_from_history,
+)
+from custom_components.quiet_solar.home_model.commands import CMD_CST_ON, CMD_IDLE, CMD_ON, LoadCommand
+from custom_components.quiet_solar.home_model.load import AbstractDevice, AbstractLoad
+from tests.conftest import FakeConfigEntry, FakeHass
 from tests.factories import MinimalTestHome
-
 
 # ==========================================================================
 # Concrete test subclass mixing HADeviceMixin + AbstractLoad
@@ -122,9 +121,7 @@ def test_compute_energy_clip_next_value_line66():
 
 def test_convert_current_to_amps_milliamps_line115_120():
     """Cover lines 115-120: conversion branch when unit is milliamps."""
-    with patch(
-        "custom_components.quiet_solar.ha_model.device.PowerConverter"
-    ) as mock_pc:
+    with patch("custom_components.quiet_solar.ha_model.device.PowerConverter") as mock_pc:
         mock_pc.convert.return_value = 16.0
         value, attrs = convert_current_to_amps(
             16000.0,
@@ -137,9 +134,7 @@ def test_convert_current_to_amps_milliamps_line115_120():
 
 def test_convert_current_to_amps_milliamps_no_attrs():
     """Cover lines 115-120 branch where attributes is None before conversion."""
-    with patch(
-        "custom_components.quiet_solar.ha_model.device.PowerConverter"
-    ) as mock_pc:
+    with patch("custom_components.quiet_solar.ha_model.device.PowerConverter") as mock_pc:
         mock_pc.convert.return_value = 16.0
         value, attrs = convert_current_to_amps(
             16000.0,
@@ -198,9 +193,7 @@ def test_get_device_amps_3p_none_filling_lines581_586():
 
     # pM tells us total should be [10, 10, 10]
     pM = [10.0, 10.0, 10.0]
-    result = dev._get_device_amps_consumption(
-        pM=pM, tolerance_seconds=None, time=now, multiplier=1, is_3p=True
-    )
+    result = dev._get_device_amps_consumption(pM=pM, tolerance_seconds=None, time=now, multiplier=1, is_3p=True)
     # Phase 1 = 10.0 from sensor, phases 2 & 3 filled: (30 - 10) / 2 = 10.0
     assert result is not None
     assert result[0] == 10.0
@@ -272,9 +265,7 @@ async def test_on_device_state_change_constraint_lines622_625():
 
     # Since dev IS an AbstractLoad, line 623 will be hit
     # get_active_readable_name returns None or a string
-    await dev.on_device_state_change_helper(
-        now, DEVICE_STATUS_CHANGE_CONSTRAINT, title=None
-    )
+    await dev.on_device_state_change_helper(now, DEVICE_STATUS_CHANGE_CONSTRAINT, title=None)
     # If message ends up None, title defaults (line 641 may be hit)
 
 
@@ -292,9 +283,7 @@ async def test_on_device_state_change_completed_lines627_629():
     mock_constraint.get_readable_name_for_load.return_value = "Charge to 80%"
     dev._last_completed_constraint = mock_constraint
 
-    await dev.on_device_state_change_helper(
-        now, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, title=None
-    )
+    await dev.on_device_state_change_helper(now, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, title=None)
 
 
 @pytest.mark.asyncio
@@ -309,9 +298,7 @@ async def test_on_device_state_change_constraint_no_completed_line641():
     # CONSTRAINT_COMPLETED with no _last_completed_constraint → message stays None
     dev._last_completed_constraint = None
 
-    await dev.on_device_state_change_helper(
-        now, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, title=None
-    )
+    await dev.on_device_state_change_helper(now, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, title=None)
 
 
 # ==========================================================================
@@ -340,7 +327,7 @@ def test_is_sensor_growing_with_none_values_line702():
     now = datetime.now(tz=pytz.UTC)
     dev._entity_probed_state[entity_id] = [
         (now - timedelta(minutes=3), 100.0, {}),
-        (now - timedelta(minutes=2), None, {}),   # → line 702 continue
+        (now - timedelta(minutes=2), None, {}),  # → line 702 continue
         (now - timedelta(minutes=1), 150.0, {}),
         (now, 200.0, {}),
     ]
@@ -367,9 +354,7 @@ def test_sensor_valid_time_value_attr_empty_hist_tolerance_line752():
     dev._entity_probed_last_valid_state[entity_id] = (last_valid_time, 42.0, {})
     dev._entity_probed_state[entity_id] = []  # empty hist
 
-    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(
-        entity_id, tolerance_seconds=60, time=now
-    )
+    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(entity_id, tolerance_seconds=60, time=now)
     assert v == 42.0
 
 
@@ -394,9 +379,7 @@ def test_sensor_valid_time_value_attr_tolerance_passes_line766():
         (invalid_time, None, {}),
     ]
 
-    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(
-        entity_id, tolerance_seconds=60, time=now
-    )
+    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(entity_id, tolerance_seconds=60, time=now)
     # Within tolerance (20s + delta < 60s), should return valid
     assert v == 99.0
 
@@ -412,9 +395,7 @@ def test_get_device_power_ignore_auto_load_line779():
     dev = _make_load_device()
     dev.load_is_auto_to_be_boosted = True
     now = datetime.now(tz=pytz.UTC)
-    result = dev.get_device_power_latest_possible_valid_value(
-        tolerance_seconds=None, time=now, ignore_auto_load=True
-    )
+    result = dev.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=now, ignore_auto_load=True)
     assert result == 0.0
 
 
@@ -495,9 +476,7 @@ def test_get_median_power_line874():
         (now - timedelta(seconds=20), 500.0, {}),
         (now - timedelta(seconds=10), 600.0, {}),
     ]
-    dev._entity_probed_last_valid_state["sensor.power_for_median"] = (
-        now - timedelta(seconds=10), 600.0, {}
-    )
+    dev._entity_probed_last_valid_state["sensor.power_for_median"] = (now - timedelta(seconds=10), 600.0, {})
 
     result = dev.get_median_power(num_seconds=60, time=now)
     assert result is not None
@@ -519,9 +498,7 @@ def test_get_device_power_values_line885():
         (now - timedelta(seconds=20), 500.0, {}),
         (now - timedelta(seconds=10), 600.0, {}),
     ]
-    dev._entity_probed_last_valid_state["sensor.power_vals"] = (
-        now - timedelta(seconds=10), 600.0, {}
-    )
+    dev._entity_probed_last_valid_state["sensor.power_vals"] = (now - timedelta(seconds=10), 600.0, {})
 
     result = dev.get_device_power_values(60, now)
     assert len(result) >= 1
@@ -577,9 +554,7 @@ def test_get_last_state_value_duration_time_equals_first_line924():
     def state_getter(eid, t):
         return (t, "on", {}) if t is not None else None
 
-    dev.attach_ha_state_to_probe(
-        entity_id, is_numerical=False, non_ha_entity_get_state=state_getter
-    )
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=False, non_ha_entity_get_state=state_getter)
 
     now = datetime.now(tz=pytz.UTC)
     base = now - timedelta(minutes=10)
@@ -591,9 +566,7 @@ def test_get_last_state_value_duration_time_equals_first_line924():
     dev._entity_probed_last_valid_state[entity_id] = (now, "on", {})
 
     # Query at exactly the first timestamp (num_seconds_before=None)
-    duration, ranges = dev.get_last_state_value_duration(
-        entity_id, {"on"}, None, base
-    )
+    duration, ranges = dev.get_last_state_value_duration(entity_id, {"on"}, None, base)
     assert duration is not None
     assert duration == 0.0  # Only one entry at `base`, so duration is 0
 
@@ -606,9 +579,7 @@ def test_get_last_state_value_duration_bisect_right_line930():
     def state_getter(eid, t):
         return (t, "on", {}) if t is not None else None
 
-    dev.attach_ha_state_to_probe(
-        entity_id, is_numerical=False, non_ha_entity_get_state=state_getter
-    )
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=False, non_ha_entity_get_state=state_getter)
 
     now = datetime.now(tz=pytz.UTC)
     base = now - timedelta(minutes=20)
@@ -618,16 +589,12 @@ def test_get_last_state_value_duration_bisect_right_line930():
         (base + timedelta(minutes=10), "on", {}),
         (base + timedelta(minutes=15), "on", {}),
     ]
-    dev._entity_probed_last_valid_state[entity_id] = (
-        base + timedelta(minutes=15), "on", {}
-    )
+    dev._entity_probed_last_valid_state[entity_id] = (base + timedelta(minutes=15), "on", {})
 
     # Query at a time between entries with num_seconds_before=None
     # time is between entries → bisect_right path
     query_time = base + timedelta(minutes=12)
-    duration, ranges = dev.get_last_state_value_duration(
-        entity_id, {"on"}, None, query_time
-    )
+    duration, ranges = dev.get_last_state_value_duration(entity_id, {"on"}, None, query_time)
     assert duration is not None
 
 
@@ -677,9 +644,7 @@ def test_add_state_history_with_transform_fn_line1211():
     def my_transform(value, attrs):
         return value * 2, attrs
 
-    dev.attach_ha_state_to_probe(
-        entity_id, is_numerical=True, transform_fn=my_transform
-    )
+    dev.attach_ha_state_to_probe(entity_id, is_numerical=True, transform_fn=my_transform)
 
     now = datetime.now(tz=pytz.UTC)
     mock_state = MagicMock()
@@ -746,9 +711,7 @@ def test_get_state_history_data_from_after_last_line1269():
     # Query with from_ts > last entry time
     # num_seconds_before=5 means from_ts = to_ts - 5s
     # to_ts = base + 60s, from_ts = base + 55s which is > base + 10s
-    result = dev.get_state_history_data(
-        entity_id, 5, base + timedelta(seconds=60)
-    )
+    result = dev.get_state_history_data(entity_id, 5, base + timedelta(seconds=60))
     assert len(result) == 1
     assert result[0][1] == 20.0
 
@@ -773,9 +736,7 @@ def test_get_state_history_data_bisect_right_line1286():
     ]
 
     # to_ts between entries and before last → triggers bisect_right on line 1286
-    result = dev.get_state_history_data(
-        entity_id, 15, base + timedelta(seconds=25)
-    )
+    result = dev.get_state_history_data(entity_id, 15, base + timedelta(seconds=25))
     assert len(result) >= 1
 
 
@@ -799,9 +760,7 @@ def test_get_state_history_data_in_s_eq_out_s_lines1289_1290():
     # from_ts = base + 10.5s, which is > base + 10s → in_s = 2 (past array)
     # to_ts = base + 11s > hist[-1] → out_s = len(hist) = 2
     # in_s (2) == out_s (2) and out_s == len(hist) → lines 1289-1290
-    result = dev.get_state_history_data(
-        entity_id, 0.5, base + timedelta(seconds=11)
-    )
+    result = dev.get_state_history_data(entity_id, 0.5, base + timedelta(seconds=11))
     assert len(result) == 1  # returns hist[-1:]
     assert result[0][1] == 20.0
 
@@ -901,17 +860,18 @@ async def test_load_from_history_inner_function_line215():
 
     mock_recorder.async_add_executor_job = run_sync
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.device.recorder_get_instance",
-        return_value=mock_recorder,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.device.state_changes_during_period",
-        return_value={"sensor.test": [MagicMock(state="42")]},
-    ) as mock_scdp:
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.device.recorder_get_instance",
+            return_value=mock_recorder,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.device.state_changes_during_period",
+            return_value={"sensor.test": [MagicMock(state="42")]},
+        ) as mock_scdp,
+    ):
         now = datetime.now(tz=pytz.UTC)
-        result = await load_from_history(
-            mock_hass, "sensor.test", now - timedelta(hours=1), now
-        )
+        result = await load_from_history(mock_hass, "sensor.test", now - timedelta(hours=1), now)
         mock_scdp.assert_called_once()
         assert len(result) == 1
 
@@ -943,9 +903,7 @@ async def test_get_next_scheduled_events_state_max_not_1_lines497_498():
     )
 
     # max_number_of_events=5 (not 1) → goes to lines 497-498
-    events = await dev.get_next_scheduled_events(
-        now, max_number_of_events=5
-    )
+    events = await dev.get_next_scheduled_events(now, max_number_of_events=5)
     # At least one event from state
     assert len(events) >= 1
 
@@ -1176,9 +1134,7 @@ async def test_on_device_state_change_wrong_state_line625():
     dev.mobile_app_url = None
     now = datetime.now(tz=pytz.UTC)
 
-    await dev.on_device_state_change_helper(
-        now, DEVICE_STATUS_CHANGE_CONSTRAINT, title=None
-    )
+    await dev.on_device_state_change_helper(now, DEVICE_STATUS_CHANGE_CONSTRAINT, title=None)
 
 
 # ==========================================================================
@@ -1262,9 +1218,7 @@ def test_sensor_valid_time_value_attr_time_before_last_valid_line771():
     ]
     dev._entity_probed_last_valid_state[entity_id] = (future, 123.0, {})
 
-    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(
-        entity_id, tolerance_seconds=1200, time=now
-    )
+    t, v, a = dev.get_sensor_latest_possible_valid_time_value_attr(entity_id, tolerance_seconds=1200, time=now)
     assert v == 99.0
     assert t == now
 
@@ -1405,8 +1359,10 @@ class TestDampenPowerUse:
         hass = _make_fake_hass()
         entry = FakeConfigEntry(entry_id="cfg_damp", data={"name": "Test"})
         dev = _make_dampenable(
-            hass=hass, config_entry=entry,
-            power=1000, accurate_power_sensor="sensor.power",
+            hass=hass,
+            config_entry=entry,
+            power=1000,
+            accurate_power_sensor="sensor.power",
         )
         start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)
         now = datetime.now(tz=pytz.UTC)
@@ -1479,7 +1435,8 @@ class TestDampenPowerUse:
     def test_inside_window_no_config_entry_still_dampens(self):
         """Without config_entry, dampening still sets _dampened_computed_power_use."""
         dev = _make_dampenable(
-            power=1000, accurate_power_sensor="sensor.power",
+            power=1000,
+            accurate_power_sensor="sensor.power",
             config_entry=None,
         )
         start = datetime.now(tz=pytz.UTC) - timedelta(seconds=DAMPENING_TIME_S + 30)

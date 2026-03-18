@@ -1,17 +1,18 @@
 """Tests for ha_model/pool.py - Pool device functionality."""
+
 from __future__ import annotations
 
-from datetime import datetime, time as dt_time, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from datetime import datetime, timedelta
+from datetime import time as dt_time
+from unittest.mock import MagicMock
 
-import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
-    CONF_POOL_TEMPERATURE_SENSOR,
-    POOL_TEMP_STEPS,
-    CONF_POOL_WINTER_IDX,
     CONF_POOL_DEFAULT_IDX,
+    CONF_POOL_TEMPERATURE_SENSOR,
+    CONF_POOL_WINTER_IDX,
+    POOL_TEMP_STEPS,
 )
 
 
@@ -175,11 +176,6 @@ def test_pool_power_use():
 def test_pool_update_current_metrics_with_last_completed_constraint():
     """Test update_current_metrics includes _last_completed_constraint (line 60)."""
     from custom_components.quiet_solar.ha_model.pool import QSPool
-    from custom_components.quiet_solar.home_model.constraints import (
-        TimeBasedSimplePowerLoadConstraint,
-        DATETIME_MIN_UTC,
-    )
-    from custom_components.quiet_solar.home_model.commands import LoadCommand
 
     now = datetime.now(tz=pytz.UTC)
     end = now + timedelta(hours=1)

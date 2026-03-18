@@ -1,23 +1,25 @@
 """Tests for select platform."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.components.select import DOMAIN as SELECT_DOMAIN, SERVICE_SELECT_OPTION
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
+from homeassistant.components.select import SERVICE_SELECT_OPTION
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_OPTION
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.select import (
     QSBaseSelect,
-    QSUserOverrideSelectRestore,
     QSExtraStoredDataSelect,
-    QSSimpleSelectRestore,
     QSSelectEntityDescription,
+    QSSimpleSelectRestore,
+    QSUserOverrideSelectRestore,
     async_unload_entry,
 )
-from custom_components.quiet_solar.const import DOMAIN
 
 
 class _DummyHome:
@@ -251,6 +253,7 @@ def test_user_override_select_extra_restore_data():
     extra = entity.extra_restore_state_data
 
     assert isinstance(extra, QSExtraStoredDataSelect)
+
 
 def test_extra_stored_data_from_dict_error():
     """Test QSExtraStoredDataSelect.from_dict handles errors."""

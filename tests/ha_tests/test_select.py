@@ -4,11 +4,9 @@ import pytest
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.const import DOMAIN, DATA_HANDLER
-
+from custom_components.quiet_solar.const import DOMAIN
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -22,9 +20,7 @@ async def test_home_select_entities_created(
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, home_config_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
     select_entries = [e for e in entity_entries if e.domain == "select"]
     assert len(select_entries) >= 1
 
@@ -60,9 +56,10 @@ async def test_home_mode_select_change(
         new_option = options[1] if state.state == options[0] else options[0]
 
         await hass.services.async_call(
-            "select", "select_option",
+            "select",
+            "select_option",
             {"entity_id": "select.qs_test_home_home_home_mode", "option": new_option},
-            blocking=True
+            blocking=True,
         )
         await hass.async_block_till_done()
 
@@ -92,9 +89,7 @@ async def test_car_select_entities_created(
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
     select_entries = [e for e in entity_entries if e.domain == "select"]
     assert len(select_entries) >= 2
 
@@ -121,9 +116,7 @@ async def test_charger_select_entities_created(
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     select_entries = [e for e in entity_entries if e.domain == "select"]
     assert len(select_entries) >= 1
 
@@ -131,6 +124,7 @@ async def test_charger_select_entities_created(
 # =============================================================================
 # Test QSBiStateDuration (OnOffDuration) Select Entities
 # =============================================================================
+
 
 async def test_on_off_duration_select_entities_created(
     hass: HomeAssistant,
@@ -159,9 +153,7 @@ async def test_on_off_duration_select_entities_created(
 
     assert on_off_entry.state is ConfigEntryState.LOADED
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, on_off_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, on_off_entry.entry_id)
     select_entries = [e for e in entity_entries if e.domain == "select"]
 
     # QSBiStateDuration (via QSOnOffDuration) should have at least 1 select entity (bistate_mode)
@@ -196,6 +188,7 @@ async def test_on_off_duration_bistate_mode_select(
     assert on_off_device is not None
 
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+
     assert isinstance(on_off_device, QSBiStateDuration)
 
     # Check that bistate_modes are available
@@ -210,6 +203,7 @@ async def test_create_ha_select_for_bistate_duration_returns_entities(
 ) -> None:
     """Test create_ha_select_for_QSBiStateDuration returns proper entity list."""
     from custom_components.quiet_solar.select import create_ha_select_for_QSBiStateDuration
+
     from .const import MOCK_ON_OFF_DURATION_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -240,6 +234,7 @@ async def test_create_ha_select_for_bistate_duration_returns_entities(
 
     # Each entity should be a select entity
     from custom_components.quiet_solar.select import QSSimpleSelectRestore
+
     for entity in entities:
         assert isinstance(entity, QSSimpleSelectRestore)
 
@@ -248,28 +243,26 @@ async def test_create_ha_select_for_bistate_duration_returns_entities(
 # Test QSClimateDuration Select Entities
 # =============================================================================
 
+
 async def test_climate_duration_device_creation(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test climate_duration device can be created."""
     from unittest.mock import patch
+
     from .const import MOCK_CLIMATE_DURATION_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     # Set up mock climate entity
-    hass.states.async_set(
-        "climate.test_climate_device",
-        "off",
-        {"hvac_modes": ["off", "heat", "cool", "auto"]}
-    )
+    hass.states.async_set("climate.test_climate_device", "off", {"hvac_modes": ["off", "heat", "cool", "auto"]})
 
     # Mock get_hvac_modes to return a list without requiring entity registry
     with patch(
         "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
-        return_value=["off", "heat", "cool", "auto"]
+        return_value=["off", "heat", "cool", "auto"],
     ):
         climate_entry = MockConfigEntry(
             domain=DOMAIN,
@@ -289,6 +282,7 @@ async def test_climate_duration_device_creation(
         assert climate_device is not None
 
         from custom_components.quiet_solar.ha_model.climate_controller import QSClimateDuration
+
         assert isinstance(climate_device, QSClimateDuration)
 
 
@@ -298,22 +292,20 @@ async def test_create_ha_select_for_climate_duration_returns_entities(
 ) -> None:
     """Test create_ha_select_for_QSClimateDuration returns proper entity list."""
     from unittest.mock import patch
+
     from custom_components.quiet_solar.select import create_ha_select_for_QSClimateDuration
+
     from .const import MOCK_CLIMATE_DURATION_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    hass.states.async_set(
-        "climate.test_climate_device",
-        "off",
-        {"hvac_modes": ["off", "heat", "cool", "auto"]}
-    )
+    hass.states.async_set("climate.test_climate_device", "off", {"hvac_modes": ["off", "heat", "cool", "auto"]})
 
     # Mock get_hvac_modes to return a list without requiring entity registry
     with patch(
         "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
-        return_value=["off", "heat", "cool", "auto"]
+        return_value=["off", "heat", "cool", "auto"],
     ):
         climate_entry = MockConfigEntry(
             domain=DOMAIN,
@@ -338,6 +330,7 @@ async def test_create_ha_select_for_climate_duration_returns_entities(
 
         # Each entity should be a select entity
         from custom_components.quiet_solar.select import QSSimpleSelectRestore
+
         for entity in entities:
             assert isinstance(entity, QSSimpleSelectRestore)
 
@@ -348,21 +341,19 @@ async def test_create_ha_select_detects_bistate_and_climate_duration(
 ) -> None:
     """Test create_ha_select correctly detects both QSBiStateDuration and QSClimateDuration."""
     from unittest.mock import patch
-    from custom_components.quiet_solar.select import create_ha_select
+
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
     from custom_components.quiet_solar.ha_model.climate_controller import QSClimateDuration
-    from .const import MOCK_ON_OFF_DURATION_CONFIG, MOCK_CLIMATE_DURATION_CONFIG
+    from custom_components.quiet_solar.select import create_ha_select
+
+    from .const import MOCK_CLIMATE_DURATION_CONFIG, MOCK_ON_OFF_DURATION_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     # Set up mock entities
     hass.states.async_set("switch.test_on_off_device", "off", {})
-    hass.states.async_set(
-        "climate.test_climate_device",
-        "off",
-        {"hvac_modes": ["off", "heat", "cool", "auto"]}
-    )
+    hass.states.async_set("climate.test_climate_device", "off", {"hvac_modes": ["off", "heat", "cool", "auto"]})
 
     # Set up on_off_duration device
     on_off_entry = MockConfigEntry(
@@ -388,7 +379,7 @@ async def test_create_ha_select_detects_bistate_and_climate_duration(
     # Mock get_hvac_modes for climate device
     with patch(
         "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
-        return_value=["off", "heat", "cool", "auto"]
+        return_value=["off", "heat", "cool", "auto"],
     ):
         # Set up climate_duration device
         climate_entry = MockConfigEntry(
@@ -456,11 +447,7 @@ async def test_climate_duration_select_unload(
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    hass.states.async_set(
-        "climate.test_climate_device",
-        "off",
-        {"hvac_modes": ["off", "heat", "cool", "auto"]}
-    )
+    hass.states.async_set("climate.test_climate_device", "off", {"hvac_modes": ["off", "heat", "cool", "auto"]})
 
     entity_reg = er.async_get(hass)
     entity_reg.async_get_or_create(
@@ -490,5 +477,3 @@ async def test_climate_duration_select_unload(
 
     # Entry should be unloaded or failed to unload (both are acceptable)
     assert climate_entry.state in (ConfigEntryState.NOT_LOADED, ConfigEntryState.FAILED_UNLOAD)
-
-

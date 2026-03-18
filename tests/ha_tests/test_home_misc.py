@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 
@@ -50,9 +49,7 @@ async def test_home_force_update_and_resets(
     home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now)
 
     await home.light_reset_forecasts(time_now)
-    home._consumption_forecast.reset_forecasts.assert_awaited_with(
-        time_now, light_reset=True
-    )
+    home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now, light_reset=True)
 
 
 @pytest.mark.asyncio
@@ -204,9 +201,7 @@ async def test_home_update_loads_forbid_command(
     load.get_current_active_constraint = MagicMock(return_value=True)
     load.do_probe_state_change = AsyncMock()
     load.current_command = CMD_IDLE
-    load.father_device = SimpleNamespace(
-        is_delta_current_acceptable=MagicMock(return_value=False)
-    )
+    load.father_device = SimpleNamespace(is_delta_current_acceptable=MagicMock(return_value=False))
 
     command = LoadCommand(command="on", power_consign=100.0)
     time_now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)

@@ -1,33 +1,29 @@
 """Tests for QSOnOffDuration class in ha_model/on_off_duration.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
 from unittest.mock import MagicMock, patch
-from datetime import time as dt_time
 
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
-    SERVICE_TURN_ON,
     SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.ha_model.on_off_duration import QSOnOffDuration
-from custom_components.quiet_solar.home_model.commands import CMD_ON, CMD_OFF, CMD_IDLE
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    SENSOR_CONSTRAINT_SENSOR_ON_OFF,
     CONF_SWITCH,
+    DATA_HANDLER,
+    DOMAIN,
+    SENSOR_CONSTRAINT_SENSOR_ON_OFF,
 )
-
-import pytz
+from custom_components.quiet_solar.ha_model.on_off_duration import QSOnOffDuration
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON
 
 
 @pytest.fixture
@@ -69,7 +65,7 @@ def on_off_device(hass, on_off_config_entry, on_off_home, on_off_data_handler, o
         hass=hass,
         config_entry=on_off_config_entry,
         home=on_off_home,
-        **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
+        **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"},
     )
 
 
@@ -90,15 +86,13 @@ def recorded_service_calls(hass: HomeAssistant):
 class TestQSOnOffDurationInit:
     """Test QSOnOffDuration initialization."""
 
-    def test_init_default_values(
-        self, hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data
-    ):
+    def test_init_default_values(self, hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data):
         """Test initialization with default values."""
         device = QSOnOffDuration(
             hass=hass,
             config_entry=on_off_config_entry,
             home=on_off_home,
-            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"}
+            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.test_device"},
         )
 
         assert device._state_on == "on"
@@ -114,7 +108,7 @@ class TestQSOnOffDurationInit:
             hass=hass,
             config_entry=on_off_config_entry,
             home=on_off_home,
-            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.my_switch"}
+            **{CONF_NAME: "Test Device", CONF_SWITCH: "switch.my_switch"},
         )
 
         assert device.bistate_entity == "switch.my_switch"
@@ -146,10 +140,7 @@ class TestQSOnOffDurationExecuteCommandSystem:
         result = await on_off_device.execute_command_system(time, CMD_ON, state=None)
 
         assert result is False  # Method returns False
-        switch_calls = [
-            c for c in recorded_service_calls
-            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON
-        ]
+        switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
@@ -160,10 +151,7 @@ class TestQSOnOffDurationExecuteCommandSystem:
         result = await on_off_device.execute_command_system(time, CMD_OFF, state=None)
 
         assert result is False
-        switch_calls = [
-            c for c in recorded_service_calls
-            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
-        ]
+        switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
@@ -174,42 +162,29 @@ class TestQSOnOffDurationExecuteCommandSystem:
         result = await on_off_device.execute_command_system(time, CMD_IDLE, state=None)
 
         assert result is False
-        switch_calls = [
-            c for c in recorded_service_calls
-            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
-        ]
+        switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_with_override_state_on(
-        self, on_off_device, recorded_service_calls
-    ):
+    async def test_execute_command_with_override_state_on(self, on_off_device, recorded_service_calls):
         """Test execute_command_system with override state ON."""
         time = datetime.datetime.now(pytz.UTC)
 
         result = await on_off_device.execute_command_system(time, CMD_OFF, state="on")
 
         assert result is False
-        switch_calls = [
-            c for c in recorded_service_calls
-            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON
-        ]
+        switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_execute_command_with_override_state_off(
-        self, on_off_device, recorded_service_calls
-    ):
+    async def test_execute_command_with_override_state_off(self, on_off_device, recorded_service_calls):
         """Test execute_command_system with override state OFF (idle)."""
         time = datetime.datetime.now(pytz.UTC)
 
         result = await on_off_device.execute_command_system(time, CMD_ON, state="off")
 
         assert result is False
-        switch_calls = [
-            c for c in recorded_service_calls
-            if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF
-        ]
+        switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_OFF]
         assert len(switch_calls) == 1
 
     @pytest.mark.asyncio
@@ -218,6 +193,7 @@ class TestQSOnOffDurationExecuteCommandSystem:
         time = datetime.datetime.now(pytz.UTC)
 
         from custom_components.quiet_solar.home_model.commands import LoadCommand
+
         invalid_cmd = LoadCommand(command="invalid", power_consign=0)
 
         with pytest.raises(ValueError, match="Invalid command"):

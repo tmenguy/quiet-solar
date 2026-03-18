@@ -1,46 +1,67 @@
-import importlib
 import logging
-from dataclasses import dataclass, asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from .ha_model.bistate_duration import QSBiStateDuration
-from .ha_model.pool import QSPool
 from .home_model.constraints import get_readable_date_string
 
 _LOGGER = logging.getLogger(__name__)
 
 import pytz
-from homeassistant.components.sensor import SensorEntityDescription, SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower, EntityCategory, UnitOfEnergy, PERCENTAGE, \
-    UnitOfLength, UnitOfTime
+from homeassistant.const import (
+    PERCENTAGE,
+    STATE_UNAVAILABLE,
+    EntityCategory,
+    UnitOfEnergy,
+    UnitOfLength,
+    UnitOfPower,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
-
-from .ha_model.car import QSCar
-from .ha_model.charger import QSChargerGeneric
-
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .const import (
-    DOMAIN, SENSOR_HOME_AVAILABLE_EXTRA_POWER, SENSOR_HOME_CONSUMPTION_POWER,
-    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, HA_CONSTRAINT_SENSOR_HISTORY,
+    DOMAIN,
+    HA_CONSTRAINT_SENSOR_HISTORY,
     HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT,
-    QSForecastHomeNonControlledSensors, QSForecastSolarSensors, SENSOR_LOAD_CURRENT_COMMAND,
-    SENSOR_LOAD_BEST_POWER_VALUE, SENSOR_CONSTRAINT_SENSOR_VALUE, SENSOR_CONSTRAINT_SENSOR_ENERGY,
-    HA_CONSTRAINT_SENSOR_LOAD_INFO, SENSOR_CONSTRAINT_SENSOR_COMPLETION, SENSOR_LOAD_OVERRIDE_STATE,
-    SENSOR_CONSTRAINT_SENSOR_CHARGE, SENSOR_CAR_SOC_PERCENT,
-    SENSOR_CAR_CHARGE_TYPE, SENSOR_CAR_CHARGE_TIME,
-    SENSOR_CAR_ESTIMATED_RANGE_KM, SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM, SENSOR_PERSON_MILEAGE_PREDICTION_KM,
-    SENSOR_CAR_PERSON_FORECAST, SENSOR_BISTATE_CURRENT_DURATION_H, SENSOR_BISTATE_CURRENT_ON_H,
-    SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START, SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END
+    HA_CONSTRAINT_SENSOR_LOAD_INFO,
+    SENSOR_BISTATE_CURRENT_DURATION_H,
+    SENSOR_BISTATE_CURRENT_ON_H,
+    SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
+    SENSOR_CAR_CHARGE_TIME,
+    SENSOR_CAR_CHARGE_TYPE,
+    SENSOR_CAR_ESTIMATED_RANGE_KM,
+    SENSOR_CAR_PERSON_FORECAST,
+    SENSOR_CAR_SOC_PERCENT,
+    SENSOR_CONSTRAINT_SENSOR_CHARGE,
+    SENSOR_CONSTRAINT_SENSOR_COMPLETION,
+    SENSOR_CONSTRAINT_SENSOR_ENERGY,
+    SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END,
+    SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START,
+    SENSOR_CONSTRAINT_SENSOR_VALUE,
+    SENSOR_HOME_AVAILABLE_EXTRA_POWER,
+    SENSOR_HOME_CONSUMPTION_POWER,
+    SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
+    SENSOR_LOAD_BEST_POWER_VALUE,
+    SENSOR_LOAD_CURRENT_COMMAND,
+    SENSOR_LOAD_OVERRIDE_STATE,
+    SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    QSForecastHomeNonControlledSensors,
+    QSForecastSolarSensors,
 )
 from .entity import QSDeviceEntity
+from .ha_model.car import QSCar
+from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .ha_model.home import QSHome
 from .ha_model.person import QSPerson
 from .home_model.load import AbstractDevice, AbstractLoad
+
 
 def create_ha_sensor_for_QSBiStateDuration(device: QSBiStateDuration):
     entities = []
@@ -50,21 +71,25 @@ def create_ha_sensor_for_QSBiStateDuration(device: QSBiStateDuration):
         translation_key=SENSOR_BISTATE_CURRENT_DURATION_H,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
-        device_class = SensorDeviceClass.DURATION
+        device_class=SensorDeviceClass.DURATION,
     )
-    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+    entities.append(
+        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command)
+    )
 
     load_current_command = QSSensorEntityDescription(
         key=SENSOR_BISTATE_CURRENT_ON_H,
         translation_key=SENSOR_BISTATE_CURRENT_ON_H,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
-        device_class=SensorDeviceClass.DURATION
+        device_class=SensorDeviceClass.DURATION,
     )
-    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
-
+    entities.append(
+        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command)
+    )
 
     return entities
+
 
 def create_ha_sensor_for_QSPerson(device: QSPerson):
     entities = []
@@ -74,7 +99,9 @@ def create_ha_sensor_for_QSPerson(device: QSPerson):
         translation_key=SENSOR_PERSON_MILEAGE_PREDICTION_KM,
         value_fn_and_attr=lambda device, key: device.get_person_mileage_serialized_prediction(),
     )
-    entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command))
+    entities.append(
+        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=load_current_command)
+    )
 
     return entities
 
@@ -85,7 +112,9 @@ def create_ha_sensor_for_QSCar(device: QSCar):
     load_current_command = QSSensorEntityDescription(
         key="current_constraint_car",
         translation_key=SENSOR_CONSTRAINT_SENSOR_CHARGE,
-        value_fn=lambda device, key: "NO CHARGE" if device.charger is None else device.charger.get_active_readable_name(),
+        value_fn=lambda device, key: (
+            "NO CHARGE" if device.charger is None else device.charger.get_active_readable_name()
+        ),
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
@@ -104,7 +133,7 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         translation_key=SENSOR_CONSTRAINT_SENSOR_ENERGY,
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
-        qs_is_none_unavailable=True
+        qs_is_none_unavailable=True,
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
@@ -143,7 +172,6 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
-
     load_current_command = QSSensorEntityDescription(
         key="car_charge_type",
         translation_key=SENSOR_CAR_CHARGE_TYPE,
@@ -157,7 +185,6 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         value_fn=lambda device, key: device.get_car_charge_time_readable_name(),
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
-
 
     load_current_command = QSSensorEntityDescription(
         key=SENSOR_CAR_PERSON_FORECAST,
@@ -177,7 +204,6 @@ def create_ha_sensor_for_QSCharger(device: QSChargerGeneric):
 def create_ha_sensor_for_Load(device: AbstractLoad):
     entities = []
 
-
     if device.support_user_override():
         # add hare a sensor to know if the load has been ovreriden externally
         load_override_state = QSSensorEntityDescription(
@@ -188,9 +214,7 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_override_state))
 
-
     if isinstance(device, HADeviceMixin) and isinstance(device, AbstractLoad):
-
         load_power_sensor = QSSensorEntityDescription(
             key="best_power_value",
             translation_key=SENSOR_LOAD_BEST_POWER_VALUE,
@@ -201,19 +225,21 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_power_sensor))
 
-
         constraints_sensor = QSSensorEntityDescription(
-            key="current_constraint",
-            translation_key=device.get_virtual_current_constraint_translation_key()
+            key="current_constraint", translation_key=device.get_virtual_current_constraint_translation_key()
         )
-        entities.append(QSLoadSensorCurrentConstraints(data_handler=device.data_handler, device=device, description=constraints_sensor))
+        entities.append(
+            QSLoadSensorCurrentConstraints(
+                data_handler=device.data_handler, device=device, description=constraints_sensor
+            )
+        )
 
         constraints_sensor = QSSensorEntityDescription(
             key="current_constraint_current_value",
             translation_key=SENSOR_CONSTRAINT_SENSOR_VALUE,
             state_class=SensorStateClass.MEASUREMENT,
             entity_category=EntityCategory.DIAGNOSTIC,
-            qs_is_none_unavailable=True
+            qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
@@ -222,7 +248,7 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
             translation_key=SENSOR_CONSTRAINT_SENSOR_ENERGY,
             device_class=SensorDeviceClass.ENERGY,
             native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
-            qs_is_none_unavailable=True
+            qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
@@ -232,24 +258,27 @@ def create_ha_sensor_for_Load(device: AbstractLoad):
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement=PERCENTAGE,
             entity_category=EntityCategory.DIAGNOSTIC,
-            qs_is_none_unavailable=True
+            qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
         constraints_sensor = QSSensorEntityDescription(
             key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START,
             translation_key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START,
-            value_fn=lambda device, key: get_readable_date_string(device.next_or_current_constraint_start_time, for_small_standalone=True)
+            value_fn=lambda device, key: get_readable_date_string(
+                device.next_or_current_constraint_start_time, for_small_standalone=True
+            ),
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
 
         constraints_sensor = QSSensorEntityDescription(
             key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END,
             translation_key=SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END,
-            value_fn=lambda device, key: get_readable_date_string(device.next_or_current_constraint_end_time, for_small_standalone=True)
+            value_fn=lambda device, key: get_readable_date_string(
+                device.next_or_current_constraint_end_time, for_small_standalone=True
+            ),
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=constraints_sensor))
-
 
     return entities
 
@@ -266,12 +295,12 @@ def create_ha_sensor_for_Device(device: AbstractDevice):
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 
     info_sensor = QSSensorEntityDescription(
-        key="device_information_storage",
-        translation_key="device_information_storage"
+        key="device_information_storage", translation_key="device_information_storage"
     )
     entities.append(QSDeviceSensorData(data_handler=device.data_handler, device=device, description=info_sensor))
 
     return entities
+
 
 def create_ha_sensor_for_QSHome(device: QSHome):
     entities = []
@@ -283,7 +312,11 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         state_class=SensorStateClass.MEASUREMENT,
         device_class=SensorDeviceClass.POWER,
     )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_non_controlled_consumption_sensor))
+    entities.append(
+        QSBaseSensor(
+            data_handler=device.data_handler, device=device, description=home_non_controlled_consumption_sensor
+        )
+    )
 
     home_consumption_sensor = QSSensorEntityDescription(
         key="home_consumption",
@@ -311,8 +344,8 @@ def create_ha_sensor_for_QSHome(device: QSHome):
             state_class=SensorStateClass.MEASUREMENT,
             device_class=SensorDeviceClass.POWER,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn = lambda device, key: device.home_non_controlled_power_forecast_sensor_values.get(key, None),
-            qs_is_none_unavailable=True
+            value_fn=lambda device, key: device.home_non_controlled_power_forecast_sensor_values.get(key, None),
+            qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
 
@@ -324,12 +357,13 @@ def create_ha_sensor_for_QSHome(device: QSHome):
             state_class=SensorStateClass.MEASUREMENT,
             device_class=SensorDeviceClass.POWER,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn = lambda device, key: device.home_solar_forecast_sensor_values.get(key, None),
-            qs_is_none_unavailable=True
+            value_fn=lambda device, key: device.home_solar_forecast_sensor_values.get(key, None),
+            qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
 
     return entities
+
 
 def create_ha_sensor(device: AbstractDevice):
 
@@ -353,6 +387,7 @@ def create_ha_sensor(device: AbstractDevice):
 
     return ret
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -362,7 +397,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_sensor(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_sensor(attached_device))
@@ -372,6 +406,7 @@ async def async_setup_entry(
 
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -379,8 +414,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry sensor: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry sensor: exception for device %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
 
@@ -388,10 +424,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 @dataclass(frozen=True, kw_only=True)
 class QSSensorEntityDescription(SensorEntityDescription):
     """Describes Quiet Solar sensor entity."""
-    qs_is_none_unavailable: bool  = False
-    value_fn: Callable[[AbstractDevice, str], Any] | None = None
-    value_fn_and_attr: Callable[[AbstractDevice, str], tuple[Any,Any]] | None = None
 
+    qs_is_none_unavailable: bool = False
+    value_fn: Callable[[AbstractDevice, str], Any] | None = None
+    value_fn_and_attr: Callable[[AbstractDevice, str], tuple[Any, Any]] | None = None
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
@@ -408,7 +444,7 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
         super().__init__(data_handler=data_handler, device=device, description=description)
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
 
         extra_attr = {}
@@ -419,7 +455,6 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
             state, extra_attr = self.entity_description.value_fn_and_attr(self.device, self.entity_description.key)
         else:
             state = getattr(self.device, self.entity_description.key)
-
 
         self._set_availabiltiy()
 
@@ -436,9 +471,8 @@ class QSBaseSensor(QSDeviceEntity, SensorEntity):
         self._attr_native_value = state
         if extra_attr is not None:
             # only set if we have some
-            self._attr_extra_state_attributes = extra_attr # or self._attr_extra_state_attributes.update(extra_attr) ?
+            self._attr_extra_state_attributes = extra_attr  # or self._attr_extra_state_attributes.update(extra_attr) ?
         self.async_write_ha_state()
-
 
 
 @dataclass
@@ -447,7 +481,6 @@ class QSExtraStoredData(ExtraStoredData):
 
     native_value: str | None
     native_attr: dict
-
 
     def as_dict(self) -> dict[str, Any]:
         """Return a dict representation of the text data."""
@@ -462,11 +495,13 @@ class QSExtraStoredData(ExtraStoredData):
                 restored["native_attr"],
             )
         except Exception as e:
-            _LOGGER.error("QSExtraStoredData.from_dict sensor exception %s %s", restored, e, exc_info=True,
-                          stack_info=True)
+            _LOGGER.error(
+                "QSExtraStoredData.from_dict sensor exception %s %s", restored, e, exc_info=True, stack_info=True
+            )
             return None
-class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
 
+
+class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
     @property
     def extra_restore_state_data(self) -> QSExtraStoredData:
         """Return sensor specific state data to be restored."""
@@ -486,14 +521,11 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
         self._attr_extra_state_attributes = {}
 
         last_sensor_state = await self.async_get_last_sensor_data()
-        if (
-            not last_sensor_state
-        ):
+        if not last_sensor_state:
             return
 
         self._attr_native_value = last_sensor_state.native_value
         self._attr_extra_state_attributes = last_sensor_state.native_attr
-
 
     # @property
     # def extra_state_attributes(self) -> dict[str, Any]:
@@ -501,11 +533,10 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
 
 
 class QSDeviceSensorData(QSBaseSensorRestore):
-
     device: AbstractDevice
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
 
         self._set_availabiltiy()
@@ -528,13 +559,11 @@ class QSDeviceSensorData(QSBaseSensorRestore):
         await self.device.async_get_info_from_storage(datetime.now(pytz.UTC), stored_device_info)
 
 
-
 class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
-
     device: AbstractLoad
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
 
         self._set_availabiltiy()
@@ -545,7 +574,7 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
             self._attr_native_value = new_val
 
         constraints = self.device.get_active_constraints(time)
-        serialized_constraints = [ l.to_dict() for l in constraints]
+        serialized_constraints = [l.to_dict() for l in constraints]
 
         self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_HISTORY] = serialized_constraints
 
@@ -555,7 +584,6 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
             serialized_constraint = self.device._last_completed_constraint.to_dict()
             self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT] = serialized_constraint
 
-
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -564,4 +592,3 @@ class QSLoadSensorCurrentConstraints(QSBaseSensorRestore):
         stored_cs = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_HISTORY, [])
         stored_executed = self._attr_extra_state_attributes.get(HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT, None)
         await self.device.async_load_constraints_from_storage(datetime.now(pytz.UTC), stored_cs, stored_executed)
-

@@ -1,24 +1,35 @@
 import copy
 import logging
+import random
 from bisect import bisect_left
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from operator import itemgetter
-import random
+from typing import TYPE_CHECKING, Any
 
 import pytz
-
-from .commands import LoadCommand, copy_command, CMD_IDLE
-from .constraints import LoadConstraint, DATETIME_MAX_UTC, DATETIME_MIN_UTC
-
-from typing import TYPE_CHECKING, Any, Mapping, Callable, Awaitable
-
-from ..const import CONF_POWER, CONF_SWITCH, CONF_LOAD_IS_BOOST_ONLY, CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, \
-    CONF_DEVICE_EFFICIENCY, DEVICE_STATUS_CHANGE_CONSTRAINT, \
-    DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, CONF_IS_3P, CONF_MONO_PHASE, CONF_DEVICE_DYNAMIC_GROUP_NAME, \
-    CONF_NUM_MAX_ON_OFF, DASHBOARD_NO_SECTION, CONF_DEVICE_DASHBOARD_SECTION, LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, \
-    CONF_DEVICE_TO_PILOT_NAME, CHANGE_ON_OFF_STATE_HYSTERESIS_S
-
 import slugify
+
+from ..const import (
+    CHANGE_ON_OFF_STATE_HYSTERESIS_S,
+    CONF_DEVICE_DASHBOARD_SECTION,
+    CONF_DEVICE_DYNAMIC_GROUP_NAME,
+    CONF_DEVICE_EFFICIENCY,
+    CONF_DEVICE_TO_PILOT_NAME,
+    CONF_IS_3P,
+    CONF_LOAD_IS_BOOST_ONLY,
+    CONF_MONO_PHASE,
+    CONF_NUM_MAX_ON_OFF,
+    CONF_POWER,
+    CONF_SWITCH,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    DASHBOARD_NO_SECTION,
+    DEVICE_STATUS_CHANGE_CONSTRAINT,
+    DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
+    LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
+)
+from .commands import CMD_IDLE, LoadCommand, copy_command
+from .constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, LoadConstraint
 
 if TYPE_CHECKING:
     import QSDynamicGroup
@@ -26,6 +37,7 @@ if TYPE_CHECKING:
 NUM_MAX_INVALID_PROBES_COMMANDS = 10
 
 _LOGGER = logging.getLogger(__name__)
+
 
 def extract_name_and_index_from_dashboard_section_option(section_option: str) -> tuple[str, int | None]:
     name = section_option
@@ -40,11 +52,14 @@ def extract_name_and_index_from_dashboard_section_option(section_option: str) ->
             found_index = None
 
         if found_index is not None:
-            name = section_option[len(vals[0]) + 3:]
+            name = section_option[len(vals[0]) + 3 :]
 
     return name, found_index
 
-def map_section_selected_name_in_section_list(section_stored_name: str, section_list: list[tuple[str, str]], compute_options:bool=False) -> tuple[int | None, list[str] | None]:
+
+def map_section_selected_name_in_section_list(
+    section_stored_name: str, section_list: list[tuple[str, str]], compute_options: bool = False
+) -> tuple[int | None, list[str] | None]:
 
     options: list[str] | None = None
     if compute_options:
@@ -72,11 +87,10 @@ def map_section_selected_name_in_section_list(section_stored_name: str, section_
     return ret, options
 
 
-class AbstractDevice(object):
-
+class AbstractDevice:
     conf_type_name = "unknown"
 
-    def __init__(self, name:str, device_type:str|None = None, **kwargs):
+    def __init__(self, name: str, device_type: str | None = None, **kwargs):
         super().__init__()
         self._enabled = True
         self._power_use_conf = kwargs.pop(CONF_POWER, None)
@@ -84,10 +98,10 @@ class AbstractDevice(object):
         self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
         self.dynamic_group_name = kwargs.pop(CONF_DEVICE_DYNAMIC_GROUP_NAME, None)
         self.piloted_device_name = kwargs.pop(CONF_DEVICE_TO_PILOT_NAME, None)
-        self._mono_phase_conf : str | None = kwargs.pop(CONF_MONO_PHASE, None)
+        self._mono_phase_conf: str | None = kwargs.pop(CONF_MONO_PHASE, None)
         if self._mono_phase_conf is None:
             # at random allocate phase on 0, 1, or 2
-            self._mono_phase_default = random.randint(0,2)
+            self._mono_phase_default = random.randint(0, 2)
         else:
             self._mono_phase_default = int(self._mono_phase_conf) - 1
 
@@ -106,12 +120,12 @@ class AbstractDevice(object):
 
         self.name = name
 
-        self.devices_to_pilot : list[PilotedDevice] = []
+        self.devices_to_pilot: list[PilotedDevice] = []
 
-        self.device_id = f"qs_{slugify.slugify(name, separator="_")}_{self.device_type}"
+        self.device_id = f"qs_{slugify.slugify(name, separator='_')}_{self.device_type}"
         self.home = kwargs.pop("home", None)
 
-        self._dampen_start_transition: datetime| None = None
+        self._dampen_start_transition: datetime | None = None
         self._dampened_computed_power_use: float | None = kwargs.pop(f"measured_{CONF_POWER}", None)
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
@@ -126,7 +140,7 @@ class AbstractDevice(object):
             if self.num_max_on_off % 2 == 1:
                 self.num_max_on_off += 1
 
-        self.father_device : QSDynamicGroup = self.home
+        self.father_device: QSDynamicGroup = self.home
 
         self._computed_dashboard_section = None
 
@@ -157,7 +171,7 @@ class AbstractDevice(object):
 
         return power_delta
 
-    def update_demanding_clients_for_piloted_devices_for_budget(self, slot_idx: int, add: bool) -> int|float:
+    def update_demanding_clients_for_piloted_devices_for_budget(self, slot_idx: int, add: bool) -> int | float:
         if len(self.devices_to_pilot) == 0:
             return 0.0
 
@@ -167,19 +181,18 @@ class AbstractDevice(object):
 
         return power_delta
 
-    def get_phase_amps_from_power_for_piloted_budgeting(self, power:float) -> list[float | int]:
+    def get_phase_amps_from_power_for_piloted_budgeting(self, power: float) -> list[float | int]:
         if len(self.devices_to_pilot) == 0:
             return [0.0, 0.0, 0.0]
 
         ret = [0.0, 0.0, 0.0]
         for pd in self.devices_to_pilot:
-            pd_amps = pd.get_phase_amps_from_power_for_budgeting(power/len(self.devices_to_pilot))
+            pd_amps = pd.get_phase_amps_from_power_for_budgeting(power / len(self.devices_to_pilot))
             ret[0] += pd_amps[0]
             ret[1] += pd_amps[1]
             ret[2] += pd_amps[2]
 
         return ret
-
 
     def is_off_grid(self) -> bool:
         if self.home:
@@ -188,8 +201,15 @@ class AbstractDevice(object):
 
     @property
     def dashboard_section(self) -> str | None:
-        if self._computed_dashboard_section is None and self.home is not None and self.home.dashboard_sections is not None and len(self.home.dashboard_sections) > 0:
-            idx, _ = map_section_selected_name_in_section_list(self._conf_dashboard_section_option, self.home.dashboard_sections, compute_options=False)
+        if (
+            self._computed_dashboard_section is None
+            and self.home is not None
+            and self.home.dashboard_sections is not None
+            and len(self.home.dashboard_sections) > 0
+        ):
+            idx, _ = map_section_selected_name_in_section_list(
+                self._conf_dashboard_section_option, self.home.dashboard_sections, compute_options=False
+            )
             if idx is not None:
                 self._computed_dashboard_section = self.home.dashboard_sections[idx][0]
             else:
@@ -208,12 +228,11 @@ class AbstractDevice(object):
     def dashboard_sort_string(self) -> int:
         ret = ""
         for s in [self.device_type, self.dashboard_sort_string_in_type, self.name]:
-
             if len(s) >= 255:
                 ret += s[:255]
             else:
                 ret += s
-                ret += ' ' * (255 - len(s))
+                ret += " " * (255 - len(s))
 
         return ret
 
@@ -224,30 +243,31 @@ class AbstractDevice(object):
             return self.home.voltage
         return 230.0
 
-    async def async_get_info_from_storage(self, time:datetime, stored_device_info: dict | None):
+    async def async_get_info_from_storage(self, time: datetime, stored_device_info: dict | None):
         if stored_device_info:
             self.use_saved_extra_device_info(stored_device_info)
 
-    def update_available_amps_for_group(self, idx:int, amps:list[float | int], add:bool):
+    def update_available_amps_for_group(self, idx: int, amps: list[float | int], add: bool):
         """Update the available amps for the group based on the device's configuration."""
         if self.father_device is not None:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
-
 
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
         _LOGGER.info(f"Constraint Reset device {self.name}")
         self._constraints: list[LoadConstraint | None] = []
         if keep_commands is False:
-            self.current_command : LoadCommand | None = None
+            self.current_command: LoadCommand | None = None
             self.prev_command: LoadCommand | None = None
-            self.running_command : LoadCommand | None = None # a command that has been launched but not yet finished, wait for its resolution
-            self._stacked_command: LoadCommand | None = None # a command (keep only the last one) that has been pushed to be executed later when running command is free
+            self.running_command: LoadCommand | None = (
+                None  # a command that has been launched but not yet finished, wait for its resolution
+            )
+            self._stacked_command: LoadCommand | None = (
+                None  # a command (keep only the last one) that has been pushed to be executed later when running command is free
+            )
             self.running_command_first_launch: datetime | None = None
             self.running_command_last_launch: datetime | None = None
-            self.running_command_num_relaunch : int = 0
+            self.running_command_num_relaunch: int = 0
             self.running_command_num_relaunch_after_invalid: int = 0
-
-
 
     # for class overcharging reset
     def reset(self, keep_commands=False):
@@ -269,7 +289,7 @@ class AbstractDevice(object):
         return self._enabled
 
     @qs_enable_device.setter
-    def qs_enable_device(self, enabled:bool):
+    def qs_enable_device(self, enabled: bool):
         if enabled != self._enabled:
             self.reset()
             self._enabled = enabled
@@ -288,12 +308,13 @@ class AbstractDevice(object):
                 for ha_object in self._exposed_entities:
                     ha_object.async_update_callback(time)
 
-
-    def prepare_slots_for_amps_budget(self,
-                                      time:datetime,
-                                      num_slots:int,
-                                      from_father_budget: list[float | int] | None,
-                                      from_father_production_budget: list[float | int] | None = None):
+    def prepare_slots_for_amps_budget(
+        self,
+        time: datetime,
+        num_slots: int,
+        from_father_budget: list[float | int] | None,
+        from_father_production_budget: list[float | int] | None = None,
+    ):
 
         _LOGGER.debug(f"prepare_slots_for_amps_budget for load {self.name} from_father_budget {from_father_budget}")
 
@@ -307,8 +328,6 @@ class AbstractDevice(object):
             return self.__class__.conf_type_name
 
         return self.__class__.__name__
-
-
 
     @property
     def physical_num_phases(self) -> int:
@@ -342,7 +361,9 @@ class AbstractDevice(object):
 
         return self._mono_phase_default
 
-    def update_amps_with_delta(self, from_amps:list[float|int], delta:int|float, is_3p:bool) -> list[float|int]:
+    def update_amps_with_delta(
+        self, from_amps: list[float | int], delta: int | float, is_3p: bool
+    ) -> list[float | int]:
         amps = copy.copy(from_amps)
         if is_3p is False:
             amps[self.mono_phase_index] += delta
@@ -355,18 +376,21 @@ class AbstractDevice(object):
     def __repr__(self):
         return self.device_id
 
-    #it is a property as it has to be overchargeable (ex: charger for its car)
+    # it is a property as it has to be overchargeable (ex: charger for its car)
     # has to be > 1.0
     @property
     def efficiency_factor(self):
         return 100.0 / self.efficiency
 
-
-    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         data_to_update["num_on_off"] = self.num_on_off
         data_to_update["current_command"] = self.current_command.to_dict() if self.current_command is not None else None
-        data_to_update["last_state_change_time"] = self.last_state_change_time.isoformat() if self.last_state_change_time is not None else None
-        data_to_update["last_check_update"] = self.last_check_update.isoformat() if self.last_check_update is not None else None
+        data_to_update["last_state_change_time"] = (
+            self.last_state_change_time.isoformat() if self.last_state_change_time is not None else None
+        )
+        data_to_update["last_check_update"] = (
+            self.last_check_update.isoformat() if self.last_check_update is not None else None
+        )
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         self.num_on_off = stored_load_info.get("num_on_off", 0)
@@ -395,14 +419,13 @@ class AbstractDevice(object):
         else:
             self.last_check_update = None
 
-
-
-
-    def reset_daily_load_datas(self, time:datetime | None = None):
+    def reset_daily_load_datas(self, time: datetime | None = None):
         self.num_on_off = 0
         self.last_state_change_time: datetime | None = None
 
-    def get_first_unlocked_slot_index(self, time_slots: list[datetime], change_state_hysteresis_s: float = CHANGE_ON_OFF_STATE_HYSTERESIS_S) -> int:
+    def get_first_unlocked_slot_index(
+        self, time_slots: list[datetime], change_state_hysteresis_s: float = CHANGE_ON_OFF_STATE_HYSTERESIS_S
+    ) -> int:
         """Return the first slot index where the solver is allowed to change state.
         All slots from 0 to return_value - 1 must keep the load's current command."""
         if self.num_max_on_off is None or self.last_state_change_time is None:
@@ -414,11 +437,10 @@ class AbstractDevice(object):
     def get_min_max_power(self) -> tuple[float, float]:
         return 0.0, 0.0
 
-
-    def get_phase_amps_from_power_for_budgeting(self, power:float) -> list[float | int]:
+    def get_phase_amps_from_power_for_budgeting(self, power: float) -> list[float | int]:
         return self.get_phase_amps_from_power(power, is_3p=self.physical_3p)
 
-    def get_phase_amps_from_power(self, power:float, is_3p=False) -> list[float | int]:
+    def get_phase_amps_from_power(self, power: float, is_3p=False) -> list[float | int]:
 
         if power == 0.0:
             return [0.0, 0.0, 0.0]
@@ -434,8 +456,7 @@ class AbstractDevice(object):
             ret[self.mono_phase_index] = p
             return ret
 
-
-    def get_current_active_constraint(self, time:datetime | None = None) -> LoadConstraint | None:
+    def get_current_active_constraint(self, time: datetime | None = None) -> LoadConstraint | None:
         if self.qs_enable_device is False:
             self._constraints = []
 
@@ -450,8 +471,7 @@ class AbstractDevice(object):
                 return c
         return None
 
-
-    def _ack_command(self, time:datetime|None,  command:LoadCommand|None):
+    def _ack_command(self, time: datetime | None, command: LoadCommand | None):
 
         if command is not None:
             _LOGGER.info(f"ack command {command.command} for load {self.name}")
@@ -476,14 +496,16 @@ class AbstractDevice(object):
             if do_count:
                 self.num_on_off += 1
                 self.last_state_change_time = time
-                _LOGGER.info(f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})")
+                _LOGGER.info(
+                    f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})"
+                )
 
     @property
     def effective_command(self) -> LoadCommand | None:
         """Return the best known command, including pending ones not yet acked."""
         return self.current_command or self.running_command or self._stacked_command
 
-    def is_load_has_a_command_now_or_coming(self, time:datetime) -> bool:
+    def is_load_has_a_command_now_or_coming(self, time: datetime) -> bool:
         if self.qs_enable_device is False:
             return False
 
@@ -495,7 +517,7 @@ class AbstractDevice(object):
             return True
         return False
 
-    async def launch_command(self, time:datetime, command: LoadCommand, ctxt="NO CTXT"):
+    async def launch_command(self, time: datetime, command: LoadCommand, ctxt="NO CTXT"):
         if self.qs_enable_device is False:
             return
 
@@ -509,7 +531,9 @@ class AbstractDevice(object):
             else:
                 self._stacked_command = command
 
-            _LOGGER.info(f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt} running {self.running_command}, stacked {self._stacked_command}")
+            _LOGGER.info(
+                f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt} running {self.running_command}, stacked {self._stacked_command}"
+            )
             return
 
         # there is no running : whatever we will not execute the stacked one but only the last one
@@ -517,9 +541,8 @@ class AbstractDevice(object):
 
         if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
-            self.current_command = command # needed as command == may have been overcharged to not test everything
+            self.current_command = command  # needed as command == may have been overcharged to not test everything
             return
-
 
         self.running_command = command
         self.running_command_first_launch = time
@@ -534,19 +557,25 @@ class AbstractDevice(object):
             try:
                 is_command_set = await self.execute_command(time, command)
             except Exception as err:
-                _LOGGER.error(f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"Error while executing command {command.command} for load {self.name} : {err}, ctxt: {ctxt}",
+                    exc_info=True,
+                    stack_info=True,
+                )
                 is_command_set = None
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
-            _LOGGER.info(f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}")
+            _LOGGER.info(
+                f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}"
+            )
         elif is_command_set is True:
             _LOGGER.info(f"launch_command: ack command {command} for this load {self.name}), ctxt: {ctxt}")
             self._ack_command(time, self.running_command)
 
         return
 
-    def is_load_command_set(self, time:datetime):
+    def is_load_command_set(self, time: datetime):
         if self.qs_enable_device is False:
             return False
 
@@ -563,14 +592,17 @@ class AbstractDevice(object):
 
         if self.running_command is not None:
             _LOGGER.info(
-                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
+            )
 
             is_command_set = await self.probe_if_command_set(time, self.running_command)
             if is_command_set is None:
                 command_acked_or_good = False
                 # impossible to run this command for this load ...
                 self.running_command_num_relaunch_after_invalid += 1
-                _LOGGER.info(f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})")
+                _LOGGER.info(
+                    f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
+                )
                 if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
                     # will kill completely the command ....
                     self._ack_command(time, None)
@@ -581,7 +613,6 @@ class AbstractDevice(object):
             elif self.running_command_last_launch is not None:
                 res = time - self.running_command_last_launch
                 command_acked_or_good = False
-
 
         if self.running_command is None and self._stacked_command is not None:
             await self.launch_command(time, self._stacked_command, ctxt="check_commands, launch stacked command")
@@ -595,12 +626,18 @@ class AbstractDevice(object):
             self.running_command = None
 
         if self.running_command is not None:
-            _LOGGER.info(f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})")
+            _LOGGER.info(
+                f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})"
+            )
             self.running_command_num_relaunch += 1
             try:
                 is_command_set = await self.execute_command(time, self.running_command)
             except Exception as err:
-                _LOGGER.error(f"Error while executing command {self.running_command.command} for load {self.name} : {err}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"Error while executing command {self.running_command.command} for load {self.name} : {err}",
+                    exc_info=True,
+                    stack_info=True,
+                )
                 is_command_set = None
             self.running_command_last_launch = time
             if is_command_set is None:
@@ -622,7 +659,7 @@ class PilotedDevice(AbstractDevice):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.num_demanding_clients: list[int] | None = None
-        self.clients : list[AbstractDevice] = []
+        self.clients: list[AbstractDevice] = []
 
     @property
     def is_piloted_device_activated(self) -> bool:
@@ -636,9 +673,8 @@ class PilotedDevice(AbstractDevice):
         return self.is_piloted_device_activated
 
     def prepare_slots_for_piloted_device_budget(self, num_slots: int):
-        self.num_demanding_clients = [0]*num_slots
-        _LOGGER.debug(
-            f"prepare_slots_for_piloted_device_budget for a piloted device: {self.name}")
+        self.num_demanding_clients = [0] * num_slots
+        _LOGGER.debug(f"prepare_slots_for_piloted_device_budget for a piloted device: {self.name}")
 
     def possible_delta_power_for_slot(self, slot_idx: int | None, add: bool = True) -> float:
         if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
@@ -661,8 +697,7 @@ class PilotedDevice(AbstractDevice):
 
             return 0
 
-
-    def update_num_demanding_clients_for_slot(self, slot_idx: int, add: bool) -> int|float:
+    def update_num_demanding_clients_for_slot(self, slot_idx: int, add: bool) -> int | float:
         if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
             return 0
 
@@ -674,7 +709,8 @@ class PilotedDevice(AbstractDevice):
         if add:
             if self.num_demanding_clients[slot_idx] >= len(self.clients):
                 _LOGGER.warning(
-                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} too many clients on: {len(self.clients)}")
+                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} too many clients on: {len(self.clients)}"
+                )
                 self.num_demanding_clients[slot_idx] = len(self.clients) - 1
 
             self.num_demanding_clients[slot_idx] += 1
@@ -683,26 +719,23 @@ class PilotedDevice(AbstractDevice):
 
             if self.num_demanding_clients[slot_idx] < 0:
                 _LOGGER.warning(
-                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} negative num demanding clients fix it")
+                    f"update_num_demanding_clients_for_slot for a piloted device: {self.name} negative num demanding clients fix it"
+                )
                 self.num_demanding_clients[slot_idx] = 0
 
         return power_delta
 
 
-
 class AbstractLoad(AbstractDevice):
-
     def __init__(self, **kwargs):
         self.switch_entity = kwargs.pop(CONF_SWITCH, None)
         self.load_is_auto_to_be_boosted = kwargs.pop(CONF_LOAD_IS_BOOST_ONLY, False)
         self.external_user_initiated_state: str | None = None
-        self.external_user_initiated_state_time : datetime | None = None
-        self.asked_for_reset_user_initiated_state_time : datetime | None = None
-        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done : datetime | None = None
-
+        self.external_user_initiated_state_time: datetime | None = None
+        self.asked_for_reset_user_initiated_state_time: datetime | None = None
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done: datetime | None = None
 
         super().__init__(**kwargs)
-
 
         self._last_completed_constraint: LoadConstraint | None = None
 
@@ -711,8 +744,6 @@ class AbstractLoad(AbstractDevice):
         self.current_constraint_current_percent_completion: float | None = None
         self.next_or_current_constraint_start_time: datetime | None = None
         self.next_or_current_constraint_end_time: datetime | None = None
-
-
 
         self.externally_initialized_constraints = False
 
@@ -732,7 +763,7 @@ class AbstractLoad(AbstractDevice):
         self.next_or_current_constraint_end_time = None
         self._last_completed_constraint = None
 
-    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
         data_to_update["external_user_initiated_state"] = self.external_user_initiated_state
         data_to_update["external_user_initiated_state_time"] = None
@@ -741,28 +772,41 @@ class AbstractLoad(AbstractDevice):
 
         data_to_update["asked_for_reset_user_initiated_state_time"] = None
         if self.asked_for_reset_user_initiated_state_time is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time"] = f"{self.asked_for_reset_user_initiated_state_time}"
+            data_to_update["asked_for_reset_user_initiated_state_time"] = (
+                f"{self.asked_for_reset_user_initiated_state_time}"
+            )
 
         data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = None
         if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
+            data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = (
+                f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
+            )
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         self.external_user_initiated_state = stored_load_info.get("external_user_initiated_state", None)
 
-        self.external_user_initiated_state_time  = stored_load_info.get("external_user_initiated_state_time", None)
+        self.external_user_initiated_state_time = stored_load_info.get("external_user_initiated_state_time", None)
         if self.external_user_initiated_state_time is not None:
-            self.external_user_initiated_state_time = datetime.fromisoformat(stored_load_info.get("external_user_initiated_state_time", None))
+            self.external_user_initiated_state_time = datetime.fromisoformat(
+                stored_load_info.get("external_user_initiated_state_time", None)
+            )
 
-
-        self.asked_for_reset_user_initiated_state_time = stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
+        self.asked_for_reset_user_initiated_state_time = stored_load_info.get(
+            "asked_for_reset_user_initiated_state_time", None
+        )
         if self.asked_for_reset_user_initiated_state_time is not None:
-            self.asked_for_reset_user_initiated_state_time = datetime.fromisoformat(stored_load_info.get("asked_for_reset_user_initiated_state_time", None))
+            self.asked_for_reset_user_initiated_state_time = datetime.fromisoformat(
+                stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
+            )
 
-        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = stored_load_info.get(
+            "asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None
+        )
         if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = datetime.fromisoformat(stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None))
+            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = datetime.fromisoformat(
+                stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
+            )
 
     def get_override_state(self):
 
@@ -770,7 +814,7 @@ class AbstractLoad(AbstractDevice):
         if overridden_state is None:
             ct = self.get_current_active_constraint()
             if ct is not None:
-                if ct.load_info is not None and ct.load_info.get("originator",None) == "user_override":
+                if ct.load_info is not None and ct.load_info.get("originator", None) == "user_override":
                     overridden_state = ct.load_param
 
         if self.asked_for_reset_user_initiated_state_time is not None:
@@ -789,7 +833,7 @@ class AbstractLoad(AbstractDevice):
     def is_best_effort_only_load(self):
         return self.load_is_auto_to_be_boosted or self.qs_best_effort_green_only
 
-    def get_for_solver_constraints(self, start_time:datetime, end_time:datetime) -> list[Any]:
+    def get_for_solver_constraints(self, start_time: datetime, end_time: datetime) -> list[Any]:
         if self.qs_enable_device is False:
             self._constraints = []
 
@@ -801,9 +845,8 @@ class AbstractLoad(AbstractDevice):
 
         return res
 
-    def get_normalized_score(self, ct:LoadConstraint, time:datetime, score_span:int=0) -> float:
+    def get_normalized_score(self, ct: LoadConstraint, time: datetime, score_span: int = 0) -> float:
         return 0.0
-
 
     def get_min_max_power(self) -> (float, float):
         if self.power_use is None:
@@ -842,7 +885,7 @@ class AbstractLoad(AbstractDevice):
     #
     #     return res
 
-    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint|None]) -> bool:
+    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint | None]) -> bool:
 
         for new_ct in new_constraints:
             new_ct.add_or_update_load_info("originator", "agenda")
@@ -883,14 +926,12 @@ class AbstractLoad(AbstractDevice):
             self.set_live_constraints(time, self._constraints)
             res = True
 
-
         for new_ct in new_constraints:
             res = self.push_live_constraint(time, new_ct) or res
 
         return res
 
-
-    def get_power_from_switch_state(self, state : str | None) -> float | None:
+    def get_power_from_switch_state(self, state: str | None) -> float | None:
         if state is None:
             return None
         if state == "on":
@@ -898,18 +939,19 @@ class AbstractLoad(AbstractDevice):
         else:
             return 0.0
 
-    async def do_run_check_load_activity_and_constraints(self, time: datetime)-> bool:
+    async def do_run_check_load_activity_and_constraints(self, time: datetime) -> bool:
         if self.qs_enable_device is False:
             return False
         if self.externally_initialized_constraints is False:
             return False
-        return  await self.check_load_activity_and_constraints(time)
+        return await self.check_load_activity_and_constraints(time)
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         return False
 
-
-    async def async_load_constraints_from_storage(self, time:datetime, constraints_dicts: list[dict], stored_executed: dict | None):
+    async def async_load_constraints_from_storage(
+        self, time: datetime, constraints_dicts: list[dict], stored_executed: dict | None
+    ):
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
 
@@ -936,18 +978,20 @@ class AbstractLoad(AbstractDevice):
 
         if new_hash is not None:
             # do not notify just after a reset (self._last_hash_state None)
-            if (self._last_hash_state is not None and self._last_hash_state != new_hash):
+            if self._last_hash_state is not None and self._last_hash_state != new_hash:
                 _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
                 await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT)
 
             self._last_hash_state = new_hash
 
-
-    async def on_device_state_change(self, time: datetime, device_change_type:str, title: str|None =None, message: str|None =None):
+    async def on_device_state_change(
+        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+    ):
         pass
 
-
-    def get_update_value_callback_for_constraint_class(self, constraint:LoadConstraint) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
+    def get_update_value_callback_for_constraint_class(
+        self, constraint: LoadConstraint
+    ) -> Callable[[LoadConstraint, datetime], Awaitable[tuple[float | None, bool]]] | None:
         return None
 
     def is_load_active(self, time: datetime):
@@ -957,7 +1001,7 @@ class AbstractLoad(AbstractDevice):
             return False
         return True
 
-    def _match_ct(self, ct:LoadConstraint, load_param:str|None, load_info:dict | None = None) -> bool:
+    def _match_ct(self, ct: LoadConstraint, load_param: str | None, load_info: dict | None = None) -> bool:
         if ct.load_param != load_param:
             return False
         if not load_info:
@@ -969,9 +1013,10 @@ class AbstractLoad(AbstractDevice):
                 return False
         return True
 
-    def clean_constraints_for_load_param_and_if_same_key_same_value_info(self, time:datetime, load_param: str | None, load_info: dict | None = None, for_full_reset=True) -> bool:
-
-        """ Clean constraints that do not match the load_param and load_info the load info matching is loose : ie : it is only NOT matching if their is a common key with a different value """
+    def clean_constraints_for_load_param_and_if_same_key_same_value_info(
+        self, time: datetime, load_param: str | None, load_info: dict | None = None, for_full_reset=True
+    ) -> bool:
+        """Clean constraints that do not match the load_param and load_info the load info matching is loose : ie : it is only NOT matching if their is a common key with a different value"""
 
         existing_constraints = []
         last_completed_constraint = None
@@ -984,21 +1029,21 @@ class AbstractLoad(AbstractDevice):
                 # we have a last completed constraint that is still valid
                 if for_full_reset:
                     _LOGGER.info(
-                        f"clean_constraints_for_load_param: Found a stored last completed constraint to be kept with {self._last_completed_constraint.load_param}  {self._last_completed_constraint.name}")
+                        f"clean_constraints_for_load_param: Found a stored last completed constraint to be kept with {self._last_completed_constraint.load_param}  {self._last_completed_constraint.name}"
+                    )
                 last_completed_constraint = self._last_completed_constraint
             else:
                 found_one_bad = True
 
-
         for ct in self._constraints:
-
             if self._match_ct(ct, load_param, load_info) is False:
                 # this constraint is not compatible with the load_param we are looking for
                 found_one_bad = True
                 continue
             if for_full_reset:
                 _LOGGER.info(
-                    f"clean_constraints_for_load_param: Found a stored car constraint to be kept with {ct.load_param}  {ct.name}")
+                    f"clean_constraints_for_load_param: Found a stored car constraint to be kept with {ct.load_param}  {ct.name}"
+                )
 
             existing_constraints.append(ct)
 
@@ -1022,25 +1067,29 @@ class AbstractLoad(AbstractDevice):
 
         return True
 
-
     def reset(self, keep_commands=False):
         _LOGGER.info(f"Reset load {self.name}")
         super().reset(keep_commands=keep_commands)
 
-    async def ack_completed_constraint(self, time:datetime, constraint:LoadConstraint|None):
+    async def ack_completed_constraint(self, time: datetime, constraint: LoadConstraint | None):
         if self.qs_enable_device is False:
             return
 
-        if constraint is not None and constraint.load_info is not None and constraint.load_info.get("originator",None) == "user_override":
+        if (
+            constraint is not None
+            and constraint.load_info is not None
+            and constraint.load_info.get("originator", None) == "user_override"
+        ):
             # it is a user override based constraint ... we should reset the override state.
-            _LOGGER.info(f"Ack completed constraint {constraint.name} for load {self.name} with user override origin, reset override state and set reset ask time")
+            _LOGGER.info(
+                f"Ack completed constraint {constraint.name} for load {self.name} with user override origin, reset override state and set reset ask time"
+            )
             self.reset_override_state_and_set_reset_ask_time(time=time)
 
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
 
-
-    def get_active_readable_name(self, time:datetime | None = None, filter_for_human_notification=False) -> str | None:
+    def get_active_readable_name(self, time: datetime | None = None, filter_for_human_notification=False) -> str | None:
 
         current_constraint = self.get_current_active_constraint(time)
 
@@ -1058,7 +1107,7 @@ class AbstractLoad(AbstractDevice):
 
         return new_val
 
-    def get_active_state_hash(self, time:datetime) -> str:
+    def get_active_state_hash(self, time: datetime) -> str:
 
         current_constraint = self.get_current_active_constraint(time)
 
@@ -1067,28 +1116,32 @@ class AbstractLoad(AbstractDevice):
                 load_param = "NO"
                 if self._last_completed_constraint.load_param is not None:
                     load_param = self._last_completed_constraint.load_param
-                new_val = ("COMPLETED:" +
-                           self._last_completed_constraint.stable_name +
-                           "-" +
-                           load_param +
-                           "-" +
-                           self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
+                new_val = (
+                    "COMPLETED:"
+                    + self._last_completed_constraint.stable_name
+                    + "-"
+                    + load_param
+                    + "-"
+                    + self._last_completed_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+                )
             else:
                 new_val = "NOTHING PLANNED"
         else:
             load_param = "NO"
             if current_constraint.load_param is not None:
                 load_param = current_constraint.load_param
-            new_val = ("RUNNING:" +
-                       current_constraint.stable_name +
-                       "-" +
-                       load_param +
-                       "-" +
-                       current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S"))
+            new_val = (
+                "RUNNING:"
+                + current_constraint.stable_name
+                + "-"
+                + load_param
+                + "-"
+                + current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+            )
 
         return new_val
 
-    def get_active_constraints(self, time:datetime) -> list[LoadConstraint]:
+    def get_active_constraints(self, time: datetime) -> list[LoadConstraint]:
         if self.qs_enable_device is False:
             self._constraints = []
 
@@ -1109,17 +1162,17 @@ class AbstractLoad(AbstractDevice):
         self._constraints = [c for c in self._constraints if c is not None]
         self._constraints.sort(key=lambda x: x.end_of_constraint)
 
-        #remove all the infinite constraints but the last one
+        # remove all the infinite constraints but the last one
         if self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
-            removed_infinits : list[LoadConstraint] = []
+            removed_infinits: list[LoadConstraint] = []
             while self._constraints[-1].end_of_constraint == DATETIME_MAX_UTC:
                 removed_infinits.append(self._constraints.pop())
                 if len(self._constraints) == 0:
                     break
 
-            #only one infinite is allowed!
+            # only one infinite is allowed!
             if removed_infinits:
-                keep : LoadConstraint = removed_infinits[0]
+                keep: LoadConstraint = removed_infinits[0]
                 for k in removed_infinits:
                     if k.is_constraint_met(time=time):
                         continue
@@ -1129,7 +1182,7 @@ class AbstractLoad(AbstractDevice):
                 self._constraints.append(keep)
 
         # only one as fast as possible constraint can be active at a time.... and has to be first
-        removed_as_fast = [(i,c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
+        removed_as_fast = [(i, c) for i, c in enumerate(self._constraints) if c.as_fast_as_possible]
         if len(removed_as_fast) == 0 or (len(removed_as_fast) == 1 and removed_as_fast[0][0] == 0):
             # ok if there is a as fast constraint it should be the first one
             pass
@@ -1144,7 +1197,7 @@ class AbstractLoad(AbstractDevice):
 
             keep = removed_as_fast[0][1]
             end_ctr = keep.end_of_constraint
-            for (_, k) in removed_as_fast:
+            for _, k in removed_as_fast:
                 if k.is_constraint_met(time=time):
                     continue
                 if k.score(time) > keep.score(time):
@@ -1153,23 +1206,22 @@ class AbstractLoad(AbstractDevice):
             self._constraints = [keep]
             self._constraints.extend(new_constraints)
 
-        #check all the constraints that have the same end time, keep the highest score
+        # check all the constraints that have the same end time, keep the highest score
         current_end = DATETIME_MIN_UTC
 
-        current_cluster : list[tuple[int, LoadConstraint]] = []
-        clusters : list[list[tuple[int, LoadConstraint]]] = []
-
+        current_cluster: list[tuple[int, LoadConstraint]] = []
+        clusters: list[list[tuple[int, LoadConstraint]]] = []
 
         for i, c in enumerate(self._constraints):
             if c.end_of_constraint == DATETIME_MAX_UTC or c.end_of_constraint == DATETIME_MIN_UTC:
                 continue
 
             if c.end_of_constraint == current_end:
-                current_cluster.append((i,c))
+                current_cluster.append((i, c))
             else:
                 if len(current_cluster) > 1:
                     clusters.append(current_cluster)
-                current_cluster = [(i,c)]
+                current_cluster = [(i, c)]
                 current_end = c.end_of_constraint
 
         if len(current_cluster) > 1:
@@ -1177,10 +1229,10 @@ class AbstractLoad(AbstractDevice):
 
         if len(clusters) > 0:
             for current_cluster in clusters:
-                keep_ic : tuple[int, LoadConstraint] = current_cluster[0]
+                keep_ic: tuple[int, LoadConstraint] = current_cluster[0]
                 for i, c in current_cluster:
                     if c.score(time) > keep_ic[1].score(time):
-                        keep_ic = (i,c)
+                        keep_ic = (i, c)
 
                 for i, c in current_cluster:
                     if i == keep_ic[0]:
@@ -1190,7 +1242,7 @@ class AbstractLoad(AbstractDevice):
 
             self._constraints = [c for c in self._constraints if c is not None]
 
-        #and now we may have to recompute the start values of the constraints
+        # and now we may have to recompute the start values of the constraints
         prev_ct = None
         for c in self._constraints:
             if prev_ct is not None:
@@ -1202,7 +1254,7 @@ class AbstractLoad(AbstractDevice):
 
         self._constraints = [c for c in self._constraints if c.is_constraint_met(time=time) is False]
 
-        #recompute the constraint start:
+        # recompute the constraint start:
         kept = []
         current_start = DATETIME_MIN_UTC
         for c in self._constraints:
@@ -1221,42 +1273,48 @@ class AbstractLoad(AbstractDevice):
         if not self._constraints:
             self._constraints = []
 
-    def push_live_constraint(self, time:datetime, constraint: LoadConstraint| None = None) -> bool:
+    def push_live_constraint(self, time: datetime, constraint: LoadConstraint | None = None) -> bool:
 
         if self.qs_enable_device is False:
             self._constraints = []
             return True
 
-
         if not self._constraints:
             self._constraints = []
 
         if constraint is not None:
-
             # use the requested_target_value instead of teh real target_value, as it could have been updated
             # (by a TimeConstraint for example) and making this test erroneous
-            if (self._last_completed_constraint is not None and
-                self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint and
-                self._last_completed_constraint.requested_target_value == constraint.requested_target_value):
-                _LOGGER.debug(f"Constraint {constraint.name} not pushed because same end date and same target value as last completed one")
+            if (
+                self._last_completed_constraint is not None
+                and self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
+                and self._last_completed_constraint.requested_target_value == constraint.requested_target_value
+            ):
+                _LOGGER.debug(
+                    f"Constraint {constraint.name} not pushed because same end date and same target value as last completed one"
+                )
                 return False
-
-
 
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):
                     c.carry_info_from_other_constraint(constraint)
                     return False
-                if  c.end_of_constraint == constraint.end_of_constraint or (c.as_fast_as_possible and constraint.as_fast_as_possible):
+                if c.end_of_constraint == constraint.end_of_constraint or (
+                    c.as_fast_as_possible and constraint.as_fast_as_possible
+                ):
                     if c.score(time) == constraint.score(time):
-                        _LOGGER.debug(f"Constraint not pushed because same end date as another one, and same score or type old: {c.name} new not added {constraint.name}")
+                        _LOGGER.debug(
+                            f"Constraint not pushed because same end date as another one, and same score or type old: {c.name} new not added {constraint.name}"
+                        )
                         c.carry_info_from_other_constraint(constraint)
                         return False
                     else:
                         self._constraints[i] = None
-                        _LOGGER.info(f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one)")
+                        _LOGGER.info(
+                            f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one)"
+                        )
                         # the problem here is that we can loose .... the current value
-                        if type(c) == type(constraint) and c.current_value > constraint.current_value :
+                        if type(c) == type(constraint) and c.current_value > constraint.current_value:
                             constraint.current_value = min(c.current_value, constraint.target_value)
 
             self._constraints.append(constraint)
@@ -1265,25 +1323,26 @@ class AbstractLoad(AbstractDevice):
 
         return False
 
-    async def update_live_constraints(self, time:datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)) -> bool:
+    async def update_live_constraints(
+        self, time: datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)
+    ) -> bool:
         # there should be ONLY ONE ACTIVE CONSTRAINT AT A TIME!
         # they are sorted in time order, the first one we find should be executed (could be a constraint with no end date
         # if it is the last and the one before are for the next days)
-
 
         if self.qs_enable_device is False:
             self._constraints = []
             return True
 
         current_constraint = None
-        #if self.running_command is not None:
+        # if self.running_command is not None:
         #    force_solving =  False
-        #elif
+        # elif
         # to update any constraint the load must be in a state with the right command working...do not update constraints during its execution
         # well don't like it ... running command will be gracefully handled by launch command
         if not self._constraints:
             self._constraints = []
-            force_solving =  False
+            force_solving = False
         else:
             force_solving = False
 
@@ -1292,7 +1351,6 @@ class AbstractLoad(AbstractDevice):
                 c.skip = False
 
             for i, c in enumerate(self._constraints):
-
                 if c.skip:
                     continue
 
@@ -1303,22 +1361,26 @@ class AbstractLoad(AbstractDevice):
                     force_solving = True
                     await self.ack_completed_constraint(time, c)
                     _LOGGER.info(f"{c.name} skipped because met")
-                elif c.end_of_constraint <= time  and c.is_mandatory is False:
+                elif c.end_of_constraint <= time and c.is_mandatory is False:
                     _LOGGER.info(f"{c.name} skipped because not mandatory")
                     c.skip = True
                     force_solving = True
-                elif c.is_mandatory and c.end_of_constraint <  time + end_constraint_min_tolerancy and c.always_end_at_end_of_constraint is False:
+                elif (
+                    c.is_mandatory
+                    and c.end_of_constraint < time + end_constraint_min_tolerancy
+                    and c.always_end_at_end_of_constraint is False
+                ):
                     # c.always_end_at_end_of_constraint : means we will never push it ever
                     # a not met mandatory one! we should expand it or force it
-                    duration_s = c.best_duration_extension_to_push_constraint(time, end_constraint_min_tolerancy)# extend if we continue to push it
+                    duration_s = c.best_duration_extension_to_push_constraint(
+                        time, end_constraint_min_tolerancy
+                    )  # extend if we continue to push it
                     new_constraint_end = time + duration_s
                     handled_constraint_force = False
                     c.skip = True
 
                     if i < len(self._constraints) - 1:
-
-                        for j in range(i+1, len(self._constraints)):
-
+                        for j in range(i + 1, len(self._constraints)):
                             nc = self._constraints[j]
 
                             if nc.skip:
@@ -1349,18 +1411,18 @@ class AbstractLoad(AbstractDevice):
                                         nc.skip = True
 
                     if handled_constraint_force is False:
-
                         if c.pushed_count > 4:
                             # TODO: we should send a push notification to the one attached to the constraint!
                             # As it is not met and pushed too many times
                             c.skip = True
                             _LOGGER.info(f"{c.name} not met and pushed too many times")
                         else:
-
                             # unskip the current one
                             c.skip = False
                             c.pushed_count += 1
-                            _LOGGER.info(f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}")
+                            _LOGGER.info(
+                                f"{c.name} pushed because mandatory and not met (#pushed {c.pushed_count}) from {c.end_of_constraint} to {new_constraint_end}"
+                            )
                             handled_constraint_force = True
                             c.end_of_constraint = new_constraint_end
 
@@ -1369,7 +1431,9 @@ class AbstractLoad(AbstractDevice):
                         # ok we have pushed or made a target the next important constraint
                         do_update_c = True
                         c.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE  # force as much as we can....(will only impact off_grid off)
-                        _LOGGER.info(f"{c.name} handled_constraint_force is now as fast as possible, end of constraint {c.end_of_constraint} (pushed count {c.pushed_count})")
+                        _LOGGER.info(
+                            f"{c.name} handled_constraint_force is now as fast as possible, end of constraint {c.end_of_constraint} (pushed count {c.pushed_count})"
+                        )
                 else:
                     do_update_c = True
 
@@ -1393,16 +1457,19 @@ class AbstractLoad(AbstractDevice):
 
             current_constraint = self.get_current_active_constraint(time)
 
-
         if current_constraint is not None:
             self.current_constraint_current_value = current_constraint.current_value
-            self.current_constraint_current_energy = current_constraint.convert_target_value_to_energy(current_constraint.current_value)
+            self.current_constraint_current_energy = current_constraint.convert_target_value_to_energy(
+                current_constraint.current_value
+            )
             self.current_constraint_current_percent_completion = current_constraint.get_percent_completion(time)
 
         else:
             if self._last_completed_constraint is not None:
                 self.current_constraint_current_value = self._last_completed_constraint.target_value
-                self.current_constraint_current_energy = self._last_completed_constraint.convert_target_value_to_energy(self._last_completed_constraint.target_value)
+                self.current_constraint_current_energy = self._last_completed_constraint.convert_target_value_to_energy(
+                    self._last_completed_constraint.target_value
+                )
                 self.current_constraint_current_percent_completion = 100.0
             else:
                 self.current_constraint_current_value = None
@@ -1420,9 +1487,7 @@ class AbstractLoad(AbstractDevice):
 
         return force_solving
 
-
-
-    async def mark_current_constraint_has_done(self, time:datetime|None=None):
+    async def mark_current_constraint_has_done(self, time: datetime | None = None):
         if time is None:
             time = datetime.now(tz=pytz.UTC)
         c = self.get_current_active_constraint(time)
@@ -1431,23 +1496,23 @@ class AbstractLoad(AbstractDevice):
             c.current_value = c.target_value
             await self.update_live_constraints(time, self.home._period)
             if self.is_load_active(time) is False or self.get_current_active_constraint(time) is None:
-                await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}")
-
+                await self.launch_command(
+                    time=time,
+                    command=CMD_IDLE,
+                    ctxt=f"mark_current_constraint_has_done constraint {self.get_current_active_constraint(time)} is active {self.is_load_active(time)}",
+                )
 
     async def user_clean_and_reset(self):
         await super().user_clean_and_reset()
         time = datetime.now(tz=pytz.UTC)
         _LOGGER.info(f"user_clean_and_reset: {self.name}")
-        await self.launch_command(time=time, command=CMD_IDLE,
-                                  ctxt=f"user_clean_and_reset: {self.name}")
-
+        await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"user_clean_and_reset: {self.name}")
 
     async def async_reset_override_state(self):
         time = datetime.now(tz=pytz.UTC)
         self.reset_override_state_and_set_reset_ask_time(time=time)
         if await self.do_run_check_load_activity_and_constraints(time):
             self.home.force_next_solve()
-
 
     def reset_override_state_and_set_reset_ask_time(self, time: datetime | None = None):
         if self.external_user_initiated_state is None or self.external_user_initiated_state_time is None:
@@ -1476,10 +1541,15 @@ class TestLoad(AbstractLoad):
     def get_min_max_power(self) -> tuple[float, float]:
         return self.min_p, self.max_p
 
+
 def align_time_series_and_values(
-        tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-        tsv2: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]]| None,
-        operation: Callable[[Any, Any], Any] | None = None):
+    tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+    tsv2: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]]
+    | None,
+    operation: Callable[[Any, Any], Any] | None = None,
+):
 
     if not tsv1:
         if not tsv2:
@@ -1528,7 +1598,7 @@ def align_time_series_and_values(
     object_len = 3
     object_len = min(object_len, len(tsv1[0]), len(tsv2[0]))
 
-    #compute all values for each time
+    # compute all values for each time
     new_v1: list[float | str | None] = [0] * len(t_only)
     new_v2: list[float | str | None] = [0] * len(t_only)
 
@@ -1539,7 +1609,6 @@ def align_time_series_and_values(
         new_attr_2: list[dict | None] = [None] * len(t_only)
 
     for vi in range(2):
-
         new_v = new_v1
         new_attr = new_attr_1
         tsv = tsv1
@@ -1553,22 +1622,22 @@ def align_time_series_and_values(
         for i, (t, idxs) in enumerate(timings):
             attr_to_put = None
             if idxs[vi] is not None:
-                #ok an exact value
+                # ok an exact value
                 last_real_idx = idxs[vi]
-                val_to_put = (tsv[last_real_idx][1])
+                val_to_put = tsv[last_real_idx][1]
                 if object_len == 3:
-                    attr_to_put = (tsv[last_real_idx][2])
+                    attr_to_put = tsv[last_real_idx][2]
             else:
                 if last_real_idx is None:
-                    #we have new values "before" the first real value"
-                    val_to_put = (tsv[0][1])
+                    # we have new values "before" the first real value"
+                    val_to_put = tsv[0][1]
                     if object_len == 3:
-                        attr_to_put = (tsv[0][2])
+                        attr_to_put = tsv[0][2]
                 elif last_real_idx == len(tsv) - 1:
-                    #we have new values "after" the last real value"
-                    val_to_put = (tsv[-1][1])
+                    # we have new values "after" the last real value"
+                    val_to_put = tsv[-1][1]
                     if object_len == 3:
-                        attr_to_put = (tsv[-1][2])
+                        attr_to_put = tsv[-1][2]
                 else:
                     # we have new values "between" two real values"
                     # interpolate
@@ -1585,7 +1654,7 @@ def align_time_series_and_values(
                         nv = (d1 / d2) * (vnxt - vcur) + vcur
                         val_to_put = float(nv)
                     if object_len == 3:
-                        attr_to_put = (tsv[last_real_idx][2])
+                        attr_to_put = tsv[last_real_idx][2]
 
             if object_len == 3 and attr_to_put is not None:
                 attr_to_put = dict(attr_to_put)
@@ -1605,7 +1674,7 @@ def align_time_series_and_values(
                     elif attr_to_put is not None:
                         new_attr[i].update(attr_to_put)
 
-    #ok so we do have values and timings for 1 and 2
+    # ok so we do have values and timings for 1 and 2
     if operation is not None:
         if object_len == 3:
             return list(zip(t_only, new_v1, new_attr_1))
@@ -1617,8 +1686,9 @@ def align_time_series_and_values(
         return list(zip(t_only, new_v1)), list(zip(t_only, new_v2))
 
 
-def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datetime | None = None) -> list[
-    tuple[datetime | None, str | float | None]]:
+def get_slots_from_time_series(
+    time_serie, start_time: datetime, end_time: datetime | None = None
+) -> list[tuple[datetime | None, str | float | None]]:
     if not time_serie:
         return []
 
@@ -1629,7 +1699,7 @@ def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datet
             start_idx -= 1
 
     if end_time is None:
-        return time_serie[start_idx:start_idx + 1]
+        return time_serie[start_idx : start_idx + 1]
 
     end_idx = bisect_left(time_serie, end_time, key=itemgetter(0))
     if end_idx >= len(time_serie):
@@ -1639,15 +1709,18 @@ def get_slots_from_time_series(time_serie, start_time: datetime, end_time: datet
         if time_serie[end_idx][0] != end_time:
             end_idx += 1
 
-    return time_serie[start_idx:end_idx + 1]
+    return time_serie[start_idx : end_idx + 1]
 
-def get_value_from_time_series(time_series, time: datetime, interpolation_operation : Callable[[Any, Any, datetime], Any]| None = None) -> tuple[datetime | None, str | float | None, bool, int]:
+
+def get_value_from_time_series(
+    time_series, time: datetime, interpolation_operation: Callable[[Any, Any, datetime], Any] | None = None
+) -> tuple[datetime | None, str | float | None, bool, int]:
 
     # find the closest time in the time serie
     if time_series is None or len(time_series) == 0:
         return (None, None, False, -1)
 
-    #small optim:
+    # small optim:
     if time_series[-1][0] == time:
         res = time_series[-1]
         res_idx = len(time_series) - 1
@@ -1656,7 +1729,7 @@ def get_value_from_time_series(time_series, time: datetime, interpolation_operat
         res_idx = 0
     else:
         idx = bisect_left(time_series, time, key=itemgetter(0))
-        
+
         if idx >= len(time_series):
             res = time_series[-1]
             res_idx = len(time_series) - 1
@@ -1673,7 +1746,7 @@ def get_value_from_time_series(time_series, time: datetime, interpolation_operat
                     res = time_series[idx - 1]
                     res_idx = idx - 1
                 else:
-                    res =  time_series[idx]
+                    res = time_series[idx]
                     res_idx = idx
             else:
                 v1 = time_series[idx - 1]
@@ -1692,7 +1765,4 @@ def get_value_from_time_series(time_series, time: datetime, interpolation_operat
                     res = interpolation_operation(v1, v2, time)
                     res_idx = idx - 1
 
-
     return res[0], res[1], res[0] == time, res_idx
-
-

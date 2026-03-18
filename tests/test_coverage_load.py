@@ -3,55 +3,39 @@
 Covers standalone functions, AbstractDevice edge cases, AbstractLoad constraint
 lifecycle, and the update_live_constraints complex flow.
 """
+
 from __future__ import annotations
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
+import pytest
 import pytz
 
+from custom_components.quiet_solar.const import (
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
+from custom_components.quiet_solar.home_model.commands import (
+    CMD_ON,
+    LoadCommand,
+    copy_command,
+)
+from custom_components.quiet_solar.home_model.constraints import (
+    DATETIME_MAX_UTC,
+)
 from custom_components.quiet_solar.home_model.load import (
     AbstractDevice,
-    AbstractLoad,
-    PilotedDevice,
     TestLoad,
     align_time_series_and_values,
     get_slots_from_time_series,
     get_value_from_time_series,
 )
-from custom_components.quiet_solar.home_model.commands import (
-    LoadCommand,
-    CMD_ON,
-    CMD_OFF,
-    CMD_IDLE,
-    CMD_AUTO_GREEN_ONLY,
-    copy_command,
-)
-from custom_components.quiet_solar.home_model.constraints import (
-    LoadConstraint,
-    MultiStepsPowerLoadConstraint,
-    DATETIME_MAX_UTC,
-    DATETIME_MIN_UTC,
-)
-from custom_components.quiet_solar.const import (
-    CONF_POWER,
-    CONF_SWITCH,
-    CONF_LOAD_IS_BOOST_ONLY,
-    CONF_DEVICE_EFFICIENCY,
-    CONF_IS_3P,
-    CONF_MONO_PHASE,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-    CONSTRAINT_TYPE_FILLER_AUTO,
-    CONSTRAINT_TYPE_FILLER,
-    DASHBOARD_NO_SECTION,
-)
 from tests.factories import (
-    MinimalTestLoad,
     MinimalTestHome,
+    MinimalTestLoad,
     create_constraint,
-    create_load_command,
     create_minimal_home_model,
 )
 
@@ -200,7 +184,9 @@ class TestAlignTimeSeriesAndValues:
         t1, t2 = _t(0), _t(1)
         tsv1 = [(t1, None), (t2, None)]
         tsv2 = [(t1, 10.0), (t2, 20.0)]
-        result = align_time_series_and_values(tsv1, tsv2, operation=lambda a, b: a + b if a is not None and b is not None else None)
+        result = align_time_series_and_values(
+            tsv1, tsv2, operation=lambda a, b: a + b if a is not None and b is not None else None
+        )
         # None values propagate
         assert len(result) == 2
 
@@ -538,13 +524,19 @@ class TestAbstractLoadPushAgendaConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         old_ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=500,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=500,
         )
         old_ct.load_info = {"originator": "agenda"}
         load._constraints = [old_ct]
 
         new_ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(4), target_value=1000,
+            load=load,
+            time=t,
+            end_of_constraint=_t(4),
+            target_value=1000,
         )
         result = load.push_agenda_constraints(t, [new_ct])
         assert result is True
@@ -561,7 +553,10 @@ class TestAbstractLoadLoadConstraintsFromStorage:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=1000,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=1000,
         )
         ct_dict = ct.to_dict()
 
@@ -575,11 +570,17 @@ class TestAbstractLoadLoadConstraintsFromStorage:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=1000,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=1000,
         )
         ct_dict = ct.to_dict()
         executed_ct = create_constraint(
-            load=load, time=_t(-1), end_of_constraint=_t(-0.5), target_value=500,
+            load=load,
+            time=_t(-1),
+            end_of_constraint=_t(-0.5),
+            target_value=500,
         )
         exec_dict = executed_ct.to_dict()
 
@@ -593,7 +594,10 @@ class TestAbstractLoadLoadConstraintsFromStorage:
         t = _t(0)
         # Create a constraint that ended in the past
         old_ct = create_constraint(
-            load=load, time=_t(-3), end_of_constraint=_t(-1), target_value=100,
+            load=load,
+            time=_t(-3),
+            end_of_constraint=_t(-1),
+            target_value=100,
         )
         ct_dict = old_ct.to_dict()
 
@@ -641,7 +645,10 @@ class TestAbstractLoadCleanConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=100,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=100,
         )
         ct.load_param = "my_param"
         load._constraints = [ct]
@@ -655,11 +662,17 @@ class TestAbstractLoadCleanConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=100,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=100,
         )
         ct.load_param = "my_param"
         bad_ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(3), target_value=200,
+            load=load,
+            time=t,
+            end_of_constraint=_t(3),
+            target_value=200,
         )
         bad_ct.load_param = "other_param"
         load._constraints = [ct, bad_ct]
@@ -673,7 +686,10 @@ class TestAbstractLoadCleanConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=100,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=100,
         )
         ct.load_param = "my_param"
         load._constraints = [ct]
@@ -687,7 +703,10 @@ class TestAbstractLoadCleanConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2), target_value=100,
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
+            target_value=100,
         )
         ct.load_param = "my_param"
         ct.load_info = {"car": "car1"}
@@ -706,7 +725,10 @@ class TestAbstractLoadGetActiveReadableName:
         """Line 988: no current constraint but has completed."""
         load = MinimalTestLoad(name="TestLoad")
         completed = create_constraint(
-            load=load, time=_t(-2), end_of_constraint=_t(-1), target_value=100,
+            load=load,
+            time=_t(-2),
+            end_of_constraint=_t(-1),
+            target_value=100,
         )
         load._last_completed_constraint = completed
         result = load.get_active_readable_name(_t(0))
@@ -717,7 +739,10 @@ class TestAbstractLoadGetActiveReadableName:
         """Line 993: has active constraint."""
         load = MinimalTestLoad(name="TestLoad")
         ct = create_constraint(
-            load=load, time=_t(0), end_of_constraint=_t(2), target_value=100,
+            load=load,
+            time=_t(0),
+            end_of_constraint=_t(2),
+            target_value=100,
         )
         load._constraints = [ct]
         result = load.get_active_readable_name(_t(0))
@@ -732,10 +757,16 @@ class TestAbstractLoadSetLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct1 = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC, target_value=100,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100,
         )
         ct2 = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC, target_value=200,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=200,
         )
         load.set_live_constraints(t, [ct1, ct2])
         # Only one infinite should remain
@@ -748,14 +779,16 @@ class TestAbstractLoadSetLiveConstraints:
         t = _t(0)
         # Regular constraint first (ends before ASAP)
         ct_regular = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(1),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # ASAP constraint - type makes as_fast_as_possible True
         ct_asap = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(3),
             target_value=200,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -763,14 +796,16 @@ class TestAbstractLoadSetLiveConstraints:
         assert ct_asap.as_fast_as_possible is True
         # Another ASAP to trigger the multi-ASAP path (lines 1076, 1085)
         ct_asap2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(4),
             target_value=300,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
         )
         # Another regular after ASAP
         ct_regular2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(5),
             target_value=400,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -793,12 +828,14 @@ class TestAbstractLoadSetLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct1 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(1),
             target_value=100,
         )
         ct2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(0),
             end_of_constraint=_t(2),
             target_value=200,
@@ -815,14 +852,18 @@ class TestAbstractLoadPushLiveConstraint:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct1 = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2),
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load.push_live_constraint(t, ct1)
 
         ct2 = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2),
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
@@ -859,7 +900,9 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t, end_of_constraint=_t(2),
+            load=load,
+            time=t,
+            end_of_constraint=_t(2),
             target_value=100,
             initial_value=100,  # Already met
         )
@@ -874,9 +917,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)  # time is after constraint end
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=_t(0.5),  # Already ended
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,  # Not mandatory
         )
         load._constraints = [ct]
@@ -890,9 +935,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),  # Just expired
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct.always_end_at_end_of_constraint = False
@@ -908,9 +955,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct.always_end_at_end_of_constraint = False
@@ -927,17 +976,21 @@ class TestAbstractLoadUpdateLiveConstraints:
         t = _t(1)
         # First constraint: expired mandatory, not met
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         # Second constraint: a more important one within the push window
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(minutes=10),
-            target_value=50000, initial_value=0,
+            target_value=50000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct2.from_user = True  # Higher score
@@ -952,11 +1005,14 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
+
         # Set up a callback that stops the constraint
         async def stop_callback(constraint, time):
             return (50.0, False)
@@ -978,9 +1034,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         today = datetime(2026, 2, 11, 0, 10, 0, tzinfo=pytz.UTC)
         load.last_check_update = yesterday
         ct = create_constraint(
-            load=load, time=yesterday,
+            load=load,
+            time=yesterday,
             end_of_constraint=today + timedelta(hours=2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
@@ -993,10 +1051,12 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(0),
             end_of_constraint=_t(2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
@@ -1012,9 +1072,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         completed = create_constraint(
-            load=load, time=_t(-2),
+            load=load,
+            time=_t(-2),
             end_of_constraint=_t(-1),
-            target_value=100, initial_value=100,
+            target_value=100,
+            initial_value=100,
         )
         load._last_completed_constraint = completed
         load.last_check_update = t
@@ -1027,9 +1089,11 @@ class TestAbstractLoadUpdateLiveConstraints:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
@@ -1051,9 +1115,11 @@ class TestAbstractLoadMarkConstraintDone:
         load = MinimalTestLoad(name="TestLoad", home=home)
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=50,
+            target_value=100,
+            initial_value=50,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct]
@@ -1121,24 +1187,30 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
         t = _t(1)
         # First: mandatory, just expired, not met
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         # Second: also expired
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=2),
-            target_value=5000, initial_value=0,
+            target_value=5000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # Third: future, large enough to break the loop
         ct3 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=5),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
@@ -1152,24 +1224,30 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         # Next: within push window but already met
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(minutes=5),
-            target_value=100, initial_value=100,  # Already met
+            target_value=100,
+            initial_value=100,  # Already met
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # Third: far future to break
         ct3 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=5),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
@@ -1184,25 +1262,31 @@ class TestAbstractLoadMandatoryExpiredWithNextSkipPath:
         t = _t(1)
         # First: mandatory, just expired, not met, HIGH score
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=50000, initial_value=0,
+            target_value=50000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.from_user = True  # Higher score
         ct1.always_end_at_end_of_constraint = False
         # Second: within push window, lower score, not met
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(minutes=5),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # Third: far future to break
         ct3 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=5),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
@@ -1220,9 +1304,11 @@ class TestAbstractLoadUpdateConstraintCallback:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=50,
+            target_value=100,
+            initial_value=50,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
 
@@ -1242,9 +1328,11 @@ class TestAbstractLoadUpdateConstraintCallback:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
 
@@ -1267,13 +1355,19 @@ class TestSetLiveConstraintsDeepEdgeCases:
         t = _t(0)
         # First infinite with low score
         ct1 = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
-            target_value=100, constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100,
+            constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # Second infinite with higher score (user requested, higher target)
         ct2 = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
-            target_value=50000, constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=50000,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct2.from_user = True
         load.set_live_constraints(t, [ct1, ct2])
@@ -1287,21 +1381,25 @@ class TestSetLiveConstraintsDeepEdgeCases:
         t = _t(0)
         # A regular before
         ct_regular = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(1),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # ASAP that's already met
         ct_asap_met = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(3),
-            target_value=100, initial_value=100,  # Already met
+            target_value=100,
+            initial_value=100,  # Already met
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
         )
         # Another ASAP that's not met
         ct_asap2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(4),
             target_value=200,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -1314,7 +1412,8 @@ class TestSetLiveConstraintsDeepEdgeCases:
         t = _t(0)
         # First constraint takes the full window
         ct1 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(0),
             end_of_constraint=_t(5),
             target_value=100,
@@ -1323,7 +1422,8 @@ class TestSetLiveConstraintsDeepEdgeCases:
         # Second constraint starts at t(0) but ends at t(3) - its current_start will be
         # pushed to after ct1's end (t(5)), making start >= end
         ct2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(0),
             end_of_constraint=_t(3),
             target_value=200,
@@ -1337,7 +1437,8 @@ class TestSetLiveConstraintsDeepEdgeCases:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct1 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -1347,7 +1448,8 @@ class TestSetLiveConstraintsDeepEdgeCases:
 
         # Same end, same type, same target => same score
         ct2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -1367,24 +1469,30 @@ class TestUpdateLiveConstraintsInnerLoop:
         t = _t(1)
         # First: mandatory, just expired, not met
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         # Second: already met (will be skipped in inner loop)
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(minutes=5),
-            target_value=100, initial_value=100,
+            target_value=100,
+            initial_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         # Third: far future, end >= new_constraint_end to break
         ct3 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=5),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2, ct3]
@@ -1398,17 +1506,21 @@ class TestUpdateLiveConstraintsInnerLoop:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         # Next: end way beyond push window
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=48),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct1, ct2]
@@ -1446,15 +1558,16 @@ class TestPushAgendaConstraintDeep:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         completed = create_constraint(
-            load=load, time=_t(-2), end_of_constraint=_t(-1), target_value=50,
+            load=load,
+            time=_t(-2),
+            end_of_constraint=_t(-1),
+            target_value=50,
         )
         completed.load_param = None
         load._last_completed_constraint = completed
 
         # Clean with matching param
-        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
-            t, None, for_full_reset=True
-        )
+        result = load.clean_constraints_for_load_param_and_if_same_key_same_value_info(t, None, for_full_reset=True)
         assert result is True
 
 
@@ -1674,7 +1787,8 @@ class TestAckCompletedConstraintUserOverride:
         load.asked_for_reset_user_initiated_state_time = None
 
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=_t(2),
             target_value=100,
         )
@@ -1691,7 +1805,8 @@ class TestAckCompletedConstraintUserOverride:
         load.external_user_initiated_state = "forced_on"
 
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=_t(2),
             target_value=100,
         )
@@ -1710,7 +1825,8 @@ class TestAckCompletedConstraintUserOverride:
         load.qs_enable_device = False
 
         ct = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=_t(2),
             target_value=100,
         )
@@ -1742,13 +1858,19 @@ class TestSetLiveConstraintsLine1087:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct_low = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
-            target_value=100, initial_value=0,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         ct_high = create_constraint(
-            load=load, time=t, end_of_constraint=DATETIME_MAX_UTC,
-            target_value=100, initial_value=0,
+            load=load,
+            time=t,
+            end_of_constraint=DATETIME_MAX_UTC,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct_high.from_user = True
@@ -1770,19 +1892,22 @@ class TestSetLiveConstraintsLine1100:
         load = MinimalTestLoad(name="TestLoad", power=1000.0)
         t = _t(0)
         ct_asap = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             target_value=5000,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             power=1000.0,
         )
         ct_early = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=t + timedelta(minutes=1),
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         ct_after = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=ct_asap.end_of_constraint + timedelta(hours=10),
             target_value=300,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
@@ -1812,7 +1937,8 @@ class TestSetLiveConstraintsLine1173:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct_normal = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(0),
             end_of_constraint=_t(8),
             target_value=100,
@@ -1821,7 +1947,8 @@ class TestSetLiveConstraintsLine1173:
         # ct_late has start=_t(10), end=_t(9).  After sort it follows ct_normal
         # (end=9 > end=8).  Its adjusted start = max(_t(8), _t(10)) = _t(10) >= _t(9).
         ct_late = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             start_of_constraint=_t(10),
             end_of_constraint=_t(9),
             target_value=200,
@@ -1842,16 +1969,20 @@ class TestPushLiveConstraintLines1212_1214:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(0)
         ct1 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         load._constraints = [ct1]
         ct2 = create_constraint(
-            load=load, time=t,
+            load=load,
+            time=t,
             end_of_constraint=_t(2),
-            target_value=100, initial_value=10,
+            target_value=100,
+            initial_value=10,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         assert ct1.score(t) == ct2.score(t)
@@ -1893,30 +2024,38 @@ class TestUpdateLiveConstraintsLine1295:
         load = MinimalTestLoad(name="TestLoad")
         t = _t(1)
         ct0 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=2),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct0.always_end_at_end_of_constraint = False
         ct0.pushed_count = 5
         ct1 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t - timedelta(seconds=1),
-            target_value=10000, initial_value=0,
+            target_value=10000,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         )
         ct1.always_end_at_end_of_constraint = False
         ct2 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(minutes=2),
-            target_value=100, initial_value=100,
+            target_value=100,
+            initial_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         ct3 = create_constraint(
-            load=load, time=_t(0),
+            load=load,
+            time=_t(0),
             end_of_constraint=t + timedelta(hours=50),
-            target_value=100, initial_value=0,
+            target_value=100,
+            initial_value=0,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
         load._constraints = [ct0, ct1, ct2, ct3]

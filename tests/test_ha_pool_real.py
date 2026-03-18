@@ -1,39 +1,32 @@
 """Tests for QSPool class in ha_model/pool.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
+from datetime import time as dt_time
 from unittest.mock import MagicMock
 
-from tests.factories import create_minimal_home_model
-from datetime import time as dt_time
-
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
 )
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-import pytz
-
-from custom_components.quiet_solar.ha_model.pool import QSPool
-from custom_components.quiet_solar.home_model.commands import CMD_ON, CMD_OFF, CMD_IDLE
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_POOL_TEMPERATURE_SENSOR,
-    POOL_TEMP_STEPS,
-    CONF_POOL_WINTER_IDX,
     CONF_POOL_DEFAULT_IDX,
-    SENSOR_CONSTRAINT_SENSOR_POOL,
+    CONF_POOL_TEMPERATURE_SENSOR,
+    CONF_POOL_WINTER_IDX,
     CONF_SWITCH,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
     CONSTRAINT_TYPE_FILLER_AUTO,
+    DATA_HANDLER,
+    DOMAIN,
+    POOL_TEMP_STEPS,
+    SENSOR_CONSTRAINT_SENSOR_POOL,
 )
+from custom_components.quiet_solar.ha_model.pool import QSPool
+from tests.factories import create_minimal_home_model
 
 
 @pytest.fixture
@@ -81,16 +74,14 @@ def pool_device(hass, pool_config_entry, pool_home, pool_data_handler, pool_hass
             CONF_NAME: "Test Pool",
             CONF_SWITCH: "switch.pool_pump",
             CONF_POOL_TEMPERATURE_SENSOR: "sensor.pool_temp",
-        }
+        },
     )
 
 
 class TestQSPoolInit:
     """Test QSPool initialization."""
 
-    def test_init_with_required_params(
-        self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data
-    ):
+    def test_init_with_required_params(self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data):
         """Test initialization with required parameters."""
         device = QSPool(
             hass=hass,
@@ -100,7 +91,7 @@ class TestQSPoolInit:
                 CONF_NAME: "My Pool",
                 CONF_SWITCH: "switch.pool_pump",
                 CONF_POOL_TEMPERATURE_SENSOR: "sensor.pool_temp",
-            }
+            },
         )
 
         assert device.name == "My Pool"
@@ -108,9 +99,7 @@ class TestQSPoolInit:
         assert device.switch_entity == "switch.pool_pump"
         assert device.is_load_time_sensitive is False
 
-    def test_init_creates_pool_steps(
-        self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data
-    ):
+    def test_init_creates_pool_steps(self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data):
         """Test that pool steps are created from POOL_TEMP_STEPS."""
         device = QSPool(
             hass=hass,
@@ -120,7 +109,7 @@ class TestQSPoolInit:
                 CONF_NAME: "My Pool",
                 CONF_SWITCH: "switch.pool_pump",
                 CONF_POOL_TEMPERATURE_SENSOR: "sensor.pool_temp",
-            }
+            },
         )
 
         assert len(device.pool_steps) == len(POOL_TEMP_STEPS)
@@ -128,9 +117,7 @@ class TestQSPoolInit:
             assert device.pool_steps[i][0] == min_temp
             assert device.pool_steps[i][1] == max_temp
 
-    def test_init_with_custom_temp_steps(
-        self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data
-    ):
+    def test_init_with_custom_temp_steps(self, hass, pool_config_entry, pool_home, pool_data_handler, pool_hass_data):
         """Test initialization with custom temperature steps."""
         if len(POOL_TEMP_STEPS) > 0:
             _, max_temp, _ = POOL_TEMP_STEPS[0]
@@ -145,7 +132,7 @@ class TestQSPoolInit:
                     CONF_SWITCH: "switch.pool_pump",
                     CONF_POOL_TEMPERATURE_SENSOR: "sensor.pool_temp",
                     f"water_temp_{max_temp}": custom_hours,
-                }
+                },
             )
 
             assert device.pool_steps[0][2] == custom_hours

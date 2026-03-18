@@ -8,6 +8,7 @@ actual behavior.
 For HA-related tests, use these factories with the real `hass` fixture from
 pytest_homeassistant_custom_component rather than FakeHass.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -15,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytz
-
 from homeassistant.const import CONF_NAME
 
 from custom_components.quiet_solar.const import (
@@ -43,22 +43,18 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    DATA_HANDLER,
-    DOMAIN,
 )
 from custom_components.quiet_solar.home_model.commands import (
-    CMD_AUTO_GREEN_ONLY,
     CMD_ON,
     LoadCommand,
     copy_command,
 )
 from custom_components.quiet_solar.home_model.constraints import (
-    DATETIME_MAX_UTC,
     LoadConstraint,
     MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
 )
-from custom_components.quiet_solar.home_model.load import AbstractDevice, AbstractLoad
+from custom_components.quiet_solar.home_model.load import AbstractLoad
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -279,7 +275,7 @@ def create_state_cmd(
     initial_value: Any = None,
     is_ok_to_set: bool = True,
     command_retries_s: float = 42.0,
-) -> "QSStateCmd":
+) -> QSStateCmd:
     """Create a real QSStateCmd for testing charger state management.
 
     Args:
@@ -332,7 +328,7 @@ def create_minimal_home_model(
     home._loads = []
     home._last_persons_car_allocation = {}
     home.available_amps_for_group = [[max_phase_amps] * 3]
-    home.available_amps_production_for_group= [[max_phase_amps] * 3]
+    home.available_amps_production_for_group = [[max_phase_amps] * 3]
     home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
     home.get_preferred_person_for_car = MagicMock(return_value=None)
 
@@ -438,12 +434,12 @@ def get_default_home_config(
 
 
 async def create_real_car(
-    hass: "HomeAssistant",
-    config_entry: "ConfigEntry",
-    home: "QSHome",
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    home: QSHome,
     name: str = "Test Car",
     **config_overrides,
-) -> "QSCar":
+) -> QSCar:
     """Create a real QSCar instance for HA integration tests.
 
     This factory creates a real QSCar using the actual class, suitable for
@@ -478,12 +474,12 @@ async def create_real_car(
 
 
 async def create_real_charger(
-    hass: "HomeAssistant",
-    config_entry: "ConfigEntry",
-    home: "QSHome",
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    home: QSHome,
     name: str = "Test Charger",
     **config_overrides,
-) -> "QSChargerGeneric":
+) -> QSChargerGeneric:
     """Create a real QSChargerGeneric instance for HA integration tests.
 
     Args:
@@ -524,7 +520,7 @@ def create_charger_group(
     chargers: list[Any] | None = None,
     name: str = "Test Charger Group",
     max_amps: list[float] | None = None,
-) -> "QSChargerGroup":
+) -> QSChargerGroup:
     """Create a real QSChargerGroup for testing group charging logic.
 
     Args:
@@ -608,7 +604,7 @@ def setup_car_charging_scenario(
 def create_inner_state(
     value: Any = None,
     is_ok_to_set_return: bool = True,
-) -> "QSStateCmd":
+) -> QSStateCmd:
     """Create a QSStateCmd for charger internal state testing.
 
     This replaces patterns like:
@@ -839,7 +835,10 @@ class TestDynamicGroupDouble:
         return 0
 
     def update_available_amps_for_group(
-        self, idx: int, amps: list[float | int], add: bool,
+        self,
+        idx: int,
+        amps: list[float | int],
+        add: bool,
     ) -> None:
         """Update both consumption and production budgets."""
         from custom_components.quiet_solar.home_model.home_utils import add_amps, diff_amps

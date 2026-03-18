@@ -1,47 +1,63 @@
 from datetime import datetime
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity, async_generate_entity_id
+from homeassistant.helpers.typing import UNDEFINED
 
-from .ha_model.climate_controller import QSClimateDuration
-from .ha_model.dynamic_group import QSDynamicGroup
-from .ha_model.home import QSHome
+from .const import (
+    DEFAULT_ATTRIBUTION,
+    DOMAIN,
+    ENTITY_ID_FORMAT,
+    MANUFACTURER,
+)
 from .ha_model.battery import QSBattery
 from .ha_model.car import QSCar
-from .ha_model.charger import QSChargerOCPP, QSChargerWallbox, QSChargerGeneric
+from .ha_model.charger import QSChargerGeneric, QSChargerOCPP, QSChargerWallbox
+from .ha_model.climate_controller import QSClimateDuration
+from .ha_model.device import HADeviceMixin
+from .ha_model.dynamic_group import QSDynamicGroup
+from .ha_model.heat_pump import QSHeatPump
+from .ha_model.home import QSHome
 from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
-from .ha_model.heat_pump import QSHeatPump
 from .home_model.load import AbstractDevice
-from .const import (
-    DEFAULT_ATTRIBUTION,
-    DOMAIN,
-    MANUFACTURER, ENTITY_ID_FORMAT, )
-from .ha_model.device import HADeviceMixin
 
-LOAD_TYPE_LIST = [QSHome, QSBattery, QSSolar, QSChargerOCPP, QSChargerWallbox, QSChargerGeneric, QSCar, QSPerson, QSPool, QSOnOffDuration, QSClimateDuration, QSDynamicGroup, QSHeatPump]
-LOAD_TYPE__DICT = {t.conf_type_name:t for t in LOAD_TYPE_LIST}
+LOAD_TYPE_LIST = [
+    QSHome,
+    QSBattery,
+    QSSolar,
+    QSChargerOCPP,
+    QSChargerWallbox,
+    QSChargerGeneric,
+    QSCar,
+    QSPerson,
+    QSPool,
+    QSOnOffDuration,
+    QSClimateDuration,
+    QSDynamicGroup,
+    QSHeatPump,
+]
+LOAD_TYPE__DICT = {t.conf_type_name: t for t in LOAD_TYPE_LIST}
 
 LOAD_NAMES = {
-    QSHome.conf_type_name : "home",
+    QSHome.conf_type_name: "home",
     QSBattery.conf_type_name: "battery",
     QSSolar.conf_type_name: "solar",
     "charger": "charger",
     QSChargerOCPP.conf_type_name: "charger",
     QSChargerWallbox.conf_type_name: "charger",
     QSChargerGeneric.conf_type_name: "charger",
-    QSPerson.conf_type_name : "person",
-    QSCar.conf_type_name : "car",
-    QSPool.conf_type_name:"pool",
+    QSPerson.conf_type_name: "person",
+    QSCar.conf_type_name: "car",
+    QSPool.conf_type_name: "pool",
     QSOnOffDuration.conf_type_name: "on/off",
-    QSClimateDuration.conf_type_name:"climate",
-    QSDynamicGroup.conf_type_name:"group",
-    QSHeatPump.conf_type_name:"heat pump"
+    QSClimateDuration.conf_type_name: "climate",
+    QSDynamicGroup.conf_type_name: "group",
+    QSHeatPump.conf_type_name: "heat pump",
 }
 
 
@@ -72,14 +88,16 @@ class QSBaseEntity(Entity):
 
         if not (self.entity_description.name is UNDEFINED or self.entity_description.name is None):
             self._attr_has_entity_name = False
-        if not (self.entity_description.translation_key is UNDEFINED or self.entity_description.translation_key is None):
+        if not (
+            self.entity_description.translation_key is UNDEFINED or self.entity_description.translation_key is None
+        ):
             self._attr_has_entity_name = True
 
     def _set_availabiltiy(self):
         self._attr_available = True
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
         self._set_availabiltiy()
 
@@ -87,7 +105,8 @@ class QSBaseEntity(Entity):
 # this one is to be used for 'exported" HA entities that are describing a load, and so passthrough control of it
 class QSDeviceEntity(QSBaseEntity):
     """QS entity base class."""
-    device : AbstractDevice
+
+    device: AbstractDevice
 
     def __init__(self, data_handler, device: AbstractDevice, description) -> None:
         """Set up Quiet Solar entity base."""
@@ -97,12 +116,10 @@ class QSDeviceEntity(QSBaseEntity):
             identifiers={(DOMAIN, device.device_id)},
             name=f"{LOAD_NAMES.get(device.device_type, device.device_type)} {device.name}",
             manufacturer=MANUFACTURER,
-            model=device.device_type
+            model=device.device_type,
         )
         self._attr_unique_id = f"{self.device.device_id}-{description.key}"
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass
-        )
+        self.entity_id = async_generate_entity_id(ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass)
 
     @property
     def device_type(self) -> str:
@@ -124,10 +141,7 @@ class QSDeviceEntity(QSBaseEntity):
             self._attr_available = True
 
 
-   # @property
-   # def home(self) -> Home:
-   #     """Return the home this room belongs to."""
-   #     return self.device.device.home
-
-
-
+# @property
+# def home(self) -> Home:
+#     """Return the home this room belongs to."""
+#     return self.device.device.home

@@ -4,38 +4,35 @@ This module provides pytest fixtures following Home Assistant's testing patterns
 using pytest-homeassistant-custom-component for a real HA test harness.
 """
 
-from collections.abc import AsyncGenerator, Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Generator
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from homeassistant.config_entries import ConfigEntry, SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import DOMAIN
 
 from .const import (
-    MOCK_HOME_CONFIG,
-    MOCK_CAR_CONFIG,
-    MOCK_CHARGER_CONFIG,
-    MOCK_PERSON_CONFIG,
     MOCK_BATTERY_CONFIG,
-    MOCK_SOLAR_CONFIG,
-    MOCK_DYNAMIC_GROUP_CONFIG,
-    MOCK_HEAT_PUMP_CONFIG,
-    MOCK_HOME_ENTRY_ID,
-    MOCK_CAR_ENTRY_ID,
-    MOCK_CHARGER_ENTRY_ID,
-    MOCK_PERSON_ENTRY_ID,
     MOCK_BATTERY_ENTRY_ID,
-    MOCK_SOLAR_ENTRY_ID,
+    MOCK_CAR_CONFIG,
+    MOCK_CAR_ENTRY_ID,
+    MOCK_CHARGER_CONFIG,
+    MOCK_CHARGER_ENTRY_ID,
+    MOCK_DYNAMIC_GROUP_CONFIG,
     MOCK_DYNAMIC_GROUP_ENTRY_ID,
+    MOCK_HEAT_PUMP_CONFIG,
     MOCK_HEAT_PUMP_ENTRY_ID,
+    MOCK_HOME_CONFIG,
+    MOCK_HOME_ENTRY_ID,
+    MOCK_PERSON_CONFIG,
+    MOCK_PERSON_ENTRY_ID,
     MOCK_SENSOR_STATES,
+    MOCK_SOLAR_CONFIG,
+    MOCK_SOLAR_ENTRY_ID,
 )
 
 
@@ -227,7 +224,7 @@ async def setup_person_entry(
     hass: HomeAssistant,
     person_config_entry: ConfigEntry,
     setup_home_entry: ConfigEntry,  # Person requires home
-    setup_car_entry: ConfigEntry,   # Person needs cars to be set up
+    setup_car_entry: ConfigEntry,  # Person needs cars to be set up
 ) -> ConfigEntry:
     """Set up the person config entry (requires home and car)."""
     await hass.config_entries.async_setup(person_config_entry.entry_id)

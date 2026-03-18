@@ -3,10 +3,9 @@
 import unittest
 from datetime import datetime, timedelta
 
-import pytest
 import pytz
 
-from custom_components.quiet_solar.ha_model.car import QSCar, CAR_MAX_EFFICIENCY_HISTORY_S
+from custom_components.quiet_solar.ha_model.car import CAR_MAX_EFFICIENCY_HISTORY_S, QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome
 
 
@@ -16,12 +15,7 @@ class TestCarRangeEstimation(unittest.TestCase):
     def setUp(self):
         """Set up test car instance."""
         self.home = QSHome(hass=None, config_entry=None, name="test home")
-        self.car = QSCar(
-            hass=None,
-            home=self.home,
-            config_entry=None,
-            name="test car"
-        )
+        self.car = QSCar(hass=None, home=self.home, config_entry=None, name="test car")
         # Set a battery capacity for efficiency calculations
         self.car.car_battery_capacity = 60000  # 60 kWh in Wh
 
@@ -120,16 +114,16 @@ class TestCarRangeEstimation(unittest.TestCase):
         # First segment: 80% -> 70%, 100km
         seg1 = self.car._efficiency_segments[0]
         self.assertEqual(seg1[0], 100.0)  # delta_km
-        self.assertEqual(seg1[1], 10.0)   # delta_soc
-        self.assertEqual(seg1[2], 80.0)   # from_soc
-        self.assertEqual(seg1[3], 70.0)   # to_soc
+        self.assertEqual(seg1[1], 10.0)  # delta_soc
+        self.assertEqual(seg1[2], 80.0)  # from_soc
+        self.assertEqual(seg1[3], 70.0)  # to_soc
 
         # Second segment: 90% -> 75%, 150km
         seg2 = self.car._efficiency_segments[1]
         self.assertEqual(seg2[0], 150.0)  # delta_km
-        self.assertEqual(seg2[1], 15.0)   # delta_soc
-        self.assertEqual(seg2[2], 90.0)   # from_soc
-        self.assertEqual(seg2[3], 75.0)   # to_soc
+        self.assertEqual(seg2[1], 15.0)  # delta_soc
+        self.assertEqual(seg2[2], 90.0)  # from_soc
+        self.assertEqual(seg2[3], 75.0)  # to_soc
 
     def test_add_soc_odo_value_bad_segment_not_stored(self):
         """Test that segments with bad data (decreasing odometer) are not stored."""
@@ -176,10 +170,10 @@ class TestCarRangeEstimation(unittest.TestCase):
         # Now manually create a second segment with an earlier finish time
         # This simulates historical data being processed
         seg2_finish_time = base_time + timedelta(hours=5)
-        
+
         # Directly append to efficiency segments to test time ordering
         earlier_segment = (50.0, 5.0, 85.0, 80.0, seg2_finish_time)
-        
+
         # The code should handle this by inserting in order
         # Simulate what happens when a segment finishes earlier
         if len(self.car._efficiency_segments) == 0 or seg2_finish_time > self.car._efficiency_segments[-1][4]:
@@ -267,18 +261,20 @@ class TestCarRangeEstimation(unittest.TestCase):
 
         # Check that we have 2 segments
         self.assertEqual(len(self.car._efficiency_segments), 2)
-        
+
         # Verify segment contents
         seg1 = self.car._efficiency_segments[0]
         self.assertEqual(seg1[0], 100.0)  # delta_km
-        self.assertEqual(seg1[1], 10.0)   # delta_soc
-        
+        self.assertEqual(seg1[1], 10.0)  # delta_soc
+
         seg2 = self.car._efficiency_segments[1]
         self.assertAlmostEqual(seg2[0], 240.0, places=1)  # delta_km (10340 - 10100)
-        self.assertAlmostEqual(seg2[1], 20.0, places=1)   # delta_soc (100 - 80)
+        self.assertAlmostEqual(seg2[1], 20.0, places=1)  # delta_soc (100 - 80)
 
         # Estimate range for similar SOC delta - should prefer the closer match
-        estimated_range = self.car.get_car_estimated_range_km(from_soc=10.0, to_soc=0.0, time=time + timedelta(hours=13))
+        estimated_range = self.car.get_car_estimated_range_km(
+            from_soc=10.0, to_soc=0.0, time=time + timedelta(hours=13)
+        )
 
         self.assertIsNotNone(estimated_range)
         # With 10% SOC and segment 1 (10% = 100km), should be ~100km
@@ -351,9 +347,7 @@ class TestCarRangeEstimation(unittest.TestCase):
         self.car.get_car_charge_percent = mock_get_soc
 
         # Add first value
-        result = self.car.car_efficiency_km_per_kwh_sensor_state_getter(
-            self.car.car_efficiency_km_per_kwh_sensor, time
-        )
+        result = self.car.car_efficiency_km_per_kwh_sensor_state_getter(self.car.car_efficiency_km_per_kwh_sensor, time)
 
         # Add second value (should compute efficiency)
         result = self.car.car_efficiency_km_per_kwh_sensor_state_getter(
@@ -438,8 +432,7 @@ class TestCarRangeEstimation(unittest.TestCase):
 
         # Test range estimation - should use most recent segment with best match
         estimated_range = self.car.get_car_estimated_range_km(
-            from_soc=50.0, to_soc=0.0,
-            time=base_time + timedelta(hours=35)
+            from_soc=50.0, to_soc=0.0, time=base_time + timedelta(hours=35)
         )
 
         # Should use second segment (50% delta): 50% = 120km (proportional)
@@ -489,6 +482,5 @@ class TestCarRangeEstimation(unittest.TestCase):
         self.assertEqual(eff_seg[1], 18.0)  # delta_soc (100 - 82)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-

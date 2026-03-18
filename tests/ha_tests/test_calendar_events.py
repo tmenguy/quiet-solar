@@ -7,19 +7,18 @@ This module tests:
 Uses a mock calendar service to properly test the calendar integration.
 """
 
-import pytest
-from datetime import datetime, timedelta
-from typing import Any
 from collections.abc import Callable
+from datetime import datetime, timedelta
 
+import pytest
 import pytz
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
     DATA_HANDLER,
+    DOMAIN,
     FLOATING_PERIOD_S,
 )
 
@@ -29,6 +28,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 # =============================================================================
 # Fixtures for calendar events
 # =============================================================================
+
 
 def _to_local_iso(dt: datetime) -> str:
     """Convert datetime to ISO format string without timezone info.
@@ -107,11 +107,7 @@ async def mock_calendar_service(hass: HomeAssistant, calendar_entity_id: str):
 
     async def mock_get_events(call: ServiceCall) -> ServiceResponse:
         """Mock implementation of calendar.get_events service."""
-        return {
-            calendar_entity_id: {
-                "events": events_to_return
-            }
-        }
+        return {calendar_entity_id: {"events": events_to_return}}
 
     # Register the mock service
     hass.services.async_register(
@@ -135,6 +131,7 @@ async def mock_calendar_service(hass: HomeAssistant, calendar_entity_id: str):
 # =============================================================================
 # Tests for get_next_scheduled_event
 # =============================================================================
+
 
 class TestGetNextScheduledEvent:
     """Tests for the get_next_scheduled_event method."""
@@ -261,14 +258,16 @@ class TestGetNextScheduledEvent:
             },
         )
 
-        start_time, end_time = await home.get_next_scheduled_event(
-            time_now, give_currently_running_event=True
-        )
+        start_time, end_time = await home.get_next_scheduled_event(time_now, give_currently_running_event=True)
 
         assert start_time is not None
         assert end_time is not None
-        expected_start = datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
-        expected_end = datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start = (
+            datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
+        expected_end = (
+            datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         assert start_time == expected_start
         assert end_time == expected_end
 
@@ -304,9 +303,7 @@ class TestGetNextScheduledEvent:
         mock_calendar_service([currently_running_event, future_event])
 
         # With flag=False, should skip running event and return future event
-        start_time, end_time = await home.get_next_scheduled_event(
-            time_now, give_currently_running_event=False
-        )
+        start_time, end_time = await home.get_next_scheduled_event(time_now, give_currently_running_event=False)
 
         assert start_time is not None
         assert end_time is not None
@@ -371,6 +368,7 @@ class TestGetNextScheduledEvent:
 # =============================================================================
 # Tests for get_next_scheduled_events
 # =============================================================================
+
 
 class TestGetNextScheduledEvents:
     """Tests for the get_next_scheduled_events method."""
@@ -476,8 +474,12 @@ class TestGetNextScheduledEvents:
         )
 
         assert len(events) == 1
-        expected_start = datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
-        expected_end = datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start = (
+            datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
+        expected_end = (
+            datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         assert events[0] == (expected_start, expected_end)
 
     async def test_returns_multiple_events_from_service(
@@ -513,11 +515,15 @@ class TestGetNextScheduledEvents:
         expected_end_1 = datetime.fromisoformat(future_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
         assert events[0] == (expected_start_1, expected_end_1)
 
-        expected_start_2 = datetime.fromisoformat(second_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start_2 = (
+            datetime.fromisoformat(second_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         expected_end_2 = datetime.fromisoformat(second_future_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
         assert events[1] == (expected_start_2, expected_end_2)
 
-        expected_start_3 = datetime.fromisoformat(third_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start_3 = (
+            datetime.fromisoformat(third_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         expected_end_3 = datetime.fromisoformat(third_future_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
         assert events[2] == (expected_start_3, expected_end_3)
 
@@ -554,7 +560,9 @@ class TestGetNextScheduledEvents:
         expected_end_1 = datetime.fromisoformat(future_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
         assert events[0] == (expected_start_1, expected_end_1)
 
-        expected_start_2 = datetime.fromisoformat(second_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start_2 = (
+            datetime.fromisoformat(second_future_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         expected_end_2 = datetime.fromisoformat(second_future_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
         assert events[1] == (expected_start_2, expected_end_2)
 
@@ -581,9 +589,7 @@ class TestGetNextScheduledEvents:
         # Service returns running event and future event
         mock_calendar_service([currently_running_event, future_event])
 
-        events = await home.get_next_scheduled_events(
-            time_now, give_currently_running_event=False
-        )
+        events = await home.get_next_scheduled_events(time_now, give_currently_running_event=False)
 
         # Should only return the future event
         assert len(events) == 1
@@ -614,14 +620,16 @@ class TestGetNextScheduledEvents:
         # Service returns running event and future event
         mock_calendar_service([currently_running_event, future_event])
 
-        events = await home.get_next_scheduled_events(
-            time_now, give_currently_running_event=True
-        )
+        events = await home.get_next_scheduled_events(time_now, give_currently_running_event=True)
 
         # Should return both events
         assert len(events) == 2
-        expected_start_1 = datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
-        expected_end_1 = datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        expected_start_1 = (
+            datetime.fromisoformat(currently_running_event["start"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
+        expected_end_1 = (
+            datetime.fromisoformat(currently_running_event["end"]).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        )
         assert events[0] == (expected_start_1, expected_end_1)
 
     async def test_excludes_past_events(

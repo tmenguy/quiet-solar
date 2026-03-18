@@ -1,20 +1,15 @@
 """Tests for ha_model/climate_controller.py - Climate device functionality."""
+
 from __future__ import annotations
 
-from datetime import datetime
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-import pytz
-
-from custom_components.quiet_solar.ha_model.climate_controller import get_hvac_modes
-from custom_components.quiet_solar.home_model.commands import CMD_ON, CMD_OFF
 from custom_components.quiet_solar.const import (
-    CONF_CLIMATE_HVAC_MODE_ON,
-    CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_CLIMATE,
-    SENSOR_CONSTRAINT_SENSOR_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_CLIMATE_HVAC_MODE_ON,
 )
+from custom_components.quiet_solar.ha_model.climate_controller import get_hvac_modes
 
 
 def test_get_hvac_modes():
@@ -71,7 +66,7 @@ def test_climate_duration_init():
             CONF_CLIMATE: "climate.living_room",
             CONF_CLIMATE_HVAC_MODE_ON: "heat",
             CONF_CLIMATE_HVAC_MODE_OFF: "off",
-        }
+        },
     )
 
     assert climate.name == "Living Room"
@@ -137,10 +132,12 @@ def test_climate_default_hvac_modes():
 
 def test_climate_custom_hvac_modes():
     """Test custom HVAC mode values."""
-    climate = FakeClimateDuration(**{
-        CONF_CLIMATE_HVAC_MODE_ON: "cool",
-        CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
-    })
+    climate = FakeClimateDuration(
+        **{
+            CONF_CLIMATE_HVAC_MODE_ON: "cool",
+            CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
+        }
+    )
 
     assert climate._state_on == "cool"
     assert climate._state_off == "fan_only"

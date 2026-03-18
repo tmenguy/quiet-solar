@@ -1,38 +1,36 @@
 """Tests for the dashboard module."""
+
 from __future__ import annotations
 
 import os
 import tempfile
 from typing import Any
-from unittest.mock import MagicMock, AsyncMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.ui.dashboard import (
-    generate_dashboard_resource_qs_tag,
-    generate_dashboard_resource_namespace,
-    _get_resource_handler,
-    _get_resource_handler_from_hass,
-    _register_panel,
-    update_resource,
-    generate_dashboard_yaml,
-    _async_copy_and_register_resources,
-    async_restore_dashboards_and_update_resources,
-    async_unregister_dashboards,
-    async_auto_generate_if_first_install,
-    async_update_resources,
-    _async_register_or_update_dashboard,
-    _async_save_dashboard_tracking,
-    _async_load_tracking,
-    ALL_DASHBOARDS,
     DASHBOARD_CUSTOM,
     DASHBOARD_STANDARD,
     QS_DASHBOARDS_STORAGE_KEY,
     QS_DASHBOARDS_STORAGE_VERSION,
-    LOVELACE_DATA,
+    _async_copy_and_register_resources,
+    _async_register_or_update_dashboard,
+    _async_save_dashboard_tracking,
+    _get_resource_handler,
+    _get_resource_handler_from_hass,
+    _register_panel,
+    async_auto_generate_if_first_install,
+    async_restore_dashboards_and_update_resources,
+    async_unregister_dashboards,
+    async_update_resources,
+    generate_dashboard_resource_namespace,
+    generate_dashboard_resource_qs_tag,
+    generate_dashboard_yaml,
+    update_resource,
 )
+from tests.factories import create_minimal_home_model
 
 
 class MockResourceStorageCollection:
@@ -113,9 +111,7 @@ def create_mock_hass(config_dir: str | None = None) -> MagicMock:
 
     config = MagicMock()
     config_dir = config_dir or tempfile.mkdtemp()
-    config.path = MagicMock(
-        side_effect=lambda *args: os.path.join(config_dir, *args) if args else config_dir
-    )
+    config.path = MagicMock(side_effect=lambda *args: os.path.join(config_dir, *args) if args else config_dir)
     hass.config = config
 
     # Support async_add_executor_job: just runs the function synchronously
@@ -149,12 +145,13 @@ def test_generate_dashboard_resource_qs_tag_is_numeric():
 def test_generate_dashboard_resource_qs_tag_changes_over_time():
     """Test that qs_tag changes between calls (with time mocking)."""
     import time
+
     mock_home = create_minimal_home_model()
 
-    with patch.object(time, 'time', return_value=1000):
+    with patch.object(time, "time", return_value=1000):
         tag1 = generate_dashboard_resource_qs_tag(mock_home)
 
-    with patch.object(time, 'time', return_value=2000):
+    with patch.object(time, "time", return_value=2000):
         tag2 = generate_dashboard_resource_qs_tag(mock_home)
 
     assert tag1 == "1000"
@@ -209,7 +206,7 @@ def test_get_resource_handler_no_resources_in_lovelace():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -224,7 +221,7 @@ def test_get_resource_handler_no_resources_in_lovelace_new_ha():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": mock_lovelace}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=True)
         result = _get_resource_handler(mock_home)
 
@@ -239,7 +236,7 @@ def test_get_resource_handler_yaml_mode_no_store():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -253,7 +250,7 @@ def test_get_resource_handler_yaml_mode_no_store_attr():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -269,7 +266,7 @@ def test_get_resource_handler_wrong_store_key():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -285,7 +282,7 @@ def test_get_resource_handler_wrong_store_version():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -301,7 +298,7 @@ def test_get_resource_handler_success_old_ha_version():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": {"resources": mock_resources}}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=False)
         result = _get_resource_handler(mock_home)
 
@@ -320,7 +317,7 @@ def test_get_resource_handler_success_new_ha_version():
     mock_home = create_minimal_home_model()
     mock_home.hass.data = {"lovelace": mock_lovelace}
 
-    with patch('custom_components.quiet_solar.ui.dashboard.AwesomeVersion') as mock_av:
+    with patch("custom_components.quiet_solar.ui.dashboard.AwesomeVersion") as mock_av:
         mock_av.return_value.__gt__ = MagicMock(return_value=True)
         result = _get_resource_handler(mock_home)
 
@@ -382,9 +379,11 @@ async def test_update_resource_creates_new_resource():
 async def test_update_resource_updates_existing_resource():
     """Test updating an existing resource."""
     mock_home = create_minimal_home_model()
-    resources = MockResourceStorageCollection([
-        {"id": "resource_1", "url": "/local/test?qs_tag=old"},
-    ])
+    resources = MockResourceStorageCollection(
+        [
+            {"id": "resource_1", "url": "/local/test?qs_tag=old"},
+        ]
+    )
 
     await update_resource(mock_home, resources, "/local/test", "/local/test?qs_tag=new")
 
@@ -397,9 +396,11 @@ async def test_update_resource_updates_existing_resource():
 async def test_update_resource_no_update_if_same_url():
     """Test that no update occurs if URL is the same."""
     mock_home = create_minimal_home_model()
-    resources = MockResourceStorageCollection([
-        {"id": "resource_1", "url": "/local/test?qs_tag=123"},
-    ])
+    resources = MockResourceStorageCollection(
+        [
+            {"id": "resource_1", "url": "/local/test?qs_tag=123"},
+        ]
+    )
 
     await update_resource(mock_home, resources, "/local/test", "/local/test?qs_tag=123")
 
@@ -411,10 +412,12 @@ async def test_update_resource_no_update_if_same_url():
 async def test_update_resource_matches_by_prefix():
     """Test that resources are matched by URL prefix."""
     mock_home = create_minimal_home_model()
-    resources = MockResourceStorageCollection([
-        {"id": "resource_1", "url": "/local/other/file.js?tag=1"},
-        {"id": "resource_2", "url": "/local/test/file.js?tag=old"},
-    ])
+    resources = MockResourceStorageCollection(
+        [
+            {"id": "resource_1", "url": "/local/other/file.js?tag=1"},
+            {"id": "resource_2", "url": "/local/test/file.js?tag=old"},
+        ]
+    )
 
     await update_resource(mock_home, resources, "/local/test/file.js", "/local/test/file.js?qs_tag=new")
 
@@ -435,9 +438,7 @@ async def test_copy_resources_creates_destination_dir():
         to_dir = os.path.join(tmp_dir, "dest")
         os.makedirs(from_dir)
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", None
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", None)
 
         assert os.path.exists(to_dir)
 
@@ -454,13 +455,11 @@ async def test_copy_resources_copies_files():
         with open(test_file, "w") as f:
             f.write("console.log('test');")
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", None
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", None)
 
         dest_file = os.path.join(to_dir, "test.js")
         assert os.path.exists(dest_file)
-        with open(dest_file, "r") as f:
+        with open(dest_file) as f:
             assert f.read() == "console.log('test');"
 
 
@@ -477,9 +476,7 @@ async def test_copy_resources_copies_binary_files():
         with open(test_file, "wb") as f:
             f.write(binary_content)
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", None
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", None)
 
         dest_file = os.path.join(to_dir, "test.bin")
         assert os.path.exists(dest_file)
@@ -501,9 +498,7 @@ async def test_copy_resources_recursive_directories():
         with open(os.path.join(subdir, "sub.js"), "w") as f:
             f.write("sub")
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", None
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", None)
 
         assert os.path.exists(os.path.join(to_dir, "root.js"))
         assert os.path.exists(os.path.join(to_dir, "subdir", "sub.js"))
@@ -524,9 +519,7 @@ async def test_copy_resources_registers_resources():
 
         resources = MockResourceStorageCollection()
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", resources
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
 
         assert len(resources.created_items) == 2
 
@@ -544,9 +537,7 @@ async def test_copy_resources_registers_with_qs_tag():
 
         resources = MockResourceStorageCollection()
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "12345", resources
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "12345", resources)
 
         assert len(resources.created_items) == 1
         assert resources.created_items[0]["url"] == "/local/test/test.js?qs_tag=12345"
@@ -563,9 +554,7 @@ async def test_copy_resources_no_register_when_handler_none():
         with open(os.path.join(from_dir, "test.js"), "w") as f:
             f.write("test")
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", None
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", None)
 
         assert os.path.exists(os.path.join(to_dir, "test.js"))
 
@@ -584,9 +573,7 @@ async def test_copy_resources_recursive_namespace():
 
         resources = MockResourceStorageCollection()
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", resources
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
 
         assert len(resources.created_items) == 1
         assert resources.created_items[0]["url"] == "/local/test/cards/card.js?qs_tag=123"
@@ -602,9 +589,7 @@ async def test_copy_resources_empty_directory():
 
         resources = MockResourceStorageCollection()
 
-        await _async_copy_and_register_resources(
-            from_dir, to_dir, "/local/test", "123", resources
-        )
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
 
         assert os.path.exists(to_dir)
         assert len(resources.created_items) == 0
@@ -620,15 +605,15 @@ async def test_register_dashboard_creates_new_panel():
     """Test that a new dashboard panel is created when it doesn't exist."""
     mock_hass, lovelace_data = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._register_panel') as mock_register:
-            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+            ) as mock_store_cls:
                 mock_store = AsyncMock()
                 mock_store_cls.return_value = mock_store
 
-                await _async_register_or_update_dashboard(
-                    mock_hass, DASHBOARD_CUSTOM, {"views": []}
-                )
+                await _async_register_or_update_dashboard(mock_hass, DASHBOARD_CUSTOM, {"views": []})
 
                 mock_register.assert_called_once()
                 mock_store.async_save.assert_called_once_with({"views": []})
@@ -643,18 +628,14 @@ async def test_register_dashboard_updates_existing():
     existing_store = AsyncMock()
     lovelace_data.dashboards["quiet-solar"] = existing_store
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._register_panel') as mock_register:
-            await _async_register_or_update_dashboard(
-                mock_hass, DASHBOARD_CUSTOM, {"views": [{"title": "Updated"}]}
-            )
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+            await _async_register_or_update_dashboard(mock_hass, DASHBOARD_CUSTOM, {"views": [{"title": "Updated"}]})
 
             # Panel should NOT be re-registered
             mock_register.assert_not_called()
             # Content should be saved
-            existing_store.async_save.assert_called_once_with(
-                {"views": [{"title": "Updated"}]}
-            )
+            existing_store.async_save.assert_called_once_with({"views": [{"title": "Updated"}]})
 
 
 @pytest.mark.asyncio
@@ -662,18 +643,18 @@ async def test_register_dashboard_handles_panel_conflict():
     """Test fallback to update=True when panel already exists."""
     mock_hass, lovelace_data = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._register_panel') as mock_register:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
             # First call raises ValueError, second (update=True) succeeds
             mock_register.side_effect = [ValueError("exists"), None]
 
-            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+            ) as mock_store_cls:
                 mock_store = AsyncMock()
                 mock_store_cls.return_value = mock_store
 
-                await _async_register_or_update_dashboard(
-                    mock_hass, DASHBOARD_CUSTOM, {"views": []}
-                )
+                await _async_register_or_update_dashboard(mock_hass, DASHBOARD_CUSTOM, {"views": []})
 
                 assert mock_register.call_count == 2
                 # Second call should have update=True
@@ -686,11 +667,9 @@ async def test_register_dashboard_no_lovelace_data():
     """Test graceful handling when lovelace data is not available."""
     mock_hass, _ = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=None):
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=None):
         # Should not raise
-        await _async_register_or_update_dashboard(
-            mock_hass, DASHBOARD_CUSTOM, {"views": []}
-        )
+        await _async_register_or_update_dashboard(mock_hass, DASHBOARD_CUSTOM, {"views": []})
 
 
 # =============================================================================
@@ -703,7 +682,7 @@ async def test_restore_dashboards_no_lovelace_data():
     """Test that restore does nothing when lovelace is not ready."""
     mock_hass, _ = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=None):
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=None):
         # Should not raise
         await async_restore_dashboards_and_update_resources(mock_hass)
 
@@ -713,9 +692,9 @@ async def test_restore_dashboards_no_tracking_data():
     """Test that restore does nothing when no dashboards were previously generated."""
     mock_hass, lovelace_data = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=None):
-            with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=None):
+            with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
                 await async_restore_dashboards_and_update_resources(mock_hass)
 
                 assert len(lovelace_data.dashboards) == 0
@@ -731,15 +710,19 @@ async def test_restore_dashboards_registers_panels():
         "dashboards": [DASHBOARD_CUSTOM["id"], DASHBOARD_STANDARD["id"]],
     }
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=tracking_data):
-            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_ll_store:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+            ) as mock_ll_store:
                 mock_ll_store.return_value = MagicMock()
 
-                with patch('custom_components.quiet_solar.ui.dashboard._register_panel') as mock_register:
-                    with patch('custom_components.quiet_solar.ui.dashboard.frontend') as mock_frontend:
+                with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+                    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_frontend:
                         mock_frontend.DATA_PANELS = "frontend_panels"
-                        with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
                             await async_restore_dashboards_and_update_resources(mock_hass)
 
                             assert mock_register.call_count == 2
@@ -757,15 +740,19 @@ async def test_restore_dashboards_skips_already_registered():
         "dashboards": [DASHBOARD_CUSTOM["id"], DASHBOARD_STANDARD["id"]],
     }
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=tracking_data):
-            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_ll_store:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+            ) as mock_ll_store:
                 mock_ll_store.return_value = MagicMock()
 
-                with patch('custom_components.quiet_solar.ui.dashboard._register_panel') as mock_register:
-                    with patch('custom_components.quiet_solar.ui.dashboard.frontend') as mock_frontend:
+                with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
+                    with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_frontend:
                         mock_frontend.DATA_PANELS = "frontend_panels"
-                        with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
                             await async_restore_dashboards_and_update_resources(mock_hass)
 
                             # Only the standard dashboard should be registered (custom already exists)
@@ -778,9 +765,11 @@ async def test_restore_always_updates_resources():
     """Test that JS resources are always updated on restore, even without tracking data."""
     mock_hass, lovelace_data = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=None):
-            with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock) as mock_update:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=None):
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+            ) as mock_update:
                 await async_restore_dashboards_and_update_resources(mock_hass)
 
                 mock_update.assert_called_once_with(mock_hass)
@@ -798,8 +787,10 @@ async def test_auto_generate_first_install():
     mock_home = MagicMock()
     mock_home.hass = mock_hass
 
-    with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=None):
-        with patch('custom_components.quiet_solar.ui.dashboard.generate_dashboard_yaml', new_callable=AsyncMock) as mock_gen:
+    with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=None):
+        with patch(
+            "custom_components.quiet_solar.ui.dashboard.generate_dashboard_yaml", new_callable=AsyncMock
+        ) as mock_gen:
             await async_auto_generate_if_first_install(mock_home)
 
             mock_gen.assert_called_once_with(mock_home)
@@ -814,8 +805,10 @@ async def test_auto_generate_skips_if_already_generated():
 
     tracking_data = {"dashboards": [DASHBOARD_CUSTOM["id"]]}
 
-    with patch('custom_components.quiet_solar.ui.dashboard._async_load_tracking', return_value=tracking_data):
-        with patch('custom_components.quiet_solar.ui.dashboard.generate_dashboard_yaml', new_callable=AsyncMock) as mock_gen:
+    with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
+        with patch(
+            "custom_components.quiet_solar.ui.dashboard.generate_dashboard_yaml", new_callable=AsyncMock
+        ) as mock_gen:
             await async_auto_generate_if_first_install(mock_home)
 
             mock_gen.assert_not_called()
@@ -836,9 +829,9 @@ async def test_unregister_dashboards_removes_panels():
     lovelace_data.dashboards["quiet-solar"] = mock_store_1
     lovelace_data.dashboards["quiet-solar-standard"] = mock_store_2
 
-    with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-        with patch('custom_components.quiet_solar.ui.dashboard.frontend') as mock_frontend:
-            with patch('custom_components.quiet_solar.ui.dashboard.Store') as mock_tracking_store_cls:
+    with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+        with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_frontend:
+            with patch("custom_components.quiet_solar.ui.dashboard.Store") as mock_tracking_store_cls:
                 mock_tracking_store = AsyncMock()
                 mock_tracking_store_cls.return_value = mock_tracking_store
 
@@ -873,20 +866,27 @@ async def test_generate_dashboard_yaml_renders_and_saves():
 
         rendered_yaml = "views:\n  - type: sections\n    title: Test"
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             mock_tpl.async_render.return_value = rendered_yaml
             mock_tpl_cls.return_value = mock_tpl
 
-            with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-                with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                    with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock) as mock_save_tracking:
-                            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+            with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+                with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                            new_callable=AsyncMock,
+                        ) as mock_save_tracking:
+                            with patch(
+                                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                            ) as mock_store_cls:
                                 mock_store = AsyncMock()
                                 mock_store_cls.return_value = mock_store
 
-                                with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                                with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                     await generate_dashboard_yaml(mock_home)
 
                                 # Both dashboards should have been saved
@@ -913,18 +913,25 @@ async def test_generate_dashboard_yaml_passes_home_to_template():
             captured_variables.append(variables)
             return "views:\n  - title: test"
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             mock_tpl.async_render.side_effect = capture_render
             mock_tpl_cls.return_value = mock_tpl
 
-            with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-                with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                    with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
-                            with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+            with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+                with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                            new_callable=AsyncMock,
+                        ):
+                            with patch(
+                                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                            ) as mock_store_cls:
                                 mock_store_cls.return_value = AsyncMock()
-                                with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                                with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                     await generate_dashboard_yaml(mock_home)
 
         assert len(captured_variables) == 2
@@ -941,7 +948,7 @@ async def test_generate_dashboard_yaml_handles_template_error():
         mock_hass, lovelace_data = create_mock_hass(tmp_dir)
         mock_home = MockHome(mock_hass)
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             mock_tpl.async_render.side_effect = TemplateError("Test template error")
             mock_tpl_cls.return_value = mock_tpl
@@ -959,7 +966,7 @@ async def test_generate_dashboard_yaml_handles_yaml_parse_error():
         mock_hass, lovelace_data = create_mock_hass(tmp_dir)
         mock_home = MockHome(mock_hass)
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             # Return invalid YAML that will cause a parse error
             mock_tpl.async_render.return_value = ":\n  invalid: :\n  yaml: {[}"
@@ -985,16 +992,24 @@ async def test_generate_dashboard_yaml_skips_non_dict_result():
                 return "just a string"  # Not a dict
             return "views:\n  - title: ok"
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             mock_tpl.async_render.side_effect = render_side_effect
             mock_tpl_cls.return_value = mock_tpl
 
-            with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-                with patch('custom_components.quiet_solar.ui.dashboard._async_register_or_update_dashboard', new_callable=AsyncMock) as mock_register:
-                    with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                        with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                            with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
+            with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+                with patch(
+                    "custom_components.quiet_solar.ui.dashboard._async_register_or_update_dashboard",
+                    new_callable=AsyncMock,
+                ) as mock_register:
+                    with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
+                            with patch(
+                                "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                                new_callable=AsyncMock,
+                            ):
                                 await generate_dashboard_yaml(mock_home)
 
                     # Only the second template (valid dict) should have been registered
@@ -1008,17 +1023,24 @@ async def test_generate_dashboard_yaml_copies_resources():
         mock_hass, lovelace_data = create_mock_hass(tmp_dir)
         mock_home = MockHome(mock_hass)
 
-        with patch('custom_components.quiet_solar.ui.dashboard.Template') as mock_tpl_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard.Template") as mock_tpl_cls:
             mock_tpl = MagicMock()
             mock_tpl.async_render.return_value = "views:\n  - title: test"
             mock_tpl_cls.return_value = mock_tpl
 
-            with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-                with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock) as mock_update_res:
-                    with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+            with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+                with patch(
+                    "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                ) as mock_update_res:
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                        ) as mock_store_cls:
                             mock_store_cls.return_value = AsyncMock()
-                            with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                            with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                 await generate_dashboard_yaml(mock_home)
 
                     mock_update_res.assert_called_once_with(mock_hass)
@@ -1034,15 +1056,13 @@ async def test_save_dashboard_tracking():
     """Test that tracking data is saved correctly."""
     mock_hass, _ = create_mock_hass()
 
-    with patch('custom_components.quiet_solar.ui.dashboard.Store') as mock_store_cls:
+    with patch("custom_components.quiet_solar.ui.dashboard.Store") as mock_store_cls:
         mock_store = AsyncMock()
         mock_store_cls.return_value = mock_store
 
         await _async_save_dashboard_tracking(mock_hass)
 
-        mock_store_cls.assert_called_once_with(
-            mock_hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY
-        )
+        mock_store_cls.assert_called_once_with(mock_hass, QS_DASHBOARDS_STORAGE_VERSION, QS_DASHBOARDS_STORAGE_KEY)
         mock_store.async_save.assert_called_once()
         saved_data = mock_store.async_save.call_args[0][0]
         assert "dashboards" in saved_data
@@ -1057,6 +1077,7 @@ async def test_save_dashboard_tracking():
 
 class MockEntity:
     """Mock entity with entity_id and name."""
+
     def __init__(self, entity_id, name):
         self.entity_id = entity_id
         self.name = name
@@ -1146,7 +1167,6 @@ def create_real_home_for_dashboard(hass, lovelace_data, dashboard_sections=None)
 @pytest.mark.asyncio
 async def test_real_template_rendering_produces_valid_lovelace():
     """Test actual template rendering produces a valid Lovelace config dict."""
-    import yaml
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         mock_hass, lovelace_data = create_mock_hass(tmp_dir)
@@ -1154,11 +1174,16 @@ async def test_real_template_rendering_produces_valid_lovelace():
 
         saved_configs: list[dict[str, Any]] = []
 
-        with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-            with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                    with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+            with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                        ) as mock_store_cls:
                             mock_store = AsyncMock()
 
                             async def capture_save(config):
@@ -1167,7 +1192,7 @@ async def test_real_template_rendering_produces_valid_lovelace():
                             mock_store.async_save.side_effect = capture_save
                             mock_store_cls.return_value = mock_store
 
-                            with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                            with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                 await generate_dashboard_yaml(mock_home)
 
         # Both dashboards should have been saved
@@ -1183,7 +1208,6 @@ async def test_real_template_rendering_produces_valid_lovelace():
 @pytest.mark.asyncio
 async def test_real_template_rendering_contains_devices():
     """Test that rendered dashboard config contains device information."""
-    import yaml
     import json
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1192,11 +1216,16 @@ async def test_real_template_rendering_contains_devices():
 
         saved_configs: list[dict[str, Any]] = []
 
-        with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-            with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                    with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+            with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                        ) as mock_store_cls:
                             mock_store = AsyncMock()
 
                             async def capture_save(config):
@@ -1205,7 +1234,7 @@ async def test_real_template_rendering_contains_devices():
                             mock_store.async_save.side_effect = capture_save
                             mock_store_cls.return_value = mock_store
 
-                            with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                            with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                 await generate_dashboard_yaml(mock_home)
 
         # Check the custom dashboard (first one)
@@ -1231,11 +1260,16 @@ async def test_real_template_rendering_valid_view_structure():
 
         saved_configs: list[dict[str, Any]] = []
 
-        with patch('custom_components.quiet_solar.ui.dashboard._get_lovelace_data', return_value=lovelace_data):
-            with patch('custom_components.quiet_solar.ui.dashboard._get_resource_handler', return_value=None):
-                with patch('custom_components.quiet_solar.ui.dashboard.async_update_resources', new_callable=AsyncMock):
-                    with patch('custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking', new_callable=AsyncMock):
-                        with patch('custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage') as mock_store_cls:
+        with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
+            with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler", return_value=None):
+                with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard._async_save_dashboard_tracking",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                        ) as mock_store_cls:
                             mock_store = AsyncMock()
 
                             async def capture_save(config):
@@ -1244,7 +1278,7 @@ async def test_real_template_rendering_valid_view_structure():
                             mock_store.async_save.side_effect = capture_save
                             mock_store_cls.return_value = mock_store
 
-                            with patch('custom_components.quiet_solar.ui.dashboard._register_panel'):
+                            with patch("custom_components.quiet_solar.ui.dashboard._register_panel"):
                                 await generate_dashboard_yaml(mock_home)
 
         config = saved_configs[0]
@@ -1339,7 +1373,9 @@ async def test_restore_skips_dashboard_not_in_tracking():
                     mock_ll.return_value = MagicMock()
                     with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
                         mock_fe.DATA_PANELS = "frontend_panels"
-                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
                             await async_restore_dashboards_and_update_resources(mock_hass)
 
     # Only quiet-solar should be registered, not quiet-solar-standard
@@ -1368,9 +1404,13 @@ async def test_restore_warns_when_panel_already_exists_in_frontend():
                 # quiet-solar panel already exists in frontend
                 mock_hass.data["frontend_panels"] = {"quiet-solar": MagicMock()}
                 with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
-                    with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_ll:
+                    with patch(
+                        "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+                    ) as mock_ll:
                         mock_ll.return_value = MagicMock()
-                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
                             await async_restore_dashboards_and_update_resources(mock_hass)
 
     # quiet-solar should NOT be in lovelace dashboards (skipped due to panel conflict)
@@ -1396,12 +1436,16 @@ async def test_restore_handles_register_panel_value_error():
 
     with patch("custom_components.quiet_solar.ui.dashboard._get_lovelace_data", return_value=lovelace_data):
         with patch("custom_components.quiet_solar.ui.dashboard._async_load_tracking", return_value=tracking_data):
-            with patch("custom_components.quiet_solar.ui.dashboard._register_panel", side_effect=ValueError("conflict")):
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard._register_panel", side_effect=ValueError("conflict")
+            ):
                 with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_ll:
                     mock_ll.return_value = MagicMock()
                     with patch("custom_components.quiet_solar.ui.dashboard.frontend") as mock_fe:
                         mock_fe.DATA_PANELS = "frontend_panels"
-                        with patch("custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock):
+                        with patch(
+                            "custom_components.quiet_solar.ui.dashboard.async_update_resources", new_callable=AsyncMock
+                        ):
                             # Should not raise
                             await async_restore_dashboards_and_update_resources(mock_hass)
 
@@ -1423,13 +1467,13 @@ async def test_register_dashboard_double_value_error_returns_early():
         with patch("custom_components.quiet_solar.ui.dashboard._register_panel") as mock_register:
             # Both calls raise ValueError
             mock_register.side_effect = ValueError("always fails")
-            with patch("custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage") as mock_store_cls:
+            with patch(
+                "custom_components.quiet_solar.ui.dashboard.lovelace_dashboard.LovelaceStorage"
+            ) as mock_store_cls:
                 mock_store = AsyncMock()
                 mock_store_cls.return_value = mock_store
 
-                await _async_register_or_update_dashboard(
-                    mock_hass, DASHBOARD_CUSTOM, {"views": []}
-                )
+                await _async_register_or_update_dashboard(mock_hass, DASHBOARD_CUSTOM, {"views": []})
 
                 # Both attempts should have been made
                 assert mock_register.call_count == 2
@@ -1464,7 +1508,10 @@ async def test_async_update_resources_success_path():
     with patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock):
         with patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None):
             with patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="99999"):
-                with patch("custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources", new_callable=AsyncMock) as mock_copy:
+                with patch(
+                    "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+                    new_callable=AsyncMock,
+                ) as mock_copy:
                     await async_update_resources(mock_hass)
                     mock_copy.assert_called_once()
 

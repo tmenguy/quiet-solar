@@ -1,57 +1,87 @@
 import copy
 import logging
 import pickle
-from bisect import bisect, bisect_left
+from collections.abc import Mapping
+from datetime import datetime, timedelta
 from enum import StrEnum
 from operator import itemgetter
 from os.path import join
-from typing import Mapping, Any
-from datetime import datetime, timedelta
+from typing import Any
 
 import aiofiles.os
+import numpy as np
+import numpy.typing as npt
 import pytz
-from haversine import haversine, Unit
-
+from haversine import Unit, haversine
 from homeassistant.components.recorder.models import LazyState
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
+from homeassistant.core import Event
+from homeassistant.helpers.event import EventStateChangedData, async_track_state_change_event
 
-from .dynamic_group import QSDynamicGroup
-from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.core import Event, callback as ha_callback
-from homeassistant.helpers.event import EventStateChangedData
-
-from ..const import CONF_HOME_VOLTAGE, CONF_GRID_POWER_SENSOR, CONF_GRID_POWER_SENSOR_INVERTED, \
-    HOME_CONSUMPTION_SENSOR, HOME_NON_CONTROLLED_CONSUMPTION_SENSOR, HOME_AVAILABLE_POWER_SENSOR, DOMAIN, \
-    FLOATING_PERIOD_S, CONF_HOME_START_OFF_PEAK_RANGE_1, \
-    CONF_HOME_END_OFF_PEAK_RANGE_1, CONF_HOME_START_OFF_PEAK_RANGE_2, CONF_HOME_END_OFF_PEAK_RANGE_2, \
-    CONF_HOME_PEAK_PRICE, CONF_HOME_OFF_PEAK_PRICE, QSForecastHomeNonControlledSensors, QSForecastSolarSensors, \
-    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, GRID_CONSUMPTION_SENSOR, DASHBOARD_NUM_SECTION_MAX, \
-    CONF_DASHBOARD_SECTION_NAME, CONF_DASHBOARD_SECTION_ICON, DASHBOARD_DEFAULT_SECTIONS, CONF_TYPE_NAME_QSHome, \
-    MAX_POWER_INFINITE, FORCE_CAR_NO_PERSON_ATTACHED, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, \
-    PERSON_NOTIFY_REASON_CHANGED_CAR, PREFERRED_CAR_ENERGY_THRESHOLD_KWH, \
-    PASS1_PREFERRED_CAR_PENALTY_KWH, FAR_FUTURE_FORECAST_THRESHOLD_S, \
-    CONF_OFF_GRID_ENTITY, CONF_OFF_GRID_STATE_VALUE, CONF_OFF_GRID_INVERTED, \
-    SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID, \
-    SENSOR_CAR_PERSON_FORECAST
+from ..const import (
+    CONF_DASHBOARD_SECTION_ICON,
+    CONF_DASHBOARD_SECTION_NAME,
+    CONF_GRID_POWER_SENSOR,
+    CONF_GRID_POWER_SENSOR_INVERTED,
+    CONF_HOME_END_OFF_PEAK_RANGE_1,
+    CONF_HOME_END_OFF_PEAK_RANGE_2,
+    CONF_HOME_OFF_PEAK_PRICE,
+    CONF_HOME_PEAK_PRICE,
+    CONF_HOME_START_OFF_PEAK_RANGE_1,
+    CONF_HOME_START_OFF_PEAK_RANGE_2,
+    CONF_HOME_VOLTAGE,
+    CONF_OFF_GRID_ENTITY,
+    CONF_OFF_GRID_INVERTED,
+    CONF_OFF_GRID_STATE_VALUE,
+    DASHBOARD_DEFAULT_SECTIONS,
+    DASHBOARD_NUM_SECTION_MAX,
+    DOMAIN,
+    FAR_FUTURE_FORECAST_THRESHOLD_S,
+    FLOATING_PERIOD_S,
+    FORCE_CAR_NO_PERSON_ATTACHED,
+    FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
+    GRID_CONSUMPTION_SENSOR,
+    HOME_AVAILABLE_POWER_SENSOR,
+    HOME_CONSUMPTION_SENSOR,
+    HOME_NON_CONTROLLED_CONSUMPTION_SENSOR,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    MAX_POWER_INFINITE,
+    OFF_GRID_MODE_AUTO,
+    OFF_GRID_MODE_FORCE_OFF_GRID,
+    OFF_GRID_MODE_FORCE_ON_GRID,
+    PASS1_PREFERRED_CAR_PENALTY_KWH,
+    PERSON_NOTIFY_REASON_CHANGED_CAR,
+    PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+    SENSOR_CAR_PERSON_FORECAST,
+    CONF_TYPE_NAME_QSHome,
+    QSForecastHomeNonControlledSensors,
+    QSForecastSolarSensors,
+)
 from ..ha_model.battery import QSBattery
 from ..ha_model.car import QSCar
 from ..ha_model.charger import QSChargerGeneric
-from ..ha_model.person import QSPerson
-from ..ha_model.heat_pump import QSHeatPump
-
 from ..ha_model.device import HADeviceMixin, convert_power_to_w, load_from_history
+from ..ha_model.heat_pump import QSHeatPump
+from ..ha_model.person import QSPerson
 from ..ha_model.solar import QSSolar
-from ..home_model.commands import LoadCommand, CMD_IDLE, CMD_GREEN_CHARGE_AND_DISCHARGE
-from ..home_model.home_utils import get_average_time_series, add_amps, diff_amps, min_amps, hungarian_algorithm, \
-    max_amps
-from ..home_model.load import AbstractLoad, AbstractDevice, get_slots_from_time_series, \
-    extract_name_and_index_from_dashboard_section_option, get_value_from_time_series, PilotedDevice
+from ..home_model.commands import CMD_GREEN_CHARGE_AND_DISCHARGE, CMD_IDLE, LoadCommand
+from ..home_model.home_utils import (
+    add_amps,
+    diff_amps,
+    get_average_time_series,
+    hungarian_algorithm,
+    min_amps,
+)
+from ..home_model.load import (
+    AbstractDevice,
+    AbstractLoad,
+    PilotedDevice,
+    extract_name_and_index_from_dashboard_section_option,
+    get_value_from_time_series,
+)
 from ..home_model.solver import PeriodSolver
-
-import numpy as np
-import numpy.typing as npt
-
 from ..ui.dashboard import generate_dashboard_yaml
+from .dynamic_group import QSDynamicGroup
 
 
 class QSHomeMode(StrEnum):
@@ -65,16 +95,16 @@ class QSHomeMode(StrEnum):
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_SENSOR_HISTORY_S = 60*60*24*7
+MAX_SENSOR_HISTORY_S = 60 * 60 * 24 * 7
 
 POWER_ALIGNMENT_TOLERANCE_S = 120
 
 HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
 HOME_PERSON_CAR_MIN_SEGMENT_S = 30
 HOME_PERSON_CAR_MIN_OVERLAP_S = 30
-HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S = 15*60
+HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S = 15 * 60
 
-HOME_PERSON_CAR_ALLOCATION_CACHE_S = 3*60
+HOME_PERSON_CAR_ALLOCATION_CACHE_S = 3 * 60
 
 HOME_SEGMENT_PRE_DELTA_TIMEDELTA = timedelta(minutes=30)
 
@@ -96,7 +126,13 @@ def get_time_from_state(state: LazyState | None) -> datetime | None:
                 try:
                     time = datetime.fromisoformat(time_updated)
                 except Exception as e:
-                    _LOGGER.error("get_time_from_state: exception changing last_updated %s %s", time_updated, e, exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        "get_time_from_state: exception changing last_updated %s %s",
+                        time_updated,
+                        e,
+                        exc_info=True,
+                        stack_info=True,
+                    )
         elif isinstance(time_updated, datetime):
             time = time_updated
 
@@ -107,8 +143,7 @@ def get_time_from_state(state: LazyState | None) -> datetime | None:
             try:
                 time = datetime.fromisoformat(time)
             except Exception as e:
-                _LOGGER.error("get_time_from_state: exception changing %s %s", time, e, exc_info=True,
-                              stack_info=True)
+                _LOGGER.error("get_time_from_state: exception changing %s %s", time, e, exc_info=True, stack_info=True)
                 return None
 
     if time is None or not isinstance(time, datetime):
@@ -116,8 +151,8 @@ def get_time_from_state(state: LazyState | None) -> datetime | None:
 
     return time
 
-class QSforecastValueSensor:
 
+class QSforecastValueSensor:
     _stored_values: list[tuple[datetime, float]]
 
     @classmethod
@@ -130,7 +165,6 @@ class QSforecastValueSensor:
 
         return probers
 
-
     def __init__(self, name, duration_s, forecast_getter, current_getter=None):
         self._stored_values = []
         self._getter = forecast_getter
@@ -138,18 +172,16 @@ class QSforecastValueSensor:
         self._delta = timedelta(seconds=duration_s)
         self.name = name
 
-
     def push_and_get(self, time: datetime) -> float | None:
 
         if self._delta == timedelta(seconds=0) and self._current_getter is not None:
             # get the current value
             _, value = self._current_getter(time)
         else:
-
             future_time = time + self._delta
             future_time, future_val = self._getter(future_time)
             if future_val is not None:
-                t,v, found, _ = get_value_from_time_series(self._stored_values, future_time)
+                t, v, found, _ = get_value_from_time_series(self._stored_values, future_time)
                 if found is False:
                     self._stored_values.append((future_time, future_val))
 
@@ -161,7 +193,7 @@ class QSforecastValueSensor:
 
             # the list is sorted ... remove all index before idx as we wil never ask again for a time before "time"
             if value is not None and idx > 0 and idx < len(self._stored_values):
-                self._stored_values = self._stored_values[idx - 1:]
+                self._stored_values = self._stored_values[idx - 1 :]
 
         return value
 
@@ -184,12 +216,13 @@ def _segments_weak_sub_on_main_overlap(segments_subs, segments_main, min_overlap
                     seg1 = s_sub
                     seg2 = s_main
                     mx_length = max((seg1[1] - seg1[0]).total_seconds(), (seg2[1] - seg2[0]).total_seconds())
-                    overlap_score = abs((earliest_end - latest_start).total_seconds())/mx_length
+                    overlap_score = abs((earliest_end - latest_start).total_seconds()) / mx_length
                     overlap_segments.append((latest_start, earliest_end, seg1, seg2, overlap_score, duration_overlap))
 
     overlap_segments = sorted(overlap_segments, key=lambda x: x[0])
 
     return overlap_segments
+
 
 def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
     # First pass: identify which seg1 overlaps with which seg2(s)
@@ -220,7 +253,7 @@ def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
                 seg1 = segments_1[i]
                 seg2 = segments_2[j]
                 mx_length = max((seg1[1] - seg1[0]).total_seconds(), (seg2[1] - seg2[0]).total_seconds())
-                overlap_score = abs((earliest_end - latest_start).total_seconds())/mx_length
+                overlap_score = abs((earliest_end - latest_start).total_seconds()) / mx_length
                 overlap_segments.append((latest_start, earliest_end, seg1, seg2, overlap_score, duration_overlap))
 
     overlap_segments = sorted(overlap_segments, key=lambda x: x[0])
@@ -229,7 +262,6 @@ def _segments_strong_overlap(segments_1, segments_2, min_overlap=0):
 
 
 class QSHome(QSDynamicGroup):
-
     conf_type_name = CONF_TYPE_NAME_QSHome
 
     def __init__(self, **kwargs) -> None:
@@ -241,8 +273,7 @@ class QSHome(QSDynamicGroup):
         self._cars: list[QSCar] = []
         self._persons: list = []
         self._heat_pumps: list[QSHeatPump] = []
-        self._all_piloted_devices : list[PilotedDevice] = []
-
+        self._all_piloted_devices: list[PilotedDevice] = []
 
         self._all_devices: list[HADeviceMixin] = []
         self._disabled_devices: list[HADeviceMixin] = []
@@ -250,7 +281,7 @@ class QSHome(QSDynamicGroup):
         self._all_loads: list[AbstractLoad] = []
         self._all_dynamic_groups: list[QSDynamicGroup] = []
         self._name_to_groups: dict[str, QSDynamicGroup] = {}
-        self._name_to_piloted_devices: dict[str,PilotedDevice] = {}
+        self._name_to_piloted_devices: dict[str, PilotedDevice] = {}
 
         self._period: timedelta = timedelta(seconds=FLOATING_PERIOD_S)
         self._commands: list[tuple[AbstractLoad, list[tuple[datetime, LoadCommand]]]] = []
@@ -276,7 +307,7 @@ class QSHome(QSDynamicGroup):
         self._off_grid_inverted: bool = kwargs.pop(CONF_OFF_GRID_INVERTED, False)
 
         self.tariff_start_1 = kwargs.pop(CONF_HOME_START_OFF_PEAK_RANGE_1, None)
-        self.tariff_end_1  = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_1, None)
+        self.tariff_end_1 = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_1, None)
         self.tariff_start_2 = kwargs.pop(CONF_HOME_START_OFF_PEAK_RANGE_2, None)
         self.tariff_end_2 = kwargs.pop(CONF_HOME_END_OFF_PEAK_RANGE_2, None)
         self.price_peak = kwargs.pop(CONF_HOME_PEAK_PRICE, 0.2)
@@ -284,7 +315,6 @@ class QSHome(QSDynamicGroup):
             self.price_peak = 0.2
         self.price_peak = self.price_peak / 1000.0
         self.price_off_peak = kwargs.pop(CONF_HOME_OFF_PEAK_PRICE, 0.0) / 1000.0
-
 
         self.dashboard_sections: list[tuple[str, str]] = []
         num_found_sections = 0
@@ -314,20 +344,18 @@ class QSHome(QSDynamicGroup):
         self.home_consumption_sensor = HOME_CONSUMPTION_SENSOR
         self.grid_consumption_power_sensor = GRID_CONSUMPTION_SENSOR
 
-
-
         self.home_non_controlled_power_forecast_sensor_values = {}
         self.home_solar_forecast_sensor_values = {}
 
         self.home_non_controlled_power_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
             self.get_non_controlled_consumption_from_current_forecast_getter,
             self.get_non_controlled_consumption_best_stored_value_getter,
-            QSForecastHomeNonControlledSensors)
+            QSForecastHomeNonControlledSensors,
+        )
 
         self.home_solar_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
-            self.get_solar_from_current_forecast_getter,
-            None,
-            QSForecastSolarSensors)
+            self.get_solar_from_current_forecast_getter, None, QSForecastSolarSensors
+        )
 
         kwargs["home"] = self
         self.home = self
@@ -347,28 +375,31 @@ class QSHome(QSDynamicGroup):
 
         self._last_active_load_time = None
         if self.grid_active_power_sensor_inverted:
-            self.attach_power_to_probe(self.grid_active_power_sensor,
-                                          transform_fn=lambda x, a: (-x, a))
+            self.attach_power_to_probe(self.grid_active_power_sensor, transform_fn=lambda x, a: (-x, a))
         else:
             self.attach_power_to_probe(self.grid_active_power_sensor)
 
-        self.attach_power_to_probe(self.home_consumption_sensor,
-                                      non_ha_entity_get_state=self.home_consumption_sensor_state_getter)
+        self.attach_power_to_probe(
+            self.home_consumption_sensor, non_ha_entity_get_state=self.home_consumption_sensor_state_getter
+        )
 
-        self.attach_power_to_probe(self.home_available_power_sensor,
-                                      non_ha_entity_get_state=self.home_available_power_sensor_state_getter)
+        self.attach_power_to_probe(
+            self.home_available_power_sensor, non_ha_entity_get_state=self.home_available_power_sensor_state_getter
+        )
 
-        self.attach_power_to_probe(self.grid_consumption_power_sensor,
-                                      non_ha_entity_get_state=self.grid_consumption_power_sensor_state_getter)
+        self.attach_power_to_probe(
+            self.grid_consumption_power_sensor, non_ha_entity_get_state=self.grid_consumption_power_sensor_state_getter
+        )
 
-        self.attach_power_to_probe(self.home_non_controlled_consumption_sensor,
-                                      non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter)
-
+        self.attach_power_to_probe(
+            self.home_non_controlled_consumption_sensor,
+            non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter,
+        )
 
         self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
         # self.register_all_on_change_states()
-        self._last_solve_done  : datetime | None = None
-        self._last_forecast_probe_time  : datetime | None = None
+        self._last_solve_done: datetime | None = None
+        self._last_forecast_probe_time: datetime | None = None
 
         self.add_device(self)
 
@@ -376,10 +407,10 @@ class QSHome(QSDynamicGroup):
 
         self._init_completed = False
 
-        self._switch_to_off_grid_launched : datetime | None = None
+        self._switch_to_off_grid_launched: datetime | None = None
 
-        self._last_persons_car_allocation : dict[str,QSPerson] = {}
-        self._last_persons_car_allocation_time : datetime | None = None
+        self._last_persons_car_allocation: dict[str, QSPerson] = {}
+        self._last_persons_car_allocation_time: datetime | None = None
 
         try:
             # Get the home zone entity
@@ -399,26 +430,26 @@ class QSHome(QSDynamicGroup):
             self.longitude = None
             self.radius = None
 
-
     @property
     def battery(self) -> QSBattery | None:
         """Return the battery device."""
-        if self.home_mode in [QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
-                              QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
-                              ]:
+        if self.home_mode in [
+            QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
+            QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
+        ]:
             return None
         return self.physical_battery
 
     @property
     def solar_plant(self) -> QSSolar | None:
         """Return the solar plant device."""
-        if self.home_mode in [QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
-                              QSHomeMode.HOME_MODE_NO_SOLAR.value,
-                              QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
-                              ]:
+        if self.home_mode in [
+            QSHomeMode.HOME_MODE_NO_SOLAR_NO_BATTERY.value,
+            QSHomeMode.HOME_MODE_NO_SOLAR.value,
+            QSHomeMode.HOME_MODE_CHARGER_ONLY.value,
+        ]:
             return None
         return self.physical_solar_plant
-
 
     async def _compute_mileage_for_period_per_person(self, start: datetime, end: datetime):
 
@@ -429,7 +460,6 @@ class QSHome(QSDynamicGroup):
         car_result = {}
 
         for car in self._cars:
-
             car_positions = None
             car_segments_not_home = None
 
@@ -437,34 +467,50 @@ class QSHome(QSDynamicGroup):
                 continue
 
             for person in self._persons:
-
                 if car.name in person.authorized_cars:
-
                     if car_positions is None:
-                        car_positions = await load_from_history(self.hass, car.car_tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
-                                                                no_attributes=False)
+                        car_positions = await load_from_history(
+                            self.hass,
+                            car.car_tracker,
+                            start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA,
+                            end,
+                            no_attributes=False,
+                        )
 
                     if person_positions_cache.get(person) is None:
-                        person_positions = await load_from_history(self.hass, person.get_tracker_id(), start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
-                                                                   no_attributes=False)
+                        person_positions = await load_from_history(
+                            self.hass,
+                            person.get_tracker_id(),
+                            start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA,
+                            end,
+                            no_attributes=False,
+                        )
                         person_positions_cache[person] = person_positions
                     else:
                         person_positions = person_positions_cache.get(person)
 
                     gps_segments, segments_person_not_home, segments_car_not_home = self.map_location_path(
-                        person_positions, car_positions, start=start, end=end)
+                        person_positions, car_positions, start=start, end=end
+                    )
 
-                    segments_person_not_home = [s for s in segments_person_not_home if
-                                           (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S]
-                    segments_car_not_home = [s for s in segments_car_not_home if
-                                           (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S]
+                    segments_person_not_home = [
+                        s
+                        for s in segments_person_not_home
+                        if (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S
+                    ]
+                    segments_car_not_home = [
+                        s
+                        for s in segments_car_not_home
+                        if (s[1] - s[0]).total_seconds() > HOME_PERSON_CAR_MIN_SEGMENT_S
+                    ]
 
+                    overlap_not_home_segments = _segments_strong_overlap(
+                        segments_person_not_home, segments_car_not_home, min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S
+                    )
 
-                    overlap_not_home_segments = _segments_strong_overlap(segments_person_not_home, segments_car_not_home,
-                                                                         min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
-
-                    overlap_gps_segments = _segments_weak_sub_on_main_overlap(gps_segments, segments_car_not_home,
-                                                                              min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S)
+                    overlap_gps_segments = _segments_weak_sub_on_main_overlap(
+                        gps_segments, segments_car_not_home, min_overlap=HOME_PERSON_CAR_MIN_OVERLAP_S
+                    )
 
                     if person not in person_not_home_cache:
                         person_not_home_cache[person] = segments_person_not_home
@@ -475,26 +521,40 @@ class QSHome(QSDynamicGroup):
                         for seg_start, seg_end in segments_car_not_home:
                             car_segments_not_home[seg_start] = [seg_start, seg_end, {}, False]
 
-                    for s_s, s_e, person_not_home, car_not_home, overlap_score, duration_overlap in overlap_not_home_segments:
+                    for (
+                        s_s,
+                        s_e,
+                        person_not_home,
+                        car_not_home,
+                        overlap_score,
+                        duration_overlap,
+                    ) in overlap_not_home_segments:
                         if car_segments_not_home.get(car_not_home[0]) is not None and overlap_score > 0.0:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
                             if existing.get(person) is None:
-                                existing[person] = [0.0, 0.0, min(person_not_home[0], car_not_home[0]), max(person_not_home[1], car_not_home[1])]
+                                existing[person] = [
+                                    0.0,
+                                    0.0,
+                                    min(person_not_home[0], car_not_home[0]),
+                                    max(person_not_home[1], car_not_home[1]),
+                                ]
                             existing[person][1] += overlap_score
                             existing[person][2] = min(existing[person][2], min(person_not_home[0], car_not_home[0]))
                             existing[person][3] = max(existing[person][3], max(person_not_home[1], car_not_home[1]))
-
 
                     for s_s, s_e, gps_segment, car_not_home, overlap_score, duration_overlap in overlap_gps_segments:
                         if car_segments_not_home.get(car_not_home[0]) is not None and overlap_score > 0.0:
                             existing = car_segments_not_home.get(car_not_home[0])[2]
                             if existing.get(person) is None:
-                                existing[person] = [0.0, 0.0, min(gps_segment[0], car_not_home[0]), max(gps_segment[1], car_not_home[1])]
+                                existing[person] = [
+                                    0.0,
+                                    0.0,
+                                    min(gps_segment[0], car_not_home[0]),
+                                    max(gps_segment[1], car_not_home[1]),
+                                ]
                             existing[person][0] += overlap_score
                             existing[person][2] = min(existing[person][2], min(gps_segment[0], car_not_home[0]))
                             existing[person][3] = max(existing[person][3], max(gps_segment[1], car_not_home[1]))
-
-
 
             if car_segments_not_home is None or len(car_segments_not_home) == 0:
                 continue
@@ -503,11 +563,8 @@ class QSHome(QSDynamicGroup):
             car_segments_not_home = sorted(car_segments_not_home, key=lambda x: x[0])
             car_result[car] = car_segments_not_home
 
-
         for car, car_segments_not_home in car_result.items():
-
             for i, v in enumerate(car_segments_not_home):
-
                 seg_start, seg_end, p_res, treated = v
 
                 if len(p_res) == 0 or treated:
@@ -515,7 +572,7 @@ class QSHome(QSDynamicGroup):
                     car_segments_not_home[i][3] = True
                     continue
 
-                persons_in_overlapping_segments = {k:[0] for k in p_res}
+                persons_in_overlapping_segments = {k: [0] for k in p_res}
 
                 segs = [(car, i)]
 
@@ -535,12 +592,12 @@ class QSHome(QSDynamicGroup):
                             # overlapping segments
                             segs.append((c2, j))
                             for person in p2_res:
-                                persons_in_overlapping_segments.setdefault(person, []).append(len(segs)-1)
+                                persons_in_overlapping_segments.setdefault(person, []).append(len(segs) - 1)
 
                 # compute a score matrix for all persons here
                 num_persons = len(persons_in_overlapping_segments)
                 persons = [(p, ps) for p, ps in persons_in_overlapping_segments.items()]
-                scores = np.zeros(( num_persons, len(segs)), dtype=np.float64)
+                scores = np.zeros((num_persons, len(segs)), dtype=np.float64)
 
                 for pi, (person, seg_indices) in enumerate(persons):
                     for seg_idx in seg_indices:
@@ -553,9 +610,9 @@ class QSHome(QSDynamicGroup):
 
                             score = 0.0
                             if coverage_person_not_home > 0.9 and coverage_person_near_car == 0.0:
-                                score = coverage_person_not_home +  coverage_person_near_car
+                                score = coverage_person_not_home + coverage_person_near_car
                             elif coverage_person_not_home == 0.0 and coverage_person_near_car > 0.0:
-                                score = coverage_person_not_home +  coverage_person_near_car
+                                score = coverage_person_not_home + coverage_person_near_car
                             elif coverage_person_not_home > 0.0 and coverage_person_near_car > 0.0:
                                 score = coverage_person_not_home + coverage_person_near_car
 
@@ -586,7 +643,6 @@ class QSHome(QSDynamicGroup):
                         for si in seg_indices:
                             scores[max_person_idx, si] = 0.0
 
-
                 # in all case we will mark it as treated, it will never be used again in any comparison
                 car_segments_not_home[i][3] = True
                 if found_person_idx is not None:
@@ -594,7 +650,7 @@ class QSHome(QSDynamicGroup):
                     # assign this person to the original segment
                     car_segments_not_home[i][2] = {person: car_segments_not_home[i][2][person]}
 
-                    #remove it from all other overlapping segment from above:
+                    # remove it from all other overlapping segment from above:
                     for si in seg_indices:
                         if si == 0:
                             continue
@@ -604,13 +660,10 @@ class QSHome(QSDynamicGroup):
                     # no person found for that segment
                     car_segments_not_home[i][2] = {}
 
-
         unassigned_segment_per_car = {}
 
         for car, car_segments_not_home in car_result.items():
-
             for i, v in enumerate(car_segments_not_home):
-
                 seg_start, seg_end, p_res, treated = v
 
                 if len(p_res) == 0:
@@ -621,7 +674,9 @@ class QSHome(QSDynamicGroup):
                 # ok we normally do have ONLY ONE assigned person here now
                 for person in p_res:
                     _, _, s_s, s_e = p_res[person]
-                    dist = await car.get_car_mileage_on_period_km(s_s - timedelta(minutes=5), s_e + timedelta(minutes=5))
+                    dist = await car.get_car_mileage_on_period_km(
+                        s_s - timedelta(minutes=5), s_e + timedelta(minutes=5)
+                    )
                     if dist is not None and dist > 0.0:
                         persons_result.setdefault(person, [0.0, None])[0] += dist
                         if persons_result[person][1] is None:
@@ -629,9 +684,7 @@ class QSHome(QSDynamicGroup):
                         else:
                             persons_result[person][1] = min(persons_result[person][1], s_s)
 
-
         for car, unassigned_car_segments in unassigned_segment_per_car.items():
-
             if len(unassigned_car_segments) > 0:
                 # try to assign these unassigned segments to the best matching person: the default one for the car if any
                 default_person = None
@@ -652,7 +705,6 @@ class QSHome(QSDynamicGroup):
                             else:
                                 persons_result[default_person][1] = min(persons_result[default_person][1], seg_start)
 
-
         for person in persons_result:
             segments_person_not_home = person_not_home_cache.get(person)
 
@@ -665,22 +717,36 @@ class QSHome(QSDynamicGroup):
                 if spnh_idx >= len(segments_person_not_home):
                     # all segments after before start
                     _LOGGER.info(
-                        f"_compute_mileage_for_period_per_person: No not home segments after start for person {person.name}, setting start time to None")
-                    if persons_result[person][1] is not None and  persons_result[person][1] <= start:
+                        f"_compute_mileage_for_period_per_person: No not home segments after start for person {person.name}, setting start time to None"
+                    )
+                    if persons_result[person][1] is not None and persons_result[person][1] <= start:
                         persons_result[person][1] = None
                 else:
                     if persons_result[person][1] is None or persons_result[person][1] <= start:
                         persons_result[person][1] = max(start, segments_person_not_home[spnh_idx][0])
                     else:
-                        persons_result[person][1] = max(start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0]))
+                        persons_result[person][1] = max(
+                            start, min(persons_result[person][1], segments_person_not_home[spnh_idx][0])
+                        )
             else:
-                _LOGGER.info(f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None")
+                _LOGGER.info(
+                    f"_compute_mileage_for_period_per_person: No not home segments found for person {person.name}, setting start time to None"
+                )
                 if persons_result[person][1] is not None and persons_result[person][1] <= start:
                     persons_result[person][1] = None
 
         return persons_result
 
-    def map_location_path(self, states_1: list[LazyState], states_2: list[LazyState], start: datetime, end: datetime,small_distance_threshold_m: float = 350) -> tuple[list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+    def map_location_path(
+        self,
+        states_1: list[LazyState],
+        states_2: list[LazyState],
+        start: datetime,
+        end: datetime,
+        small_distance_threshold_m: float = 350,
+    ) -> tuple[
+        list[tuple[datetime, datetime, float]], list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]
+    ]:
         """
         Map two GPS paths based on timestamps.
         Returns a list of tuples: (time, lat1, lon1, lat2, lon2)
@@ -699,18 +765,19 @@ class QSHome(QSDynamicGroup):
         home_bigger_radius_m = min(180.0, small_distance_threshold_m)
 
         num_home = 0
-        for path, state_list, path_not_home in [(path_1, states_1, segments_1_not_home),
-                                                (path_2, states_2, segments_2_not_home)]:
+        for path, state_list, path_not_home in [
+            (path_1, states_1, segments_1_not_home),
+            (path_2, states_2, segments_2_not_home),
+        ]:
             current_not_home_segment: list[None | datetime] = [None, None]
             last_unknown_start = None
             for state in state_list:
                 try:
-
                     time = get_time_from_state(state)
                     attr = state.attributes
 
                     if time is None:
-                       continue
+                        continue
 
                     if time in timings:
                         continue
@@ -733,7 +800,7 @@ class QSHome(QSDynamicGroup):
                         tracker = attr.get("source")
 
                     if lat is not None and lon is not None:
-                        path.append((time, (lat, lon,  tracker)))
+                        path.append((time, (lat, lon, tracker)))
                         timings.add(time)
 
                     if state.state != "home":
@@ -761,11 +828,12 @@ class QSHome(QSDynamicGroup):
 
                     last_unknown_start = None
 
-                except (ValueError, TypeError, KeyError):
-                    _LOGGER.error(f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}", exc_info=True, stack_info=True)
-
-
-
+                except ValueError, TypeError, KeyError:
+                    _LOGGER.error(
+                        f"map_location_path: Error processing state {state.entity_id} with state {state.state} and attributes {state.attributes}",
+                        exc_info=True,
+                        stack_info=True,
+                    )
 
             if current_not_home_segment[0] is not None and end is not None:
                 current_not_home_segment[1] = end
@@ -780,13 +848,14 @@ class QSHome(QSDynamicGroup):
             if self.latitude is not None and self.longitude is not None:
                 dhh = haversine((self.latitude, self.longitude), (home_latitude, home_longitude), unit=Unit.METERS)
                 if dhh > home_bigger_radius_m or (self.radius is not None and dhh > self.radius):
-                    _LOGGER.warning(f"map_location_path: Home point seems to be too far away from zone home, ignoring home position")
+                    _LOGGER.warning(
+                        "map_location_path: Home point seems to be too far away from zone home, ignoring home position"
+                    )
                     home_latitude = self.latitude
                     home_longitude = self.longitude
         else:
             home_latitude = self.latitude
             home_longitude = self.longitude
-
 
         # find all overlapping segment and compute the overlap duration
 
@@ -807,10 +876,10 @@ class QSHome(QSDynamicGroup):
 
         mapped_path = []
         for t in timings:
-            t1, p1, f1, idx1 = get_value_from_time_series(path_1, t) #, interpolate_positions)
+            t1, p1, f1, idx1 = get_value_from_time_series(path_1, t)  # , interpolate_positions)
             if p1 is None:
                 continue
-            t2, p2, f2, idx2 = get_value_from_time_series(path_2, t) #, interpolate_positions)
+            t2, p2, f2, idx2 = get_value_from_time_series(path_2, t)  # , interpolate_positions)
             if p2 is None:
                 continue
 
@@ -829,7 +898,7 @@ class QSHome(QSDynamicGroup):
             tracker_1 = path_1[idx1][1]
             tracker_2 = path_2[idx2][1]
 
-            dist = haversine((p1[0], p1[1]), (p2[0], p2[1]),  unit=Unit.METERS)
+            dist = haversine((p1[0], p1[1]), (p2[0], p2[1]), unit=Unit.METERS)
             mapped_path.append((t, dist, dh1, dh2, tracker_1, tracker_2))
 
         # now find the time segments where distance is small, ie < small_distance_threshold_m
@@ -869,24 +938,22 @@ class QSHome(QSDynamicGroup):
                 # If segments are close in time, merge them
                 if (seg[0] - last_seg[1]).total_seconds() <= HOME_GPS_SEGMENTS_MIN_MERGE_GAP_S:
                     new_end = seg[1]
-                    d1 = (last_seg[1] -  last_seg[0]).total_seconds()
-                    d2 = (seg[1] -  seg[0]).total_seconds()
-                    avg_distance = ((last_seg[2]*d1) + (seg[2]*d2)) / (d1 + d2)
+                    d1 = (last_seg[1] - last_seg[0]).total_seconds()
+                    d2 = (seg[1] - seg[0]).total_seconds()
+                    avg_distance = ((last_seg[2] * d1) + (seg[2] * d2)) / (d1 + d2)
                     merged_segments[-1] = (last_seg[0], new_end, avg_distance)
                 else:
                     merged_segments.append(seg)
 
-
         return merged_segments, segments_1_not_home, segments_2_not_home
 
-    async def async_set_off_grid_mode(self, off_grid:bool, for_init:bool):
+    async def async_set_off_grid_mode(self, off_grid: bool, for_init: bool):
 
         do_reset = self.qs_home_is_off_grid != off_grid
 
         self.qs_home_is_off_grid = off_grid
 
         if do_reset and for_init is False:
-
             time = datetime.now(pytz.UTC)
 
             _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
@@ -903,7 +970,11 @@ class QSHome(QSDynamicGroup):
                     await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
 
                 if self.battery is not None:
-                    await self.battery.launch_command(time=time, command=CMD_GREEN_CHARGE_AND_DISCHARGE, ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode")
+                    await self.battery.launch_command(
+                        time=time,
+                        command=CMD_GREEN_CHARGE_AND_DISCHARGE,
+                        ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode",
+                    )
 
                 # here we should wait for each load to be idle, nothing will happen before all the loads are idle
                 # or ... 3 minutes
@@ -1013,7 +1084,9 @@ class QSHome(QSDynamicGroup):
             if new_state is None:
                 return
             previous_real_off_grid = self.qs_home_real_off_grid
-            self.qs_home_real_off_grid = self._compute_off_grid_from_entity_state(new_state.state, self._off_grid_entity)
+            self.qs_home_real_off_grid = self._compute_off_grid_from_entity_state(
+                new_state.state, self._off_grid_entity
+            )
 
             # Notify all devices only on the on-grid -> off-grid transition
             if self.qs_home_real_off_grid and not previous_real_off_grid:
@@ -1080,7 +1153,6 @@ class QSHome(QSDynamicGroup):
 
         return available_production_w
 
-
     def get_home_max_phase_amps(self) -> float | int:
 
         static_amp = self.dyn_group_max_phase_current_conf
@@ -1103,7 +1175,7 @@ class QSHome(QSDynamicGroup):
         return min(static_amp, available_production_amp)
 
     @property
-    def dyn_group_max_phase_current(self) -> list[float|int]:
+    def dyn_group_max_phase_current(self) -> list[float | int]:
 
         static_amps = super().dyn_group_max_phase_current
 
@@ -1125,13 +1197,12 @@ class QSHome(QSDynamicGroup):
         return dyn_group_max_phase_current
 
     @property
-    def dyn_group_max_phase_current_for_budget(self) -> list[float|int]:
+    def dyn_group_max_phase_current_for_budget(self) -> list[float | int]:
 
         if self.is_off_grid():
             return self.dyn_group_max_production_phase_current_for_budget
 
         return super().dyn_group_max_phase_current_for_budget
-
 
     @property
     def dyn_group_max_production_phase_current_for_budget(self) -> list[float | int]:
@@ -1179,7 +1250,6 @@ class QSHome(QSDynamicGroup):
 
         return found
 
-
     def get_best_tariff(self, time: datetime) -> float:
         if self.price_off_peak == 0:
             return self.price_peak
@@ -1192,25 +1262,32 @@ class QSHome(QSDynamicGroup):
     def force_next_person_allocation_compute_and_set(self):
         self._last_persons_car_allocation_time = None
 
-    def get_non_controlled_consumption_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
+    def get_non_controlled_consumption_from_current_forecast_getter(
+        self, start_time: datetime
+    ) -> tuple[datetime | None, str | float | None]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
-                return self._consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(start_time)
+                return self._consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(
+                    start_time
+                )
         return (None, None)
 
-    def get_non_controlled_consumption_best_stored_value_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
+    def get_non_controlled_consumption_best_stored_value_getter(
+        self, start_time: datetime
+    ) -> tuple[datetime | None, str | float | None]:
         if self._consumption_forecast:
             if self._consumption_forecast.home_non_controlled_consumption:
                 return self._consumption_forecast.home_non_controlled_consumption.get_closest_stored_value(start_time)
         return (None, None)
 
-
     def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
         forecast = self._consumption_forecast.home_non_controlled_consumption.compute_now_forecast(
-                time_now=time,
-                history_in_hours=24, future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1,
-                set_as_current=True)
+            time_now=time,
+            history_in_hours=24,
+            future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1,
+            set_as_current=True,
+        )
 
         return forecast
 
@@ -1222,25 +1299,28 @@ class QSHome(QSDynamicGroup):
 
         return unavoidable_consumption_forecast
 
-    def get_solar_from_current_forecast_getter(self, start_time:datetime) -> tuple[datetime | None, str | float | None]:
+    def get_solar_from_current_forecast_getter(
+        self, start_time: datetime
+    ) -> tuple[datetime | None, str | float | None]:
         if self.solar_plant:
             return self.solar_plant.get_value_from_current_forecast(start_time)
         return (None, None)
 
-    def get_solar_from_current_forecast(self, start_time:datetime, end_time:datetime | None = None) -> list[tuple[datetime | None, float | None]]:
+    def get_solar_from_current_forecast(
+        self, start_time: datetime, end_time: datetime | None = None
+    ) -> list[tuple[datetime | None, float | None]]:
         if self.solar_plant:
             return self.solar_plant.get_forecast(start_time, end_time)
         return []
 
-
-    def _get_today_off_peak_ranges(self, time:datetime) -> list[tuple[datetime, datetime]]:
+    def _get_today_off_peak_ranges(self, time: datetime) -> list[tuple[datetime, datetime]]:
 
         if self.price_off_peak == 0:
             return []
 
         to_prob = [
             (self.tariff_start_1, self.tariff_end_1, self.price_off_peak),
-            (self.tariff_start_2, self.tariff_end_2, self.price_off_peak)
+            (self.tariff_start_2, self.tariff_end_2, self.price_off_peak),
         ]
 
         ranges_off_peak = []
@@ -1254,9 +1334,16 @@ class QSHome(QSDynamicGroup):
             if start == end:
                 continue
 
-
-            start_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {start}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
-            end_utc = datetime.fromisoformat(f"{start_time_local.strftime("%Y-%m-%d")} {end}").replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            start_utc = (
+                datetime.fromisoformat(f"{start_time_local.strftime('%Y-%m-%d')} {start}")
+                .replace(tzinfo=None)
+                .astimezone(tz=pytz.UTC)
+            )
+            end_utc = (
+                datetime.fromisoformat(f"{start_time_local.strftime('%Y-%m-%d')} {end}")
+                .replace(tzinfo=None)
+                .astimezone(tz=pytz.UTC)
+            )
 
             if end_utc < start_utc:
                 end_utc += timedelta(days=1)
@@ -1267,7 +1354,6 @@ class QSHome(QSDynamicGroup):
             ranges_off_peak = sorted(ranges_off_peak, key=lambda x: x[0])
 
         return ranges_off_peak
-
 
     def get_tariff(self, start_time: datetime, end_time: datetime) -> float:
         if self.price_off_peak == 0:
@@ -1284,7 +1370,7 @@ class QSHome(QSDynamicGroup):
                 price_start = self.price_peak
                 break
             if start_time < range_end:
-                price_start =  self.price_off_peak
+                price_start = self.price_off_peak
                 break
 
         price_end = self.price_peak
@@ -1293,13 +1379,12 @@ class QSHome(QSDynamicGroup):
                 price_end = self.price_peak
                 break
             if end_time < range_end:
-                price_end =  self.price_off_peak
+                price_end = self.price_off_peak
                 break
 
         return max(price_start, price_end)
 
-
-    def get_tariffs(self, start_time:datetime, end_time:datetime) -> list[tuple[datetime, float]] | float:
+    def get_tariffs(self, start_time: datetime, end_time: datetime) -> list[tuple[datetime, float]] | float:
 
         if self.is_off_grid():
             return 0.0
@@ -1314,12 +1399,11 @@ class QSHome(QSDynamicGroup):
 
         span = end_time - start_time
         num_day = span.days + 1
-        start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0) # beware it is utc time
+        start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)  # beware it is utc time
         tariffs = []
         curr_start = start_day
         for d in range(num_day):
             for first_start, first_end in ranges_off_peak:
-
                 curr_end = first_start + timedelta(days=d)
 
                 if curr_end > curr_start and curr_end >= start_time:
@@ -1345,7 +1429,7 @@ class QSHome(QSDynamicGroup):
     def get_platforms(self):
         parent = super().get_platforms()
         parent = set(parent)
-        parent.update([ Platform.SENSOR, Platform.SELECT, Platform.BUTTON, Platform.SWITCH ])
+        parent.update([Platform.SENSOR, Platform.SELECT, Platform.BUTTON, Platform.SWITCH])
         return list(parent)
 
     def get_car_by_name(self, name: str) -> QSCar | None:
@@ -1362,38 +1446,43 @@ class QSHome(QSDynamicGroup):
                 return person
         return None
 
-    def get_preferred_person_for_car(self, car:QSCar) -> QSPerson | None:
+    def get_preferred_person_for_car(self, car: QSCar) -> QSPerson | None:
         for person in self._persons:
             preferred_car_name = person.preferred_car
             if preferred_car_name is not None and preferred_car_name == car.name:
                 return person
         return None
 
-    def home_consumption_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
+    def home_consumption_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         if self.home_consumption is None:
             return None
 
         return (time, self.home_consumption, {})
 
-    def home_available_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
+    def home_available_power_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         if self.home_available_power is None:
             return None
 
         return (time, self.home_available_power, {})
 
-    def grid_consumption_power_sensor_state_getter(self, entity_id: str, time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
+    def grid_consumption_power_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         if self.grid_consumption_power is None:
             return None
 
         return (time, self.grid_consumption_power, {})
 
-
-    def home_non_controlled_consumption_sensor_state_getter(self,
-                                                            entity_id: str,
-                                                            time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
+    def home_non_controlled_consumption_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         # Home real consumption : Solar Production - grid_active_power_sensor - battery_charge_discharge_sensor
         # Available Power : grid_active_power_sensor + battery_charge_discharge_sensor
@@ -1408,7 +1497,9 @@ class QSHome(QSDynamicGroup):
         is_battery_dc_coupled = False
         if self.battery is not None:
             is_battery_dc_coupled = self.battery.is_dc_coupled
-            battery_charge_clamped = self.battery.get_sensor_latest_possible_valid_value(self.battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+            battery_charge_clamped = self.battery.get_sensor_latest_possible_valid_value(
+                self.battery.charge_discharge_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time
+            )
 
         if self.solar_plant is None:
             is_battery_dc_coupled = False
@@ -1419,22 +1510,46 @@ class QSHome(QSDynamicGroup):
             if self.solar_plant.solar_inverter_active_power:
                 # this one has the battery inside! ... in case of dc coupled battery: but it is clamped to the max power of the inverter
                 # the system can't ask more than the clamping of the inverter.
-                inverter_output_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+                inverter_output_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(
+                    self.solar_plant.solar_inverter_active_power,
+                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                    time=time,
+                )
 
             if self.solar_plant.solar_inverter_input_active_power:
                 # this one is the TRUE solar production, unclamped. If there is an hybrid charging battery : a part of the battery charge will actually be
                 # because of this excess solar production that will go, not matter what inside the battery.
-                solar_production_not_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(self.solar_plant.solar_inverter_input_active_power, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+                solar_production_not_clamped = self.solar_plant.get_sensor_latest_possible_valid_value(
+                    self.solar_plant.solar_inverter_input_active_power,
+                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                    time=time,
+                )
 
-            if is_battery_dc_coupled and inverter_output_clamped is not None and solar_production_not_clamped is not None and battery_charge_clamped is None:
+            if (
+                is_battery_dc_coupled
+                and inverter_output_clamped is not None
+                and solar_production_not_clamped is not None
+                and battery_charge_clamped is None
+            ):
                 # comparing clamped and not clamped ... but no other way to get battery charge here
-                battery_charge_clamped = self.battery.clamp_charge_power(solar_production_not_clamped - inverter_output_clamped)
+                battery_charge_clamped = self.battery.clamp_charge_power(
+                    solar_production_not_clamped - inverter_output_clamped
+                )
 
             if inverter_output_clamped is None:
-                if is_battery_dc_coupled and solar_production_not_clamped is not None and battery_charge_clamped is not None:
-                    inverter_output_clamped = min(self.solar_plant.solar_max_output_power_value, solar_production_not_clamped - battery_charge_clamped)
+                if (
+                    is_battery_dc_coupled
+                    and solar_production_not_clamped is not None
+                    and battery_charge_clamped is not None
+                ):
+                    inverter_output_clamped = min(
+                        self.solar_plant.solar_max_output_power_value,
+                        solar_production_not_clamped - battery_charge_clamped,
+                    )
                 elif solar_production_not_clamped is not None:
-                    inverter_output_clamped = min(solar_production_not_clamped, self.solar_plant.solar_max_output_power_value)
+                    inverter_output_clamped = min(
+                        solar_production_not_clamped, self.solar_plant.solar_max_output_power_value
+                    )
 
             if solar_production_not_clamped is not None:
                 self.solar_plant.solar_production = solar_production_not_clamped
@@ -1459,13 +1574,15 @@ class QSHome(QSDynamicGroup):
             self.solar_plant.inverter_output_power = inverter_output_clamped
 
         # get grid consumption
-        grid_consumption = self.get_sensor_latest_possible_valid_value(self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time)
+        grid_consumption = self.get_sensor_latest_possible_valid_value(
+            self.grid_active_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time
+        )
 
         home_consumption = None
         if self.accurate_power_sensor is not None:
-            home_consumption = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor,
-                                                                           tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
-                                                                           time=time)
+            home_consumption = self.get_sensor_latest_possible_valid_value(
+                self.accurate_power_sensor, tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time
+            )
             if home_consumption is not None and grid_consumption is None:
                 if is_battery_dc_coupled:
                     grid_consumption = inverter_output_clamped - home_consumption
@@ -1490,8 +1607,8 @@ class QSHome(QSDynamicGroup):
                     if device.qs_enable_device is False:
                         continue
                     p = device.get_device_power_latest_possible_valid_value(
-                        tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
-                        time=time, ignore_auto_load=True)
+                        tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True
+                    )
                     if p is not None:
                         controlled_consumption += p
             piloted_sets = set()
@@ -1503,11 +1620,10 @@ class QSHome(QSDynamicGroup):
 
             for piloted_device in piloted_sets:
                 p = piloted_device.get_device_power_latest_possible_valid_value(
-                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
-                    time=time, ignore_auto_load=True)
+                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True
+                )
                 if p is not None:
                     controlled_consumption += p
-
 
             self.grid_consumption_power = grid_consumption
             self.home_non_controlled_consumption = home_consumption - controlled_consumption
@@ -1520,14 +1636,19 @@ class QSHome(QSDynamicGroup):
 
                 max_available_home_power = MAX_POWER_INFINITE
                 if self.battery is None or is_battery_dc_coupled:
-                    if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
+                    if (
+                        self.solar_plant is not None
+                        and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE
+                    ):
                         if inverter_output_clamped >= self.solar_plant.solar_max_output_power_value:
                             max_available_home_power = 0
                         else:
-                            max_available_home_power = max(0,
-                                                           self.solar_plant.solar_max_output_power_value - inverter_output_clamped)
-                        max_available_home_power = min(max_available_home_power,
-                                                       self.solar_plant.solar_max_output_power_value)
+                            max_available_home_power = max(
+                                0, self.solar_plant.solar_max_output_power_value - inverter_output_clamped
+                            )
+                        max_available_home_power = min(
+                            max_available_home_power, self.solar_plant.solar_max_output_power_value
+                        )
                     else:
                         max_available_home_power = MAX_POWER_INFINITE
                 else:
@@ -1537,11 +1658,22 @@ class QSHome(QSDynamicGroup):
                     elif self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
                         # the inverter and the battery are un coupled so the max available power
                         # will be the sum of the max battery discharge
-                        max_available_home_power = max(0, max_battery_discharge + self.solar_plant.solar_max_output_power_value - inverter_output_clamped)
+                        max_available_home_power = max(
+                            0,
+                            max_battery_discharge
+                            + self.solar_plant.solar_max_output_power_value
+                            - inverter_output_clamped,
+                        )
 
-                if self.home_available_power > (1.05*max_available_home_power): # 5% tolerance
-                     _LOGGER.warning("Home available_power CLAMPED to max available home power: from %.2f to  %.2f, (inverter_output_clamped:%.2f, max_available_home_power:%.2f)", self.home_available_power, max(0.0, 1.05*max_available_home_power), inverter_output_clamped, max_available_home_power )
-                     self.home_available_power = max(0.0, 1.05*max_available_home_power)
+                if self.home_available_power > (1.05 * max_available_home_power):  # 5% tolerance
+                    _LOGGER.warning(
+                        "Home available_power CLAMPED to max available home power: from %.2f to  %.2f, (inverter_output_clamped:%.2f, max_available_home_power:%.2f)",
+                        self.home_available_power,
+                        max(0.0, 1.05 * max_available_home_power),
+                        inverter_output_clamped,
+                        max_available_home_power,
+                    )
+                    self.home_available_power = max(0.0, 1.05 * max_available_home_power)
 
         val = self.home_non_controlled_consumption
 
@@ -1579,8 +1711,13 @@ class QSHome(QSDynamicGroup):
         # check what could really be the max production output...because we could not reach the max inverter output
         # with the current production of the solar plant + battery discharge
         if is_dc_coupled and maximum_solar_production_output > 0.0:
-            if self.solar_plant is not None and float(self.solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output:
-               maximum_production_output = min(maximum_solar_production_output, float(self.solar_plant.solar_production) + max_battery_discharge)
+            if (
+                self.solar_plant is not None
+                and float(self.solar_plant.solar_production) + max_battery_discharge < maximum_solar_production_output
+            ):
+                maximum_production_output = min(
+                    maximum_solar_production_output, float(self.solar_plant.solar_production) + max_battery_discharge
+                )
             else:
                 maximum_production_output = maximum_solar_production_output
         else:
@@ -1588,19 +1725,23 @@ class QSHome(QSDynamicGroup):
 
         return maximum_production_output
 
-    def get_grid_active_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_grid_active_power_values(
+        self, duration_before_s: float, time: datetime
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.grid_active_power_sensor, duration_before_s, time)
 
-    def get_available_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_available_power_values(
+        self, duration_before_s: float, time: datetime
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.home_available_power_sensor, duration_before_s, time)
 
-
-    def get_grid_consumption_power_values(self, duration_before_s: float, time: datetime)-> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_grid_consumption_power_values(
+        self, duration_before_s: float, time: datetime
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         return self.get_state_history_data(self.grid_consumption_power_sensor, duration_before_s, time)
 
     # no need to overcharge anymore now that a home can have an accurate power sensor ... and has always a secondary sensor for hone consumptionconsumption
     # def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
-
 
     def battery_can_discharge(self):
 
@@ -1609,11 +1750,12 @@ class QSHome(QSDynamicGroup):
 
         return self.battery.battery_can_discharge()
 
-    def get_battery_charge_values(self, duration_before_s: float, time: datetime) -> list[tuple[datetime | None, str|float|None, Mapping[str, Any] | None | dict]]:
+    def get_battery_charge_values(
+        self, duration_before_s: float, time: datetime
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         if self.battery is None:
             return []
         return self.battery.get_state_history_data(self.battery.charge_discharge_sensor, duration_before_s, time)
-
 
     async def set_max_discharging_power(self, power: float | None = None, blocking: bool = False):
         if self.battery is not None:
@@ -1642,17 +1784,18 @@ class QSHome(QSDynamicGroup):
                 continue
             load.father_device = None
 
-
         for load in self._all_loads:
             if isinstance(load, QSDynamicGroup):
                 continue
             father = self._name_to_groups.get(load.dynamic_group_name, self)
             if load.father_device == father:
                 # already in the group
-                _LOGGER.warning( f"_set_topology Load {load.name} already in its froup {father.name}")
+                _LOGGER.warning(f"_set_topology Load {load.name} already in its froup {father.name}")
                 continue
             if load.father_device is not None:
-                _LOGGER.warning( f"_set_topology Load {load.name} already in added elsewhere in {load.father_device} we wanted {father.name}")
+                _LOGGER.warning(
+                    f"_set_topology Load {load.name} already in added elsewhere in {load.father_device} we wanted {father.name}"
+                )
                 continue
 
             father._childrens.append(load)
@@ -1696,7 +1839,6 @@ class QSHome(QSDynamicGroup):
             if device not in self._all_piloted_devices:
                 self._all_piloted_devices.append(device)
 
-
         if isinstance(device, AbstractLoad):
             if device not in self._all_loads:
                 self._all_loads.append(device)
@@ -1715,7 +1857,7 @@ class QSHome(QSDynamicGroup):
                 if isinstance(attached_device, AbstractDevice):
                     self.add_device(attached_device)
 
-        #will redo the whole topology each time
+        # will redo the whole topology each time
         self._set_topology()
 
     def remove_device(self, device):
@@ -1735,14 +1877,22 @@ class QSHome(QSDynamicGroup):
             try:
                 self._cars.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove car {device.name} that was not in the list of cars {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove car {device.name} that was not in the list of cars {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
         elif isinstance(device, QSChargerGeneric):
             if device.car is not None:
                 device.detach_car()
             try:
                 self._chargers.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove charger {device.name} that was not in the list of chargers {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove charger {device.name} that was not in the list of chargers {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
         elif isinstance(device, QSSolar):
             self.physical_solar_plant = None
 
@@ -1750,32 +1900,51 @@ class QSHome(QSDynamicGroup):
             try:
                 self._persons.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove person {device.name} that was not in the list of persons {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove person {device.name} that was not in the list of persons {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         if isinstance(device, QSHeatPump):
             try:
                 self._heat_pumps.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove heat pump {device.name} that was not in the list of heat pumps {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove heat pump {device.name} that was not in the list of heat pumps {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         if isinstance(device, PilotedDevice):
             try:
                 self._all_piloted_devices.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove pilted device {device.name} that was not in the list of piloted devices {e}", exc_info=True, stack_info=True)
-
+                _LOGGER.warning(
+                    f"Attempted to remove pilted device {device.name} that was not in the list of piloted devices {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         if isinstance(device, AbstractLoad):
             try:
                 self._all_loads.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove load {device.name} that was not in the list of loads {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove load {device.name} that was not in the list of loads {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         if isinstance(device, QSDynamicGroup):
             try:
                 self._all_dynamic_groups.remove(device)
             except Exception as e:
-                _LOGGER.warning(f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning(
+                    f"Attempted to remove dynamic group {device.name} that was not in the list of dynamic groups {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         if isinstance(device, HADeviceMixin):
             for attached_device in device.get_attached_virtual_devices():
@@ -1783,12 +1952,10 @@ class QSHome(QSDynamicGroup):
 
             try:
                 self._all_devices.remove(device)
-            except Exception as e:
+            except Exception:
                 _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
 
-
-
-        #will redo the whole topology each time
+        # will redo the whole topology each time
         self._set_topology()
 
     def add_disabled_device(self, device):
@@ -1799,7 +1966,11 @@ class QSHome(QSDynamicGroup):
         try:
             self._disabled_devices.remove(device)
         except Exception as e:
-            _LOGGER.warning(f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices {e}", exc_info=True, stack_info=True)
+            _LOGGER.warning(
+                f"Attempted to remove device form disabled list {device.name} that was not in the list of disabled devices {e}",
+                exc_info=True,
+                stack_info=True,
+            )
 
     async def finish_setup(self, time: datetime) -> bool:
         """
@@ -1826,7 +1997,6 @@ class QSHome(QSDynamicGroup):
         if not self._all_loads and not self._disabled_devices:
             return False
 
-
         for load in self._all_loads:
             if load.externally_initialized_constraints is False:
                 return False
@@ -1845,20 +2015,23 @@ class QSHome(QSDynamicGroup):
                 await device.update_states(time)
             except Exception as err:
                 if isinstance(device, AbstractDevice):
-                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True
+                    )
                 else:
-                    _LOGGER.error("Error updating states for unknown element %s %s", err, exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        "Error updating states for unknown element %s %s", err, exc_info=True, stack_info=True
+                    )
 
         self._init_completed = True
         return True
-
 
     async def update_loads_constraints(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
-            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
-            ]:
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value,
+        ]:
             return
 
         if await self.finish_setup(time) is False:
@@ -1867,9 +2040,12 @@ class QSHome(QSDynamicGroup):
 
         # check for active loads
         for load in self._all_loads:
-
             now_local_date = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-            prev_local_date = now_local_date if load.last_check_update is None else load.last_check_update.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            prev_local_date = (
+                now_local_date
+                if load.last_check_update is None
+                else load.last_check_update.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+            )
 
             if prev_local_date.day != now_local_date.day:
                 # we should reset some stuffs
@@ -1878,29 +2054,33 @@ class QSHome(QSDynamicGroup):
 
             if load.qs_enable_device is False:
                 pass
-            elif self._switch_to_off_grid_launched is None: #check for re-entrance
+            elif self._switch_to_off_grid_launched is None:  # check for re-entrance
                 if await load.do_run_check_load_activity_and_constraints(time):
                     self.force_next_solve()
 
             load.last_check_update = time
 
-
     async def _prepare_data_for_dump(self, start, end):
         car_data = []
         for car in self._cars:
-
             car_positions = None
             car_odos = None
 
             if car.car_tracker:
-                car_positions = await load_from_history(self.hass, car.car_tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
-                                                        no_attributes=False)
+                car_positions = await load_from_history(
+                    self.hass, car.car_tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end, no_attributes=False
+                )
             if car_positions is None:
                 car_positions = []
 
             if car.car_odometer_sensor:
-                car_odos = await load_from_history(self.hass, car.car_odometer_sensor, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end,
-                                                   no_attributes=False)
+                car_odos = await load_from_history(
+                    self.hass,
+                    car.car_odometer_sensor,
+                    start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA,
+                    end,
+                    no_attributes=False,
+                )
             if car_odos is None:
                 car_odos = []
 
@@ -1908,21 +2088,20 @@ class QSHome(QSDynamicGroup):
 
         person_data = []
         for person in self._persons:
-
             person_entity_id = person.person_entity_id
             tracker = person.get_tracker_id()
 
-            person_positions = await load_from_history(self.hass, tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end, no_attributes=False)
+            person_positions = await load_from_history(
+                self.hass, tracker, start - HOME_SEGMENT_PRE_DELTA_TIMEDELTA, end, no_attributes=False
+            )
             if person_positions is None:
                 person_positions = []
 
             person_data.append((person_entity_id, person_positions))
 
-        return  [start, end, car_data, person_data]
+        return [start, end, car_data, person_data]
 
-
-    async def dump_person_car_data_for_debug(self, time:datetime, storage_path:str):
-
+    async def dump_person_car_data_for_debug(self, time: datetime, storage_path: str):
 
         local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(time)
         if is_passed_limit is False:
@@ -1931,12 +2110,12 @@ class QSHome(QSDynamicGroup):
         # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
         # we shift to 4am to have mileage from 4am to 4am,
 
-        data_to_save = [] # list of (start, end, [(car_name, car_positions, car_odos)], [(person, person_positions)])
+        data_to_save = []  # list of (start, end, [(car_name, car_positions, car_odos)], [(person, person_positions)])
         min_start = None
         max_end = None
 
         for d in range(0, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS):
-            start = local_day_utc - timedelta(days=d+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+            start = local_day_utc - timedelta(days=d + 1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
             end = local_day_utc - timedelta(days=d) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
 
             if min_start is None or start < min_start:
@@ -1950,30 +2129,27 @@ class QSHome(QSDynamicGroup):
         final_data = {
             "full_range": await self._prepare_data_for_dump(min_start, max_end),
             "per_day": data_to_save,
-            "time":time,
-            "local_day_utc": local_day_utc
+            "time": time,
+            "local_day_utc": local_day_utc,
         }
 
-        file_path = join(storage_path, f"person_and_car.pickle")
+        file_path = join(storage_path, "person_and_car.pickle")
 
         def _pickle_save(file_path, obj):
-            with open(file_path, 'wb') as file:
+            with open(file_path, "wb") as file:
                 pickle.dump(obj, file)
 
-        await self.hass.async_add_executor_job(
-            _pickle_save, file_path, final_data
-        )
-
+        await self.hass.async_add_executor_job(_pickle_save, file_path, final_data)
 
     async def update_forecast_probers(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
-            ]:
+        ]:
             return
 
         prev_time = self._last_forecast_probe_time
-        self._last_forecast_probe_time  = time
+        self._last_forecast_probe_time = time
 
         if await self.finish_setup(time) is False:
             _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
@@ -1993,8 +2169,12 @@ class QSHome(QSDynamicGroup):
             # car  / person forecasts probers
             # to be called at end of day to compute the finished day of cars mileage
 
-            prev_local_day, prev_local_day_shifted, prev_local_day_utc, prev_is_passed_limit = self._compute_person_needed_time_and_date(prev_time)
-            local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(time)
+            prev_local_day, prev_local_day_shifted, prev_local_day_utc, prev_is_passed_limit = (
+                self._compute_person_needed_time_and_date(prev_time)
+            )
+            local_day, local_day_shifted, local_day_utc, is_passed_limit = self._compute_person_needed_time_and_date(
+                time
+            )
 
             # first check the existing values for the persons, if one is empty
             # we should recompute everyone as much as possible
@@ -2015,15 +2195,16 @@ class QSHome(QSDynamicGroup):
                 if local_day_shifted != prev_local_day_shifted:
                     # we changed day, we can compute the previous day
                     await self._compute_and_store_person_car_forecasts(local_day_utc)
-                    _LOGGER.info(f"update_forecast_probers: compute prev day {local_day_shifted}/{prev_local_day_shifted} -> {local_day_utc}")
+                    _LOGGER.info(
+                        f"update_forecast_probers: compute prev day {local_day_shifted}/{prev_local_day_shifted} -> {local_day_utc}"
+                    )
 
-
-
-    def _compute_person_needed_time_and_date(self, time:datetime):
+    def _compute_person_needed_time_and_date(self, time: datetime):
 
         local = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
         local_shifted = local - timedelta(
-            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)  # we shift to 4am to have mileage from 4am to 4am,
+            hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS
+        )  # we shift to 4am to have mileage from 4am to 4am,
         local_day_shifted = datetime(local_shifted.year, local_shifted.month, local_shifted.day, tzinfo=None)
         local_day = datetime(local.year, local.month, local.day, tzinfo=None)
         local_day_utc = local_day.replace(tzinfo=None).astimezone(tz=pytz.UTC)
@@ -2033,8 +2214,6 @@ class QSHome(QSDynamicGroup):
             is_passed_limit = True
 
         return local_day, local_day_shifted, local_day_utc, is_passed_limit
-
-
 
     async def recompute_people_historical_data(self, time: datetime | None = None):
 
@@ -2050,7 +2229,7 @@ class QSHome(QSDynamicGroup):
             delta = 0
         else:
             delta = 1
-        for d in range(delta, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS+delta):
+        for d in range(delta, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS + delta):
             await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
 
         for person in self._persons:
@@ -2059,18 +2238,22 @@ class QSHome(QSDynamicGroup):
 
         _LOGGER.warning("update_forecast_probers: recomputed all persons historical data")
 
-    async def _compute_and_store_person_car_forecasts(self, local_day_utc:datetime, day_shift:int=0):
+    async def _compute_and_store_person_car_forecasts(self, local_day_utc: datetime, day_shift: int = 0):
 
-        start = local_day_utc - timedelta(days=day_shift+1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
+        start = local_day_utc - timedelta(days=day_shift + 1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
         end = local_day_utc - timedelta(days=day_shift) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
 
         persons_mileage = await self._compute_mileage_for_period_per_person(start, end)
 
         for person in persons_mileage:
-            if persons_mileage[person][1] is not None and persons_mileage[person][0] is not None and persons_mileage[person][0] > 0:
-                person.add_to_mileage_history(day=start, mileage=persons_mileage[person][0],
-                                              leave_time=persons_mileage[person][1])
-
+            if (
+                persons_mileage[person][1] is not None
+                and persons_mileage[person][0] is not None
+                and persons_mileage[person][0] > 0
+            ):
+                person.add_to_mileage_history(
+                    day=start, mileage=persons_mileage[person][0], leave_time=persons_mileage[person][1]
+                )
 
     @staticmethod
     def _build_raw_energy_matrix(
@@ -2093,10 +2276,7 @@ class QSHome(QSDynamicGroup):
         far_future_threshold = timedelta(seconds=FAR_FUTURE_FORECAST_THRESHOLD_S)
 
         for person_index, (person, p_leave_time, p_mileage) in enumerate(p_s):
-            is_far_future = (
-                p_leave_time is not None
-                and (p_leave_time - time) > far_future_threshold
-            )
+            is_far_future = p_leave_time is not None and (p_leave_time - time) > far_future_threshold
 
             for p_car in person.get_authorized_cars():
                 car_index = c_name_to_index.get(p_car.name, None)
@@ -2184,7 +2364,9 @@ class QSHome(QSDynamicGroup):
                 total += val
         return total
 
-    async def compute_and_set_best_persons_cars_allocations(self, time: datetime | None=None, force_update=False, do_notify=True) -> dict[str,QSPerson]:
+    async def compute_and_set_best_persons_cars_allocations(
+        self, time: datetime | None = None, force_update=False, do_notify=True
+    ) -> dict[str, QSPerson]:
 
         if time is None:
             time = datetime.now(tz=pytz.UTC)
@@ -2194,11 +2376,11 @@ class QSHome(QSDynamicGroup):
         for car in self._cars:
             initial_car_allocated_persons[car.name] = car.current_forecasted_person
 
-
-        if self._last_persons_car_allocation_time is None or \
-                force_update or \
-                (time - self._last_persons_car_allocation_time).total_seconds() > HOME_PERSON_CAR_ALLOCATION_CACHE_S:
-
+        if (
+            self._last_persons_car_allocation_time is None
+            or force_update
+            or (time - self._last_persons_car_allocation_time).total_seconds() > HOME_PERSON_CAR_ALLOCATION_CACHE_S
+        ):
             self._last_persons_car_allocation_time = time
             self._last_persons_car_allocation = {}
 
@@ -2206,7 +2388,6 @@ class QSHome(QSDynamicGroup):
             covered_persons = set()
 
             for car in self._cars:
-
                 car.current_forecasted_person = None
 
                 if car.user_selected_person_name_for_car is None:
@@ -2222,7 +2403,8 @@ class QSHome(QSDynamicGroup):
                         _LOGGER.warning(
                             "get_best_persons_cars_allocations: clearing stale manual assignment "
                             "Car:%s -> Person:%s (not authorized)",
-                            car.name, p_per.name,
+                            car.name,
+                            p_per.name,
                         )
                         car.user_selected_person_name_for_car = None
                         continue
@@ -2234,7 +2416,6 @@ class QSHome(QSDynamicGroup):
                 # after direct assignement force invited cars to not be assigned
                 if car.car_is_invited:
                     covered_cars.add(car.name)
-
 
             person_forecasts: dict[str, tuple[datetime | None, float | None]] = {}
             for person in self._persons:
@@ -2272,16 +2453,16 @@ class QSHome(QSDynamicGroup):
                 person_names = [p[0].name for p in p_s]
                 car_names = [c.name for c in c_s]
                 for pi, pname in enumerate(person_names):
-                    row_str = ", ".join(
-                        f"{car_names[ci]}={raw_energy[pi, ci]:.1f}"
-                        for ci in range(len(car_names))
-                    )
+                    row_str = ", ".join(f"{car_names[ci]}={raw_energy[pi, ci]:.1f}" for ci in range(len(car_names)))
                     _LOGGER.debug(
                         "get_best_persons_cars_allocations: raw_energy[%s] = [%s]",
-                        pname, row_str,
+                        pname,
+                        row_str,
                     )
 
-                costs_energy = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_KWH)
+                costs_energy = self._finalize_cost_matrix(
+                    raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_KWH
+                )
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 
@@ -2312,9 +2493,9 @@ class QSHome(QSDynamicGroup):
                     # raw_energy == 0.0 means unauthorized pair — skip it
                     if raw_energy[person_index, car_index] == 0.0:
                         _LOGGER.warning(
-                            "get_best_persons_cars_allocations: REJECTING unauthorized assignment "
-                            "Car:%s -> Person:%s",
-                            c_s[car_index].name, p_s[person_index][0].name,
+                            "get_best_persons_cars_allocations: REJECTING unauthorized assignment Car:%s -> Person:%s",
+                            c_s[car_index].name,
+                            p_s[person_index][0].name,
                         )
                         continue
                     car = c_s[car_index]
@@ -2346,9 +2527,9 @@ class QSHome(QSDynamicGroup):
                 car = self.get_car_by_name(car_name)
                 if car is not None and car.current_forecasted_person != person:
                     _LOGGER.info(
-                        "get_best_persons_cars_allocations: cache re-apply: "
-                        "Car:%s -> Person:%s (was %s)",
-                        car_name, person.name,
+                        "get_best_persons_cars_allocations: cache re-apply: Car:%s -> Person:%s (was %s)",
+                        car_name,
+                        person.name,
                         car.current_forecasted_person.name if car.current_forecasted_person else "None",
                     )
                     car.current_forecasted_person = person
@@ -2372,7 +2553,11 @@ class QSHome(QSDynamicGroup):
                 if car.current_forecasted_person.name not in changed_person_names:
                     changed_person_names.add(car.current_forecasted_person.name)
                     persons_that_changed.append(car.current_forecasted_person)
-            elif initial_person is not None and car.current_forecasted_person is not None and initial_person.name != car.current_forecasted_person.name:
+            elif (
+                initial_person is not None
+                and car.current_forecasted_person is not None
+                and initial_person.name != car.current_forecasted_person.name
+            ):
                 if initial_person.name not in changed_person_names:
                     changed_person_names.add(initial_person.name)
                     persons_that_changed.append(initial_person)
@@ -2395,12 +2580,11 @@ class QSHome(QSDynamicGroup):
 
         return self._last_persons_car_allocation
 
-
     async def update_all_states(self, time: datetime):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
-            ]:
+        ]:
             return
 
         if await self.finish_setup(time) is False:
@@ -2418,22 +2602,23 @@ class QSHome(QSDynamicGroup):
                 await device.update_states(time)
             except Exception as err:
                 if isinstance(device, AbstractDevice):
-                    _LOGGER.error(f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        f"Error updating states for device:{device.name} error: {err}", exc_info=True, stack_info=True
+                    )
                 else:
-                    _LOGGER.error("Error updating states for unknown device: %s",  err,
-                                  exc_info=True, stack_info=True)
-
+                    _LOGGER.error("Error updating states for unknown device: %s", err, exc_info=True, stack_info=True)
 
         if await self._consumption_forecast.init_forecasts(time):
             if self._consumption_forecast.home_non_controlled_consumption is not None:
-                if self._consumption_forecast.home_non_controlled_consumption.add_value(time, self.home_non_controlled_consumption):
+                if self._consumption_forecast.home_non_controlled_consumption.add_value(
+                    time, self.home_non_controlled_consumption
+                ):
                     await self._consumption_forecast.home_non_controlled_consumption.save_values()
             if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
                 self._compute_non_controlled_forecast_intl(time)
 
-        #it has its own logic of tiing and caching
+        # it has its own logic of tiing and caching
         await self.compute_and_set_best_persons_cars_allocations(time=time, force_update=False, do_notify=True)
-
 
     async def finish_off_grid_switch(self, time: datetime) -> tuple[bool, bool]:
 
@@ -2456,8 +2641,8 @@ class QSHome(QSDynamicGroup):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
-            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
-            ]:
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value,
+        ]:
             return True
 
         if await self.finish_setup(time) is False:
@@ -2475,19 +2660,24 @@ class QSHome(QSDynamicGroup):
 
         all_ok = True
         for load in all_extended_loads:
-
             try:
                 wait_time, command_acked_or_good = await load.check_commands(time=time)
                 if command_acked_or_good is False:
                     all_ok = False
-                if wait_time > timedelta(seconds=50*(load.running_command_num_relaunch + 1)):
+                if wait_time > timedelta(seconds=50 * (load.running_command_num_relaunch + 1)):
                     if load.running_command_num_relaunch < 6:
                         await load.force_relaunch_command(time)
                     else:
                         # we have an issue with this command ....
-                        _LOGGER.error(f"check_loads_commands: Command for load {load.name} has been relaunched {load.running_command_num_relaunch} times and is still not acked or good, there may be an issue with the device or the command, please check it. Last command was {load.current_command} and wait time is {wait_time}")
+                        _LOGGER.error(
+                            f"check_loads_commands: Command for load {load.name} has been relaunched {load.running_command_num_relaunch} times and is still not acked or good, there may be an issue with the device or the command, please check it. Last command was {load.current_command} and wait time is {wait_time}"
+                        )
             except Exception as err:
-                _LOGGER.error(f"check_loads_commands: Error checking load commands {load.name} {err}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"check_loads_commands: Error checking load commands {load.name} {err}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
         return all_ok
 
@@ -2495,21 +2685,21 @@ class QSHome(QSDynamicGroup):
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
-            QSHomeMode.HOME_MODE_SENSORS_ONLY.value
-            ]:
+            QSHomeMode.HOME_MODE_SENSORS_ONLY.value,
+        ]:
             return
 
         if await self.finish_setup(time) is False:
             _LOGGER.info("update_loads: Home not finished setup, skipping")
             return
 
-        finished_grid_switch, just_switched =  await self.finish_off_grid_switch(time)
+        finished_grid_switch, just_switched = await self.finish_off_grid_switch(time)
         if finished_grid_switch is False:
             _LOGGER.info("update_loads: Off grid switch not finished, skipping")
             return
 
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
-            all_loads  = self._chargers
+            all_loads = self._chargers
         else:
             all_loads = self._all_loads
 
@@ -2525,7 +2715,6 @@ class QSHome(QSDynamicGroup):
 
             do_force_solve = False
             for load in all_loads:
-
                 # check _switch_to_off_grid_launched for re_entrance
                 if load.is_load_active(time) is False or self._switch_to_off_grid_launched is not None:
                     continue
@@ -2534,14 +2723,15 @@ class QSHome(QSDynamicGroup):
                     # need to add this self._update_step_s to add a tolerancy for the mandatory not met constraint, to not
                     # send an unwanted command (see bellow while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
                     # to not accidentaly send an idle command on an unfinished command
-                    if await load.update_live_constraints(time, self._period, 4*self._update_step_s):
+                    if await load.update_live_constraints(time, self._period, 4 * self._update_step_s):
                         do_force_solve = True
                 except Exception as err:
-                    _LOGGER.error(f"Error updating live constraints for load {load.name} {err}", exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        f"Error updating live constraints for load {load.name} {err}", exc_info=True, stack_info=True
+                    )
 
-            if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5*60):
+            if self._last_solve_done is None or (time - self._last_solve_done) > timedelta(seconds=5 * 60):
                 do_force_solve = True
-
 
         active_loads = []
         for load in all_loads:
@@ -2550,8 +2740,9 @@ class QSHome(QSDynamicGroup):
 
         # we may also want to force solve ... if we have less energy than what was expected too ....imply force every 5mn
 
-        if do_force_solve and (active_loads or self.battery is not None) and self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
-
+        if (
+            do_force_solve and (active_loads or self.battery is not None) and self._switch_to_off_grid_launched is None
+        ):  # _switch_to_off_grid_launched for re-entrance
             _LOGGER.info("DO SOLVE")
 
             self._last_solve_done = time
@@ -2565,15 +2756,15 @@ class QSHome(QSDynamicGroup):
 
             end_time = time + self._period
             solver = PeriodSolver(
-                start_time = time,
-                end_time = end_time,
-                tariffs = self.get_tariffs(time, end_time),
-                actionable_loads = active_loads,
-                battery = self.battery,
-                pv_forecast  = pv_forecast,
-                unavoidable_consumption_forecast = unavoidable_consumption_forecast,
-                step_s = self._solver_step_s,
-                max_inverter_dc_to_ac_power=max_inverter_dc_to_ac_power
+                start_time=time,
+                end_time=end_time,
+                tariffs=self.get_tariffs(time, end_time),
+                actionable_loads=active_loads,
+                battery=self.battery,
+                pv_forecast=pv_forecast,
+                unavoidable_consumption_forecast=unavoidable_consumption_forecast,
+                step_s=self._solver_step_s,
+                max_inverter_dc_to_ac_power=max_inverter_dc_to_ac_power,
             )
 
             # need to tweak a bit if there is some available power now for ex (or not) vs what is forecasted here.
@@ -2582,11 +2773,14 @@ class QSHome(QSDynamicGroup):
 
             self._commands, self._battery_commands = solver.solve(is_off_grid=self.is_off_grid())
 
-        if self.battery and self._battery_commands is not None and self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
-
+        if (
+            self.battery and self._battery_commands is not None and self._switch_to_off_grid_launched is None
+        ):  # _switch_to_off_grid_launched for re-entrance
             while len(self._battery_commands) > 0 and self._battery_commands[0][0] < time + self._update_step_s:
                 cmd_time, command = self._battery_commands.pop(0)
-                await self.battery.launch_command(time, command, ctxt=f"launch command battery true launch at {cmd_time}")
+                await self.battery.launch_command(
+                    time, command, ctxt=f"launch command battery true launch at {cmd_time}"
+                )
                 # only launch one at a time for a given load
                 break
 
@@ -2595,41 +2789,49 @@ class QSHome(QSDynamicGroup):
 
         delta_amps = [0, 0, 0]
 
-        if self._switch_to_off_grid_launched is None: #_switch_to_off_grid_launched for re-entrance
-
+        if self._switch_to_off_grid_launched is None:  # _switch_to_off_grid_launched for re-entrance
             for load, commands in self._commands:
-
                 prev_cmd = load.current_command
                 if prev_cmd is None:
                     prev_cmd = CMD_IDLE
 
                 while len(commands) > 0 and commands[0][0] < time + self._update_step_s:
-
                     cmd_time, command = commands.pop(0)
 
                     new_amps = load.get_phase_amps_from_power_for_budgeting(command.power_consign)
                     current_amps = load.get_phase_amps_from_power_for_budgeting(prev_cmd.power_consign)
                     delta_load_amps = diff_amps(new_amps, current_amps)
 
-                    if command.power_consign == 0 or load.father_device.is_delta_current_acceptable(delta_amps=add_amps(delta_amps, delta_load_amps), time=time):
+                    if command.power_consign == 0 or load.father_device.is_delta_current_acceptable(
+                        delta_amps=add_amps(delta_amps, delta_load_amps), time=time
+                    ):
                         # _LOGGER.info(f"---> Set load command {load.name} {command}")
                         await load.launch_command(time, command, ctxt=f"upload_time true launch at {cmd_time}")
                         # only launch one at a time for a given load
                         delta_amps = add_amps(delta_amps, delta_load_amps)
                         break
                     else:
-                        _LOGGER.warning(f"update_loads: ---> FORBID Set load command {load.name} {command} delta_amps {delta_amps} delta_load_amps {delta_load_amps}")
+                        _LOGGER.warning(
+                            f"update_loads: ---> FORBID Set load command {load.name} {command} delta_amps {delta_amps} delta_load_amps {delta_load_amps}"
+                        )
 
                     prev_cmd = command
 
             for load in all_loads:
-                if load.is_load_has_a_command_now_or_coming(time) is False or load.get_current_active_constraint(time) is None or load.is_load_active(time) is False:
+                if (
+                    load.is_load_has_a_command_now_or_coming(time) is False
+                    or load.get_current_active_constraint(time) is None
+                    or load.is_load_active(time) is False
+                ):
                     # set them back to a kind of "idle" state, many times will be "OFF" CMD
                     # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
-                    await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for active, no command loads or not active")
+                    await load.launch_command(
+                        time=time,
+                        command=CMD_IDLE,
+                        ctxt="launch command idle for active, no command loads or not active",
+                    )
 
                 await load.do_probe_state_change(time)
-
 
     async def force_update_all(self, time: datetime = None):
         if time is None:
@@ -2649,7 +2851,6 @@ class QSHome(QSDynamicGroup):
         if self._consumption_forecast:
             await self._consumption_forecast.reset_forecasts(time, light_reset=True)
 
-
     async def dump_for_debug(self):
         storage_path: str = join(self.hass.config.path(), DOMAIN, "debug")
         await aiofiles.os.makedirs(storage_path, exist_ok=True)
@@ -2662,19 +2863,17 @@ class QSHome(QSDynamicGroup):
         if self._consumption_forecast:
             await self._consumption_forecast.dump_for_debug(storage_path)
 
-        debugs = {"now":time}
+        debugs = {"now": time}
 
         await self.dump_person_car_data_for_debug(time, storage_path)
 
         file_path = join(storage_path, "debug_conf.pickle")
 
         def _pickle_save(file_path, obj):
-            with open(file_path, 'wb') as file:
+            with open(file_path, "wb") as file:
                 pickle.dump(obj, file)
 
-        await self.hass.async_add_executor_job(
-            _pickle_save, file_path, debugs
-        )
+        await self.hass.async_add_executor_job(_pickle_save, file_path, debugs)
 
     async def generate_yaml_for_dashboard(self):
         await generate_dashboard_yaml(self)
@@ -2684,29 +2883,31 @@ class QSHome(QSDynamicGroup):
         for piloted_device in self._all_piloted_devices:
             piloted_device.prepare_slots_for_piloted_device_budget(num_slots)
 
+
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
-BUFFER_SIZE_DAYS = 80*7
+BUFFER_SIZE_DAYS = 80 * 7
 # interval in minutes between 2 measures
 NUM_INTERVAL_PER_HOUR = 4
-INTERVALS_MN = 60//NUM_INTERVAL_PER_HOUR # has to be a multiple of 60
-NUM_INTERVALS_PER_DAY = (24*NUM_INTERVAL_PER_HOUR)
+INTERVALS_MN = 60 // NUM_INTERVAL_PER_HOUR  # has to be a multiple of 60
+NUM_INTERVALS_PER_DAY = 24 * NUM_INTERVAL_PER_HOUR
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
-BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS*NUM_INTERVALS_PER_DAY
+BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY
+
 
 def _sanitize_idx(idx):
     # it works for negative values too -2 * 10 => 8
     return idx % BUFFER_SIZE_IN_INTERVALS
 
-class QSHomeConsumptionHistoryAndForecast:
 
-    def __init__(self, home: QSHome | None, storage_path:str=None) -> None:
+class QSHomeConsumptionHistoryAndForecast:
+    def __init__(self, home: QSHome | None, storage_path: str = None) -> None:
         self.home = home
         if home is None:
             self.hass = None
         else:
             self.hass = home.hass
 
-        self.home_non_controlled_consumption : QSSolarHistoryVals | None = None
+        self.home_non_controlled_consumption: QSSolarHistoryVals | None = None
         self._in_reset = False
         if storage_path is None:
             if self.hass is None:
@@ -2718,7 +2919,7 @@ class QSHomeConsumptionHistoryAndForecast:
 
         # ok now go through the various spots
 
-    async def dump_for_debug(self, path:str):
+    async def dump_for_debug(self, path: str):
         if self.home_non_controlled_consumption is not None:
             file_path = join(path, self.home_non_controlled_consumption.file_name)
             await self.home_non_controlled_consumption.save_values(file_path)
@@ -2726,12 +2927,14 @@ class QSHomeConsumptionHistoryAndForecast:
     async def init_forecasts(self, time: datetime):
 
         if self._in_reset is False and self.home_non_controlled_consumption is None and self.home is not None:
-            self.home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+            self.home_non_controlled_consumption = QSSolarHistoryVals(
+                entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self
+            )
             await self.home_non_controlled_consumption.init(time)
 
         return not self._in_reset
 
-    def _combine_stored_forecast_values(self, val1, val2, do_add = True) :
+    def _combine_stored_forecast_values(self, val1, val2, do_add=True):
 
         val1_ok_values = np.asarray(val1[1] != 0, dtype=np.int32)
         val2_ok_values = np.asarray(val2[1] != 0, dtype=np.int32)
@@ -2743,22 +2946,19 @@ class QSHomeConsumptionHistoryAndForecast:
 
         ret = np.zeros_like(val1)
         if do_add:
-            ret[0] = (val1[0] + val2[0])*check_vals
+            ret[0] = (val1[0] + val2[0]) * check_vals
         else:
-            ret[0] = (val1[0] - val2[0])*check_vals
+            ret[0] = (val1[0] - val2[0]) * check_vals
 
-        ret[1] = (val1[1])*check_vals # take days from val1 only, it will be only the common days anyway ...
+        ret[1] = (val1[1]) * check_vals  # take days from val1 only, it will be only the common days anyway ...
 
         return ret
-
 
     async def reset_forecasts(self, time: datetime, light_reset=False):
 
         self._in_reset = True
 
         if light_reset is False:
-
-
             # compute from history all the values that are not yet computed ... from "true HA" sensors, not QS computed ones
 
             # start with home consumption
@@ -2770,7 +2970,9 @@ class QSHomeConsumptionHistoryAndForecast:
             battery_charge = None
             if self.home.battery is not None:
                 if self.home.battery.charge_discharge_sensor:
-                    battery_charge = QSSolarHistoryVals(entity_id=self.home.battery.charge_discharge_sensor, forecast=self)
+                    battery_charge = QSSolarHistoryVals(
+                        entity_id=self.home.battery.charge_discharge_sensor, forecast=self
+                    )
                     s, e = await battery_charge.init(time, for_reset=True)
                     if s is None or e is None:
                         is_one_bad = True
@@ -2782,14 +2984,15 @@ class QSHomeConsumptionHistoryAndForecast:
 
             values_for_debug = {}
 
-
             inverter_output_power = None
             _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
             if is_one_bad is False:
                 if self.home.solar_plant is not None:
                     if self.home.solar_plant.solar_inverter_active_power:
                         # this one has the battery inside!
-                        inverter_output_power =  QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self)
+                        inverter_output_power = QSSolarHistoryVals(
+                            entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self
+                        )
                         s, e = await inverter_output_power.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True
@@ -2800,7 +3003,9 @@ class QSHomeConsumptionHistoryAndForecast:
                                 end = e
                     elif self.home.solar_plant.solar_inverter_input_active_power:
                         # in fact it is input power ... but will reuse it in place
-                        inverter_output_power = QSSolarHistoryVals(entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self)
+                        inverter_output_power = QSSolarHistoryVals(
+                            entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self
+                        )
                         s, e = await inverter_output_power.init(time, for_reset=True)
                         if s is None or e is None:
                             is_one_bad = True
@@ -2811,9 +3016,13 @@ class QSHomeConsumptionHistoryAndForecast:
                                 end = e
 
                         if is_one_bad is False and battery_charge is not None and self.home.battery.is_dc_coupled:
-                            inverter_output_power.values = self._combine_stored_forecast_values(inverter_output_power.values, battery_charge.values, do_add=False)
-                        if self.home.solar_plant.solar_max_output_power_value < 2000000000 : #int 32 limit
-                            inverter_output_power.values[0] = np.minimum(inverter_output_power.values[0], int(self.home.solar_plant.solar_max_output_power_value))
+                            inverter_output_power.values = self._combine_stored_forecast_values(
+                                inverter_output_power.values, battery_charge.values, do_add=False
+                            )
+                        if self.home.solar_plant.solar_max_output_power_value < 2000000000:  # int 32 limit
+                            inverter_output_power.values[0] = np.minimum(
+                                inverter_output_power.values[0], int(self.home.solar_plant.solar_max_output_power_value)
+                            )
 
             if inverter_output_power is not None:
                 values_for_debug["inverter_output_power"] = np.copy(inverter_output_power.values)
@@ -2833,7 +3042,7 @@ class QSHomeConsumptionHistoryAndForecast:
                             end = e
                         if inverter_output_power is None:
                             if self.home.grid_active_power_sensor_inverted is False:
-                                home_consumption.values[0] = (-1)*home_consumption.values[0]
+                                home_consumption.values[0] = (-1) * home_consumption.values[0]
                             # else do nothing, it is already in the right format
                         else:
                             # if self.home.grid_active_power_sensor_inverted is False:
@@ -2844,13 +3053,15 @@ class QSHomeConsumptionHistoryAndForecast:
                             # when not inverted it means grid consumption is negative : when the house consume from teh grid is it negative : so we need to remove it from solar production
                             # if "inverted, simply add it to solar production
                             values_for_debug["grid"] = np.copy(home_consumption.values)
-                            home_consumption.values = self._combine_stored_forecast_values(inverter_output_power.values, home_consumption.values, do_add=self.home.grid_active_power_sensor_inverted)
-
+                            home_consumption.values = self._combine_stored_forecast_values(
+                                inverter_output_power.values,
+                                home_consumption.values,
+                                do_add=self.home.grid_active_power_sensor_inverted,
+                            )
 
             _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")
             if is_one_bad is False and home_consumption is not None:
-
-                #ok we do have the computed home consumption ... now time for the controlled loads
+                # ok we do have the computed home consumption ... now time for the controlled loads
 
                 controlled_power_values = None
                 added_controlled = False
@@ -2886,7 +3097,6 @@ class QSHomeConsumptionHistoryAndForecast:
                         else:
                             ha_best_entity_id = device.accurate_power_sensor
                     else:
-
                         if isinstance(device, AbstractLoad) and device.load_is_auto_to_be_boosted:
                             continue
 
@@ -2922,16 +3132,23 @@ class QSHomeConsumptionHistoryAndForecast:
                         if controlled_power_values is None:
                             controlled_power_values = load_sensor.values
                         else:
-                            controlled_power_values = self._combine_stored_forecast_values(controlled_power_values,load_sensor.values, do_add=True)
+                            controlled_power_values = self._combine_stored_forecast_values(
+                                controlled_power_values, load_sensor.values, do_add=True
+                            )
 
                         added_controlled = True
-                        _LOGGER.info(f"Resetting home consumption 4: is_one_bad {is_one_bad} load {device.name} {ha_best_entity_id}")
+                        _LOGGER.info(
+                            f"Resetting home consumption 4: is_one_bad {is_one_bad} load {device.name} {ha_best_entity_id}"
+                        )
 
-
-                _LOGGER.info(f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}")
+                _LOGGER.info(
+                    f"Resetting home consumption 6: is_one_bad {is_one_bad} added_controlled {added_controlled}"
+                )
                 if is_one_bad is False and added_controlled:
                     values_for_debug["controlled_sum"] = np.copy(controlled_power_values)
-                    home_consumption.values = self._combine_stored_forecast_values(home_consumption.values, controlled_power_values, do_add=False)
+                    home_consumption.values = self._combine_stored_forecast_values(
+                        home_consumption.values, controlled_power_values, do_add=False
+                    )
 
             if is_one_bad is False and home_consumption is not None:
                 _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
@@ -2939,7 +3156,7 @@ class QSHomeConsumptionHistoryAndForecast:
                 # let's first clean it with the proper start and end
                 strt_idx, strt_days = home_consumption.get_index_from_time(strt)
                 end_idx, end_days = home_consumption.get_index_from_time(end)
-                #rolling buffer cleaning
+                # rolling buffer cleaning
                 if strt_idx == end_idx:
                     # equal
                     is_one_bad = True
@@ -2955,13 +3172,16 @@ class QSHomeConsumptionHistoryAndForecast:
 
                     if delta_reset is not None:
                         _LOGGER.info(f"Resetting home consumption 7: start {strt.astimezone()} end {end.astimezone()}")
-                        _LOGGER.info(f"Resetting home consumption 7: RESET: found last good idx {last_good_reset} ({delta_reset} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_reset, home_consumption.values[1][last_good_reset]).astimezone()} ")
+                        _LOGGER.info(
+                            f"Resetting home consumption 7: RESET: found last good idx {last_good_reset} ({delta_reset} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_reset, home_consumption.values[1][last_good_reset]).astimezone()} "
+                        )
 
-                        home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+                        home_non_controlled_consumption = QSSolarHistoryVals(
+                            entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self
+                        )
                         await home_non_controlled_consumption.init(time, for_reset=True)
 
-                        for i in range(30*NUM_INTERVAL_PER_HOUR):
-
+                        for i in range(30 * NUM_INTERVAL_PER_HOUR):
                             idx = _sanitize_idx(last_good_reset - i)
 
                             if home_consumption.values[1][idx] == 0:
@@ -2973,29 +3193,32 @@ class QSHomeConsumptionHistoryAndForecast:
                             loc_time = utc_time.astimezone()
                             val_reset = home_consumption.values[0][idx]
                             val_real = home_non_controlled_consumption.values[0][idx]
-                            _LOGGER.info(f"Resetting home consumption 7: {loc_time} ({idx}/{days}): reset {val_reset} real {val_real}")
+                            _LOGGER.info(
+                                f"Resetting home consumption 7: {loc_time} ({idx}/{days}): reset {val_reset} real {val_real}"
+                            )
                             debug_values = "Resetting home consumption 7:"
                             for k, v in values_for_debug.items():
                                 debug_values += f" {k}={v[0][idx]} "
                             _LOGGER.debug(debug_values)
 
-
-
-
             _LOGGER.info(f"Resetting home consumption 8: is_one_bad {is_one_bad}")
             if is_one_bad is False:
                 # now we do have something to save!
-                home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+                home_non_controlled_consumption = QSSolarHistoryVals(
+                    entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self
+                )
                 home_non_controlled_consumption.values = home_consumption.values
                 await home_non_controlled_consumption.save_values(for_reset=True)
                 _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
                 self.home_non_controlled_consumption = None
 
         else:
-            home_non_controlled_consumption = QSSolarHistoryVals(entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self)
+            home_non_controlled_consumption = QSSolarHistoryVals(
+                entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self
+            )
             await home_non_controlled_consumption.init(time, for_reset=True)
             await home_non_controlled_consumption.save_values(for_reset=True)
-            _LOGGER.info(f"Resetting home consumption LIGHT")
+            _LOGGER.info("Resetting home consumption LIGHT")
             self.home_non_controlled_consumption = None
 
         self._in_reset = False
@@ -3003,10 +3226,8 @@ class QSHomeConsumptionHistoryAndForecast:
         return True
 
 
-
 class QSSolarHistoryVals:
-
-    def __init__(self, forecast: QSHomeConsumptionHistoryAndForecast, entity_id:str) -> None:
+    def __init__(self, forecast: QSHomeConsumptionHistoryAndForecast, entity_id: str) -> None:
 
         self.forecast = forecast
         if forecast is None:
@@ -3017,24 +3238,25 @@ class QSSolarHistoryVals:
             if self.home is None:
                 self.hass = None
             else:
-                self.hass =  self.home.hass
+                self.hass = self.home.hass
 
-        self.entity_id:str = entity_id
-        self.values : npt.NDArray | None = None
-        self.storage_path : str = forecast.storage_path
+        self.entity_id: str = entity_id
+        self.values: npt.NDArray | None = None
+        self.storage_path: str = forecast.storage_path
         self.file_name = f"{self.entity_id}.npy"
         self.file_path = join(self.storage_path, self.file_name)
 
-        self._current_values : list[tuple[datetime, float|None]] = []
+        self._current_values: list[tuple[datetime, float | None]] = []
         self._current_idx = None
         self._current_days = None
         self._init_done = False
         self._current_forecast = None
         self._last_forecast_update_time = None
 
-
     def update_current_forecast_if_needed(self, time: datetime) -> bool:
-        if self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(minutes=INTERVALS_MN):
+        if self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(
+            minutes=INTERVALS_MN
+        ):
             return True
         return False
 
@@ -3042,15 +3264,16 @@ class QSSolarHistoryVals:
         res = get_value_from_time_series(self._current_forecast, time)
         return res[0], res[1]
 
-
-    def _get_possible_past_consumption_for_forecast(self, now_idx, now_days, history_in_hours: int, use_val_as_current:float = None):
+    def _get_possible_past_consumption_for_forecast(
+        self, now_idx, now_days, history_in_hours: int, use_val_as_current: float = None
+    ):
 
         end_idx = now_idx
         if use_val_as_current is None:
-            end_idx -= 1 # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
+            end_idx -= 1  # step back one INTERVALS_MN as we want to have a full INTERVALS_MN of history for the current values to select
         end_idx = _sanitize_idx(end_idx)
 
-        start_idx = _sanitize_idx(end_idx - (history_in_hours*NUM_INTERVAL_PER_HOUR))
+        start_idx = _sanitize_idx(end_idx - (history_in_hours * NUM_INTERVAL_PER_HOUR))
 
         current_values, current_days = self._get_values(start_idx, end_idx)
 
@@ -3059,13 +3282,13 @@ class QSSolarHistoryVals:
             return []
 
         if use_val_as_current is not None:
-            #override the last one with the current value
+            # override the last one with the current value
             current_values = np.copy(current_values)
             current_values[-1] = use_val_as_current
             current_days = np.copy(current_days)
             current_days[-1] = now_days
 
-        current_ok_vales = np.asarray(current_days!=0, dtype=np.int32)
+        current_ok_vales = np.asarray(current_days != 0, dtype=np.int32)
 
         # best_past_probes_in_days = [
         #     1,
@@ -3085,22 +3308,20 @@ class QSSolarHistoryVals:
         scores = []
 
         for probe_days in best_past_probes_in_days:
-
-
             for i in range(-2, 3):
                 past_delta = probe_days * NUM_INTERVALS_PER_DAY + i
 
-                if past_delta < history_in_hours*NUM_INTERVAL_PER_HOUR:
+                if past_delta < history_in_hours * NUM_INTERVAL_PER_HOUR:
                     # not enough history for this probe
                     _LOGGER.debug(
-                        f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago + {i} for bad too small history")
+                        f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) trash a past match {probe_days} days ago + {i} for bad too small history"
+                    )
                     continue
 
                 score = self._get_range_score(current_values, current_ok_vales, start_idx, past_delta=past_delta)
 
                 if score:
                     scores.append(score)
-
 
         if not scores:
             _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) no scores !!!")
@@ -3119,8 +3340,7 @@ class QSSolarHistoryVals:
 
         if past_values is None or past_days is None:
             # bad history
-            _LOGGER.debug(
-                f"_get_range_score trash a past match for None past values")
+            _LOGGER.debug("_get_range_score trash a past match for None past values")
             return []
 
         past_ok_values = np.asarray(past_days != 0, dtype=np.int32)
@@ -3130,7 +3350,7 @@ class QSSolarHistoryVals:
 
         if num_ok_vals < 0.6 * current_values.shape[0]:
             # bad history
-            #_LOGGER.debug(
+            # _LOGGER.debug(
             #    f"_get_range_score trash a past match for bad values {num_ok_vals} - {current_values.shape[0]}")
             return []
 
@@ -3140,17 +3360,23 @@ class QSSolarHistoryVals:
         for score_idx in range(num_score):
             if score_idx == 0:
                 # rmse
-                score = float(np.sqrt(np.sum(np.square(current_values - past_values) * check_vals) / float(num_ok_vals)))
+                score = float(
+                    np.sqrt(np.sum(np.square(current_values - past_values) * check_vals) / float(num_ok_vals))
+                )
             elif score_idx == 1:
                 # mean ratio
-                score = float(np.abs(np.sum(past_values*check_vals)/np.sum(current_values*check_vals) - 1.0))*100.0
+                score = (
+                    float(np.abs(np.sum(past_values * check_vals) / np.sum(current_values * check_vals) - 1.0)) * 100.0
+                )
             elif score_idx == 2:
                 # pearson correlation no lag
                 c_vals = [current_values[i] for i in range(current_values.shape[0]) if check_vals[i] > 0]
                 p_vals = [past_values[i] for i in range(past_values.shape[0]) if check_vals[i] > 0]
 
                 if len(c_vals) != num_ok_vals or len(p_vals) != num_ok_vals:
-                    _LOGGER.debug(f"_get_range_score trash a past match for bad values after check {len(c_vals)} - {num_ok_vals}")
+                    _LOGGER.debug(
+                        f"_get_range_score trash a past match for bad values after check {len(c_vals)} - {num_ok_vals}"
+                    )
                     return []
 
                 # score = self.xcorr_max_pearson(c_vals, p_vals, Lmax=4)[2]
@@ -3168,12 +3394,11 @@ class QSSolarHistoryVals:
 
         return res
 
-
     def _get_possible_now_val_for_forcast(self, time_now: datetime):
 
         now_val, now_duration = self.get_current_non_stored_val_at_time(time_now)
         # try to see if the current INTERVALS_MN, still not stored, can be used to improve the forecast
-        if now_duration is not None and now_duration > (INTERVALS_MN*60)//2:
+        if now_duration is not None and now_duration > (INTERVALS_MN * 60) // 2:
             # take it into account, enough data, even if unstored
             pass
         else:
@@ -3199,11 +3424,11 @@ class QSSolarHistoryVals:
 
         for lag in range(-Lmax, Lmax + 1):
             if lag >= 0:
-                a = zx[:n - lag]
+                a = zx[: n - lag]
                 b = zy[lag:]
             else:
                 a = zx[-lag:]
-                b = zy[:n + lag]
+                b = zy[: n + lag]
             if len(a) < 2:  # too few points to compute correlation
                 continue
 
@@ -3212,10 +3437,8 @@ class QSSolarHistoryVals:
                 best_r, best_lag = r, lag
 
         best_r = float(best_r)
-        S = 100.0*(1.0 - ((1 + best_r) / 2.0))  # score [0,100] : 0 is best, 1 is worst
+        S = 100.0 * (1.0 - ((1 + best_r) / 2.0))  # score [0,100] : 0 is best, 1 is worst
         return best_r, best_lag, S
-
-
 
     def _get_predicted_data(self, future_needed_in_hours: int, now_idx, now_days, scores):
 
@@ -3226,7 +3449,6 @@ class QSSolarHistoryVals:
         num_intervals_pushed = 0
 
         for item_past in scores:
-
             probe_num_intervals = item_past[0]
 
             past_start_idx = _sanitize_idx(now_idx + num_intervals_pushed - probe_num_intervals)
@@ -3237,8 +3459,7 @@ class QSSolarHistoryVals:
 
             if c_forecast_values is None or c_past_days is None:
                 # bad forecast
-                _LOGGER.debug(
-                    f"_get_predicted_data: trash a forecast for None values")
+                _LOGGER.debug("_get_predicted_data: trash a forecast for None values")
                 continue
 
             c_past_ok_values = np.asarray(c_past_days != 0, dtype=np.int32)
@@ -3247,7 +3468,8 @@ class QSSolarHistoryVals:
             if num_ok_vals < 0.6 * c_past_days.shape[0]:
                 # bad forecast
                 _LOGGER.debug(
-                    f"_get_predicted_data: trash a forecast for bad values {num_ok_vals} - {c_past_days.shape[0]}")
+                    f"_get_predicted_data: trash a forecast for bad values {num_ok_vals} - {c_past_days.shape[0]}"
+                )
                 continue
 
             # ok we will keep it
@@ -3412,7 +3634,9 @@ class QSSolarHistoryVals:
     #                 line += f"{res_table[probe_idx-1, res_idx]:6.1f}({res_table[probe_idx-1, res_idx+score_number]:6.1f})|"
     #             _LOGGER.info(line)
 
-    def compute_now_forecast(self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int, set_as_current=False) -> list[tuple[datetime, float]]:
+    def compute_now_forecast(
+        self, time_now: datetime, history_in_hours: int, future_needed_in_hours: int, set_as_current=False
+    ) -> list[tuple[datetime, float]]:
 
         _LOGGER.debug("compute_now_forecast called")
 
@@ -3423,12 +3647,13 @@ class QSSolarHistoryVals:
 
         now_val = self._get_possible_now_val_for_forcast(time_now)
 
-        scores = self._get_possible_past_consumption_for_forecast(now_idx, now_days, history_in_hours, use_val_as_current=now_val)
+        scores = self._get_possible_past_consumption_for_forecast(
+            now_idx, now_days, history_in_hours, use_val_as_current=now_val
+        )
 
         forecast_values, past_days = self._get_predicted_data(future_needed_in_hours, now_idx, now_days, scores)
 
         if forecast_values is not None and past_days is not None:
-
             forecast = []
 
             # add the best possible matches until we have enough future
@@ -3471,18 +3696,18 @@ class QSSolarHistoryVals:
                         _LOGGER.error("compute_now_forecast no prev_val !!!!")
                         return []
 
-            if time_now < time_now_from_idx + timedelta(minutes=INTERVALS_MN//2):
+            if time_now < time_now_from_idx + timedelta(minutes=INTERVALS_MN // 2):
                 # we are before the middle of the current INTERVALS_MN, so we want to have a value before time_now
                 # and this value can be real
                 if prev_val is None:
                     prev_val = forecast_values[0]
-                forecast.append((time_now_from_idx - timedelta(minutes=INTERVALS_MN - INTERVALS_MN//2), prev_val))
+                forecast.append((time_now_from_idx - timedelta(minutes=INTERVALS_MN - INTERVALS_MN // 2), prev_val))
 
             for i in range(past_days.shape[0]):
                 if past_days[i] == 0:
                     continue
                 # adding INTERVALS_MN//2 has we have a mean on INTERVALS_MN
-                forecast_time = time_now_from_idx+timedelta(minutes=i*INTERVALS_MN + INTERVALS_MN//2)
+                forecast_time = time_now_from_idx + timedelta(minutes=i * INTERVALS_MN + INTERVALS_MN // 2)
                 forecast.append((forecast_time, forecast_values[i]))
 
             # complement with the future if there is not enough data at the end
@@ -3499,41 +3724,38 @@ class QSSolarHistoryVals:
         _LOGGER.debug("compute_now_forecast nothing works!")
         return []
 
-
-
     def _get_values(self, start_idx, end_idx):
         if self.values is None:
-            _LOGGER.info(f"NO VALUES IN _get_values")
+            _LOGGER.info("NO VALUES IN _get_values")
             return None, None
 
         start_idx = _sanitize_idx(start_idx)
         end_idx = _sanitize_idx(end_idx)
 
         if end_idx > start_idx:
-            return self.values[0][start_idx:end_idx+1], self.values[1][start_idx:end_idx+1]
+            return self.values[0][start_idx : end_idx + 1], self.values[1][start_idx : end_idx + 1]
         else:
-            return np.concatenate((self.values[0][start_idx:], self.values[0][:end_idx+1])), np.concatenate((self.values[1][start_idx:], self.values[1][:end_idx+1]))
+            return np.concatenate((self.values[0][start_idx:], self.values[0][: end_idx + 1])), np.concatenate(
+                (self.values[1][start_idx:], self.values[1][: end_idx + 1])
+            )
 
+    async def save_values(self, file_path: str = None, for_reset: bool = False) -> None:
+        def _save_values_to_file(path: str, values) -> None:
+            """Write numpy."""
+            try:
+                np.save(path, values)
+                _LOGGER.info(f"Write numpy SUCCESS for {path} for reset {for_reset}")
+            except:
+                _LOGGER.info(f"Write numpy FAILED for {path} for reset {for_reset}")
+                pass
 
-    async def save_values(self, file_path: str = None, for_reset: bool=False) -> None:
-            def _save_values_to_file(path: str, values) -> None:
-                """Write numpy."""
-                try:
-                    np.save(path, values)
-                    _LOGGER.info(f"Write numpy SUCCESS for {path} for reset {for_reset}")
-                except:
-                    _LOGGER.info(f"Write numpy FAILED for {path} for reset {for_reset}")
-                    pass
+        if file_path is None:
+            file_path = self.file_path
 
-            if file_path is None:
-                file_path = self.file_path
-
-            if self.hass is None:
-                _save_values_to_file(file_path, self.values)
-            else:
-                await self.hass.async_add_executor_job(
-                    _save_values_to_file, file_path, self.values
-                )
+        if self.hass is None:
+            _save_values_to_file(file_path, self.values)
+        else:
+            await self.hass.async_add_executor_job(_save_values_to_file, file_path, self.values)
 
     def read_value(self):
 
@@ -3546,21 +3768,20 @@ class QSSolarHistoryVals:
 
     async def read_values_async(self):
 
-            def _load_values_from_file(path: str) -> Any | None:
-                """Read numpy."""
+        def _load_values_from_file(path: str) -> Any | None:
+            """Read numpy."""
+            ret = None
+            try:
+                ret = np.load(path)
+            except:
                 ret = None
-                try:
-                    ret =  np.load(path)
-                except:
-                    ret = None
 
-                return ret
+            return ret
 
-            if self.hass is None:
-                return _load_values_from_file(self.file_path)
-            else:
-                return await self.hass.async_add_executor_job(
-                    _load_values_from_file, self.file_path)
+        if self.hass is None:
+            return _load_values_from_file(self.file_path)
+        else:
+            return await self.hass.async_add_executor_job(_load_values_from_file, self.file_path)
 
     def is_time_in_current_interval(self, time: datetime) -> bool:
 
@@ -3586,7 +3807,6 @@ class QSSolarHistoryVals:
 
         return None, None
 
-
     def _cache_current_vals(self, extend_but_not_cover_idx=None) -> bool:
 
         done_something = False
@@ -3597,11 +3817,12 @@ class QSSolarHistoryVals:
             if self.values is None:
                 self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
-
             self.values[0][self._current_idx] = nv
             self.values[1][self._current_idx] = self._current_days
 
-            if extend_but_not_cover_idx is not None and extend_but_not_cover_idx != _sanitize_idx(self._current_idx + 1):
+            if extend_but_not_cover_idx is not None and extend_but_not_cover_idx != _sanitize_idx(
+                self._current_idx + 1
+            ):
                 # used to make the ring buffer contiguous, in case there was a hole
                 if extend_but_not_cover_idx <= self._current_idx:
                     # we have circled around the ring buffer
@@ -3668,12 +3889,13 @@ class QSSolarHistoryVals:
 
         return time_out, val
 
-
     def add_value(self, time: datetime, value: float) -> bool:
 
-        something_done  = False
+        something_done = False
 
-        idx, days = self.get_index_from_time(time) # idx is % BUFFER_SIZE_IN_INTERVALS, begining of the interval minutes
+        idx, days = self.get_index_from_time(
+            time
+        )  # idx is % BUFFER_SIZE_IN_INTERVALS, begining of the interval minutes
 
         if self._current_idx is None:
             self._current_idx = idx
@@ -3690,29 +3912,30 @@ class QSSolarHistoryVals:
 
         return something_done
 
-
     def get_index_from_time(self, time: datetime) -> tuple[int, int]:
         days = (time - BEGINING_OF_TIME).days
-        idx = int((time-BEGINING_OF_TIME).total_seconds()//(60*INTERVALS_MN))%(BUFFER_SIZE_IN_INTERVALS)
+        idx = int((time - BEGINING_OF_TIME).total_seconds() // (60 * INTERVALS_MN)) % (BUFFER_SIZE_IN_INTERVALS)
         return idx, days
 
-    def get_index_with_delta(self, idx:int, days:int, delta_idx:int) -> tuple[int, int]:
+    def get_index_with_delta(self, idx: int, days: int, delta_idx: int) -> tuple[int, int]:
         init_time = self.get_utc_time_from_index(idx, days)
-        next_time = init_time + timedelta(minutes=delta_idx*INTERVALS_MN)
-        return  self.get_index_from_time(next_time)
+        next_time = init_time + timedelta(minutes=delta_idx * INTERVALS_MN)
+        return self.get_index_from_time(next_time)
 
-
-    def get_utc_time_from_index(self, idx:int, days:int) -> datetime:
-        days_index = int((days*24*60)//INTERVALS_MN)%(BUFFER_SIZE_IN_INTERVALS)
+    def get_utc_time_from_index(self, idx: int, days: int) -> datetime:
+        days_index = int((days * 24 * 60) // INTERVALS_MN) % (BUFFER_SIZE_IN_INTERVALS)
         if idx >= days_index:
             num_intervals = int(idx) - days_index
             return BEGINING_OF_TIME + timedelta(days=int(days)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
         else:
-            num_intervals = (BUFFER_SIZE_IN_INTERVALS - days_index + idx)
-            return BEGINING_OF_TIME + timedelta(days=int(days-1)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
+            num_intervals = BUFFER_SIZE_IN_INTERVALS - days_index + idx
+            return (
+                BEGINING_OF_TIME + timedelta(days=int(days - 1)) + timedelta(minutes=int(num_intervals * INTERVALS_MN))
+            )
 
-
-    async def init(self, time:datetime, for_reset:bool = False, reset_for_switch_device:AbstractLoad | None = None) -> tuple[datetime | None, datetime | None]:
+    async def init(
+        self, time: datetime, for_reset: bool = False, reset_for_switch_device: AbstractLoad | None = None
+    ) -> tuple[datetime | None, datetime | None]:
 
         if self._init_done:
             return None, None
@@ -3732,6 +3955,7 @@ class QSSolarHistoryVals:
                 await aiofiles.os.makedirs(self.storage_path, exist_ok=True)
             else:
                 import os
+
                 os.makedirs(self.storage_path, exist_ok=True)
             self.values = await self.read_values_async()
 
@@ -3739,17 +3963,16 @@ class QSSolarHistoryVals:
         num_slots_before_now_idx = 0
         do_save = False
         if self.values is not None:
-
             if self.values.shape[0] != 2 or self.values.shape[1] != BUFFER_SIZE_IN_INTERVALS:
-                _LOGGER.warning("Error loading forecast values for %s shape %s, resetting", self.entity_id, self.values.shape)
+                _LOGGER.warning(
+                    "Error loading forecast values for %s shape %s, resetting", self.entity_id, self.values.shape
+                )
                 self.values = None
 
         if self.values is not None:
-
             last_bad_idx = now_idx
 
             while True:
-
                 try_prev_idx = last_bad_idx - 1
                 if try_prev_idx < 0:
                     try_prev_idx = self.values.shape[1] - 1
@@ -3767,14 +3990,13 @@ class QSSolarHistoryVals:
             do_save = True
             self.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
-
         end_time = time
         if last_bad_idx is not None:
-            start_time = time_now_idx - timedelta(minutes=(num_slots_before_now_idx)*INTERVALS_MN)
+            start_time = time_now_idx - timedelta(minutes=(num_slots_before_now_idx) * INTERVALS_MN)
         else:
-            start_time = time - timedelta(days=BUFFER_SIZE_DAYS-1)
+            start_time = time - timedelta(days=BUFFER_SIZE_DAYS - 1)
 
-        states : list[LazyState] = await load_from_history(self.hass, self.entity_id, start_time, end_time)
+        states: list[LazyState] = await load_from_history(self.hass, self.entity_id, start_time, end_time)
 
         # states : ordered LazySates
         # we will fill INTERVALS_IN_MN slots with the mean of the values in the state
@@ -3785,7 +4007,6 @@ class QSSolarHistoryVals:
         history_end = None
 
         if states:
-
             # in states we have "LazyState" objects ... with no attribute
             # bewarei n homeassitant the states will "only change" meaning if ther eis no change, no measure, it is VERY important
             # to factor that in teh add value below!
@@ -3807,7 +4028,7 @@ class QSSolarHistoryVals:
                     continue
 
                 value = None
-                if s.state is  None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                if s.state is None or s.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
                     # we may forget what is between this "wrong measure' and the time before .. ti be seen if we don't use the last good value
                     pass
                 else:
@@ -3829,12 +4050,11 @@ class QSSolarHistoryVals:
                         # need to save if one value added, only do  it once at the end
                         do_save = True
                 else:
-
                     if self.is_time_in_current_interval(s.last_changed):
-                        #ok the current interval covers this, forget this bad value:
+                        # ok the current interval covers this, forget this bad value:
                         pass
                     else:
-                        #forget history before this bad value
+                        # forget history before this bad value
                         if self.store_and_flush_current_vals():
                             do_save = True
 

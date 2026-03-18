@@ -1,22 +1,20 @@
 """Tests for quiet_solar car.py functionality."""
 
-import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytz
 from homeassistant.components import number
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
@@ -24,15 +22,14 @@ from custom_components.quiet_solar.const import (
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_PERSON_AUTHORIZED_CARS,
     CONF_PERSON_PREFERRED_CAR,
-    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
 from custom_components.quiet_solar.ha_model.car import (
     CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S,
 )
-from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -68,7 +65,7 @@ async def test_car_initialization(
     # Find the car device
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     assert car_device is not None
-    assert car_device.name == MOCK_CAR_CONFIG['name']
+    assert car_device.name == MOCK_CAR_CONFIG["name"]
 
 
 async def test_car_battery_capacity(
@@ -333,9 +330,7 @@ async def test_car_select_entities(
     await hass.async_block_till_done()
 
     # Check select entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     select_entries = [e for e in entity_entries if e.domain == "select"]
 
@@ -366,9 +361,7 @@ async def test_car_button_entities(
     await hass.async_block_till_done()
 
     # Check button entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     button_entries = [e for e in entity_entries if e.domain == "button"]
 
@@ -399,9 +392,7 @@ async def test_car_switch_entities(
     await hass.async_block_till_done()
 
     # Check switch entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
 
@@ -432,9 +423,7 @@ async def test_car_time_entity(
     await hass.async_block_till_done()
 
     # Check time entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     time_entries = [e for e in entity_entries if e.domain == "time"]
 
@@ -491,8 +480,9 @@ async def test_car_get_platforms(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test car returns correct platforms."""
-    from .const import MOCK_CAR_CONFIG
     from homeassistant.const import Platform
+
+    from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -523,8 +513,9 @@ async def test_car_get_charge_type_no_charger(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test car charge type when no charger is connected."""
-    from .const import MOCK_CAR_CONFIG
     from custom_components.quiet_solar.const import CAR_CHARGE_TYPE_NOT_PLUGGED
+
+    from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -580,8 +571,9 @@ async def test_car_persons_options_empty(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test car persons options when no persons are configured."""
-    from .const import MOCK_CAR_CONFIG
     from custom_components.quiet_solar.const import FORCE_CAR_NO_PERSON_ATTACHED
+
+    from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -714,7 +706,7 @@ async def test_car_is_3_phase(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     # Check device exists and has required attributes
     assert car_device is not None
-    assert hasattr(car_device, 'car_battery_capacity')
+    assert hasattr(car_device, "car_battery_capacity")
 
 
 async def test_car_conf_type_name(
@@ -722,8 +714,8 @@ async def test_car_conf_type_name(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test car conf_type_name class attribute."""
-    from custom_components.quiet_solar.ha_model.car import QSCar
     from custom_components.quiet_solar.const import CONF_TYPE_NAME_QSCar
+    from custom_components.quiet_solar.ha_model.car import QSCar
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -754,7 +746,7 @@ async def test_car_min_charge(
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     # Car should have minimum ok charge value
-    assert hasattr(car_device, 'car_minimum_ok_charge')
+    assert hasattr(car_device, "car_minimum_ok_charge")
 
 
 async def test_car_charger_connection_property(
@@ -780,7 +772,7 @@ async def test_car_charger_connection_property(
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     # Car should have charger property (may be None when not connected)
-    assert hasattr(car_device, 'charger')
+    assert hasattr(car_device, "charger")
 
 
 async def test_car_current_forecasted_person(
@@ -1038,12 +1030,8 @@ async def test_car_charge_time_readable_name_with_constraint(
     await hass.async_block_till_done()
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
-    constraint = SimpleNamespace(
-        get_readable_next_target_date_string=lambda for_small_standalone: "12:30"
-    )
-    car_device.charger = SimpleNamespace(
-        get_current_active_constraint=lambda time: constraint
-    )
+    constraint = SimpleNamespace(get_readable_next_target_date_string=lambda for_small_standalone: "12:30")
+    car_device.charger = SimpleNamespace(get_current_active_constraint=lambda time: constraint)
 
     assert car_device.get_car_charge_time_readable_name() == "12:30"
 
@@ -1084,9 +1072,7 @@ async def test_car_convert_auto_constraint_to_manual(
     car_device.current_forecasted_person = hass.data[DOMAIN].get(person_entry.entry_id)
 
     constraint = SimpleNamespace(end_of_constraint=datetime.now(tz=pytz.UTC))
-    car_device.charger = SimpleNamespace(
-        get_charge_type=lambda: (CAR_CHARGE_TYPE_PERSON_AUTOMATED, constraint)
-    )
+    car_device.charger = SimpleNamespace(get_charge_type=lambda: (CAR_CHARGE_TYPE_PERSON_AUTOMATED, constraint))
     car_device.user_add_default_charge_at_datetime = AsyncMock(return_value=True)
 
     result = await car_device.convert_auto_constraint_to_manual_if_needed()
@@ -1125,17 +1111,13 @@ async def test_car_efficiency_from_soc_and_odometer(
     car_device.get_car_charge_percent = MagicMock(return_value=80.0)
     car_device.get_car_odometer_km = MagicMock(return_value=1000.0)
 
-    car_device.car_efficiency_km_per_kwh_sensor_state_getter(
-        "sensor.car_efficiency", time1
-    )
+    car_device.car_efficiency_km_per_kwh_sensor_state_getter("sensor.car_efficiency", time1)
 
     time2 = datetime(2026, 1, 15, 18, 0, tzinfo=pytz.UTC)
     car_device.get_car_charge_percent = MagicMock(return_value=70.0)
     car_device.get_car_odometer_km = MagicMock(return_value=1010.0)
 
-    result = car_device.car_efficiency_km_per_kwh_sensor_state_getter(
-        "sensor.car_efficiency", time2
-    )
+    result = car_device.car_efficiency_km_per_kwh_sensor_state_getter("sensor.car_efficiency", time2)
 
     assert result is not None
     assert result[1] is not None
@@ -1343,16 +1325,17 @@ async def test_car_bootstrap_efficiency_from_history(
         async def async_add_executor_job(self, func, *args):
             return func(*args)
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
-        new=fake_state_changes,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
-        return_value=DummyRecorder(),
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
+            new=fake_state_changes,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
+            return_value=DummyRecorder(),
+        ),
     ):
-        await car_device._async_bootstrap_efficiency_from_history(
-            datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
-        )
+        await car_device._async_bootstrap_efficiency_from_history(datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))
 
     assert car_device._km_per_kwh is not None
 
@@ -1381,9 +1364,7 @@ async def test_car_user_charge_actions(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     car_device.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
     car_device.default_charge_time = datetime(2026, 1, 15, 7, 30, tzinfo=pytz.UTC).time()
-    car_device.get_next_time_from_hours = MagicMock(
-        return_value=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
-    )
+    car_device.get_next_time_from_hours = MagicMock(return_value=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))
 
     await car_device.user_add_default_charge()
     assert car_device.do_force_next_charge is False
@@ -1493,23 +1474,18 @@ async def test_car_use_percent_mode_sensor_updates_constraint_flag(
         {},
     )
 
-    result = car_device.car_use_percent_mode_sensor_state_getter(
-        "sensor.car_use_percent_mode", time_now
-    )
+    result = car_device.car_use_percent_mode_sensor_state_getter("sensor.car_use_percent_mode", time_now)
 
     assert result == (time_now, "on", {})
     assert car_device.can_use_charge_percent_constraints() is True
 
     car_device._entity_probed_last_valid_state[soc_entity] = (
-        time_now
-        - timedelta(seconds=CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S + 1),
+        time_now - timedelta(seconds=CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S + 1),
         55.0,
         {},
     )
 
-    result = car_device.car_use_percent_mode_sensor_state_getter(
-        "sensor.car_use_percent_mode", time_now
-    )
+    result = car_device.car_use_percent_mode_sensor_state_getter("sensor.car_use_percent_mode", time_now)
 
     assert result == (time_now, "off", {})
     assert car_device.can_use_charge_percent_constraints() is False
@@ -1862,4 +1838,3 @@ async def test_car_user_clean_constraints(
     assert car_device._constraints == []
     assert car_device._next_charge_target == car_device.car_default_charge
     assert car_device.charger is charger_device
-

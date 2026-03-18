@@ -1,46 +1,45 @@
 """Tests for QSBiStateDuration class in ha_model/bistate_duration.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock
 from datetime import time as dt_time
-import pytz
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+import pytz
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_SWITCH,
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    DATA_HANDLER,
+    DOMAIN,
+    SOLVER_STEP_S,
+)
 from custom_components.quiet_solar.ha_model.bistate_duration import (
-    QSBiStateDuration,
-    bistate_modes,
     DEFAULT_USER_OVERRIDE_DURATION_S,
     USER_OVERRIDE_STATE_BACK_DURATION_S,
+    QSBiStateDuration,
+    bistate_modes,
 )
 from custom_components.quiet_solar.home_model.commands import (
-    CMD_ON,
-    CMD_OFF,
     CMD_IDLE,
+    CMD_OFF,
+    CMD_ON,
 )
 from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
 )
-from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_FILLER_AUTO,
-    CONF_SWITCH,
-    SOLVER_STEP_S,
-)
-
 from tests.factories import create_minimal_home_model
 
 
@@ -106,7 +105,7 @@ class TestQSBiStateDurationInit:
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
 
         assert device.bistate_mode == "bistate_mode_auto"
@@ -126,7 +125,7 @@ class TestQSBiStateDurationInit:
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
             switch_entity="switch.custom_device",
-            **{CONF_NAME: "Custom Device"}
+            **{CONF_NAME: "Custom Device"},
         )
 
         assert device.bistate_entity == "switch.custom_device"
@@ -138,7 +137,7 @@ class TestQSBiStateDurationInit:
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
             switch_entity="switch.my_switch",
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
 
         assert device.bistate_entity == "switch.my_switch"
@@ -148,10 +147,7 @@ class TestQSBiStateDurationInit:
 def bistate_device(hass: HomeAssistant, bistate_setup) -> ConcreteBiStateDevice:
     """ConcreteBiStateDevice instance for tests that need a shared device."""
     device = ConcreteBiStateDevice(
-        hass=hass,
-        config_entry=bistate_setup["config_entry"],
-        home=bistate_setup["home"],
-        **{CONF_NAME: "Test Device"}
+        hass=hass, config_entry=bistate_setup["config_entry"], home=bistate_setup["home"], **{CONF_NAME: "Test Device"}
     )
     device.power_use = 1000.0
     return device
@@ -165,23 +161,21 @@ def bistate_probe_device(hass: HomeAssistant, bistate_setup) -> ConcreteBiStateD
         config_entry=bistate_setup["config_entry"],
         home=bistate_setup["home"],
         switch_entity="switch.test_device",
-        **{CONF_NAME: "Test Device"}
+        **{CONF_NAME: "Test Device"},
     )
     device.external_user_initiated_state = None
     return device
 
 
 @pytest.fixture
-def bistate_check_load_device(
-    hass: HomeAssistant, bistate_setup
-) -> ConcreteBiStateDevice:
+def bistate_check_load_device(hass: HomeAssistant, bistate_setup) -> ConcreteBiStateDevice:
     """ConcreteBiStateDevice for check_load_activity tests (mode_off/mode_on)."""
     device = ConcreteBiStateDevice(
         hass=hass,
         config_entry=bistate_setup["config_entry"],
         home=bistate_setup["home"],
         switch_entity="switch.test_device",
-        **{CONF_NAME: "Test Device"}
+        **{CONF_NAME: "Test Device"},
     )
     device.load_is_auto_to_be_boosted = False
     device._constraints = []
@@ -217,15 +211,13 @@ class TestQSBiStateDurationPowerFromSwitchState:
 class TestQSBiStateDurationModes:
     """Test bistate mode related methods."""
 
-    def test_get_bistate_modes_with_user_override_support(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_get_bistate_modes_with_user_override_support(self, hass: HomeAssistant, bistate_setup):
         """Test get_bistate_modes when user override is supported."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = False
 
@@ -238,15 +230,13 @@ class TestQSBiStateDurationModes:
         assert "bistate_mode_on" in modes
         assert "bistate_mode_off" in modes
 
-    def test_get_bistate_modes_without_user_override_support(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_get_bistate_modes_without_user_override_support(self, hass: HomeAssistant, bistate_setup):
         """Test get_bistate_modes when user override is not supported."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = True
 
@@ -257,57 +247,49 @@ class TestQSBiStateDurationModes:
         assert "bistate_mode_on" not in modes
         assert "bistate_mode_off" not in modes
 
-    def test_support_green_only_switch_non_boosted(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_support_green_only_switch_non_boosted(self, hass: HomeAssistant, bistate_setup):
         """Test support_green_only_switch for non-boosted load."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = False
 
         assert device.support_green_only_switch() is True
 
-    def test_support_green_only_switch_boosted(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_support_green_only_switch_boosted(self, hass: HomeAssistant, bistate_setup):
         """Test support_green_only_switch for boosted load."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = True
 
         assert device.support_green_only_switch() is False
 
-    def test_support_user_override_non_boosted(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_support_user_override_non_boosted(self, hass: HomeAssistant, bistate_setup):
         """Test support_user_override for non-boosted load."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = False
 
         assert device.support_user_override() is True
 
-    def test_support_user_override_boosted(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_support_user_override_boosted(self, hass: HomeAssistant, bistate_setup):
         """Test support_user_override for boosted load."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
         device.load_is_auto_to_be_boosted = True
 
@@ -317,37 +299,27 @@ class TestQSBiStateDurationModes:
 class TestQSBiStateDurationExpectedState:
     """Test expected_state_from_command methods."""
 
-    def test_expected_state_from_command_on(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_on(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command with CMD_ON."""
         result = bistate_device.expected_state_from_command(CMD_ON)
         assert result == "on"
 
-    def test_expected_state_from_command_off(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_off(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command with CMD_OFF."""
         result = bistate_device.expected_state_from_command(CMD_OFF)
         assert result == "off"
 
-    def test_expected_state_from_command_idle(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_idle(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command with CMD_IDLE."""
         result = bistate_device.expected_state_from_command(CMD_IDLE)
         assert result == "off"
 
-    def test_expected_state_from_command_none(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_none(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command with None."""
         result = bistate_device.expected_state_from_command(None)
         assert result is None
 
-    def test_expected_state_from_command_or_user_no_override(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_or_user_no_override(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command_or_user without override."""
         bistate_device.external_user_initiated_state = None
 
@@ -355,9 +327,7 @@ class TestQSBiStateDurationExpectedState:
 
         assert result == "on"
 
-    def test_expected_state_from_command_or_user_with_override(
-        self, bistate_device: ConcreteBiStateDevice
-    ):
+    def test_expected_state_from_command_or_user_with_override(self, bistate_device: ConcreteBiStateDevice):
         """Test expected_state_from_command_or_user with user override."""
         bistate_device.external_user_initiated_state = "off"
 
@@ -371,9 +341,7 @@ class TestQSBiStateDurationProbeIfCommandSet:
     """Test probe_if_command_set method."""
 
     @pytest.mark.asyncio
-    async def test_probe_command_matches(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_probe_command_matches(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test probe_if_command_set when state matches expected."""
         hass.states.async_set("switch.test_device", "on")
         time = datetime.datetime.now(pytz.UTC)
@@ -383,9 +351,7 @@ class TestQSBiStateDurationProbeIfCommandSet:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_probe_command_does_not_match(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_probe_command_does_not_match(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test probe_if_command_set when state doesn't match."""
         hass.states.async_set("switch.test_device", "off")
         time = datetime.datetime.now(pytz.UTC)
@@ -395,9 +361,7 @@ class TestQSBiStateDurationProbeIfCommandSet:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_probe_state_unavailable(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_probe_state_unavailable(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test probe_if_command_set when state is unavailable."""
         hass.states.async_set("switch.test_device", STATE_UNAVAILABLE)
         time = datetime.datetime.now(pytz.UTC)
@@ -407,9 +371,7 @@ class TestQSBiStateDurationProbeIfCommandSet:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_probe_state_unknown(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_probe_state_unknown(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test probe_if_command_set when state is unknown."""
         hass.states.async_set("switch.test_device", STATE_UNKNOWN)
         time = datetime.datetime.now(pytz.UTC)
@@ -419,9 +381,7 @@ class TestQSBiStateDurationProbeIfCommandSet:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_probe_with_user_override(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_probe_with_user_override(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test probe_if_command_set respects user override."""
         hass.states.async_set("switch.test_device", "off")
         bistate_probe_device.external_user_initiated_state = "off"
@@ -438,14 +398,10 @@ class TestQSBiStateDurationExecuteCommand:
     """Test execute_command method."""
 
     @pytest.mark.asyncio
-    async def test_execute_command_no_override(
-        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
-    ):
+    async def test_execute_command_no_override(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
         """Test execute_command without user override."""
         bistate_probe_device.external_user_initiated_state = None
-        bistate_probe_device.get_current_active_constraint = MagicMock(
-            return_value=None
-        )
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=None)
         time = datetime.datetime.now(pytz.UTC)
 
         result = await bistate_probe_device.execute_command(time, CMD_ON)
@@ -461,9 +417,7 @@ class TestQSBiStateDurationExecuteCommand:
         """Test execute_command when override state matches current state."""
         hass.states.async_set("switch.test_device", "off")
         bistate_probe_device.external_user_initiated_state = "off"
-        bistate_probe_device.get_current_active_constraint = MagicMock(
-            return_value=None
-        )
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=None)
         time = datetime.datetime.now(pytz.UTC)
 
         result = await bistate_probe_device.execute_command(time, CMD_ON)
@@ -485,9 +439,7 @@ class TestQSBiStateDurationExecuteCommand:
         mock_constraint = MagicMock()
         mock_constraint.is_mandatory = False
         mock_constraint.load_param = "on"
-        bistate_probe_device.get_current_active_constraint = MagicMock(
-            return_value=mock_constraint
-        )
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=mock_constraint)
 
         time = datetime.datetime.now(pytz.UTC)
 
@@ -505,9 +457,7 @@ class TestQSBiStateDurationExecuteCommand:
         """Test execute_command when override but state unavailable."""
         hass.states.async_set("switch.test_device", state)
         bistate_probe_device.external_user_initiated_state = "off"
-        bistate_probe_device.get_current_active_constraint = MagicMock(
-            return_value=None
-        )
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=None)
         time = datetime.datetime.now(pytz.UTC)
 
         result = await bistate_probe_device.execute_command(time, CMD_ON)
@@ -526,7 +476,7 @@ class TestQSBiStateDurationPlatforms:
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
 
         platforms = device.get_platforms()
@@ -548,35 +498,25 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
         """Test that bistate_mode_off removes all constraints."""
         bistate_check_load_device.bistate_mode = "bistate_mode_off"
         bistate_check_load_device._constraints = [MagicMock()]  # Has constraints
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is True  # Should force next solve
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_mode_off_no_constraints(
-        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
-    ):
+    async def test_mode_off_no_constraints(self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice):
         """Test bistate_mode_off with no existing constraints."""
         bistate_check_load_device.bistate_mode = "bistate_mode_off"
         bistate_check_load_device._constraints = []
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         # No force solve needed if no constraints
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
@@ -587,9 +527,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
     ):
         """Test bistate_mode_off keeps override constraint only."""
         bistate_check_load_device.bistate_mode = "bistate_mode_off"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         bistate_check_load_device.set_live_constraints = MagicMock()
         bistate_check_load_device.current_command = None
         bistate_check_load_device.running_command = None
@@ -628,9 +566,7 @@ class TestQSBiStateDurationCheckLoadActivityModeOff:
             normal_constraint,
         ]
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is True
         bistate_check_load_device.set_live_constraints.assert_called_once()
@@ -647,18 +583,13 @@ class TestQSBiStateDurationCheckLoadActivityModeOn:
     ):
         """Test that bistate_mode_on creates a 25-hour constraint."""
         bistate_check_load_device.bistate_mode = "bistate_mode_on"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
         bistate_check_load_device.get_proper_local_adapted_tomorrow = MagicMock(
-            return_value=datetime.datetime.now(pytz.UTC)
-            + datetime.timedelta(hours=24)
+            return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=24)
         )
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is True
 
@@ -681,23 +612,16 @@ class TestQSBiStateDurationCheckLoadActivityModeDefault:
     ):
         """Test bistate_mode_default creates constraint with duration/finish time."""
         bistate_check_load_device.default_on_duration = 2.0
-        bistate_check_load_device.default_on_finish_time = dt_time(
-            hour=7, minute=0, second=0
-        )
+        bistate_check_load_device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
         bistate_check_load_device.bistate_mode = "bistate_mode_default"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
         bistate_check_load_device.get_next_time_from_hours = MagicMock(
-            return_value=datetime.datetime.now(pytz.UTC)
-            + datetime.timedelta(hours=8)
+            return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=8)
         )
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         constraint = bistate_check_load_device.get_current_active_constraint(time)
         assert constraint is not None
@@ -713,18 +637,12 @@ class TestQSBiStateDurationCheckLoadActivityModeDefault:
         """Test bistate_mode_default without duration does nothing."""
         bistate_check_load_device.bistate_mode = "bistate_mode_default"
         bistate_check_load_device.default_on_duration = None
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
-        bistate_check_load_device.push_agenda_constraints = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
+        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         # Should not create constraint
         bistate_check_load_device.push_agenda_constraints.assert_not_called()
@@ -739,27 +657,17 @@ class TestQSBiStateDurationCheckLoadActivityModeAuto:
     ):
         """Test bistate_mode_auto creates constraint from scheduled event."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        bistate_check_load_device.get_next_scheduled_events = AsyncMock(
-            return_value=[(start, end)]
-        )
+        bistate_check_load_device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
-        constraint = (
-            bistate_check_load_device._constraints[0]
-            if bistate_check_load_device._constraints
-            else None
-        )
+        constraint = bistate_check_load_device._constraints[0] if bistate_check_load_device._constraints else None
         assert constraint is not None
         assert result
 
@@ -776,21 +684,13 @@ class TestQSBiStateDurationCheckLoadActivityModeAuto:
     ):
         """Test bistate_mode_auto with no scheduled event."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
-        bistate_check_load_device.get_next_scheduled_event = AsyncMock(
-            return_value=(None, None)
-        )
-        bistate_check_load_device.push_agenda_constraints = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
+        bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         # Should not create constraint
         bistate_check_load_device.push_agenda_constraints.assert_not_called()
@@ -805,27 +705,17 @@ class TestQSBiStateDurationCheckLoadActivityModeExactCalendar:
     ):
         """Test bistate_mode_exact_calendar creates exact constraint."""
         bistate_check_load_device.bistate_mode = "bistate_mode_exact_calendar"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        bistate_check_load_device.get_next_scheduled_events = AsyncMock(
-            return_value=[(start, end)]
-        )
+        bistate_check_load_device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
-        constraint = (
-            bistate_check_load_device._constraints[0]
-            if bistate_check_load_device._constraints
-            else None
-        )
+        constraint = bistate_check_load_device._constraints[0] if bistate_check_load_device._constraints else None
         assert constraint is not None
         assert result
 
@@ -842,16 +732,12 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
     """Test check_load_activity_and_constraints with user override scenarios."""
 
     @pytest.mark.asyncio
-    async def test_user_override_detected(
-        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
-    ):
+    async def test_user_override_detected(self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice):
         """Test that user override is detected when state differs from expected."""
         bistate_check_load_device.current_command = None
         bistate_check_load_device.running_command = None
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         bistate_check_load_device.external_user_initiated_state = None
         bistate_check_load_device.external_user_initiated_state_time = None
         bistate_check_load_device.asked_for_reset_user_initiated_state_time = None
@@ -862,24 +748,16 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         hass.states.async_set("switch.test_device", "on")
 
         bistate_check_load_device.set_live_constraints = MagicMock()
-        bistate_check_load_device.push_live_constraint = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
-        bistate_check_load_device.get_next_scheduled_event = AsyncMock(
-            return_value=(None, None)
-        )
+        bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert bistate_check_load_device.external_user_initiated_state == "on"
-        assert (
-            bistate_check_load_device.external_user_initiated_state_time == time
-        )
+        assert bistate_check_load_device.external_user_initiated_state_time == time
 
     @pytest.mark.asyncio
     async def test_user_override_idle_resets_constraints(
@@ -887,9 +765,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
     ):
         """Test that user override to idle state resets constraints."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         bistate_check_load_device.external_user_initiated_state = None
         bistate_check_load_device.external_user_initiated_state_time = None
         bistate_check_load_device.asked_for_reset_user_initiated_state_time = None
@@ -899,19 +775,13 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         hass.states.async_set("switch.test_device", "off")
 
         bistate_check_load_device.set_live_constraints = MagicMock()
-        bistate_check_load_device.push_live_constraint = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
-        bistate_check_load_device.get_next_scheduled_event = AsyncMock(
-            return_value=(None, None)
-        )
+        bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
 
@@ -921,20 +791,11 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
     ):
         """Test that an expired override resets state."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         bistate_check_load_device.external_user_initiated_state = "on"
         time = datetime.datetime.now(pytz.UTC)
-        bistate_check_load_device.external_user_initiated_state_time = (
-            time
-            - datetime.timedelta(
-                seconds=(
-                    3600.0
-                    * bistate_check_load_device.override_duration
-                    + 1
-                )
-            )
+        bistate_check_load_device.external_user_initiated_state_time = time - datetime.timedelta(
+            seconds=(3600.0 * bistate_check_load_device.override_duration + 1)
         )
         bistate_check_load_device.asked_for_reset_user_initiated_state_time = None
         bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
@@ -944,24 +805,14 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         )
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is True
         bistate_check_load_device.reset_override_state_and_set_reset_ask_time.assert_called_once()
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
-        assert (
-            bistate_check_load_device.external_user_initiated_state is None
-        )
-        assert (
-            bistate_check_load_device.asked_for_reset_user_initiated_state_time
-            is not None
-        )
-        assert (
-            bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done
-            is None
-        )
+        assert bistate_check_load_device.external_user_initiated_state is None
+        assert bistate_check_load_device.asked_for_reset_user_initiated_state_time is not None
+        assert bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
 
     @pytest.mark.asyncio
     async def test_user_override_reset_window_skips_new_override(
@@ -969,36 +820,25 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
     ):
         """Test reset window prevents immediate re-override."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         bistate_check_load_device.external_user_initiated_state = None
         bistate_check_load_device.external_user_initiated_state_time = None
         bistate_check_load_device.current_command = CMD_OFF
         bistate_check_load_device.running_command = CMD_OFF
 
         time = datetime.datetime.now(pytz.UTC)
-        bistate_check_load_device.asked_for_reset_user_initiated_state_time = (
-            time
-            - datetime.timedelta(
-                seconds=USER_OVERRIDE_STATE_BACK_DURATION_S - 1
-            )
+        bistate_check_load_device.asked_for_reset_user_initiated_state_time = time - datetime.timedelta(
+            seconds=USER_OVERRIDE_STATE_BACK_DURATION_S - 1
         )
         bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
         hass.states.async_set("switch.test_device", "on")
-        bistate_check_load_device.push_live_constraint = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is False
-        assert (
-            bistate_check_load_device.external_user_initiated_state is None
-        )
+        assert bistate_check_load_device.external_user_initiated_state is None
         bistate_check_load_device.push_live_constraint.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1007,55 +847,41 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
     ):
         """Test override reset first command handling."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
         time = datetime.datetime.now(pytz.UTC)
         bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
             time - datetime.timedelta(seconds=5)
         )
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
         assert result is True
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed.assert_called_once()
-        assert (
-            bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done
-            is None
-        )
+        assert bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
 
 
 class TestQSBiStateDurationAbstractMethods:
     """Test abstract methods are properly defined."""
 
-    def test_get_virtual_current_constraint_translation_key(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_get_virtual_current_constraint_translation_key(self, hass: HomeAssistant, bistate_setup):
         """Test get_virtual_current_constraint_translation_key returns value."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
 
-        assert (
-            device.get_virtual_current_constraint_translation_key()
-            == "test_constraint_key"
-        )
+        assert device.get_virtual_current_constraint_translation_key() == "test_constraint_key"
 
-    def test_get_select_translation_key(
-        self, hass: HomeAssistant, bistate_setup
-    ):
+    def test_get_select_translation_key(self, hass: HomeAssistant, bistate_setup):
         """Test get_select_translation_key returns value."""
         device = ConcreteBiStateDevice(
             hass=hass,
             config_entry=bistate_setup["config_entry"],
             home=bistate_setup["home"],
-            **{CONF_NAME: "Test Device"}
+            **{CONF_NAME: "Test Device"},
         )
 
         assert device.get_select_translation_key() == "test_select_key"
@@ -1071,30 +897,18 @@ class TestQSBiStateDurationBestEffortLoad:
         """Test that best effort load uses FILLER_AUTO constraint type."""
         bistate_check_load_device.qs_best_effort_green_only = False
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
-        bistate_check_load_device.is_best_effort_only_load = MagicMock(
-            return_value=True
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
+        bistate_check_load_device.is_best_effort_only_load = MagicMock(return_value=True)
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        bistate_check_load_device.get_next_scheduled_events = AsyncMock(
-            return_value=[(start, end)]
-        )
+        bistate_check_load_device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
-        constraint = (
-            bistate_check_load_device._constraints[0]
-            if bistate_check_load_device._constraints
-            else None
-        )
+        constraint = bistate_check_load_device._constraints[0] if bistate_check_load_device._constraints else None
         assert constraint is not None
         assert result
 
@@ -1109,30 +923,20 @@ class TestQSBiStateDurationBestEffortLoad:
     ):
         """Test that non-best effort load uses MANDATORY constraint type."""
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
-        bistate_check_load_device.is_load_command_set = MagicMock(
-            return_value=False
-        )
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
         bistate_check_load_device.load_is_auto_to_be_boosted = False
         bistate_check_load_device.qs_best_effort_green_only = False
         bistate_setup["home"].is_off_grid = MagicMock(return_value=False)
 
         start = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=1)
         end = datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=3)
-        bistate_check_load_device.get_next_scheduled_events = AsyncMock(
-            return_value=[(start, end)]
-        )
+        bistate_check_load_device.get_next_scheduled_events = AsyncMock(return_value=[(start, end)])
 
         time = datetime.datetime.now(pytz.UTC)
 
-        result = await bistate_check_load_device.check_load_activity_and_constraints(
-            time
-        )
+        result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 
-        constraint = (
-            bistate_check_load_device._constraints[0]
-            if bistate_check_load_device._constraints
-            else None
-        )
+        constraint = bistate_check_load_device._constraints[0] if bistate_check_load_device._constraints else None
         assert constraint is not None
         assert result
 

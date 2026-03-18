@@ -1,4 +1,5 @@
 """Tests for home_model.commands."""
+
 from __future__ import annotations
 
 from custom_components.quiet_solar.home_model.commands import (
@@ -6,7 +7,6 @@ from custom_components.quiet_solar.home_model.commands import (
     CMD_CST_AUTO_GREEN,
     CMD_CST_OFF,
     CMD_CST_ON,
-    CMD_OFF,
     LoadCommand,
     copy_command,
     copy_command_and_change_type,
@@ -53,4 +53,3 @@ def test_copy_command_variants() -> None:
     changed = copy_command_and_change_type(cmd, CMD_CST_AUTO_GREEN)
     assert changed.command == CMD_CST_AUTO_GREEN
     assert changed.power_consign == cmd.power_consign
-

@@ -1,14 +1,12 @@
 """Tests for quiet_solar switch platform."""
 
 import pytest
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.const import DOMAIN, DATA_HANDLER
-
+from custom_components.quiet_solar.const import DOMAIN
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -22,9 +20,7 @@ async def test_home_switch_entities_created(
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, home_config_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
 
     assert len(switch_entries) == 0
@@ -45,9 +41,10 @@ async def test_home_off_grid_mode_select(
 
     # Switch to force off-grid
     await hass.services.async_call(
-        "select", "select_option",
+        "select",
+        "select_option",
         {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_off_grid"},
-        blocking=True
+        blocking=True,
     )
     await hass.async_block_till_done()
 
@@ -56,9 +53,10 @@ async def test_home_off_grid_mode_select(
 
     # Switch to force on-grid
     await hass.services.async_call(
-        "select", "select_option",
+        "select",
+        "select_option",
         {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_on_grid"},
-        blocking=True
+        blocking=True,
     )
     await hass.async_block_till_done()
 
@@ -88,9 +86,7 @@ async def test_car_switch_entities_created(
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
 
     # Car should have bump solar charge priority switch
@@ -119,9 +115,7 @@ async def test_charger_switch_entities_created(
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     switch_entries = [e for e in entity_entries if e.domain == "switch"]
 
     # Charger should have enable device and bump solar switches
@@ -151,11 +145,8 @@ async def test_enable_device_switch(
     await hass.async_block_till_done()
 
     # Find enable device switch - it should be on by default
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
-    enable_switches = [e for e in entity_entries
-                       if e.domain == "switch" and "enable" in e.entity_id.lower()]
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
+    enable_switches = [e for e in entity_entries if e.domain == "switch" and "enable" in e.entity_id.lower()]
 
     if enable_switches:
         switch_id = enable_switches[0].entity_id

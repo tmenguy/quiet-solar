@@ -1,44 +1,38 @@
 """Extended tests for home_model/load.py - AbstractDevice and AbstractLoad."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock
 from datetime import timedelta
+from unittest.mock import MagicMock
 
+import pytest
 import pytz
 
+from custom_components.quiet_solar.const import (
+    CONF_DEVICE_EFFICIENCY,
+    CONF_IS_3P,
+    CONF_LOAD_IS_BOOST_ONLY,
+    CONF_NUM_MAX_ON_OFF,
+    CONF_POWER,
+    CONF_SWITCH,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON
+from custom_components.quiet_solar.home_model.constraints import (
+    TimeBasedSimplePowerLoadConstraint,
+)
 from custom_components.quiet_solar.home_model.load import (
     AbstractDevice,
     AbstractLoad,
     PilotedDevice,
-    extract_name_and_index_from_dashboard_section_option,
-    map_section_selected_name_in_section_list,
-)
-from custom_components.quiet_solar.home_model.commands import LoadCommand, CMD_OFF, CMD_ON, CMD_IDLE
-from custom_components.quiet_solar.home_model.constraints import (
-    LoadConstraint,
-    TimeBasedSimplePowerLoadConstraint,
-    DATETIME_MAX_UTC,
-    DATETIME_MIN_UTC,
 )
 from tests.factories import create_minimal_home_model
-from custom_components.quiet_solar.const import (
-    CONF_POWER,
-    CONF_DEVICE_EFFICIENCY,
-    CONF_IS_3P,
-    CONF_SWITCH,
-    CONF_LOAD_IS_BOOST_ONLY,
-    DASHBOARD_NO_SECTION,
-    CONF_NUM_MAX_ON_OFF,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_FILLER_AUTO,
-)
-
 
 # =============================================================================
 # Test AbstractDevice
 # =============================================================================
+
 
 class TestAbstractDeviceInit:
     """Test AbstractDevice initialization."""
@@ -201,6 +195,7 @@ class TestAbstractDevicePilotedDevices:
 # Test AbstractLoad
 # =============================================================================
 
+
 class ConcreteLoad(AbstractLoad):
     """Concrete implementation for testing AbstractLoad."""
 
@@ -222,11 +217,7 @@ class TestAbstractLoadInit:
     def test_init_with_boost_only(self):
         """Test initialization with boost only mode."""
         home = create_minimal_home_model()
-        load = ConcreteLoad(
-            name="Test Load",
-            home=home,
-            **{CONF_SWITCH: "switch.test", CONF_LOAD_IS_BOOST_ONLY: True}
-        )
+        load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test", CONF_LOAD_IS_BOOST_ONLY: True})
 
         assert load.load_is_auto_to_be_boosted is True
 
@@ -253,11 +244,7 @@ class TestAbstractLoadBestEffort:
     def test_is_best_effort_only_load_with_boost(self):
         """Test is_best_effort_only_load returns True with boost only."""
         home = create_minimal_home_model()
-        load = ConcreteLoad(
-            name="Test Load",
-            home=home,
-            **{CONF_SWITCH: "switch.test", CONF_LOAD_IS_BOOST_ONLY: True}
-        )
+        load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test", CONF_LOAD_IS_BOOST_ONLY: True})
 
         result = load.is_best_effort_only_load()
 
@@ -360,7 +347,7 @@ class TestAbstractLoadCommands:
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         # Just verify the method exists
-        assert hasattr(load, '_ack_command')
+        assert hasattr(load, "_ack_command")
         assert callable(load._ack_command)
 
     @pytest.mark.asyncio
@@ -371,8 +358,9 @@ class TestAbstractLoadCommands:
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         # Just verify the method exists and is async
-        assert hasattr(load, 'execute_command')
+        assert hasattr(load, "execute_command")
         import inspect
+
         assert inspect.iscoroutinefunction(load.execute_command)
 
 
@@ -409,6 +397,7 @@ class TestAbstractLoadPushConstraint:
 # Test PilotedDevice - requires full device setup, simplified tests
 # =============================================================================
 
+
 class TestPilotedDevice:
     """Test PilotedDevice class - simplified tests."""
 
@@ -423,6 +412,7 @@ class TestPilotedDevice:
 # More AbstractLoad constraint tests
 # =============================================================================
 
+
 class TestAbstractLoadConstraintValue:
     """Test AbstractLoad constraint value methods."""
 
@@ -433,14 +423,15 @@ class TestAbstractLoadConstraintValue:
         load = ConcreteLoad(name="Test Load", home=home, **{CONF_SWITCH: "switch.test"})
 
         # These attributes should exist
-        assert hasattr(load, 'current_constraint_current_value')
-        assert hasattr(load, 'current_constraint_current_energy')
-        assert hasattr(load, 'current_constraint_current_percent_completion')
+        assert hasattr(load, "current_constraint_current_value")
+        assert hasattr(load, "current_constraint_current_energy")
+        assert hasattr(load, "current_constraint_current_percent_completion")
 
 
 # =============================================================================
 # Test is_device_light_on
 # =============================================================================
+
 
 class TestIsDeviceLightOn:
     """Test is_device_light_on on AbstractDevice and PilotedDevice."""
@@ -491,6 +482,7 @@ class TestIsDeviceLightOn:
 # Test power_use property with dampening
 # =============================================================================
 
+
 class TestPowerUseDampened:
     """Test updated power_use property with _dampened_computed_power_use."""
 
@@ -528,7 +520,8 @@ class TestPowerUseDampened:
         """Init reads measured_power from kwargs into _dampened_computed_power_use."""
         home = create_minimal_home_model()
         device = AbstractDevice(
-            name="Test", home=home,
+            name="Test",
+            home=home,
             **{CONF_POWER: 500, f"measured_{CONF_POWER}": 750.0},
         )
         assert device._dampened_computed_power_use == 750.0
@@ -538,6 +531,7 @@ class TestPowerUseDampened:
 # =============================================================================
 # Test reset() clears _dampen_start_transition
 # =============================================================================
+
 
 class TestResetClearsDampenTransition:
     """Test that reset() clears _dampen_start_transition."""

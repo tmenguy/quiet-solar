@@ -1,5 +1,3 @@
-from unittest.mock import MagicMock
-
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     PERCENTAGE,
@@ -10,10 +8,10 @@ from homeassistant.const import (
 )
 
 from custom_components.quiet_solar.config_flow import (
-    selectable_amps_entities,
-    selectable_calendar_entities,
     _get_entity_key_from_selector_key,
     _get_reset_selector_entity_name,
+    selectable_amps_entities,
+    selectable_calendar_entities,
     selectable_length_sensor_entities,
     selectable_percent_number_entities,
     selectable_percent_sensor_entities,
@@ -57,38 +55,39 @@ class DummyEntityRegistry:
 
 def _build_hass_with_states(*states: DummyState, quiet_solar_entities: list[str] | None = None):
     """Build a mock hass object with states and entity registry.
-    
+
     Args:
         *states: DummyState objects to include
         quiet_solar_entities: List of entity IDs that should be marked as quiet_solar entities
     """
     if quiet_solar_entities is None:
         quiet_solar_entities = []
-    
+
     # Create entity registry entries for all entities
     registry_entries = {}
     for state in states:
         platform = DOMAIN if state.entity_id in quiet_solar_entities else "other_integration"
         registry_entries[state.entity_id] = DummyEntityEntry(state.entity_id, platform)
-    
+
     class Hass:
         def __init__(self, states, entity_registry):
             self.states = states
             self._entity_registry = entity_registry
 
     hass = Hass(DummyStates(*states), DummyEntityRegistry(registry_entries))
-    
+
     # Mock the entity_registry.async_get function to return our dummy registry
     import homeassistant.helpers.entity_registry as er
+
     original_async_get = er.async_get
-    
+
     def mock_async_get(hass_instance):
         if hass_instance == hass:
             return hass._entity_registry
         return original_async_get(hass_instance)
-    
+
     er.async_get = mock_async_get
-    
+
     return hass
 
 
@@ -202,4 +201,3 @@ def test_reset_selector_helpers():
     assert reset_key == "sensor.test_qs_reset_selector"
     assert _get_entity_key_from_selector_key(reset_key) == key
     assert _get_entity_key_from_selector_key("sensor.other") is None
-

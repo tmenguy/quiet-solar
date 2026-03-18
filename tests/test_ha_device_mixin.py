@@ -1,47 +1,45 @@
 """Tests for device utilities in ha_model/device.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+import pytz
 from homeassistant.const import (
+    ATTR_UNIT_OF_MEASUREMENT,
     CONF_NAME,
-    UnitOfPower,
     UnitOfElectricCurrent,
     UnitOfLength,
-    ATTR_UNIT_OF_MEASUREMENT,
-)
-import pytz
-
-from custom_components.quiet_solar.ha_model.device import (
-    compute_energy_Wh_rieman_sum,
-    convert_power_to_w,
-    convert_current_to_amps,
-    convert_distance_to_km,
-    get_average_power_energy_based,
-    get_median_sensor,
-    load_from_history,
-    HADeviceMixin,
+    UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
     CONF_ACCURATE_POWER_SENSOR,
     CONF_CALENDAR,
+    DATA_HANDLER,
+    DOMAIN,
 )
-
+from custom_components.quiet_solar.ha_model.device import (
+    HADeviceMixin,
+    compute_energy_Wh_rieman_sum,
+    convert_current_to_amps,
+    convert_distance_to_km,
+    convert_power_to_w,
+    get_average_power_energy_based,
+    get_median_sensor,
+    load_from_history,
+)
 from tests.factories import create_minimal_home_model
-
 
 # =============================================================================
 # Test compute_energy_Wh_rieman_sum
 # =============================================================================
+
 
 class TestComputeEnergyRiemanSum:
     """Test compute_energy_Wh_rieman_sum function."""
@@ -121,6 +119,7 @@ class TestComputeEnergyRiemanSum:
 # Test convert_power_to_w
 # =============================================================================
 
+
 class TestConvertPowerToW:
     """Test convert_power_to_w function."""
 
@@ -144,6 +143,7 @@ class TestConvertPowerToW:
 # =============================================================================
 # Test convert_current_to_amps
 # =============================================================================
+
 
 class TestConvertCurrentToAmps:
     """Test convert_current_to_amps function."""
@@ -169,6 +169,7 @@ class TestConvertCurrentToAmps:
 # =============================================================================
 # Test convert_distance_to_km
 # =============================================================================
+
 
 class TestConvertDistanceToKm:
     """Test convert_distance_to_km function."""
@@ -197,6 +198,7 @@ class TestConvertDistanceToKm:
 # =============================================================================
 # Test get_average_power_energy_based
 # =============================================================================
+
 
 class TestGetAveragePowerEnergyBased:
     """Test get_average_power_energy_based function."""
@@ -242,6 +244,7 @@ class TestGetAveragePowerEnergyBased:
 # =============================================================================
 # Test get_median_sensor
 # =============================================================================
+
 
 class TestGetMedianSensor:
     """Test get_median_sensor function."""
@@ -300,13 +303,16 @@ class TestGetMedianSensor:
 # Test load_from_history
 # =============================================================================
 
+
 class TestLoadFromHistory:
     """Test load_from_history async function."""
 
     @pytest.mark.asyncio
     async def test_load_from_history_none_hass(self):
         """Test load_from_history returns empty list when hass is None."""
-        result = await load_from_history(None, "sensor.test", datetime.datetime.now(pytz.UTC), datetime.datetime.now(pytz.UTC))
+        result = await load_from_history(
+            None, "sensor.test", datetime.datetime.now(pytz.UTC), datetime.datetime.now(pytz.UTC)
+        )
         assert result == []
 
     @pytest.mark.asyncio
@@ -323,7 +329,7 @@ class TestLoadFromHistory:
                 hass,
                 "sensor.test",
                 datetime.datetime.now(pytz.UTC) - timedelta(hours=1),
-                datetime.datetime.now(pytz.UTC)
+                datetime.datetime.now(pytz.UTC),
             )
 
         assert result == []
@@ -332,6 +338,7 @@ class TestLoadFromHistory:
 # =============================================================================
 # Test HADeviceMixin
 # =============================================================================
+
 
 class ConcreteHADevice(HADeviceMixin):
     """Concrete implementation for testing HADeviceMixin."""
@@ -364,9 +371,7 @@ def device_mixin_home(hass: HomeAssistant):
     return home
 
 
-def test_init_basic(
-    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-):
+def test_init_basic(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """Test basic initialization."""
     device = ConcreteHADevice(
         hass=hass,
@@ -379,9 +384,7 @@ def test_init_basic(
     assert device.name == "Test Device"
 
 
-def test_init_with_calendar(
-    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-):
+def test_init_with_calendar(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """Test initialization with calendar entity."""
     device = ConcreteHADevice(
         hass=hass,
@@ -393,9 +396,7 @@ def test_init_with_calendar(
     assert device.calendar == "calendar.test"
 
 
-def test_init_with_accurate_power_sensor(
-    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-):
+def test_init_with_accurate_power_sensor(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """Test initialization with accurate power sensor."""
     device = ConcreteHADevice(
         hass=hass,
@@ -420,9 +421,7 @@ def test_init_no_config_entry(hass: HomeAssistant, device_mixin_home):
 
 
 @pytest.fixture
-def device_mixin_device(
-    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-):
+def device_mixin_device(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """ConcreteHADevice instance for time helper tests."""
     return ConcreteHADevice(
         hass=hass,
@@ -452,9 +451,7 @@ def test_get_next_time_from_hours_output_utc(device_mixin_device):
     now = datetime.datetime.now(pytz.UTC)
     target_time = dt_time(hour=12, minute=0, second=0)
 
-    result = device_mixin_device.get_next_time_from_hours(
-        target_time, now, output_in_utc=True
-    )
+    result = device_mixin_device.get_next_time_from_hours(target_time, now, output_in_utc=True)
 
     assert result is not None
     assert result.tzinfo == pytz.UTC
@@ -471,9 +468,7 @@ def test_get_proper_local_adapted_tomorrow(device_mixin_device):
 
 
 @pytest.fixture
-def device_mixin_device_power(
-    hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-):
+def device_mixin_device_power(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """ConcreteHADevice instance with power sensor for probe tests."""
     return ConcreteHADevice(
         hass=hass,
@@ -505,26 +500,16 @@ def test_attach_amps_to_probe(device_mixin_device_power):
 
 def test_attach_ha_state_to_probe_numerical(device_mixin_device_power):
     """Test attach_ha_state_to_probe for numerical sensor."""
-    device_mixin_device_power.attach_ha_state_to_probe(
-        "sensor.temp", is_numerical=True
-    )
+    device_mixin_device_power.attach_ha_state_to_probe("sensor.temp", is_numerical=True)
     assert "sensor.temp" in device_mixin_device_power._entity_probed_state
-    assert (
-        device_mixin_device_power._entity_probed_state_is_numerical["sensor.temp"]
-        is True
-    )
+    assert device_mixin_device_power._entity_probed_state_is_numerical["sensor.temp"] is True
 
 
 def test_attach_ha_state_to_probe_non_numerical(device_mixin_device_power):
     """Test attach_ha_state_to_probe for non-numerical sensor."""
-    device_mixin_device_power.attach_ha_state_to_probe(
-        "sensor.status", is_numerical=False
-    )
+    device_mixin_device_power.attach_ha_state_to_probe("sensor.status", is_numerical=False)
     assert "sensor.status" in device_mixin_device_power._entity_probed_state
-    assert (
-        device_mixin_device_power._entity_probed_state_is_numerical["sensor.status"]
-        is False
-    )
+    assert device_mixin_device_power._entity_probed_state_is_numerical["sensor.status"] is False
 
 
 # =============================================================================
@@ -549,7 +534,7 @@ class TestLoadFromHistoryExtended:
                 hass,
                 "sensor.test",
                 datetime.datetime.now(pytz.UTC) - timedelta(hours=1),
-                datetime.datetime.now(pytz.UTC)
+                datetime.datetime.now(pytz.UTC),
             )
 
         # Should return empty list on exception
@@ -645,9 +630,7 @@ class TestHADeviceMixinExtended:
     """Extended tests for HADeviceMixin to cover remaining lines."""
 
     @pytest.fixture
-    def device_with_mobile_app(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def device_with_mobile_app(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Device with mobile app configured for notification tests."""
         device = ConcreteHADevice(
             hass=hass,
@@ -670,9 +653,7 @@ class TestHADeviceMixinExtended:
         device_with_mobile_app.hass.services = MagicMock()
         device_with_mobile_app.hass.services.async_call = AsyncMock()
 
-        await device_with_mobile_app.on_device_state_change(
-            time, DEVICE_STATUS_CHANGE_ERROR
-        )
+        await device_with_mobile_app.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR)
 
         # Service should have been called with error message
         device_with_mobile_app.hass.services.async_call.assert_called_once()
@@ -703,9 +684,7 @@ class TestHADeviceMixinExtended:
         device_with_mobile_app.hass.services = MagicMock()
         device_with_mobile_app.hass.services.async_call = AsyncMock()
 
-        await device_with_mobile_app.on_device_state_change_helper(
-            time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test"
-        )
+        await device_with_mobile_app.on_device_state_change_helper(time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test")
 
         # Check that URL was included
         call_args = device_with_mobile_app.hass.services.async_call.call_args
@@ -721,14 +700,10 @@ class TestHADeviceMixinExtended:
         time = datetime.datetime.now(pytz.UTC)
 
         device_with_mobile_app.hass.services = MagicMock()
-        device_with_mobile_app.hass.services.async_call = AsyncMock(
-            side_effect=Exception("Service call failed")
-        )
+        device_with_mobile_app.hass.services.async_call = AsyncMock(side_effect=Exception("Service call failed"))
 
         # Should not raise exception
-        await device_with_mobile_app.on_device_state_change_helper(
-            time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test"
-        )
+        await device_with_mobile_app.on_device_state_change_helper(time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test")
 
     @pytest.mark.asyncio
     async def test_on_device_state_change_no_mobile_app(
@@ -749,9 +724,7 @@ class TestHADeviceMixinExtended:
         device.hass.services = MagicMock()
         device.hass.services.async_call = AsyncMock()
 
-        await device.on_device_state_change_helper(
-            time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test"
-        )
+        await device.on_device_state_change_helper(time, DEVICE_STATUS_CHANGE_NOTIFY, message="Test")
 
         # No service call should be made
         device.hass.services.async_call.assert_not_called()
@@ -773,9 +746,7 @@ class TestHADeviceMixinExtended:
 
         assert result == "sensor.secondary_power"
 
-    def test_get_best_power_ha_entity_none(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_best_power_ha_entity_none(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_best_power_HA_entity returns None when no sensors (lines 672-673)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -790,9 +761,7 @@ class TestHADeviceMixinExtended:
 
         assert result is None
 
-    def test_is_sensor_growing_none_entity(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_is_sensor_growing_none_entity(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test is_sensor_growing with None entity_id returns None (lines 689-690)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -824,9 +793,7 @@ class TestHADeviceMixinExtended:
 
         assert result is None
 
-    def test_is_sensor_growing_with_data(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_is_sensor_growing_with_data(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test is_sensor_growing with sufficient data (lines 697-710)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -848,9 +815,7 @@ class TestHADeviceMixinExtended:
 
         assert result is True
 
-    def test_is_sensor_growing_not_growing(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_is_sensor_growing_not_growing(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test is_sensor_growing when values are not growing."""
         device = ConcreteHADevice(
             hass=hass,
@@ -906,15 +871,11 @@ class TestHADeviceMixinExtended:
         device._entity_probed_last_valid_state["sensor.test"] = (time - timedelta(minutes=5), 100.0, {})
 
         # With tolerance
-        result = device.get_sensor_latest_possible_valid_value(
-            "sensor.test", tolerance_seconds=600, time=time
-        )
+        result = device.get_sensor_latest_possible_valid_value("sensor.test", tolerance_seconds=600, time=time)
 
         assert result == 100.0
 
-    def test_attach_ha_state_with_unfiltered(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_attach_ha_state_with_unfiltered(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test attach_ha_state_to_probe with attach_unfiltered=True (lines 1104-1115)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -923,19 +884,13 @@ class TestHADeviceMixinExtended:
             name="Test Device",
         )
 
-        device.attach_ha_state_to_probe(
-            "sensor.test",
-            is_numerical=True,
-            attach_unfiltered=True
-        )
+        device.attach_ha_state_to_probe("sensor.test", is_numerical=True, attach_unfiltered=True)
 
         # Should have both filtered and unfiltered versions
         assert "sensor.test" in device._entity_probed_state
         assert "sensor.test_no_filters" in device._entity_probed_state
 
-    def test_get_unfiltered_entity_name(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_unfiltered_entity_name(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_unfiltered_entity_name method."""
         device = ConcreteHADevice(
             hass=hass,
@@ -948,9 +903,7 @@ class TestHADeviceMixinExtended:
         result = device.get_unfiltered_entity_name(None)
         assert result is None
 
-    def test_root_device_post_home_init(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_root_device_post_home_init(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test root_device_post_home_init method (lines 317-329)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -987,9 +940,7 @@ class TestHADeviceMixinExtended:
         # Value should be None due to failed conversion
         assert "sensor.test" in device._entity_probed_state
 
-    def test_get_state_history_data_empty(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_state_history_data_empty(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_state_history_data with empty history."""
         device = ConcreteHADevice(
             hass=hass,
@@ -1002,9 +953,7 @@ class TestHADeviceMixinExtended:
 
         assert result == []
 
-    def test_get_state_history_data_with_data(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_state_history_data_with_data(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_state_history_data with data (lines 1248-1301)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -1049,9 +998,7 @@ class TestHADeviceMixinExtended:
 
         assert result == []
 
-    def test_get_platforms(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_platforms(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_platforms method (lines 1303-1311)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -1065,9 +1012,7 @@ class TestHADeviceMixinExtended:
         # Should include basic platforms
         assert "button" in platforms or "sensor" in platforms
 
-    def test_get_attached_virtual_devices(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def test_get_attached_virtual_devices(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Test get_attached_virtual_devices returns empty list (lines 1314-1316)."""
         device = ConcreteHADevice(
             hass=hass,
@@ -1085,9 +1030,7 @@ class TestDeviceAmpsConsumption:
     """Test device amps consumption methods."""
 
     @pytest.fixture
-    def device_with_amps_sensors(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def device_with_amps_sensors(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Device with amps sensors configured."""
         from custom_components.quiet_solar.const import (
             CONF_PHASE_1_AMPS_SENSOR,
@@ -1104,7 +1047,7 @@ class TestDeviceAmpsConsumption:
                 CONF_PHASE_1_AMPS_SENSOR: "sensor.phase1_amps",
                 CONF_PHASE_2_AMPS_SENSOR: "sensor.phase2_amps",
                 CONF_PHASE_3_AMPS_SENSOR: "sensor.phase3_amps",
-            }
+            },
         )
         return device
 
@@ -1141,9 +1084,7 @@ class TestLastStateValueDuration:
 
         time = datetime.datetime.now(pytz.UTC)
 
-        duration, ranges = device.get_last_state_value_duration(
-            "sensor.test", {"on"}, None, time
-        )
+        duration, ranges = device.get_last_state_value_duration("sensor.test", {"on"}, None, time)
 
         assert duration is None
 
@@ -1166,9 +1107,7 @@ class TestLastStateValueDuration:
             (time, "on", {}),
         ]
 
-        duration, ranges = device.get_last_state_value_duration(
-            "sensor.test", {"on"}, None, time
-        )
+        duration, ranges = device.get_last_state_value_duration("sensor.test", {"on"}, None, time)
 
         assert duration is not None
         assert duration > 0
@@ -1204,16 +1143,14 @@ class TestCalendarEvents:
     """Test calendar event methods."""
 
     @pytest.fixture
-    def device_with_calendar(
-        self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home
-    ):
+    def device_with_calendar(self, hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
         """Device with calendar configured."""
         device = ConcreteHADevice(
             hass=hass,
             config_entry=device_mixin_config_entry,
             home=device_mixin_home,
             name="Test Device",
-            **{CONF_CALENDAR: "calendar.test_calendar"}
+            **{CONF_CALENDAR: "calendar.test_calendar"},
         )
         return device
 

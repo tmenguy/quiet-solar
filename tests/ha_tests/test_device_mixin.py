@@ -11,27 +11,20 @@ This module covers the following uncovered methods:
 - _clean_times_arrays
 """
 
-import pytest
 from datetime import datetime, timedelta
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytz
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from custom_components.quiet_solar.const import (
-    DOMAIN,
     DATA_HANDLER,
-    DEVICE_STATUS_CHANGE_CONSTRAINT,
     DEVICE_STATUS_CHANGE_ERROR,
     DEVICE_STATUS_CHANGE_NOTIFY,
-    CONF_MOBILE_APP,
-    CONF_MOBILE_APP_URL,
-    CONF_CALENDAR,
+    DOMAIN,
 )
 from custom_components.quiet_solar.ha_model.device import MAX_STATE_HISTORY_S
 
@@ -41,6 +34,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 # =============================================================================
 # Tests for _clean_times_arrays
 # =============================================================================
+
 
 class TestCleanTimesArrays:
     """Tests for the _clean_times_arrays method."""
@@ -137,6 +131,7 @@ class TestCleanTimesArrays:
 # =============================================================================
 # Tests for is_sensor_growing
 # =============================================================================
+
 
 class TestIsSensorGrowing:
     """Tests for the is_sensor_growing method."""
@@ -238,6 +233,7 @@ class TestIsSensorGrowing:
 # Tests for get_sensor_latest_possible_valid_value_and_attr
 # =============================================================================
 
+
 class TestGetSensorLatestPossibleValidValueAndAttr:
     """Tests for the get_sensor_latest_possible_valid_value_and_attr method."""
 
@@ -287,9 +283,7 @@ class TestGetSensorLatestPossibleValidValueAndAttr:
         )
 
         # Get value with time after the last valid time
-        value, attrs = home.get_sensor_latest_possible_valid_value_and_attr(
-            entity_id, time_now
-        )
+        value, attrs = home.get_sensor_latest_possible_valid_value_and_attr(entity_id, time_now)
 
         assert value == expected_value
         assert attrs == expected_attrs
@@ -298,6 +292,7 @@ class TestGetSensorLatestPossibleValidValueAndAttr:
 # =============================================================================
 # Tests for get_sensor_latest_possible_valid_time_value_attr
 # =============================================================================
+
 
 class TestGetSensorLatestPossibleValidTimeValueAttr:
     """Tests for the get_sensor_latest_possible_valid_time_value_attr method."""
@@ -344,9 +339,7 @@ class TestGetSensorLatestPossibleValidTimeValueAttr:
             expected_attrs,
         )
 
-        time_val, value, attrs = home.get_sensor_latest_possible_valid_time_value_attr(
-            entity_id, time=time_now
-        )
+        time_val, value, attrs = home.get_sensor_latest_possible_valid_time_value_attr(entity_id, time=time_now)
 
         assert time_val == time_now - timedelta(minutes=2)
         assert value == expected_value
@@ -386,9 +379,11 @@ class TestGetSensorLatestPossibleValidTimeValueAttr:
         assert value is None
         assert attrs is None
 
+
 # =============================================================================
 # Tests for root_device_post_home_init
 # =============================================================================
+
 
 class TestRootDevicePostHomeInit:
     """Tests for the root_device_post_home_init method."""
@@ -418,6 +413,7 @@ class TestRootDevicePostHomeInit:
 # =============================================================================
 # Tests for on_device_state_change_helper
 # =============================================================================
+
 
 class TestOnDeviceStateChangeHelper:
     """Tests for the on_device_state_change_helper method."""
@@ -485,6 +481,7 @@ class TestOnDeviceStateChangeHelper:
 # =============================================================================
 # Tests for get_next_scheduled_event
 # =============================================================================
+
 
 class TestGetNextScheduledEvent:
     """Tests for the get_next_scheduled_event method."""
@@ -576,6 +573,7 @@ class TestGetNextScheduledEvent:
 # Tests for _async_bootstrap_from_history
 # =============================================================================
 
+
 class TestAsyncBootstrapFromHistory:
     """Tests for the _async_bootstrap_from_history method."""
 
@@ -659,6 +657,7 @@ class TestAsyncBootstrapFromHistory:
 # =============================================================================
 # Tests for _get_device_amps_consumption
 # =============================================================================
+
 
 class TestGetDeviceAmpsConsumption:
     """Tests for the _get_device_amps_consumption method."""
@@ -800,21 +799,27 @@ class TestGetDeviceAmpsConsumption:
 
         # Set values for all 3 phases
         home._entity_probed_last_valid_state[entity_id_1] = (
-            time_now - timedelta(seconds=5), 10.0, {"unit_of_measurement": "A"},
+            time_now - timedelta(seconds=5),
+            10.0,
+            {"unit_of_measurement": "A"},
         )
         home._entity_probed_state[entity_id_1] = [
             (time_now - timedelta(seconds=5), 10.0, {"unit_of_measurement": "A"}),
         ]
 
         home._entity_probed_last_valid_state[entity_id_2] = (
-            time_now - timedelta(seconds=5), 20.0, {"unit_of_measurement": "A"},
+            time_now - timedelta(seconds=5),
+            20.0,
+            {"unit_of_measurement": "A"},
         )
         home._entity_probed_state[entity_id_2] = [
             (time_now - timedelta(seconds=5), 20.0, {"unit_of_measurement": "A"}),
         ]
 
         home._entity_probed_last_valid_state[entity_id_3] = (
-            time_now - timedelta(seconds=5), 30.0, {"unit_of_measurement": "A"},
+            time_now - timedelta(seconds=5),
+            30.0,
+            {"unit_of_measurement": "A"},
         )
         home._entity_probed_state[entity_id_3] = [
             (time_now - timedelta(seconds=5), 30.0, {"unit_of_measurement": "A"}),
@@ -900,6 +905,7 @@ class TestGetDeviceAmpsConsumption:
 # =============================================================================
 # Tests for get_last_state_value_duration
 # =============================================================================
+
 
 class TestGetLastStateValueDuration:
     """Tests for the get_last_state_value_duration method."""
@@ -1094,9 +1100,9 @@ class TestGetLastStateValueDuration:
         # Multiple charging periods
         home._entity_probed_state[entity_id] = [
             (time_now - timedelta(minutes=90), "Charging", {}),  # 15 min
-            (time_now - timedelta(minutes=75), "Idle", {}),      # 15 min
+            (time_now - timedelta(minutes=75), "Idle", {}),  # 15 min
             (time_now - timedelta(minutes=60), "Charging", {}),  # 30 min
-            (time_now - timedelta(minutes=30), "Idle", {}),      # 15 min
+            (time_now - timedelta(minutes=30), "Idle", {}),  # 15 min
             (time_now - timedelta(minutes=15), "Charging", {}),  # 15 min
         ]
 
@@ -1113,5 +1119,3 @@ class TestGetLastStateValueDuration:
         # Note: The function goes backward from the most recent, so it may stop at first non-match
         # when count_only_duration=True, it continues counting all matches
         assert len(ok_ranges) >= 1
-
-

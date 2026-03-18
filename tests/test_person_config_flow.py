@@ -1,27 +1,26 @@
 """Tests for QSPerson config flow."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.config_flow import QSFlowHandler
 from custom_components.quiet_solar.const import (
-    CONF_PERSON_PERSON_ENTITY,
     CONF_PERSON_AUTHORIZED_CARS,
-    CONF_PERSON_PREFERRED_CAR,
     CONF_PERSON_NOTIFICATION_TIME,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    DATA_HANDLER,
     DEVICE_TYPE,
     DOMAIN,
-    DATA_HANDLER,
     CONF_TYPE_NAME_QSPerson,
 )
+from tests.factories import create_minimal_home_model
 
 
 @pytest.fixture
@@ -34,9 +33,7 @@ def person_flow_handler(hass: HomeAssistant) -> QSFlowHandler:
 
 
 @pytest.mark.asyncio
-async def test_person_step_with_person_entities(
-    hass: HomeAssistant, person_flow_handler
-):
+async def test_person_step_with_person_entities(hass: HomeAssistant, person_flow_handler):
     """Test people config step when person entities exist."""
     hass.states.async_set("person.john_doe", "home", {})
     hass.states.async_set("person.jane_smith", "away", {})
@@ -64,9 +61,7 @@ async def test_person_step_with_person_entities(
 
 
 @pytest.mark.asyncio
-async def test_person_step_no_person_entities(
-    hass: HomeAssistant, person_flow_handler
-):
+async def test_person_step_no_person_entities(hass: HomeAssistant, person_flow_handler):
     """Test people config step when no person entities exist."""
     result = await person_flow_handler.async_step_person()
 
@@ -75,9 +70,7 @@ async def test_person_step_no_person_entities(
 
 
 @pytest.mark.asyncio
-async def test_person_step_filters_invited_cars(
-    hass: HomeAssistant, person_flow_handler
-):
+async def test_person_step_filters_invited_cars(hass: HomeAssistant, person_flow_handler):
     """Test that invited cars are filtered out from car options."""
     hass.states.async_set("person.john_doe", "home", {})
 
@@ -106,9 +99,7 @@ async def test_person_step_filters_invited_cars(
 
 
 @pytest.mark.asyncio
-async def test_person_step_with_user_input(
-    hass: HomeAssistant, person_flow_handler
-):
+async def test_person_step_with_user_input(hass: HomeAssistant, person_flow_handler):
     """Test people config step with user input."""
     hass.states.async_set("person.john_doe", "home", {})
 
@@ -142,8 +133,8 @@ async def test_person_step_with_user_input(
 @pytest.mark.asyncio
 async def test_person_creation_from_config_entry(hass: HomeAssistant):
     """Test creating QSPerson from config entry."""
-    from custom_components.quiet_solar.ha_model.person import QSPerson
     from custom_components.quiet_solar.ha_model.home import QSHome
+    from custom_components.quiet_solar.ha_model.person import QSPerson
 
     hass.data.setdefault(DOMAIN, {})
     home = QSHome(hass=hass, config_entry=None, name="test home")
@@ -160,12 +151,7 @@ async def test_person_creation_from_config_entry(hass: HomeAssistant):
         },
     )
 
-    person = QSPerson(
-        hass=hass,
-        home=home,
-        config_entry=config_entry,
-        **config_entry.data
-    )
+    person = QSPerson(hass=hass, home=home, config_entry=config_entry, **config_entry.data)
 
     assert person.name == "John Doe"
     assert person.person_entity_id == "person.john_doe"
@@ -177,8 +163,8 @@ async def test_person_creation_from_config_entry(hass: HomeAssistant):
 @pytest.mark.asyncio
 async def test_person_creation_direct_params(hass: HomeAssistant):
     """Test backward compatibility with direct parameters."""
-    from custom_components.quiet_solar.ha_model.person import QSPerson
     from custom_components.quiet_solar.ha_model.home import QSHome
+    from custom_components.quiet_solar.ha_model.person import QSPerson
 
     hass.data.setdefault(DOMAIN, {})
     home = QSHome(hass=hass, config_entry=None, name="test home")

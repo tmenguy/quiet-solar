@@ -8,68 +8,41 @@ This test file targets the 40% -> 80%+ coverage gap by testing:
 - Charger state transitions
 - Car-charger integration
 """
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
-from datetime import timedelta, time as dt_time
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
 )
-import pytz
-
-from custom_components.quiet_solar.ha_model.charger import (
-    QSChargerGeneric,
-    QSChargerWallbox,
-    QSChargerOCPP,
-    QSChargerGroup,
-    QSChargerStatus,
-    QSStateCmd,
-    QSChargerStates,
-    WallboxChargerStatus,
-    QSOCPPv16v201ChargePointStatus,
-    STATE_CMD_RETRY_NUMBER,
-    STATE_CMD_TIME_BETWEEN_RETRY_S,
-    CHARGER_BOOT_TIME_DATA_EXPIRATION_S,
-    CHARGER_ADAPTATION_WINDOW_S,
-    TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S,
-    TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S,
-)
-from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
-from custom_components.quiet_solar.home_model.commands import (
-    LoadCommand,
-    CMD_ON,
-    CMD_OFF,
-    CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_GREEN_ONLY,
-    CMD_AUTO_GREEN_CAP,
-    CMD_AUTO_GREEN_CONSIGN,
-    CMD_AUTO_PRICE,
-)
-from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CHARGER_MIN_CHARGE,
-    CONF_CHARGER_MAX_CHARGE,
-    CONF_CHARGER_CONSUMPTION,
-    CONF_IS_3P,
-    CONF_MONO_PHASE,
-    CONF_CHARGER_STATUS_SENSOR,
-    CONF_CHARGER_PLUGGED,
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
-    CONF_CHARGER_PAUSE_RESUME_SWITCH,
-    CHARGER_NO_CAR_CONNECTED,
-)
-
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_CHARGER_CONSUMPTION,
+    CONF_CHARGER_MAX_CHARGE,
+    CONF_CHARGER_MIN_CHARGE,
+    CONF_IS_3P,
+    CONF_MONO_PHASE,
+    DATA_HANDLER,
+    DOMAIN,
+)
+from custom_components.quiet_solar.ha_model.charger import (
+    STATE_CMD_RETRY_NUMBER,
+    STATE_CMD_TIME_BETWEEN_RETRY_S,
+    QSChargerGeneric,
+    QSChargerGroup,
+    QSChargerStatus,
+    QSOCPPv16v201ChargePointStatus,
+    QSStateCmd,
+    WallboxChargerStatus,
+)
+from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from tests.factories import create_minimal_home_model
 
 
@@ -122,6 +95,7 @@ def charger_hass_data(hass: HomeAssistant, charger_data_handler):
 # Tests for QSStateCmd class
 # ============================================================================
 
+
 class TestQSStateCmd:
     """Test QSStateCmd state machine."""
 
@@ -137,10 +111,7 @@ class TestQSStateCmd:
 
     def test_init_custom_retries(self):
         """Test initialization with custom retry settings."""
-        cmd = QSStateCmd(
-            initial_num_in_out_immediate=2,
-            command_retries_s=30.0
-        )
+        cmd = QSStateCmd(initial_num_in_out_immediate=2, command_retries_s=30.0)
 
         assert cmd.initial_num_in_out_immediate == 2
         assert cmd.command_retries_s == 30.0
@@ -278,10 +249,7 @@ class TestQSStateCmd:
         cmd._num_launched = 2
         cmd.last_time_set = time
 
-        result = cmd.is_ok_to_launch(
-            True,
-            time + timedelta(seconds=STATE_CMD_TIME_BETWEEN_RETRY_S + 10)
-        )
+        result = cmd.is_ok_to_launch(True, time + timedelta(seconds=STATE_CMD_TIME_BETWEEN_RETRY_S + 10))
 
         assert result is True
 
@@ -358,6 +326,7 @@ class TestQSStateCmd:
 # ============================================================================
 # Tests for QSChargerStatus class
 # ============================================================================
+
 
 class TestQSChargerStatus:
     """Test QSChargerStatus budget management."""
@@ -456,13 +425,40 @@ class TestQSChargerStatus:
         status = QSChargerStatus(self.mock_charger)
         status.budgeted_amp = 0
         status.budgeted_num_phases = 3
-        status.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+        status.possible_amps = [
+            0,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+        ]
         status.possible_num_phases = [3]
 
         next_amp, next_phases = status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=True, allow_phase_change=False, increase=True
         )
 
         # Should go to minimum charge (6)
@@ -474,13 +470,40 @@ class TestQSChargerStatus:
         status = QSChargerStatus(self.mock_charger)
         status.budgeted_amp = 16
         status.budgeted_num_phases = 3
-        status.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+        status.possible_amps = [
+            0,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+        ]
         status.possible_num_phases = [3]
 
         next_amp, next_phases = status.can_change_budget(
-            allow_state_change=False,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=False, allow_phase_change=False, increase=True
         )
 
         assert next_amp == 17
@@ -495,9 +518,7 @@ class TestQSChargerStatus:
         status.possible_num_phases = [3]
 
         next_amp, next_phases = status.can_change_budget(
-            allow_state_change=False,
-            allow_phase_change=False,
-            increase=False
+            allow_state_change=False, allow_phase_change=False, increase=False
         )
 
         assert next_amp == 15
@@ -512,9 +533,7 @@ class TestQSChargerStatus:
         status.possible_num_phases = [1]
 
         next_amp, next_phases = status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=False
+            allow_state_change=True, allow_phase_change=False, increase=False
         )
 
         assert next_amp == 0
@@ -525,13 +544,40 @@ class TestQSChargerStatus:
         status = QSChargerStatus(self.mock_charger)
         status.budgeted_amp = 32
         status.budgeted_num_phases = 3
-        status.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+        status.possible_amps = [
+            0,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+        ]
         status.possible_num_phases = [3]
 
         next_amp, next_phases = status.can_change_budget(
-            allow_state_change=False,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=False, allow_phase_change=False, increase=True
         )
 
         assert next_amp is None
@@ -551,9 +597,7 @@ class TestQSChargerStatus:
         status = QSChargerStatus(self.mock_charger)
         status.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
-        try_amps, to_phase, amps_list = status.get_amps_phase_switch(
-            from_amp=18, from_num_phase=1, delta_for_borders=0
-        )
+        try_amps, to_phase, amps_list = status.get_amps_phase_switch(from_amp=18, from_num_phase=1, delta_for_borders=0)
 
         # 18A 1P -> 6A 3P (18/3 = 6)
         assert to_phase == 3
@@ -564,9 +608,7 @@ class TestQSChargerStatus:
         status = QSChargerStatus(self.mock_charger)
         status.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
-        try_amps, to_phase, amps_list = status.get_amps_phase_switch(
-            from_amp=6, from_num_phase=3, delta_for_borders=0
-        )
+        try_amps, to_phase, amps_list = status.get_amps_phase_switch(from_amp=6, from_num_phase=3, delta_for_borders=0)
 
         # 6A 3P -> 18A 1P (6*3 = 18)
         assert to_phase == 1
@@ -576,6 +618,7 @@ class TestQSChargerStatus:
 # ============================================================================
 # Tests for QSChargerGroup class
 # ============================================================================
+
 
 class TestQSChargerGroup:
     """Test QSChargerGroup coordination."""
@@ -674,6 +717,7 @@ class TestQSChargerGroup:
 # Tests for QSChargerGeneric class
 # ============================================================================
 
+
 class TestQSChargerGenericInit:
     """Test QSChargerGeneric initialization."""
 
@@ -686,7 +730,7 @@ class TestQSChargerGenericInit:
         charger_hass_data,
     ):
         """Test initialization with minimal parameters."""
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+        with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(
                 hass=hass,
                 config_entry=charger_config_entry,
@@ -696,7 +740,7 @@ class TestQSChargerGenericInit:
                     CONF_CHARGER_MIN_CHARGE: 6,
                     CONF_CHARGER_MAX_CHARGE: 32,
                     CONF_IS_3P: True,
-                }
+                },
             )
 
             assert charger.name == "Test Charger"
@@ -713,7 +757,7 @@ class TestQSChargerGenericInit:
         charger_hass_data,
     ):
         """Test initialization with charger consumption."""
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+        with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(
                 hass=hass,
                 config_entry=charger_config_entry,
@@ -724,7 +768,7 @@ class TestQSChargerGenericInit:
                     CONF_CHARGER_MAX_CHARGE: 32,
                     CONF_IS_3P: True,
                     CONF_CHARGER_CONSUMPTION: 100,
-                }
+                },
             )
 
             assert charger.charger_consumption_W == 100
@@ -738,7 +782,7 @@ class TestQSChargerGenericInit:
         charger_hass_data,
     ):
         """Test mono phase index initialization."""
-        with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+        with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(
                 hass=hass,
                 config_entry=charger_config_entry,
@@ -749,7 +793,7 @@ class TestQSChargerGenericInit:
                     CONF_CHARGER_MAX_CHARGE: 32,
                     CONF_IS_3P: False,
                     CONF_MONO_PHASE: 2,
-                }
+                },
             )
 
             assert charger.mono_phase_index == 1  # 0-indexed
@@ -759,10 +803,11 @@ class TestQSChargerGenericInit:
 # Tests for charger state management
 # ============================================================================
 
+
 @pytest.fixture
 def charger_generic(hass, charger_config_entry, charger_home, charger_data_handler, charger_hass_data):
     """Create QSChargerGeneric instance for tests."""
-    with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+    with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
         return QSChargerGeneric(
             hass=hass,
             config_entry=charger_config_entry,
@@ -772,7 +817,7 @@ def charger_generic(hass, charger_config_entry, charger_home, charger_data_handl
                 CONF_CHARGER_MIN_CHARGE: 6,
                 CONF_CHARGER_MAX_CHARGE: 32,
                 CONF_IS_3P: True,
-            }
+            },
         )
 
 
@@ -813,6 +858,7 @@ class TestQSChargerStateManagement:
 # Tests for Wallbox and OCPP charger status parsing
 # ============================================================================
 
+
 class TestWallboxChargerStatus:
     """Test Wallbox charger status enum."""
 
@@ -852,6 +898,7 @@ class TestOCPPChargerStatus:
 # ============================================================================
 # Tests for power budget algorithms
 # ============================================================================
+
 
 class TestChargerPowerBudget:
     """Test power budget calculation methods."""
@@ -895,6 +942,7 @@ class TestChargerPowerBudget:
 # Tests for charger check_load_activity_and_constraints
 # ============================================================================
 
+
 class TestChargerCheckLoadActivity:
     """Test check_load_activity_and_constraints method."""
 
@@ -914,8 +962,10 @@ class TestChargerCheckLoadActivity:
         time = datetime.datetime.now(pytz.UTC)
         charger_generic._boot_time = time - timedelta(seconds=5)
 
-        with patch.object(charger_generic, 'is_charger_unavailable', return_value=False), \
-             patch.object(charger_generic, 'probe_for_possible_needed_reboot', return_value=False):
+        with (
+            patch.object(charger_generic, "is_charger_unavailable", return_value=False),
+            patch.object(charger_generic, "probe_for_possible_needed_reboot", return_value=False),
+        ):
             result = await charger_generic.check_load_activity_and_constraints(time)
 
         # Should return False during boot window

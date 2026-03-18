@@ -1,15 +1,20 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED, BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS, \
-    BINARY_SENSOR_HOME_IS_OFF_GRID, BINARY_SENSOR_HOME_REAL_OFF_GRID
+from .const import (
+    BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
+    BINARY_SENSOR_HOME_IS_OFF_GRID,
+    BINARY_SENSOR_HOME_REAL_OFF_GRID,
+    BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
+    DOMAIN,
+)
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.home import QSHome
@@ -31,13 +36,13 @@ def create_ha_binary_sensor_for_PilotedDevice(device: PilotedDevice):
 
     return entities
 
+
 def create_ha_binary_sensor_for_QSHome(device: QSHome):
     """Create binary sensors for a QSHome."""
     entities = []
 
     qs_off_grid = QSBinarySensorEntityDescription(
-        key=BINARY_SENSOR_HOME_IS_OFF_GRID,
-        translation_key=BINARY_SENSOR_HOME_IS_OFF_GRID
+        key=BINARY_SENSOR_HOME_IS_OFF_GRID, translation_key=BINARY_SENSOR_HOME_IS_OFF_GRID
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=qs_off_grid))
 
@@ -107,7 +112,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry binary_sensor: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
+            _LOGGER.error(
+                "async_unload_entry binary_sensor: exception for device %s %s",
+                device.name,
+                e,
+                exc_info=True,
+                stack_info=True,
+            )
 
     return True
 
@@ -115,6 +126,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 @dataclass(frozen=True, kw_only=True)
 class QSBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes Quiet Solar binary sensor entity."""
+
     value_fn: Callable[[AbstractDevice, str], bool] | None = None
 
 

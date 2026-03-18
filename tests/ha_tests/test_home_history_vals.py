@@ -23,8 +23,8 @@ from custom_components.quiet_solar.ha_model.home import (
     QSHomeMode,
     QSSolarHistoryVals,
 )
-from custom_components.quiet_solar.home_model.load import AbstractLoad
 from custom_components.quiet_solar.home_model.home_utils import get_average_time_series
+from custom_components.quiet_solar.home_model.load import AbstractLoad
 
 
 @pytest.mark.asyncio
@@ -127,12 +127,8 @@ def test_history_vals_update_current_forecast_if_needed(tmp_path) -> None:
     vals._last_forecast_update_time = time_now
 
     assert vals.update_current_forecast_if_needed(time_now) is False
-    assert vals.update_current_forecast_if_needed(
-        time_now + timedelta(minutes=INTERVALS_MN - 1)
-    ) is False
-    assert vals.update_current_forecast_if_needed(
-        time_now + timedelta(minutes=INTERVALS_MN)
-    ) is True
+    assert vals.update_current_forecast_if_needed(time_now + timedelta(minutes=INTERVALS_MN - 1)) is False
+    assert vals.update_current_forecast_if_needed(time_now + timedelta(minutes=INTERVALS_MN)) is True
 
 
 def test_history_vals_compute_now_forecast(tmp_path) -> None:
@@ -253,6 +249,7 @@ async def test_history_vals_init_with_states(tmp_path) -> None:
     ):
         await vals.init(time_start + timedelta(minutes=INTERVALS_MN * 3), reset_for_switch_device=switch_device)
 
+
 @pytest.mark.asyncio
 async def test_forecast_combine_and_light_reset(tmp_path) -> None:
     """Test combine helper and light reset path."""
@@ -280,9 +277,7 @@ async def test_forecast_combine_and_light_reset(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_forecast_reset_full_path(
-    hass: HomeAssistant, home_config_entry, tmp_path
-) -> None:
+async def test_forecast_reset_full_path(hass: HomeAssistant, home_config_entry, tmp_path) -> None:
     """Test full reset_forecasts path with real history values."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -351,9 +346,7 @@ async def test_forecast_reset_full_path(
 
 
 @pytest.mark.asyncio
-async def test_forecast_reset_with_input_active_power(
-    hass: HomeAssistant, home_config_entry, tmp_path
-) -> None:
+async def test_forecast_reset_with_input_active_power(hass: HomeAssistant, home_config_entry, tmp_path) -> None:
     """Test reset_forecasts using solar input active power."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -399,9 +392,7 @@ async def test_forecast_reset_with_input_active_power(
 
 
 @pytest.mark.asyncio
-async def test_history_vals_init_with_invalid_states(
-    hass: HomeAssistant, tmp_path
-) -> None:
+async def test_history_vals_init_with_invalid_states(hass: HomeAssistant, tmp_path) -> None:
     """Test init handles invalid and out-of-range states."""
     forecast = SimpleNamespace(home=SimpleNamespace(hass=hass), storage_path=str(tmp_path))
     vals = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test_power")

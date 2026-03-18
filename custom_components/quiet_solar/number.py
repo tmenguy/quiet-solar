@@ -1,27 +1,29 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Any, Coroutine
+from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfTime
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTime
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
+from homeassistant.helpers.restore_state import RestoreEntity
 
-from .ha_model.bistate_duration import QSBiStateDuration
-from .home_model.load import AbstractDevice
 from .const import (
     DOMAIN,
 )
+from .ha_model.bistate_duration import QSBiStateDuration
+from .home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 from .entity import QSDeviceEntity
 
+
 @dataclass(frozen=True, kw_only=True)
 class QSNumberEntityDescription(NumberEntityDescription):
-    qs_default_option:str | None  = None
+    qs_default_option: str | None = None
     async_set_fn: Callable[[AbstractDevice, float, bool], Any] | None = None
 
 
@@ -36,10 +38,9 @@ def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
         native_step=0.25,
         native_unit_of_measurement=UnitOfTime.HOURS,
         mode=NumberMode.BOX,
-        async_set_fn = lambda device, value, for_init: device.user_set_default_on_duration(value, for_init),
+        async_set_fn=lambda device, value, for_init: device.user_set_default_on_duration(value, for_init),
     )
     entities.append(QSBaseNumber(data_handler=device.data_handler, device=device, description=selected_car_description))
-
 
     selected_car_description = QSNumberEntityDescription(
         key="override_duration",
@@ -54,6 +55,7 @@ def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
 
     return entities
 
+
 def create_ha_number(device: AbstractDevice):
     ret = []
 
@@ -61,6 +63,7 @@ def create_ha_number(device: AbstractDevice):
         ret.extend(create_ha_number_for_QSBiStateDuration(device))
 
     return ret
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -71,7 +74,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_number(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_number(attached_device))
@@ -80,6 +82,7 @@ async def async_setup_entry(
             async_add_entities(entities)
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -87,10 +90,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry number: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry number: exception for device %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
+
 
 class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
     """Implementation of a Qs DateTime sensor."""
@@ -111,9 +116,7 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
 
         val = None
-        if ( last_state is not None
-            and last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
-        ):
+        if last_state is not None and last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             try:
                 val = float(last_state.state)
             except:
@@ -124,9 +127,11 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
 
         await self.async_set_native_value(val, for_init=True)
 
-    async def async_set_native_value(self, value: float, for_init:bool=False) -> None:
+    async def async_set_native_value(self, value: float, for_init: bool = False) -> None:
         """Change the value."""
-        _LOGGER.info(f"QSBaseNumber:async_set_native_value: {value} {self.entity_description.key} on {self.device.name}")
+        _LOGGER.info(
+            f"QSBaseNumber:async_set_native_value: {value} {self.entity_description.key} on {self.device.name}"
+        )
         self._attr_native_value = value
         if self.entity_description.async_set_fn:
             await self.entity_description.async_set_fn(self.device, value, for_init)

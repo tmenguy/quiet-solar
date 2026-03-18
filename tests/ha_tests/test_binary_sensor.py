@@ -1,23 +1,16 @@
 """Tests for quiet_solar binary_sensor platform."""
 
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.const import STATE_ON, STATE_OFF
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
     BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
+    DOMAIN,
 )
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -25,6 +18,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 # =============================================================================
 # Test Binary Sensor Platform Setup
 # =============================================================================
+
 
 async def test_binary_sensor_platform_setup(
     hass: HomeAssistant,
@@ -60,9 +54,7 @@ async def test_charger_binary_sensor_entities_created(
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Charger may have piloted device activated binary sensor
@@ -91,16 +83,13 @@ async def test_car_binary_sensor_entities(
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Car should have the percent constraint binary sensor
     assert isinstance(binary_sensor_entries, list)
     assert any(
-        entry.unique_id
-        and entry.unique_id.endswith(BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS)
+        entry.unique_id and entry.unique_id.endswith(BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS)
         for entry in binary_sensor_entries
     )
 
@@ -114,9 +103,7 @@ async def test_home_binary_sensor_entities(
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, home_config_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Home may have binary sensors
@@ -126,6 +113,7 @@ async def test_home_binary_sensor_entities(
 # =============================================================================
 # Test Binary Sensor Entity Properties
 # =============================================================================
+
 
 async def test_binary_sensor_unique_id(
     hass: HomeAssistant,
@@ -149,9 +137,7 @@ async def test_binary_sensor_unique_id(
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Each binary sensor should have a unique_id
@@ -181,9 +167,7 @@ async def test_binary_sensor_device_association(
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Each binary sensor should be associated with a device
@@ -195,6 +179,7 @@ async def test_binary_sensor_device_association(
 # =============================================================================
 # Test Binary Sensor State Reading
 # =============================================================================
+
 
 async def test_binary_sensor_state_update(
     hass: HomeAssistant,
@@ -226,6 +211,7 @@ async def test_binary_sensor_state_update(
 # Test create_ha_binary_sensor Functions
 # =============================================================================
 
+
 async def test_create_binary_sensor_function_exists(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
@@ -245,6 +231,7 @@ async def test_create_binary_sensor_returns_list(
 ) -> None:
     """Test create_ha_binary_sensor returns a list."""
     from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor
+
     from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -270,6 +257,7 @@ async def test_create_binary_sensor_returns_list(
 # =============================================================================
 # Test Binary Sensor Description
 # =============================================================================
+
 
 async def test_binary_sensor_entity_description(
     hass: HomeAssistant,
@@ -318,6 +306,7 @@ async def test_binary_sensor_entity_description_no_value_fn(
 # Test Piloted Device Binary Sensor
 # =============================================================================
 
+
 async def test_piloted_device_binary_sensor_constant(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
@@ -346,6 +335,7 @@ async def test_create_binary_sensor_for_piloted_device_function(
 # =============================================================================
 # Test Binary Sensor Unload
 # =============================================================================
+
 
 async def test_binary_sensor_unload(
     hass: HomeAssistant,
@@ -380,6 +370,7 @@ async def test_binary_sensor_unload(
 # =============================================================================
 # Test Multiple Binary Sensors
 # =============================================================================
+
 
 async def test_multiple_devices_binary_sensors(
     hass: HomeAssistant,
@@ -451,14 +442,10 @@ async def test_multiple_devices_binary_sensors(
     assert charger2_entry.state is ConfigEntryState.LOADED
 
     # Get binary sensors for each
-    charger1_entities = er.async_entries_for_config_entry(
-        entity_registry, charger1_entry.entry_id
-    )
+    charger1_entities = er.async_entries_for_config_entry(entity_registry, charger1_entry.entry_id)
     charger1_binary = [e for e in charger1_entities if e.domain == "binary_sensor"]
 
-    charger2_entities = er.async_entries_for_config_entry(
-        entity_registry, charger2_entry.entry_id
-    )
+    charger2_entities = er.async_entries_for_config_entry(entity_registry, charger2_entry.entry_id)
     charger2_binary = [e for e in charger2_entities if e.domain == "binary_sensor"]
 
     # Both chargers should have their own binary sensors (even if empty list)
@@ -469,6 +456,7 @@ async def test_multiple_devices_binary_sensors(
 # =============================================================================
 # Test QSBaseBinarySensor Class
 # =============================================================================
+
 
 async def test_binary_sensor_class_exists(
     hass: HomeAssistant,
@@ -513,6 +501,7 @@ async def test_async_unload_entry_function(
 # Test Heat Pump (PilotedDevice) Binary Sensors
 # =============================================================================
 
+
 async def test_heat_pump_binary_sensor_creation(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
@@ -544,12 +533,11 @@ async def test_heat_pump_binary_sensor_creation(
 
     # Check that the device is a PilotedDevice
     from custom_components.quiet_solar.home_model.load import PilotedDevice
+
     assert isinstance(heat_pump_device, PilotedDevice)
 
     # Get binary sensor entities for heat pump
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, heat_pump_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, heat_pump_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Heat pump (as PilotedDevice) should have binary sensors
@@ -564,8 +552,9 @@ async def test_heat_pump_piloted_device_activated_binary_sensor(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test heat pump has the piloted device activated binary sensor."""
-    from .const import MOCK_HEAT_PUMP_CONFIG
     from custom_components.quiet_solar.const import BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED
+
+    from .const import MOCK_HEAT_PUMP_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -582,15 +571,15 @@ async def test_heat_pump_piloted_device_activated_binary_sensor(
     await hass.async_block_till_done()
 
     # Get binary sensor entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, heat_pump_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, heat_pump_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Check that piloted device activated sensor exists
     piloted_activated_sensors = [
-        e for e in binary_sensor_entries
-        if "is_piloted_device_activated" in e.unique_id or BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED in str(e.translation_key or "")
+        e
+        for e in binary_sensor_entries
+        if "is_piloted_device_activated" in e.unique_id
+        or BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED in str(e.translation_key or "")
     ]
 
     # Should have at least one binary sensor (the piloted device activated one)
@@ -603,6 +592,7 @@ async def test_create_ha_binary_sensor_for_piloted_device_returns_entities(
 ) -> None:
     """Test create_ha_binary_sensor_for_PilotedDevice returns proper entity list."""
     from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor_for_PilotedDevice
+
     from .const import MOCK_HEAT_PUMP_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -631,6 +621,7 @@ async def test_create_ha_binary_sensor_for_piloted_device_returns_entities(
 
     # Each entity should be a QSBaseBinarySensor
     from custom_components.quiet_solar.binary_sensor import QSBaseBinarySensor
+
     for entity in entities:
         assert isinstance(entity, QSBaseBinarySensor)
 
@@ -642,6 +633,7 @@ async def test_create_ha_binary_sensor_with_piloted_device(
     """Test create_ha_binary_sensor correctly identifies PilotedDevice and creates sensors."""
     from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor
     from custom_components.quiet_solar.home_model.load import PilotedDevice
+
     from .const import MOCK_HEAT_PUMP_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -694,9 +686,7 @@ async def test_heat_pump_binary_sensor_unique_id(
     await hass.config_entries.async_setup(heat_pump_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, heat_pump_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, heat_pump_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Each binary sensor should have a unique_id
@@ -726,9 +716,7 @@ async def test_heat_pump_binary_sensor_device_association(
     await hass.config_entries.async_setup(heat_pump_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, heat_pump_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, heat_pump_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
     # Each binary sensor should be associated with a device
@@ -847,14 +835,10 @@ async def test_multiple_heat_pumps_binary_sensors(
     assert heat_pump2_entry.state is ConfigEntryState.LOADED
 
     # Get binary sensors for each
-    heat_pump1_entities = er.async_entries_for_config_entry(
-        entity_registry, heat_pump1_entry.entry_id
-    )
+    heat_pump1_entities = er.async_entries_for_config_entry(entity_registry, heat_pump1_entry.entry_id)
     heat_pump1_binary = [e for e in heat_pump1_entities if e.domain == "binary_sensor"]
 
-    heat_pump2_entities = er.async_entries_for_config_entry(
-        entity_registry, heat_pump2_entry.entry_id
-    )
+    heat_pump2_entities = er.async_entries_for_config_entry(entity_registry, heat_pump2_entry.entry_id)
     heat_pump2_binary = [e for e in heat_pump2_entities if e.domain == "binary_sensor"]
 
     # Both heat pumps should have their own binary sensors
@@ -867,4 +851,3 @@ async def test_multiple_heat_pumps_binary_sensors(
     heat_pump1_unique_ids = {e.unique_id for e in heat_pump1_binary}
     heat_pump2_unique_ids = {e.unique_id for e in heat_pump2_binary}
     assert heat_pump1_unique_ids.isdisjoint(heat_pump2_unique_ids)
-

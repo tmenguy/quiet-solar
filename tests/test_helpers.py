@@ -4,27 +4,29 @@ This module contains FakeHass, FakeConfigEntry, FakeState and other helper class
 that are used across multiple test files. These are imported directly rather than
 through conftest.py to avoid import conflicts with Home Assistant core's tests.
 """
+
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List
-from unittest.mock import MagicMock, AsyncMock
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytz
 
-from homeassistant.const import CONF_NAME
 from custom_components.quiet_solar.const import DOMAIN
 
 
 @dataclass
 class FakeConfigEntry:
     """Fake config entry for testing."""
+
     entry_id: str
-    data: Dict[str, Any] = field(default_factory=dict)
-    options: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
     title: str | None = None
     _update_listener: Callable | None = None
 
@@ -40,7 +42,8 @@ class FakeConfigEntry:
 
 class FakeState:
     """Fake Home Assistant state object."""
-    def __init__(self, entity_id: str, state: str, attributes: Dict[str, Any] | None = None):
+
+    def __init__(self, entity_id: str, state: str, attributes: dict[str, Any] | None = None):
         self.entity_id = entity_id
         self.state = state
         self.attributes = attributes or {}
@@ -50,33 +53,35 @@ class FakeState:
 
 class FakeStates:
     """Fake Home Assistant states object."""
+
     def __init__(self):
-        self._states: Dict[str, FakeState] = {}
+        self._states: dict[str, FakeState] = {}
 
     def get(self, entity_id: str) -> FakeState | None:
         """Get state by entity_id."""
         return self._states.get(entity_id)
 
-    def async_all(self, domains: List[str] | None = None) -> List[FakeState]:
+    def async_all(self, domains: list[str] | None = None) -> list[FakeState]:
         """Get all states, optionally filtered by domain."""
         if domains is None:
             return list(self._states.values())
-        return [s for s in self._states.values() if s.entity_id.split('.')[0] in domains]
+        return [s for s in self._states.values() if s.entity_id.split(".")[0] in domains]
 
-    def set(self, entity_id: str, state: str, attributes: Dict[str, Any] | None = None):
+    def set(self, entity_id: str, state: str, attributes: dict[str, Any] | None = None):
         """Set state."""
         self._states[entity_id] = FakeState(entity_id, state, attributes)
 
 
 class FakeServiceCall:
     """Fake Home Assistant service call."""
+
     def __init__(
         self,
         domain: str,
         service: str,
-        data: Dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         context: Any = None,
-        target: Dict[str, Any] | None = None
+        target: dict[str, Any] | None = None,
     ):
         self.domain = domain
         self.service = service
@@ -87,11 +92,12 @@ class FakeServiceCall:
 
 class FakeServices:
     """Fake Home Assistant services registry."""
+
     def __init__(self):
-        self._services: Dict[str, Dict[str, Callable]] = {}
+        self._services: dict[str, dict[str, Callable]] = {}
         # calls stores tuples of (domain, service, data, blocking) for compatibility
-        self.calls: List[tuple[str, str, Dict[str, Any], bool]] = []
-        self.registered: List[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, dict[str, Any], bool]] = []
+        self.registered: list[tuple[str, str]] = []
 
     def has_service(self, domain: str, service: str) -> bool:
         """Check if service exists."""
@@ -101,11 +107,11 @@ class FakeServices:
         self,
         domain: str,
         service: str,
-        data: Dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         blocking: bool = False,
         return_response: bool = False,
-        target: Dict[str, Any] | None = None,
-        **kwargs
+        target: dict[str, Any] | None = None,
+        **kwargs,
     ) -> None:
         """Call a service."""
         # Merge target into data if provided (Home Assistant style)
@@ -118,31 +124,43 @@ class FakeServices:
         if domain in self._services and service in self._services[domain]:
             await self._services[domain][service](FakeServiceCall(domain, service, call_data))
 
-    def async_register(self, domain: str, service: str, service_func: Callable, schema: Any = None, supports_response: Any = None, *, description_placeholders: Any = None):
+    def async_register(
+        self,
+        domain: str,
+        service: str,
+        service_func: Callable,
+        schema: Any = None,
+        supports_response: Any = None,
+        *,
+        description_placeholders: Any = None,
+    ):
         """Register a service."""
         self.registered.append((domain, service))
         if domain not in self._services:
             self._services[domain] = {}
         self._services[domain][service] = service_func
 
-    def async_services_for_domain(self, domain: str) -> List[str]:
+    def async_services_for_domain(self, domain: str) -> list[str]:
         """Get all service names for a domain."""
         return [service for d, service in self.registered if d == domain]
 
 
 class FakeBus:
     """Fake Home Assistant event bus."""
-    def __init__(self):
-        self._listeners: Dict[str, List[Callable]] = {}
 
-    def async_listen(self, event_type: str, callback: Callable, event_filter: Callable | None = None) -> Callable[[], None]:
+    def __init__(self):
+        self._listeners: dict[str, list[Callable]] = {}
+
+    def async_listen(
+        self, event_type: str, callback: Callable, event_filter: Callable | None = None
+    ) -> Callable[[], None]:
         """Listen for events."""
         if event_type not in self._listeners:
             self._listeners[event_type] = []
         self._listeners[event_type].append(callback)
         return lambda: self._listeners[event_type].remove(callback) if callback in self._listeners[event_type] else None
 
-    async def async_fire(self, event_type: str, event_data: Dict[str, Any] | None = None):
+    async def async_fire(self, event_type: str, event_data: dict[str, Any] | None = None):
         """Fire an event."""
         if event_type in self._listeners:
             for callback in self._listeners[event_type]:
@@ -154,6 +172,7 @@ class FakeBus:
 
 class FakeEntity:
     """Fake Home Assistant entity."""
+
     def __init__(self, entity_id: str = None):
         self.entity_id = entity_id
         self._attr_native_value = None
@@ -163,8 +182,9 @@ class FakeEntity:
 
 class FakeEntityRegistry:
     """Fake entity registry."""
+
     def __init__(self):
-        self._entities: Dict[str, FakeEntity] = {}
+        self._entities: dict[str, FakeEntity] = {}
 
     def async_get(self, entity_id: str) -> FakeEntity | None:
         """Get entity by ID."""
@@ -173,8 +193,9 @@ class FakeEntityRegistry:
 
 class FakeConfigEntries:
     """Fake config entries manager."""
+
     def __init__(self, hass):
-        self._entries: Dict[str, FakeConfigEntry] = {}
+        self._entries: dict[str, FakeConfigEntry] = {}
         self._hass = hass
 
     def async_get_entry(self, entry_id: str) -> FakeConfigEntry | None:
@@ -192,9 +213,9 @@ class FakeConfigEntries:
     async def async_add_entry(
         self,
         entry_id: str,
-        data: Dict[str, Any] | None = None,
-        options: Dict[str, Any] | None = None,
-        title: str | None = None
+        data: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+        title: str | None = None,
     ):
         """Add a config entry."""
         entry = FakeConfigEntry(entry_id, data or {}, options or {}, title)
@@ -204,7 +225,8 @@ class FakeConfigEntries:
 
 class FakeDeviceRegistry:
     """Fake device registry."""
-    def __init__(self, devices: Dict[str, Any] | None = None) -> None:
+
+    def __init__(self, devices: dict[str, Any] | None = None) -> None:
         self._devices = devices or {}
 
     def async_get_device(self, identifiers: set | None = None, connections: set | None = None):
@@ -219,6 +241,7 @@ class FakeDeviceRegistry:
 
 class FakeConfig:
     """Fake Home Assistant config."""
+
     def __init__(self, config_dir: str = "/tmp/test_config"):
         self.config_dir = config_dir
 
@@ -231,6 +254,7 @@ class FakeConfig:
 
 class FakeHass:
     """Fake Home Assistant instance for testing."""
+
     def __init__(self) -> None:
         # Create a new event loop for each test instance
         try:
@@ -239,7 +263,7 @@ class FakeHass:
         except:
             self.loop = asyncio.get_event_loop()
 
-        self.data: Dict[str, Dict[str, Any]] = {DOMAIN: {}}
+        self.data: dict[str, dict[str, Any]] = {DOMAIN: {}}
         self.services = FakeServices()
         self.bus = FakeBus()
         self.config_entries = FakeConfigEntries(self)

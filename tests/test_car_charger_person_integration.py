@@ -4,90 +4,64 @@ Comprehensive End-to-End Integration Tests for Car-Charger-Person Interactions.
 These tests focus on the tightly coupled behavior between QSCar, QSChargerGeneric, and QSPerson
 classes, testing real object interactions with minimal mocking.
 """
+
 from __future__ import annotations
 
-import asyncio
-import copy
 from datetime import datetime, timedelta
-from datetime import time as dt_time
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
-
-from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import CONF_NAME
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_HOME_VOLTAGE,
-    CONF_IS_3P,
-    CONF_MONO_PHASE,
-    CONF_DYN_GROUP_MAX_PHASE_AMPS,
-    CONF_CHARGER_MIN_CHARGE,
-    CONF_CHARGER_MAX_CHARGE,
-    CONF_CHARGER_DEVICE_WALLBOX,
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
-    CONF_CHARGER_PAUSE_RESUME_SWITCH,
+    CAR_CHARGE_TYPE_NOT_CHARGING,
+    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CONF_CAR_BATTERY_CAPACITY,
-    CONF_CAR_TRACKER,
-    CONF_CAR_PLUGGED,
     CONF_CAR_CHARGE_PERCENT_SENSOR,
-    CONF_CAR_CHARGER_MIN_CHARGE,
     CONF_CAR_CHARGER_MAX_CHARGE,
-    CONF_DEFAULT_CAR_CHARGE,
-    CONF_MINIMUM_OK_CAR_CHARGE,
+    CONF_CAR_CHARGER_MIN_CHARGE,
     CONF_CAR_ESTIMATED_RANGE_SENSOR,
     CONF_CAR_ODOMETER_SENSOR,
-    CONF_PERSON_PERSON_ENTITY,
-    CONF_PERSON_AUTHORIZED_CARS,
-    CONF_PERSON_PREFERRED_CAR,
-    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_CAR_PLUGGED,
+    CONF_CAR_TRACKER,
+    CONF_CHARGER_MAX_CHARGE,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
+    CONF_CHARGER_MIN_CHARGE,
+    CONF_CHARGER_PAUSE_RESUME_SWITCH,
+    CONF_DEFAULT_CAR_CHARGE,
+    CONF_DYN_GROUP_MAX_PHASE_AMPS,
+    CONF_HOME_VOLTAGE,
+    CONF_IS_3P,
+    CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MOBILE_APP,
-    CAR_CHARGE_TYPE_NOT_PLUGGED,
-    CAR_CHARGE_TYPE_NOT_CHARGING,
-    CAR_CHARGE_TYPE_SCHEDULE,
-    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONF_MONO_PHASE,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
-    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
-    PERSON_NOTIFY_REASON_CHANGED_CAR,
 )
-from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.charger import (
     QSChargerGeneric,
-    QSChargerWallbox,
     QSChargerGroup,
     QSChargerStatus,
+    QSChargerWallbox,
     QSStateCmd,
-    CHARGER_ADAPTATION_WINDOW_S,
 )
-from custom_components.quiet_solar.ha_model.person import QSPerson
 from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
-from custom_components.quiet_solar.home_model.commands import (
-    CMD_ON, CMD_OFF, CMD_IDLE,
-    CMD_AUTO_GREEN_ONLY,
-    CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_PRICE,
-    copy_command,
-)
-from custom_components.quiet_solar.home_model.constraints import (
-    MultiStepsPowerLoadConstraintChargePercent,
-    DATETIME_MAX_UTC,
-)
-
-from homeassistant.core import HomeAssistant
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
+from custom_components.quiet_solar.ha_model.home import QSHome
+from custom_components.quiet_solar.ha_model.person import QSPerson
 
 # =============================================================================
 # Fixtures for Integrated Testing
 # =============================================================================
+
 
 class IntegratedTestEnvironment:
     """Container for all objects in an integrated test scenario."""
@@ -96,10 +70,10 @@ class IntegratedTestEnvironment:
         self.hass: HomeAssistant = None
         self.config_entry: MockConfigEntry = None
         self.home: QSHome = None
-        self.cars: List[QSCar] = []
-        self.chargers: List[QSChargerGeneric] = []
-        self.persons: List[QSPerson] = []
-        self.dynamic_groups: List[QSDynamicGroup] = []
+        self.cars: list[QSCar] = []
+        self.chargers: list[QSChargerGeneric] = []
+        self.persons: list[QSPerson] = []
+        self.dynamic_groups: list[QSDynamicGroup] = []
         self.charger_group: QSChargerGroup = None
         self.time: datetime = None
 
@@ -117,11 +91,15 @@ def integrated_config_entry() -> MockConfigEntry:
 
 def _set_states_sync(hass: HomeAssistant) -> None:
     """Set commonly needed states on hass (async_set; call from sync context, no await)."""
-    hass.states.async_set("zone.home", "zoning", {
-        "latitude": 48.8566,
-        "longitude": 2.3522,
-        "radius": 100.0,
-    })
+    hass.states.async_set(
+        "zone.home",
+        "zoning",
+        {
+            "latitude": 48.8566,
+            "longitude": 2.3522,
+            "radius": 100.0,
+        },
+    )
     hass.states.async_set("sensor.test_soc", "50", {"unit_of_measurement": "%"})
     hass.states.async_set("device_tracker.test_car", "home", {"latitude": 48.8566, "longitude": 2.3522})
     hass.states.async_set("binary_sensor.test_plugged", "on", {})
@@ -168,7 +146,7 @@ async def create_integrated_environment(
         "hass": env.hass,
         "config_entry": env.config_entry,
     }
-    with patch('custom_components.quiet_solar.ha_model.home.QSHomeConsumptionHistoryAndForecast'):
+    with patch("custom_components.quiet_solar.ha_model.home.QSHomeConsumptionHistoryAndForecast"):
         env.home = QSHome(**home_config)
     data_handler.home = env.home
 
@@ -187,24 +165,24 @@ async def create_integrated_environment(
         env.home.add_device(dyn_group)
 
     # Create Chargers (set wallbox entity states first so QSChargerWallbox __init__ can read them)
-    with patch('custom_components.quiet_solar.ha_model.charger.entity_registry') as mock_er:
+    with patch("custom_components.quiet_solar.ha_model.charger.entity_registry") as mock_er:
         mock_er.async_get = MagicMock(return_value=MagicMock())
         mock_er.async_get.return_value.async_entries_for_device = MagicMock(return_value=[])
 
         for i in range(num_chargers):
             phase = (i % 3) + 1
-            pause_resume_entity = f"switch.charger_{i+1}_pause_resume"
-            max_current_entity = f"number.charger_{i+1}_maximum_charging_current"
+            pause_resume_entity = f"switch.charger_{i + 1}_pause_resume"
+            max_current_entity = f"number.charger_{i + 1}_maximum_charging_current"
             env.hass.states.async_set(pause_resume_entity, "on", {})
             env.hass.states.async_set(max_current_entity, "32", {"min": 6, "max": 32})
         await hass.async_block_till_done()
 
         for i in range(num_chargers):
             phase = (i % 3) + 1
-            pause_resume_entity = f"switch.charger_{i+1}_pause_resume"
-            max_current_entity = f"number.charger_{i+1}_maximum_charging_current"
+            pause_resume_entity = f"switch.charger_{i + 1}_pause_resume"
+            max_current_entity = f"number.charger_{i + 1}_maximum_charging_current"
             charger_config = {
-                CONF_NAME: f"Charger_{i+1}",
+                CONF_NAME: f"Charger_{i + 1}",
                 CONF_MONO_PHASE: phase,
                 # Omit CONF_CHARGER_DEVICE_WALLBOX so Wallbox does not overwrite our entity IDs
                 CONF_CHARGER_MIN_CHARGE: 6,
@@ -225,17 +203,17 @@ async def create_integrated_environment(
     car_names = []
     for i in range(num_cars):
         car_config = {
-            CONF_NAME: f"Car_{i+1}",
-            CONF_CAR_TRACKER: f"device_tracker.car_{i+1}",
-            CONF_CAR_PLUGGED: f"binary_sensor.car_{i+1}_plugged",
-            CONF_CAR_CHARGE_PERCENT_SENSOR: f"sensor.car_{i+1}_soc",
+            CONF_NAME: f"Car_{i + 1}",
+            CONF_CAR_TRACKER: f"device_tracker.car_{i + 1}",
+            CONF_CAR_PLUGGED: f"binary_sensor.car_{i + 1}_plugged",
+            CONF_CAR_CHARGE_PERCENT_SENSOR: f"sensor.car_{i + 1}_soc",
             CONF_CAR_BATTERY_CAPACITY: 60000,  # 60 kWh
             CONF_CAR_CHARGER_MIN_CHARGE: 6,
             CONF_CAR_CHARGER_MAX_CHARGE: 32,
             CONF_DEFAULT_CAR_CHARGE: 80.0,
             CONF_MINIMUM_OK_CAR_CHARGE: 20.0,
-            CONF_CAR_ODOMETER_SENSOR: f"sensor.car_{i+1}_odometer",
-            CONF_CAR_ESTIMATED_RANGE_SENSOR: f"sensor.car_{i+1}_range",
+            CONF_CAR_ODOMETER_SENSOR: f"sensor.car_{i + 1}_odometer",
+            CONF_CAR_ESTIMATED_RANGE_SENSOR: f"sensor.car_{i + 1}_range",
             "home": env.home,
             "hass": env.hass,
             "config_entry": env.config_entry,
@@ -243,24 +221,24 @@ async def create_integrated_environment(
         car = QSCar(**car_config)
         env.cars.append(car)
         env.home.add_device(car)
-        car_names.append(f"Car_{i+1}")
+        car_names.append(f"Car_{i + 1}")
 
         # Set up states for this car
-        env.hass.states.async_set(f"device_tracker.car_{i+1}", "home", {"latitude": 48.8566, "longitude": 2.3522})
-        env.hass.states.async_set(f"binary_sensor.car_{i+1}_plugged", "on", {})
-        env.hass.states.async_set(f"sensor.car_{i+1}_soc", "50", {"unit_of_measurement": "%"})
-        env.hass.states.async_set(f"sensor.car_{i+1}_odometer", "50000", {"unit_of_measurement": "km"})
-        env.hass.states.async_set(f"sensor.car_{i+1}_range", "200", {"unit_of_measurement": "km"})
+        env.hass.states.async_set(f"device_tracker.car_{i + 1}", "home", {"latitude": 48.8566, "longitude": 2.3522})
+        env.hass.states.async_set(f"binary_sensor.car_{i + 1}_plugged", "on", {})
+        env.hass.states.async_set(f"sensor.car_{i + 1}_soc", "50", {"unit_of_measurement": "%"})
+        env.hass.states.async_set(f"sensor.car_{i + 1}_odometer", "50000", {"unit_of_measurement": "km"})
+        env.hass.states.async_set(f"sensor.car_{i + 1}_range", "200", {"unit_of_measurement": "km"})
 
     # Create Persons
     for i in range(num_persons):
         person_config = {
-            CONF_NAME: f"Person_{i+1}",
-            CONF_PERSON_PERSON_ENTITY: f"person.person_{i+1}",
+            CONF_NAME: f"Person_{i + 1}",
+            CONF_PERSON_PERSON_ENTITY: f"person.person_{i + 1}",
             CONF_PERSON_AUTHORIZED_CARS: car_names,  # Authorize all cars
             CONF_PERSON_PREFERRED_CAR: car_names[0] if car_names else None,
             CONF_PERSON_NOTIFICATION_TIME: "07:00:00",
-            CONF_MOBILE_APP: f"mobile_app.person_{i+1}",
+            CONF_MOBILE_APP: f"mobile_app.person_{i + 1}",
             "home": env.home,
             "hass": env.hass,
             "config_entry": env.config_entry,
@@ -270,7 +248,7 @@ async def create_integrated_environment(
         env.home.add_device(person)
 
         # Set up person state
-        env.hass.states.async_set(f"person.person_{i+1}", "home", {})
+        env.hass.states.async_set(f"person.person_{i + 1}", "home", {})
 
     # Create charger group if we have chargers
     if env.dynamic_groups and env.chargers:
@@ -280,7 +258,7 @@ async def create_integrated_environment(
     return env
 
 
-def simulate_sensor_value(env: IntegratedTestEnvironment, entity_id: str, value: str, attributes: Dict = None):
+def simulate_sensor_value(env: IntegratedTestEnvironment, entity_id: str, value: str, attributes: dict = None):
     """Simulate a sensor value change."""
     env.hass.states.async_set(entity_id, value, attributes or {})
 
@@ -306,6 +284,7 @@ def simulate_soc(env: IntegratedTestEnvironment, car_index: int = 0, soc_percent
 # =============================================================================
 # Test Class: QSStateCmd Utility
 # =============================================================================
+
 
 class TestQSStateCmd:
     """Test QSStateCmd utility class used by chargers."""
@@ -403,6 +382,7 @@ class TestQSStateCmd:
 # Test Class: Car-Charger Attachment
 # =============================================================================
 
+
 class TestCarChargerAttachment:
     """Test car-charger attachment/detachment flows."""
 
@@ -427,9 +407,7 @@ class TestCarChargerAttachment:
         assert car.charger == charger
 
     @pytest.mark.asyncio
-    async def test_detach_car_clears_both_links(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_detach_car_clears_both_links(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test that detaching car clears both links."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -473,13 +451,12 @@ class TestCarChargerAttachment:
 # Test Class: Car State Detection
 # =============================================================================
 
+
 class TestCarStateDetection:
     """Test car state detection methods."""
 
     @pytest.mark.asyncio
-    async def test_car_plugged_sensor_configured(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_plugged_sensor_configured(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test car plugged sensor is configured."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -490,9 +467,7 @@ class TestCarStateDetection:
         assert car.car_plugged == "binary_sensor.car_1_plugged"
 
     @pytest.mark.asyncio
-    async def test_car_tracker_configured(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_tracker_configured(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test car tracker is configured."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -516,9 +491,7 @@ class TestCarStateDetection:
         assert car.car_charge_percent_sensor == "sensor.car_1_soc"
 
     @pytest.mark.asyncio
-    async def test_car_battery_capacity_configured(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_battery_capacity_configured(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test car battery capacity is configured."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -528,29 +501,25 @@ class TestCarStateDetection:
         assert car.car_battery_capacity == 60000  # 60 kWh
 
     @pytest.mark.asyncio
-    async def test_is_car_plugged_method_exists(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_is_car_plugged_method_exists(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test is_car_plugged method exists."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
         )
         car = env.cars[0]
 
-        assert hasattr(car, 'is_car_plugged')
+        assert hasattr(car, "is_car_plugged")
         assert callable(car.is_car_plugged)
 
     @pytest.mark.asyncio
-    async def test_is_car_home_method_exists(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_is_car_home_method_exists(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test is_car_home method exists."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
         )
         car = env.cars[0]
 
-        assert hasattr(car, 'is_car_home')
+        assert hasattr(car, "is_car_home")
         assert callable(car.is_car_home)
 
 
@@ -558,13 +527,12 @@ class TestCarStateDetection:
 # Test Class: Person Forecast Calculations
 # =============================================================================
 
+
 class TestPersonForecast:
     """Test person mileage forecast calculations."""
 
     @pytest.mark.asyncio
-    async def test_add_to_mileage_history(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_add_to_mileage_history(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test adding mileage data to history."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=1
@@ -580,9 +548,7 @@ class TestPersonForecast:
         assert person.historical_mileage_data[0][1] == 45.0
 
     @pytest.mark.asyncio
-    async def test_add_multiple_days_to_history(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_add_multiple_days_to_history(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test adding multiple days maintains order."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=1
@@ -597,7 +563,7 @@ class TestPersonForecast:
         assert len(person.historical_mileage_data) == 5
         # Should be ordered by date
         for i in range(4):
-            assert person.historical_mileage_data[i][0] < person.historical_mileage_data[i+1][0]
+            assert person.historical_mileage_data[i][0] < person.historical_mileage_data[i + 1][0]
 
     @pytest.mark.asyncio
     async def test_compute_person_next_need_uses_weekday_data(
@@ -675,9 +641,7 @@ class TestPersonForecast:
         assert all(isinstance(c, QSCar) for c in cars)
 
     @pytest.mark.asyncio
-    async def test_get_preferred_car(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_get_preferred_car(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test get_preferred_car returns correct car."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=2, num_chargers=0, num_persons=1
@@ -693,6 +657,7 @@ class TestPersonForecast:
 # =============================================================================
 # Test Class: Car-Person Allocation
 # =============================================================================
+
 
 class TestCarPersonAllocation:
     """Test car-person allocation logic."""
@@ -768,13 +733,12 @@ class TestCarPersonAllocation:
 # Test Class: Car Efficiency Calculations
 # =============================================================================
 
+
 class TestCarEfficiency:
     """Test car efficiency and range calculations."""
 
     @pytest.mark.asyncio
-    async def test_car_range_sensor_configured(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_range_sensor_configured(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test range sensor is configured."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -823,9 +787,7 @@ class TestCarEfficiency:
         assert result is None or result > 0
 
     @pytest.mark.asyncio
-    async def test_efficiency_sensors_configured(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_efficiency_sensors_configured(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test that odometer and range sensors are configured."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -839,6 +801,7 @@ class TestCarEfficiency:
 # =============================================================================
 # Test Class: Charger Charge Type
 # =============================================================================
+
 
 class TestChargerChargeType:
     """Test charger charge type determination."""
@@ -872,20 +835,18 @@ class TestChargerChargeType:
         )
         charger = env.chargers[0]
 
-        assert hasattr(charger, 'get_charge_type')
+        assert hasattr(charger, "get_charge_type")
         assert callable(charger.get_charge_type)
 
     @pytest.mark.asyncio
-    async def test_charger_constraints_list_exists(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_constraints_list_exists(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test charger has constraints list."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
         )
         charger = env.chargers[0]
 
-        assert hasattr(charger, '_constraints')
+        assert hasattr(charger, "_constraints")
         assert isinstance(charger._constraints, list)
 
 
@@ -893,13 +854,12 @@ class TestChargerChargeType:
 # Test Class: Charger Group Operations
 # =============================================================================
 
+
 class TestChargerGroupOperations:
     """Test charger group coordination."""
 
     @pytest.mark.asyncio
-    async def test_charger_group_creation(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_group_creation(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test charger group is created correctly."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=3, num_persons=0
@@ -909,9 +869,7 @@ class TestChargerGroupOperations:
         assert len(env.charger_group._chargers) == 3
 
     @pytest.mark.asyncio
-    async def test_charger_group_has_dynamic_group(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_group_has_dynamic_group(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test charger group references dynamic group."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=3, num_persons=0
@@ -921,9 +879,7 @@ class TestChargerGroupOperations:
         assert env.charger_group.dynamic_group == env.dynamic_groups[0]
 
     @pytest.mark.asyncio
-    async def test_charger_group_has_home(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_group_has_home(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test charger group references home."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=3, num_persons=0
@@ -933,9 +889,7 @@ class TestChargerGroupOperations:
         assert env.charger_group.home == env.home
 
     @pytest.mark.asyncio
-    async def test_charger_status_creation(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_status_creation(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test creating charger status for a charger."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -952,6 +906,7 @@ class TestChargerGroupOperations:
 # =============================================================================
 # Test Class: Person Notification
 # =============================================================================
+
 
 class TestPersonNotification:
     """Test person notification logic."""
@@ -1013,13 +968,12 @@ class TestPersonNotification:
 # Test Class: Car Charge Constraint Flow
 # =============================================================================
 
+
 class TestCarChargeConstraintFlow:
     """Test the flow from person need to car constraint to charger."""
 
     @pytest.mark.asyncio
-    async def test_get_best_person_next_need(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_get_best_person_next_need(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test getting best person need for a car."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=1
@@ -1052,13 +1006,12 @@ class TestCarChargeConstraintFlow:
 # Test Class: Dampening and Power Calculations
 # =============================================================================
 
+
 class TestDampeningPowerCalculations:
     """Test power dampening calculations in car."""
 
     @pytest.mark.asyncio
-    async def test_theoretical_amp_to_power(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_theoretical_amp_to_power(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test theoretical amp to power conversion."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -1085,9 +1038,7 @@ class TestDampeningPowerCalculations:
         assert delta == 0.0
 
     @pytest.mark.asyncio
-    async def test_add_to_amps_power_graph(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_add_to_amps_power_graph(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test adding values to the amp-power graph."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -1101,9 +1052,7 @@ class TestDampeningPowerCalculations:
         assert (6, 10) in car._dampening_deltas
 
     @pytest.mark.asyncio
-    async def test_find_path_in_graph(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_find_path_in_graph(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test path finding in dampening graph."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -1111,11 +1060,7 @@ class TestDampeningPowerCalculations:
         car = env.cars[0]
 
         # Create a graph
-        graph = {
-            6: {10},
-            10: {6, 16},
-            16: {10}
-        }
+        graph = {6: {10}, 10: {6, 16}, 16: {10}}
 
         path = car.find_path(graph, 6, 16)
 
@@ -1126,13 +1071,12 @@ class TestDampeningPowerCalculations:
 # Test Class: Car Reset and Initialization
 # =============================================================================
 
+
 class TestCarResetInit:
     """Test car reset and initialization."""
 
     @pytest.mark.asyncio
-    async def test_car_reset_clears_charger(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_reset_clears_charger(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test that reset clears charger reference."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -1148,9 +1092,7 @@ class TestCarResetInit:
         assert car.do_force_next_charge is False
 
     @pytest.mark.asyncio
-    async def test_car_reset_restores_calendar(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_reset_restores_calendar(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test that reset restores original calendar."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -1184,9 +1126,7 @@ class TestCarResetInit:
         assert "current_forecasted_person_name_from_boot" in data
 
     @pytest.mark.asyncio
-    async def test_car_use_saved_extra_device_info(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_use_saved_extra_device_info(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test restoring extra device info."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0
@@ -1195,7 +1135,7 @@ class TestCarResetInit:
 
         stored_data = {
             "user_selected_person_name_for_car": "SomePerson",
-            "current_forecasted_person_name_from_boot": "AnotherPerson"
+            "current_forecasted_person_name_from_boot": "AnotherPerson",
         }
 
         car.use_saved_extra_device_info(stored_data)
@@ -1208,13 +1148,12 @@ class TestCarResetInit:
 # Test Class: Person Reset and Platforms
 # =============================================================================
 
+
 class TestPersonResetPlatforms:
     """Test person reset and platform support."""
 
     @pytest.mark.asyncio
-    async def test_person_get_platforms(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_person_get_platforms(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test person returns correct platforms."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=0, num_chargers=0, num_persons=1
@@ -1226,9 +1165,7 @@ class TestPersonResetPlatforms:
         assert "sensor" in platforms
 
     @pytest.mark.asyncio
-    async def test_person_dashboard_sort_string(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_person_dashboard_sort_string(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test person dashboard sort string."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=0, num_chargers=0, num_persons=1
@@ -1240,9 +1177,7 @@ class TestPersonResetPlatforms:
         assert sort_str == "AAA"
 
     @pytest.mark.asyncio
-    async def test_person_tracker_id(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_person_tracker_id(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test person tracker ID resolution."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=0, num_chargers=0, num_persons=1
@@ -1259,13 +1194,12 @@ class TestPersonResetPlatforms:
 # Test Class: Charger Status Calculations
 # =============================================================================
 
+
 class TestChargerStatusCalculations:
     """Test QSChargerStatus calculations."""
 
     @pytest.mark.asyncio
-    async def test_get_amps_from_values_1p(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_get_amps_from_values_1p(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test amps array for single phase."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -1281,9 +1215,7 @@ class TestChargerStatusCalculations:
         assert total == 10
 
     @pytest.mark.asyncio
-    async def test_get_amps_from_values_3p(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_get_amps_from_values_3p(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test amps array for three phase."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -1298,9 +1230,7 @@ class TestChargerStatusCalculations:
         assert amps == [10, 10, 10]
 
     @pytest.mark.asyncio
-    async def test_get_current_charging_amps(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_get_current_charging_amps(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test getting current charging amps."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -1316,9 +1246,7 @@ class TestChargerStatusCalculations:
         assert sum(amps) == 16
 
     @pytest.mark.asyncio
-    async def test_charger_status_duplicate(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_charger_status_duplicate(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test duplicating charger status."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=1, num_persons=0
@@ -1342,13 +1270,12 @@ class TestChargerStatusCalculations:
 # Test Class: Car Platforms
 # =============================================================================
 
+
 class TestCarPlatforms:
     """Test car platform support."""
 
     @pytest.mark.asyncio
-    async def test_car_get_platforms(
-        self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry
-    ):
+    async def test_car_get_platforms(self, hass: HomeAssistant, integrated_config_entry: MockConfigEntry):
         """Test car returns correct platforms."""
         env = await create_integrated_environment(
             hass, integrated_config_entry, num_cars=1, num_chargers=0, num_persons=0

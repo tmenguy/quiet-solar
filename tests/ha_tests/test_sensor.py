@@ -1,21 +1,14 @@
 """Tests for quiet_solar sensor platform."""
 
-from collections.abc import Generator
-from datetime import datetime
-from unittest.mock import patch
-
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from syrupy.assertion import SnapshotAssertion
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from syrupy.assertion import SnapshotAssertion
 
 from custom_components.quiet_solar.const import DOMAIN
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 # Fixed time for snapshot tests so timestamps are deterministic
 FROZEN_TEST_TIME = "2025-01-01T12:00:00-08:00"
@@ -38,9 +31,7 @@ async def test_home_sensors(
     assert home_config_entry.state is ConfigEntryState.LOADED
 
     # Check that sensors were created
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, home_config_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
 
     # Filter to only sensor entities
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
@@ -86,9 +77,7 @@ async def test_car_sensors(
     assert car_entry.state is ConfigEntryState.LOADED
 
     # Check car sensors
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 
@@ -142,9 +131,7 @@ async def test_person_sensors(
     assert person_entry.state is ConfigEntryState.LOADED
 
     # Check person sensors
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, person_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, person_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 
@@ -187,9 +174,7 @@ async def test_charger_sensors(
     assert charger_entry.state is ConfigEntryState.LOADED
 
     # Check charger sensors
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, charger_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, charger_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 
@@ -225,9 +210,7 @@ async def test_home_sensor_entity_count(
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, home_config_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 
@@ -263,9 +246,7 @@ async def test_car_sensor_entity_count(
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, car_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, car_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 

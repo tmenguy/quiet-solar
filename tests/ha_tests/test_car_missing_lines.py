@@ -23,39 +23,32 @@ Covers:
  - set_user_person_for_car with charger update (line 379)
 """
 
-import pytest
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytz
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CAR_BATTERY_CAPACITY,
+    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
+    CONF_CAR_CHARGER_MAX_CHARGE,
+    CONF_CAR_CHARGER_MIN_CHARGE,
     CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
     CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
-    CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGER_MAX_CHARGE,
     CONF_DEFAULT_CAR_CHARGE,
-    CONF_MINIMUM_OK_CAR_CHARGE,
-    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CONF_PERSON_AUTHORIZED_CARS,
     CONF_PERSON_PREFERRED_CAR,
+    DATA_HANDLER,
+    DOMAIN,
 )
-from custom_components.quiet_solar.ha_model.car import (
-    MIN_CHARGE_POWER_W,
-    QSCar,
-)
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -63,6 +56,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 async def _create_car(hass, home_config_entry, extra_config=None, entry_id_suffix="ml"):
     """Helper: set up home + car, return car device."""
     from homeassistant.config_entries import ConfigEntryState
+
     from .const import MOCK_CAR_CONFIG
 
     if home_config_entry.state is not ConfigEntryState.LOADED:
@@ -164,8 +158,12 @@ async def test_mileage_odometer_type_error_in_from_states(
 
     # All states are non-numeric → both from_state and to_state remain None
     states = [
-        SimpleNamespace(state="not_a_number", last_changed=from_time - timedelta(hours=1), attributes={"unit_of_measurement": "km"}),
-        SimpleNamespace(state="also_bad", last_changed=from_time + timedelta(minutes=1), attributes={"unit_of_measurement": "km"}),
+        SimpleNamespace(
+            state="not_a_number", last_changed=from_time - timedelta(hours=1), attributes={"unit_of_measurement": "km"}
+        ),
+        SimpleNamespace(
+            state="also_bad", last_changed=from_time + timedelta(minutes=1), attributes={"unit_of_measurement": "km"}
+        ),
         SimpleNamespace(state="still_bad", last_changed=to_time, attributes={"unit_of_measurement": "km"}),
     ]
 
@@ -191,7 +189,9 @@ async def test_mileage_odometer_first_state_after_from_time(
     to_time = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
 
     states = [
-        SimpleNamespace(state="100", last_changed=from_time + timedelta(minutes=1), attributes={"unit_of_measurement": "km"}),
+        SimpleNamespace(
+            state="100", last_changed=from_time + timedelta(minutes=1), attributes={"unit_of_measurement": "km"}
+        ),
         SimpleNamespace(state="150", last_changed=to_time, attributes={"unit_of_measurement": "km"}),
     ]
 
@@ -218,7 +218,11 @@ async def test_mileage_tracker_none_attributes(
 
     positions = [
         SimpleNamespace(state="home", last_changed=from_time, attributes=None),
-        SimpleNamespace(state="home", last_changed=from_time + timedelta(hours=1), attributes={"latitude": 48.8566, "longitude": 2.3522}),
+        SimpleNamespace(
+            state="home",
+            last_changed=from_time + timedelta(hours=1),
+            attributes={"latitude": 48.8566, "longitude": 2.3522},
+        ),
         SimpleNamespace(state="away", last_changed=to_time, attributes={"latitude": 48.8600, "longitude": 2.3600}),
     ]
 
@@ -391,6 +395,7 @@ async def test_bootstrap_efficiency_full_success(
     ]
 
     call_count = 0
+
     async def mock_executor_job(fn, entity_id):
         nonlocal call_count
         call_count += 1
@@ -401,12 +406,15 @@ async def test_bootstrap_efficiency_full_success(
     mock_recorder = MagicMock()
     mock_recorder.async_add_executor_job = mock_executor_job
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
-        return_value=mock_recorder,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
-        side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
+            return_value=mock_recorder,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
+            side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+        ),
     ):
         await car._async_bootstrap_efficiency_from_history(time)
 
@@ -448,12 +456,15 @@ async def test_bootstrap_efficiency_invalid_states_filtered(
     mock_recorder = MagicMock()
     mock_recorder.async_add_executor_job = mock_executor_job
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
-        return_value=mock_recorder,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
-        side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
+            return_value=mock_recorder,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
+            side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+        ),
     ):
         await car._async_bootstrap_efficiency_from_history(time)
 
@@ -483,12 +494,15 @@ async def test_bootstrap_efficiency_too_few_points(
     mock_recorder = MagicMock()
     mock_recorder.async_add_executor_job = mock_executor_job
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
-        return_value=mock_recorder,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
-        side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
+            return_value=mock_recorder,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
+            side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+        ),
     ):
         await car._async_bootstrap_efficiency_from_history(time)
 
@@ -526,12 +540,15 @@ async def test_bootstrap_efficiency_no_valid_segments(
     mock_recorder = MagicMock()
     mock_recorder.async_add_executor_job = mock_executor_job
 
-    with patch(
-        "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
-        return_value=mock_recorder,
-    ), patch(
-        "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
-        side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+    with (
+        patch(
+            "custom_components.quiet_solar.ha_model.car.recorder_get_instance",
+            return_value=mock_recorder,
+        ),
+        patch(
+            "custom_components.quiet_solar.ha_model.car.state_changes_during_period",
+            side_effect=lambda hass, start, end, eid, **kw: {eid: odo_states if "odo" in eid else soc_states},
+        ),
     ):
         await car._async_bootstrap_efficiency_from_history(time)
 
@@ -729,7 +746,8 @@ async def test_adapt_max_charge_limit_steps_overflow(
     hass.states.async_set(entity, "50")
 
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity,
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,80",
@@ -745,7 +763,8 @@ async def test_adapt_max_charge_limit_steps_overflow(
     # But if steps only had [50, 80] (no 100 auto-append): bisect would overflow
     # Let's use steps="50,70" -> [50,70,100]. default_charge=80 -> percent=80
     car2, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity,
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,70",
@@ -772,7 +791,8 @@ async def test_adapt_max_charge_limit_service_exception(
     hass.states.async_set(entity, "50")
 
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity},
         entry_id_suffix="lim_exc",
     )
@@ -804,9 +824,7 @@ async def test_update_dampening_transition_graph_add_fails(
 
     # _can_accept_new_dampen_values returns True, but _add_to_amps_power_graph returns False
     with patch.object(car, "_add_to_amps_power_graph", return_value=False):
-        result = car.update_dampening_value(
-            None, ((10, 1), (16, 1)), 580.0, time
-        )
+        result = car.update_dampening_value(None, ((10, 1), (16, 1)), 580.0, time)
     assert result is False
 
 
@@ -1035,7 +1053,12 @@ async def test_device_post_home_init_clears_unauthorized_person(
     # Create a person that does NOT authorize this car
     person_entry = MockConfigEntry(
         domain=DOMAIN,
-        data={**MOCK_PERSON_CONFIG, "name": "Unauthorized Person", CONF_PERSON_AUTHORIZED_CARS: [], CONF_PERSON_PREFERRED_CAR: ""},
+        data={
+            **MOCK_PERSON_CONFIG,
+            "name": "Unauthorized Person",
+            CONF_PERSON_AUTHORIZED_CARS: [],
+            CONF_PERSON_PREFERRED_CAR: "",
+        },
         entry_id="person_unauth_init",
         title="person: Unauthorized Person",
         unique_id="quiet_solar_person_unauth_init",

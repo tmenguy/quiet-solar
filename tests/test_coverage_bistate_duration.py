@@ -3,49 +3,44 @@
 Targets the specific uncovered lines:
 70-73, 77-78, 81-84, 91, 265, 269, 283, 286, 303, 373-379, 426, 429, 433, 435
 """
+
 from __future__ import annotations
 
 import datetime
+from datetime import time as dt_time
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-from datetime import time as dt_time, timedelta
-
 import pytz
-
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
-
+from homeassistant.const import CONF_NAME
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_SWITCH,
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    DATA_HANDLER,
+    DOMAIN,
+)
 from custom_components.quiet_solar.ha_model.bistate_duration import (
-    QSBiStateDuration,
-    bistate_modes,
-    DEFAULT_USER_OVERRIDE_DURATION_S,
     USER_OVERRIDE_STATE_BACK_DURATION_S,
+    QSBiStateDuration,
 )
 from custom_components.quiet_solar.home_model.commands import (
-    CMD_ON,
     CMD_OFF,
-    CMD_IDLE,
+    CMD_ON,
 )
 from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
-    DATETIME_MAX_UTC,
 )
-from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_FILLER_AUTO,
-    CONF_SWITCH,
-)
-
 from tests.factories import create_minimal_home_model
-
 
 # ---------------------------------------------------------------------------
 # Concrete test subclass
 # ---------------------------------------------------------------------------
+
 
 class ConcreteBiState(QSBiStateDuration):
     """Concrete implementation for testing."""
@@ -70,6 +65,7 @@ class ConcreteBiState(QSBiStateDuration):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def cfg_entry(hass):
@@ -125,8 +121,8 @@ def device(hass, setup):
 # Lines 91: power_use returns None when _power_use_conf is None
 # ===================================================================
 
-class TestPowerUseNone:
 
+class TestPowerUseNone:
     def test_power_use_returns_none_when_conf_is_none(self, hass, setup):
         """When _power_use_conf is None, power_use should return None."""
         dev = ConcreteBiState(
@@ -143,8 +139,8 @@ class TestPowerUseNone:
 # Lines 70-73: user_set_default_on_duration with for_init=False
 # ===================================================================
 
-class TestUserSetDefaultOnDuration:
 
+class TestUserSetDefaultOnDuration:
     @pytest.mark.asyncio
     async def test_sets_duration_and_triggers_solve(self, device):
         """Calling user_set_default_on_duration triggers constraint check and force_next_solve.
@@ -172,8 +168,8 @@ class TestUserSetDefaultOnDuration:
 # Lines 81-84: user_set_bistate_mode with valid mode, for_init=False
 # ===================================================================
 
-class TestUserSetBistateMode:
 
+class TestUserSetBistateMode:
     @pytest.mark.asyncio
     async def test_invalid_mode_logs_error_and_returns(self, device):
         """Invalid mode should be rejected without changing bistate_mode."""
@@ -198,8 +194,8 @@ class TestUserSetBistateMode:
 # Line 269: override state changed (current != external_user_initiated)
 # ===================================================================
 
-class TestOverrideStateChangedDetection:
 
+class TestOverrideStateChangedDetection:
     @pytest.mark.asyncio
     async def test_override_state_same_keeps_override(self, hass, device):
         """When HA state matches external override, no state change detected."""
@@ -265,8 +261,8 @@ class TestOverrideStateChangedDetection:
 # Line 286: expected_state_running is None -> fallback to expected_state
 # ===================================================================
 
-class TestExpectedStateFallbacks:
 
+class TestExpectedStateFallbacks:
     @pytest.mark.asyncio
     async def test_fallback_expected_state_to_running(self, hass, device):
         """When current_command is None, expected_state falls back to running_command's state.
@@ -328,8 +324,8 @@ class TestExpectedStateFallbacks:
 # Line 303: asked_for_reset timeout expires -> clear reset time
 # ===================================================================
 
-class TestResetTimeoutExpires:
 
+class TestResetTimeoutExpires:
     @pytest.mark.asyncio
     async def test_reset_window_expired_clears_asked_time(self, hass, device):
         """After reset window expires, asked_for_reset_user_initiated_state_time is cleared.
@@ -343,8 +339,8 @@ class TestResetTimeoutExpires:
         device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
         # Set asked_for_reset time far enough in the past (> USER_OVERRIDE_STATE_BACK_DURATION_S)
-        device.asked_for_reset_user_initiated_state_time = (
-            time - timedelta(seconds=USER_OVERRIDE_STATE_BACK_DURATION_S + 10)
+        device.asked_for_reset_user_initiated_state_time = time - timedelta(
+            seconds=USER_OVERRIDE_STATE_BACK_DURATION_S + 10
         )
 
         device.current_command = CMD_OFF
@@ -367,8 +363,8 @@ class TestResetTimeoutExpires:
 # Lines 373-379: mode_off with do_push_constraint_after, no found_override
 # ===================================================================
 
-class TestModeOffOverrideBranches:
 
+class TestModeOffOverrideBranches:
     @pytest.mark.asyncio
     async def test_mode_off_push_override_constraint_not_found_in_list(self, hass, device):
         """In mode_off, when override constraint was just built but not in _constraints.
@@ -448,8 +444,8 @@ class TestModeOffOverrideBranches:
 # Lines 426, 429, 433, 435: calendar event filtering in auto mode
 # ===================================================================
 
-class TestCalendarEventFiltering:
 
+class TestCalendarEventFiltering:
     @pytest.mark.asyncio
     async def test_event_end_before_push_constraint_after_skipped(self, hass, device):
         """Calendar events ending before do_push_constraint_after are skipped.
@@ -471,9 +467,7 @@ class TestCalendarEventFiltering:
         hass.states.async_set("switch.test_device", "off")
         device._constraints = []
 
-        push_after = device.external_user_initiated_state_time + timedelta(
-            seconds=3600.0 * device.override_duration
-        )
+        push_after = device.external_user_initiated_state_time + timedelta(seconds=3600.0 * device.override_duration)
 
         # Event that ends BEFORE do_push_constraint_after -> skipped (line 426)
         early_event = (
@@ -485,9 +479,7 @@ class TestCalendarEventFiltering:
             push_after + timedelta(seconds=1),
             push_after + timedelta(hours=3),
         )
-        device.get_next_scheduled_events = AsyncMock(
-            return_value=[early_event, valid_event]
-        )
+        device.get_next_scheduled_events = AsyncMock(return_value=[early_event, valid_event])
 
         result = await device.check_load_activity_and_constraints(time)
 
@@ -516,9 +508,7 @@ class TestCalendarEventFiltering:
             time + timedelta(hours=1),
             time + timedelta(hours=3),
         )
-        device.get_next_scheduled_events = AsyncMock(
-            return_value=[past_event, future_event]
-        )
+        device.get_next_scheduled_events = AsyncMock(return_value=[past_event, future_event])
 
         result = await device.check_load_activity_and_constraints(time)
 
@@ -545,9 +535,7 @@ class TestCalendarEventFiltering:
         hass.states.async_set("switch.test_device", "off")
         device._constraints = []
 
-        push_after = device.external_user_initiated_state_time + timedelta(
-            seconds=3600.0 * device.override_duration
-        )
+        push_after = device.external_user_initiated_state_time + timedelta(seconds=3600.0 * device.override_duration)
 
         # Valid event after push_after (start is clamped but still < end)
         event_valid = (
@@ -555,9 +543,7 @@ class TestCalendarEventFiltering:
             push_after + timedelta(hours=3),  # end well after push_after
         )
 
-        device.get_next_scheduled_events = AsyncMock(
-            return_value=[event_valid]
-        )
+        device.get_next_scheduled_events = AsyncMock(return_value=[event_valid])
 
         result = await device.check_load_activity_and_constraints(time)
         assert result is True
@@ -583,9 +569,7 @@ class TestCalendarEventFiltering:
         hass.states.async_set("switch.test_device", "off")
         device._constraints = []
 
-        push_after = device.external_user_initiated_state_time + timedelta(
-            seconds=3600.0 * device.override_duration
-        )
+        push_after = device.external_user_initiated_state_time + timedelta(seconds=3600.0 * device.override_duration)
 
         # Event where end == do_push_constraint_after exactly:
         # - Passes line 426 (end NOT < push_after, it's equal)
@@ -604,9 +588,7 @@ class TestCalendarEventFiltering:
             push_after + timedelta(hours=3),
         )
 
-        device.get_next_scheduled_events = AsyncMock(
-            return_value=[event_exact_boundary, event_valid]
-        )
+        device.get_next_scheduled_events = AsyncMock(return_value=[event_exact_boundary, event_valid])
 
         result = await device.check_load_activity_and_constraints(time)
 
@@ -619,8 +601,8 @@ class TestCalendarEventFiltering:
 # Lines 373-375 specifically: mode_off with override just detected
 # ===================================================================
 
-class TestModeOffWithFreshOverride:
 
+class TestModeOffWithFreshOverride:
     @pytest.mark.asyncio
     async def test_mode_off_fresh_on_override_pushes_via_set_live(self, hass, device):
         """In mode_off, when push_live_constraint fails but override_constraint exists.
@@ -668,8 +650,8 @@ class TestModeOffWithFreshOverride:
 # These are already covered but let's ensure push_live_constraint path
 # ===================================================================
 
-class TestConstraintPushPaths:
 
+class TestConstraintPushPaths:
     @pytest.mark.asyncio
     async def test_mode_on_pushes_live_constraint(self, hass, device):
         """Mode_on should push constraint via push_live_constraint (non-agenda).
@@ -701,9 +683,7 @@ class TestConstraintPushPaths:
         device.default_on_duration = 2.0
         device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
         device.is_load_command_set = MagicMock(return_value=False)
-        device.get_next_time_from_hours = MagicMock(
-            return_value=datetime.datetime.now(pytz.UTC) + timedelta(hours=8)
-        )
+        device.get_next_time_from_hours = MagicMock(return_value=datetime.datetime.now(pytz.UTC) + timedelta(hours=8))
         device._constraints = []
 
         time = datetime.datetime.now(pytz.UTC)

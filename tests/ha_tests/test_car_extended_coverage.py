@@ -18,41 +18,30 @@ Key targets:
  - Various other under-tested happy paths and corner cases
 """
 
-import pytest
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytz
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CAR_BATTERY_CAPACITY,
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
-    CONF_DEFAULT_CAR_CHARGE,
-    CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_CAR_IS_INVITED,
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
-    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
-    FORCE_CAR_NO_CHARGER_CONNECTED,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
-    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
 )
 from custom_components.quiet_solar.ha_model.car import (
-    MIN_CHARGE_POWER_W,
     CAR_DEFAULT_CAPACITY,
-    CAR_MINIMUM_LEFT_RANGE_KM,
-    QSCar,
 )
 from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -60,6 +49,7 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 # ---------------------------------------------------------------------------
 # Helper to create a car device quickly
 # ---------------------------------------------------------------------------
+
 
 async def _create_car(hass, home_config_entry, extra_config=None, entry_id_suffix="ext"):
     """Helper: set up home + car, return car device."""
@@ -483,8 +473,7 @@ async def test_adapt_target_soc_success_covered(
     car.get_estimated_range_km = MagicMock(return_value=400.0)
     car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=4.0)
 
-    is_covered, current_soc, needed_soc, diff_energy = \
-        car.get_adapt_target_percent_soc_to_reach_range_km(50.0, time)
+    is_covered, current_soc, needed_soc, diff_energy = car.get_adapt_target_percent_soc_to_reach_range_km(50.0, time)
 
     assert is_covered is True
     assert current_soc == 90.0
@@ -503,8 +492,7 @@ async def test_adapt_target_soc_not_covered(
     car.get_estimated_range_km = MagicMock(return_value=80.0)
     car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=4.0)
 
-    is_covered, current_soc, needed_soc, diff_energy = \
-        car.get_adapt_target_percent_soc_to_reach_range_km(200.0, time)
+    is_covered, current_soc, needed_soc, diff_energy = car.get_adapt_target_percent_soc_to_reach_range_km(200.0, time)
 
     assert is_covered is False
     assert current_soc == 30.0
@@ -589,8 +577,10 @@ async def test_get_delta_from_graph_via_path(
     """_get_delta_from_graph via intermediate path."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="delta_path")
     deltas = {
-        (6, 10): 200.0, (10, 6): -200.0,
-        (10, 16): 300.0, (16, 10): -300.0,
+        (6, 10): 200.0,
+        (10, 6): -200.0,
+        (10, 16): 300.0,
+        (16, 10): -300.0,
     }
     graph = {6: {10}, 10: {6, 16}, 16: {10}}
     result = car._get_delta_from_graph(deltas, graph, 6, 16)
@@ -828,9 +818,7 @@ async def test_update_dampening_with_transition_from_zero(
     car.get_car_charge_percent = MagicMock(return_value=50.0)
 
     # transition from 0 to 10A: amperage should be extracted as (10,1)
-    result = car.update_dampening_value(
-        None, ((0, 1), (10, 1)), 2300.0, time
-    )
+    result = car.update_dampening_value(None, ((0, 1), (10, 1)), 2300.0, time)
     assert result is True
 
 
@@ -1177,9 +1165,7 @@ async def test_get_car_coordinates_missing_lat(
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="coord_nolat")
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
     tracker = car.car_tracker
-    car._entity_probed_last_valid_state[tracker] = (
-        time, "home", {"longitude": "2.3522"}
-    )
+    car._entity_probed_last_valid_state[tracker] = (time, "home", {"longitude": "2.3522"})
     assert car.get_car_coordinates(time) == (None, None)
 
 
@@ -1191,9 +1177,7 @@ async def test_get_car_coordinates_invalid_values(
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="coord_bad")
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
     tracker = car.car_tracker
-    car._entity_probed_last_valid_state[tracker] = (
-        time, "home", {"latitude": "abc", "longitude": "def"}
-    )
+    car._entity_probed_last_valid_state[tracker] = (time, "home", {"latitude": "abc", "longitude": "def"})
     assert car.get_car_coordinates(time) == (None, None)
 
 
@@ -1208,9 +1192,7 @@ async def test_dashboard_sort_string_invited(
 ) -> None:
     """Invited cars sort to 'ZZZ'."""
     car, _ = await _create_car(
-        hass, home_config_entry,
-        extra_config={CONF_CAR_IS_INVITED: True},
-        entry_id_suffix="sort_inv"
+        hass, home_config_entry, extra_config={CONF_CAR_IS_INVITED: True}, entry_id_suffix="sort_inv"
     )
     assert car.dashboard_sort_string_in_type == "ZZZ"
 
@@ -1265,9 +1247,7 @@ async def test_charge_time_readable_no_constraint(
 ) -> None:
     """With charger but no active constraint, should return '--:--'."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="time_noct")
-    car.charger = SimpleNamespace(
-        get_current_active_constraint=lambda time: None
-    )
+    car.charger = SimpleNamespace(get_current_active_constraint=lambda time: None)
     assert car.get_car_charge_time_readable_name() == "--:--"
 
 
@@ -1293,9 +1273,7 @@ async def test_convert_auto_constraint_max_utc(
     """Does not convert when end_of_constraint is DATETIME_MAX_UTC."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="conv_max")
     constraint = SimpleNamespace(end_of_constraint=DATETIME_MAX_UTC)
-    car.charger = SimpleNamespace(
-        get_charge_type=lambda: (CAR_CHARGE_TYPE_PERSON_AUTOMATED, constraint)
-    )
+    car.charger = SimpleNamespace(get_charge_type=lambda: (CAR_CHARGE_TYPE_PERSON_AUTOMATED, constraint))
     result = await car.convert_auto_constraint_to_manual_if_needed()
     assert result is False
 
@@ -1444,9 +1422,7 @@ async def test_percent_mode_sensor_getter_invited_car(
 ) -> None:
     """Invited car should always return 'off'."""
     car, _ = await _create_car(
-        hass, home_config_entry,
-        extra_config={CONF_CAR_IS_INVITED: True},
-        entry_id_suffix="pct_mode_inv"
+        hass, home_config_entry, extra_config={CONF_CAR_IS_INVITED: True}, entry_id_suffix="pct_mode_inv"
     )
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
     result = car.car_use_percent_mode_sensor_state_getter("sensor.mode", time)
@@ -1796,9 +1772,10 @@ async def test_init_with_valid_steps(
 ) -> None:
     """Valid steps string should parse and sort correctly."""
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,80,90"},
-        entry_id_suffix="steps_valid"
+        entry_id_suffix="steps_valid",
     )
     assert car.car_charge_percent_max_number_steps == [50, 80, 90, 100]
 
@@ -1809,9 +1786,10 @@ async def test_init_with_invalid_steps(
 ) -> None:
     """Invalid steps should result in empty list."""
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,abc,90"},
-        entry_id_suffix="steps_invalid"
+        entry_id_suffix="steps_invalid",
     )
     assert car.car_charge_percent_max_number_steps == []
 
@@ -1822,9 +1800,10 @@ async def test_init_with_empty_steps(
 ) -> None:
     """Empty string steps should result in None-like handling."""
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: ""},
-        entry_id_suffix="steps_empty"
+        entry_id_suffix="steps_empty",
     )
     assert car.car_charge_percent_max_number_steps == []
 
@@ -1835,9 +1814,10 @@ async def test_init_with_100_in_steps(
 ) -> None:
     """Steps that already contain 100 should not duplicate it."""
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,100"},
-        entry_id_suffix="steps_100"
+        entry_id_suffix="steps_100",
     )
     assert car.car_charge_percent_max_number_steps == [50, 100]
     assert car.car_charge_percent_max_number_steps.count(100) == 1
@@ -1863,12 +1843,13 @@ async def test_adapt_max_charge_limit_with_steps(
     hass.states.async_set(entity, "50")
 
     car, _ = await _create_car(
-        hass, home_config_entry,
+        hass,
+        home_config_entry,
         extra_config={
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity,
             CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "50,80,100",
         },
-        entry_id_suffix="lim_steps"
+        entry_id_suffix="lim_steps",
     )
 
     # Reset mock after setup (setup may have already called the service)
@@ -2013,9 +1994,7 @@ async def test_update_dampening_transition_both_nonzero(
     car._dampening_deltas_graph = {10: {16}, 16: {10}}
 
     # Transition from 10A to 16A with a reasonable delta (within acceptance)
-    result = car.update_dampening_value(
-        None, ((10, 1), (16, 1)), 580.0, time
-    )
+    result = car.update_dampening_value(None, ((10, 1), (16, 1)), 580.0, time)
     assert result is True
 
 
@@ -2028,9 +2007,7 @@ async def test_update_dampening_transition_to_zero(
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
     car.get_car_charge_percent = MagicMock(return_value=50.0)
 
-    result = car.update_dampening_value(
-        None, ((10, 1), (0, 1)), 2300.0, time
-    )
+    result = car.update_dampening_value(None, ((10, 1), (0, 1)), 2300.0, time)
     # amperage extracted as (10,1), power negated to -2300, but that's < -MIN_CHARGE_POWER_W
     # so it should be rejected
     assert result is False
@@ -2274,8 +2251,7 @@ async def test_adapt_target_soc_b_wins(
     # target_range = 20 km, needed_soc_a = (20+40)/4 = 15
     # needed_soc_b = 70 + 20/4 = 75
     # b wins because 75 > 15
-    is_covered, current_soc, needed_soc, diff_energy = \
-        car.get_adapt_target_percent_soc_to_reach_range_km(20.0, time)
+    is_covered, current_soc, needed_soc, diff_energy = car.get_adapt_target_percent_soc_to_reach_range_km(20.0, time)
 
     assert needed_soc == pytest.approx(75.0, rel=0.01)
 

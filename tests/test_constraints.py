@@ -1,30 +1,30 @@
 """Tests for home_model/constraints.py - Load constraint functionality."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import pytz
-import numpy as np
 
+from custom_components.quiet_solar.const import (
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+    CONSTRAINT_TYPE_FILLER,
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    SOLVER_STEP_S,
+)
+from custom_components.quiet_solar.home_model.commands import LoadCommand
 from custom_components.quiet_solar.home_model.constraints import (
+    DATETIME_MAX_UTC,
     LoadConstraint,
     MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
     TimeBasedSimplePowerLoadConstraint,
     get_readable_date_string,
-    DATETIME_MAX_UTC,
-    DATETIME_MIN_UTC,
-)
-from custom_components.quiet_solar.home_model.commands import LoadCommand
-from custom_components.quiet_solar.const import (
-    CONSTRAINT_TYPE_FILLER_AUTO,
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
-    CONSTRAINT_TYPE_FILLER,
-    SOLVER_STEP_S,
 )
 from tests.factories import TestDynamicGroupDouble
 
@@ -65,6 +65,7 @@ class _FakeLoad:
 # =============================================================================
 # Test get_readable_date_string
 # =============================================================================
+
 
 def test_get_readable_date_string_none():
     """Test readable date string for None."""
@@ -394,6 +395,7 @@ def test_get_readable_date_string_standalone_near():
 # Test LoadConstraint initialization
 # =============================================================================
 
+
 def test_load_constraint_init_defaults():
     """Test LoadConstraint with default values."""
     time = datetime.now(tz=pytz.UTC)
@@ -410,10 +412,7 @@ def test_load_constraint_init_defaults():
 def test_load_constraint_init_with_type():
     """Test LoadConstraint with specific type."""
     time = datetime.now(tz=pytz.UTC)
-    constraint = LoadConstraint(
-        time=time,
-        type=CONSTRAINT_TYPE_MANDATORY_END_TIME
-    )
+    constraint = LoadConstraint(time=time, type=CONSTRAINT_TYPE_MANDATORY_END_TIME)
 
     assert constraint._type == CONSTRAINT_TYPE_MANDATORY_END_TIME
 
@@ -424,11 +423,7 @@ def test_load_constraint_init_with_load():
     mock_load = MagicMock()
     mock_load.name = "TestLoad"
 
-    constraint = LoadConstraint(
-        time=time,
-        load=mock_load,
-        load_param="power"
-    )
+    constraint = LoadConstraint(time=time, load=mock_load, load_param="power")
 
     assert constraint.load is mock_load
     assert constraint.load_param == "power"
@@ -438,11 +433,7 @@ def test_load_constraint_init_with_values():
     """Test LoadConstraint with initial and target values."""
     time = datetime.now(tz=pytz.UTC)
 
-    constraint = LoadConstraint(
-        time=time,
-        initial_value=10.0,
-        target_value=100.0
-    )
+    constraint = LoadConstraint(time=time, initial_value=10.0, target_value=100.0)
 
     assert constraint.target_value == 100.0
 
@@ -453,11 +444,7 @@ def test_load_constraint_init_with_times():
     start = time + timedelta(hours=1)
     end = time + timedelta(hours=5)
 
-    constraint = LoadConstraint(
-        time=time,
-        start_of_constraint=start,
-        end_of_constraint=end
-    )
+    constraint = LoadConstraint(time=time, start_of_constraint=start, end_of_constraint=end)
 
     assert constraint.start_of_constraint == start
     assert constraint.end_of_constraint == end
@@ -467,10 +454,7 @@ def test_load_constraint_from_user():
     """Test LoadConstraint created from user."""
     time = datetime.now(tz=pytz.UTC)
 
-    constraint = LoadConstraint(
-        time=time,
-        from_user=True
-    )
+    constraint = LoadConstraint(time=time, from_user=True)
 
     assert constraint.from_user is True
 
@@ -479,10 +463,7 @@ def test_load_constraint_support_auto():
     """Test LoadConstraint with auto support."""
     time = datetime.now(tz=pytz.UTC)
 
-    constraint = LoadConstraint(
-        time=time,
-        support_auto=True
-    )
+    constraint = LoadConstraint(time=time, support_auto=True)
 
     assert constraint.support_auto is True
 
@@ -492,9 +473,7 @@ def test_load_constraint_degraded_type():
     time = datetime.now(tz=pytz.UTC)
 
     constraint = LoadConstraint(
-        time=time,
-        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-        degraded_type=CONSTRAINT_TYPE_FILLER
+        time=time, type=CONSTRAINT_TYPE_MANDATORY_END_TIME, degraded_type=CONSTRAINT_TYPE_FILLER
     )
 
     assert constraint._type == CONSTRAINT_TYPE_MANDATORY_END_TIME
@@ -505,10 +484,7 @@ def test_load_constraint_artificial_step():
     """Test LoadConstraint with artificial step."""
     time = datetime.now(tz=pytz.UTC)
 
-    constraint = LoadConstraint(
-        time=time,
-        artificial_step_to_final_value=5
-    )
+    constraint = LoadConstraint(time=time, artificial_step_to_final_value=5)
 
     assert constraint.artificial_step_to_final_value == 5
 
@@ -517,10 +493,7 @@ def test_load_constraint_always_end_at_end():
     """Test LoadConstraint with always_end_at_end_of_constraint."""
     time = datetime.now(tz=pytz.UTC)
 
-    constraint = LoadConstraint(
-        time=time,
-        always_end_at_end_of_constraint=True
-    )
+    constraint = LoadConstraint(time=time, always_end_at_end_of_constraint=True)
 
     assert constraint.always_end_at_end_of_constraint is True
 
@@ -549,7 +522,7 @@ def test_multisteps_from_dict_strips_legacy_fields():
         "end_of_constraint": now.isoformat(),
         "power_steps": [
             {"command": "on", "power_consign": 1000, "phase_current": 10, "load_param": "x"},
-        ]
+        ],
     }
     kwargs = MultiStepsPowerLoadConstraint.from_dict_to_kwargs(data)
     assert kwargs["power_steps"][0].power_consign == 1000
@@ -686,9 +659,7 @@ def test_adapt_commands_too_many_state_changes_reduced():
     initial_changes = _count_state_changes(out_commands, first_slot, last_slot)
     assert initial_changes > 1
 
-    result = constraint._adapt_commands(
-        out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot
-    )
+    result = constraint._adapt_commands(out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot)
 
     final_changes = _count_state_changes(out_commands, first_slot, last_slot)
     num_allowed = load.num_max_on_off - load.num_on_off
@@ -723,9 +694,7 @@ def test_adapt_commands_empty_inner_segments_filled():
     power_slots_duration_s = [SOLVER_STEP_S] * len(out_commands)
     first_slot, last_slot = 0, len(out_commands) - 1
 
-    constraint._adapt_commands(
-        out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot
-    )
+    constraint._adapt_commands(out_commands, out_power, power_slots_duration_s, 0.0, first_slot, last_slot)
 
     initial_empty_count = sum(1 for c in out_commands if c is None or (getattr(c, "power_consign", 0) or 0) == 0)
     after_empty = sum(1 for c in out_commands if c is None or (getattr(c, "power_consign", 0) or 0) == 0)
@@ -1050,10 +1019,7 @@ def test_load_constraint_load_info():
     time = datetime.now(tz=pytz.UTC)
     info = {"key": "value", "number": 42}
 
-    constraint = LoadConstraint(
-        time=time,
-        load_info=info
-    )
+    constraint = LoadConstraint(time=time, load_info=info)
 
     assert constraint.load_info == info
     assert constraint.load_info["key"] == "value"
@@ -1065,6 +1031,7 @@ def test_load_constraint_load_info():
 # The priority system uses integer values where HIGHER means HIGHER priority.
 # ASAP (9) > MANDATORY (7) > BEFORE_BATTERY (5) > FILLER (3) > FILLER_AUTO (1)
 # =============================================================================
+
 
 def test_constraint_type_filler_auto():
     """Test CONSTRAINT_TYPE_FILLER_AUTO has expected value and lowest priority."""
@@ -1119,21 +1086,23 @@ def test_constraint_type_priority_ordering():
     # ASAP (9) > MANDATORY (7) > BEFORE_BATTERY (5) > FILLER (3) > FILLER_AUTO (1)
     priority_order = [
         CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,  # 9
-        CONSTRAINT_TYPE_MANDATORY_END_TIME,              # 7
-        CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,            # 5
-        CONSTRAINT_TYPE_FILLER,                          # 3
-        CONSTRAINT_TYPE_FILLER_AUTO,                     # 1
+        CONSTRAINT_TYPE_MANDATORY_END_TIME,  # 7
+        CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,  # 5
+        CONSTRAINT_TYPE_FILLER,  # 3
+        CONSTRAINT_TYPE_FILLER_AUTO,  # 1
     ]
-    
+
     # Verify order is strictly descending
     for i in range(len(priority_order) - 1):
-        assert priority_order[i] > priority_order[i + 1], \
+        assert priority_order[i] > priority_order[i + 1], (
             f"Priority order violation: {priority_order[i]} should be > {priority_order[i + 1]}"
+        )
 
 
 # =============================================================================
 # Test constraint copy_to_other_type conversions
 # =============================================================================
+
 
 def _make_test_load() -> MagicMock:
     load = MagicMock()
@@ -1259,6 +1228,7 @@ def test_copy_to_other_type_round_trip_fields(source_cls, target_cls):
 # =============================================================================
 # Test compute_best_period_repartition (constraints.py ~1303–1793)
 # =============================================================================
+
 
 def test_compute_best_period_repartition_as_fast_as_possible_solar_only():
     """As-fast-as-possible, solar-only: sum(out_power*duration) matches quantity; final_ret when fulfilled."""
@@ -1556,19 +1526,21 @@ def test_adapt_power_steps_budgeting_low_level_production_limits():
         time=time,
         load=load,
         power_steps=[
-            LoadCommand(command="on", power_consign=1000),   # 4.35A per phase
-            LoadCommand(command="on", power_consign=2000),   # 8.70A per phase
-            LoadCommand(command="on", power_consign=5000),   # 21.7A per phase
+            LoadCommand(command="on", power_consign=1000),  # 4.35A per phase
+            LoadCommand(command="on", power_consign=2000),  # 8.70A per phase
+            LoadCommand(command="on", power_consign=5000),  # 21.7A per phase
         ],
     )
 
     cmds_consumption = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, use_production_limits=False,
+        slot_idx=0,
+        use_production_limits=False,
     )
     assert len(cmds_consumption) == 3
 
     cmds_production = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, use_production_limits=True,
+        slot_idx=0,
+        use_production_limits=True,
     )
     assert len(cmds_production) < len(cmds_consumption)
     assert len(cmds_production) == 2
@@ -1596,30 +1568,28 @@ def test_adapt_power_steps_budgeting_production_tighter_than_consumption():
         time=time,
         load=load,
         power_steps=[
-            LoadCommand(command="on", power_consign=1000),   # 4.35A
-            LoadCommand(command="on", power_consign=2000),   # 8.70A
-            LoadCommand(command="on", power_consign=3000),   # 13.0A
-            LoadCommand(command="on", power_consign=5000),   # 21.7A
-            LoadCommand(command="on", power_consign=7000),   # 30.4A
+            LoadCommand(command="on", power_consign=1000),  # 4.35A
+            LoadCommand(command="on", power_consign=2000),  # 8.70A
+            LoadCommand(command="on", power_consign=3000),  # 13.0A
+            LoadCommand(command="on", power_consign=5000),  # 21.7A
+            LoadCommand(command="on", power_consign=7000),  # 30.4A
         ],
     )
 
     for slot_idx in range(4):
         cmds_prod = constraint.adapt_power_steps_budgeting_low_level(
-            slot_idx=slot_idx, use_production_limits=True,
+            slot_idx=slot_idx,
+            use_production_limits=True,
         )
         cmds_cons = constraint.adapt_power_steps_budgeting_low_level(
-            slot_idx=slot_idx, use_production_limits=False,
+            slot_idx=slot_idx,
+            use_production_limits=False,
         )
         assert len(cmds_cons) == 5, "All commands fit under 32A consumption limit"
-        assert len(cmds_prod) == 3, (
-            f"Production limit 15A should allow 3 commands in slot {slot_idx}"
-        )
+        assert len(cmds_prod) == 3, f"Production limit 15A should allow 3 commands in slot {slot_idx}"
         for cmd in cmds_prod:
             amps_per_phase = cmd.power_consign / 230.0
-            assert amps_per_phase <= 15.0 + 0.1, (
-                f"Command {cmd.power_consign}W exceeds 15A production limit"
-            )
+            assert amps_per_phase <= 15.0 + 0.1, f"Command {cmd.power_consign}W exceeds 15A production limit"
 
 
 def test_compute_best_period_solar_only_clamped_by_production():
@@ -1679,8 +1649,7 @@ def test_compute_best_period_solar_only_clamped_by_production():
     for i in range(num_slots):
         if out_commands[i] is not None:
             assert out_power[i] <= max_production_power + 200, (
-                f"Slot {i}: power {out_power[i]:.0f}W exceeds production cap "
-                f"{max_production_power:.0f}W"
+                f"Slot {i}: power {out_power[i]:.0f}W exceeds production cap {max_production_power:.0f}W"
             )
 
 
@@ -1704,10 +1673,14 @@ def test_adapt_power_steps_budgeting_production_limits_with_existing_amps():
     )
 
     cmds_no_existing = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, existing_amps=None, use_production_limits=True,
+        slot_idx=0,
+        existing_amps=None,
+        use_production_limits=True,
     )
     cmds_with_existing = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, existing_amps=[5.0, 5.0, 5.0], use_production_limits=True,
+        slot_idx=0,
+        existing_amps=[5.0, 5.0, 5.0],
+        use_production_limits=True,
     )
 
     assert len(cmds_with_existing) >= len(cmds_no_existing), (
@@ -1732,8 +1705,7 @@ def test_production_limits_guard_when_consumption_budget_none():
     )
 
     cmds = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, use_production_limits=True,
+        slot_idx=0,
+        use_production_limits=True,
     )
-    assert len(cmds) == 2, (
-        "Guard condition: when available_amps_for_group is None, return all commands"
-    )
+    assert len(cmds) == 2, "Guard condition: when available_amps_for_group is None, return all commands"

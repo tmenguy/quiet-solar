@@ -1,22 +1,16 @@
 """Additional tests for quiet_solar charger.py to improve coverage to 91%+."""
 
+from datetime import datetime
+
 import pytest
-from datetime import datetime, timedelta
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
-
 import pytz
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import STATE_UNKNOWN
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     DOMAIN,
-    DATA_HANDLER,
 )
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 

@@ -14,16 +14,22 @@ Key concepts tested:
 - Solver integration with multiple climates connected to a heat pump
 """
 
-from unittest import TestCase
 from datetime import datetime, timedelta
+from unittest import TestCase
 
 import pytz
 
 from custom_components.quiet_solar.const import (
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
-    CONF_POWER,
     CONF_DEVICE_TO_PILOT_NAME,
+    CONF_POWER,
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
+from custom_components.quiet_solar.home_model.battery import Battery
+from custom_components.quiet_solar.home_model.commands import (
+    CMD_OFF,
+    CMD_ON,
+    copy_command,
 )
 from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
@@ -33,12 +39,6 @@ from custom_components.quiet_solar.home_model.load import (
     PilotedDevice,
 )
 from custom_components.quiet_solar.home_model.solver import PeriodSolver
-from custom_components.quiet_solar.home_model.battery import Battery
-from custom_components.quiet_solar.home_model.commands import (
-    copy_command,
-    CMD_ON,
-    CMD_OFF,
-)
 
 
 class MockPilotedDevice(PilotedDevice):
@@ -148,7 +148,7 @@ class TestPilotedDeviceBasics(TestCase):
     def test_possible_delta_power_no_clients(self):
         """Test that delta power is 0 when there are no clients."""
         heat_pump = MockPilotedDevice(name="heat_pump", power=2000)
-        heat_pump.prepare_slots_for_piloted_device_budget( 10)
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
 
         # No clients means no delta power
         delta = heat_pump.possible_delta_power_for_slot(0, add=True)
@@ -200,7 +200,7 @@ class TestPilotedDeviceBasics(TestCase):
         climate1 = MockClimateLoad(name="climate1", power=1500)
         climate2 = MockClimateLoad(name="climate2", power=1500)
         heat_pump.clients.extend([climate1, climate2])
-        heat_pump.prepare_slots_for_piloted_device_budget( 10)
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
 
         # Simulate two clients on
         heat_pump.num_demanding_clients[0] = 2
@@ -237,7 +237,7 @@ class TestPilotedDeviceClientTracking(TestCase):
         climate1 = MockClimateLoad(name="climate1", power=1500)
         climate2 = MockClimateLoad(name="climate2", power=1500)
         heat_pump.clients.extend([climate1, climate2])
-        heat_pump.prepare_slots_for_piloted_device_budget( 10)
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
 
         # Start with two clients on
         heat_pump.num_demanding_clients[0] = 2
@@ -717,8 +717,8 @@ class TestSolverWithPilotedDevice(TestCase):
         # Verify all three climates get scheduled
         for i, (load, cmds) in enumerate(load_commands):
             on_count = sum(1 for _, cmd in cmds if not cmd.is_off_or_idle())
-            print(f"Climate {i+1} ON slots: {on_count}")
-            self.assertTrue(on_count > 0, f"Climate {i+1} should have ON commands")
+            print(f"Climate {i + 1} ON slots: {on_count}")
+            self.assertTrue(on_count > 0, f"Climate {i + 1} should have ON commands")
 
 
 class TestSolverWithBatteryAndPilotedDevice(TestCase):
@@ -926,8 +926,10 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
 
         expected_power = climate_power + heat_pump_power  # 1500 + 2000 = 3500W
 
-        print(f"\n=== First Climate ON Gets Heat Pump Power ===")
-        print(f"Expected total power usage: {expected_power}W (climate: {climate_power}W + heat_pump: {heat_pump_power}W)")
+        print("\n=== First Climate ON Gets Heat Pump Power ===")
+        print(
+            f"Expected total power usage: {expected_power}W (climate: {climate_power}W + heat_pump: {heat_pump_power}W)"
+        )
 
         # Check all slots where climate1 is ON - use len of power array
         found_on_slot = False
@@ -936,11 +938,13 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
             if self._is_on_at_slot(climate1_cmds, solver, slot_idx):
                 found_on_slot = True
                 actual_power = solver._load_power_usage_for_test[slot_idx]
-                print(f"  slot {slot_idx} ({solver._time_slots[slot_idx].strftime('%H:%M')}): power usage = {actual_power}W")
+                print(
+                    f"  slot {slot_idx} ({solver._time_slots[slot_idx].strftime('%H:%M')}): power usage = {actual_power}W"
+                )
                 self.assertEqual(
                     actual_power,
                     expected_power,
-                    f"Total power usage should be {expected_power}W (climate + heat_pump), got {actual_power}W"
+                    f"Total power usage should be {expected_power}W (climate + heat_pump), got {actual_power}W",
                 )
 
         self.assertTrue(found_on_slot, "Climate 1 should have ON slots")
@@ -1022,7 +1026,7 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
         climate1_cmds = load_commands[0][1]
         climate2_cmds = load_commands[1][1]
 
-        print(f"\n=== Second Climate ON Gets Only Climate Power (Total Power Check) ===")
+        print("\n=== Second Climate ON Gets Only Climate Power (Total Power Check) ===")
         print(f"Heat pump power: {heat_pump_power}W, Climate power: {climate_power}W")
 
         power_with_both = 2 * climate_power + heat_pump_power  # 5000W
@@ -1061,26 +1065,26 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
 
             if c1_on and c2_on:
                 self.assertEqual(
-                    actual_power, power_with_both,
-                    f"When both ON: should have {power_with_both}W, got {actual_power}W"
+                    actual_power, power_with_both, f"When both ON: should have {power_with_both}W, got {actual_power}W"
                 )
             elif c1_on:
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only Climate1 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power,
+                    power_with_one,
+                    f"When only Climate1 ON: should have {power_with_one}W, got {actual_power}W",
                 )
             elif c2_on:
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only Climate2 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power,
+                    power_with_one,
+                    f"When only Climate2 ON: should have {power_with_one}W, got {actual_power}W",
                 )
 
         print(f"\nSlot counts - Both ON: {both_on_count}, Only C1: {only_c1_count}, Only C2: {only_c2_count}")
 
         # At least one climate should have run
         self.assertTrue(
-            only_c1_count > 0 or only_c2_count > 0 or both_on_count > 0,
-            "At least one climate should have ON slots"
+            only_c1_count > 0 or only_c2_count > 0 or both_on_count > 0, "At least one climate should have ON slots"
         )
 
         print("✅ Power usage test passed!")
@@ -1160,8 +1164,8 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
         climate1_cmds = load_commands[0][1]
         climate2_cmds = load_commands[1][1]
 
-        print(f"\n=== Climate OFF Transfers Heat Pump Power (Overlap Test) ===")
-        print(f"Climate 1 needs 3h, Climate 2 needs 3h in staggered window")
+        print("\n=== Climate OFF Transfers Heat Pump Power (Overlap Test) ===")
+        print("Climate 1 needs 3h, Climate 2 needs 3h in staggered window")
 
         power_with_both = 2 * climate_power + heat_pump_power  # 5000W
         power_with_one = climate_power + heat_pump_power  # 3500W
@@ -1183,31 +1187,29 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
                 both_on_count += 1
                 print(f"  Both ON at {slot_time.strftime('%H:%M')}: {actual_power}W (expected {power_with_both}W)")
                 self.assertEqual(
-                    actual_power, power_with_both,
-                    f"When both ON: should have {power_with_both}W, got {actual_power}W"
+                    actual_power, power_with_both, f"When both ON: should have {power_with_both}W, got {actual_power}W"
                 )
             elif c1_on:
                 only_c1_count += 1
                 print(f"  Only C1 ON at {slot_time.strftime('%H:%M')}: {actual_power}W (expected {power_with_one}W)")
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only Climate1 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power,
+                    power_with_one,
+                    f"When only Climate1 ON: should have {power_with_one}W, got {actual_power}W",
                 )
             elif c2_on:
                 only_c2_count += 1
                 print(f"  Only C2 ON at {slot_time.strftime('%H:%M')}: {actual_power}W (expected {power_with_one}W)")
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only Climate2 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power,
+                    power_with_one,
+                    f"When only Climate2 ON: should have {power_with_one}W, got {actual_power}W",
                 )
 
         print(f"\nSlot counts - Both ON: {both_on_count}, Only C1: {only_c1_count}, Only C2: {only_c2_count}")
 
         # We should have at least one ON slot
-        self.assertTrue(
-            both_on_count > 0 or only_c1_count > 0 or only_c2_count > 0,
-            "Should have some ON slots"
-        )
+        self.assertTrue(both_on_count > 0 or only_c1_count > 0 or only_c2_count > 0, "Should have some ON slots")
 
     def test_power_consign_transition_sequence(self):
         """
@@ -1282,7 +1284,7 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
         climate1_cmds = load_commands[0][1]
         climate2_cmds = load_commands[1][1]
 
-        print(f"\n=== Power Usage Transition Sequence ===")
+        print("\n=== Power Usage Transition Sequence ===")
 
         power_with_both = 2 * climate_power + heat_pump_power  # 5000W
         power_with_one = climate_power + heat_pump_power  # 3500W
@@ -1303,20 +1305,17 @@ class TestSolverPowerConsignWithPilotedDevice(TestCase):
             if c1_on and not c2_on:
                 # Only C1 on -> total power = climate + HP
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only C1 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power, power_with_one, f"When only C1 ON: should have {power_with_one}W, got {actual_power}W"
                 )
             elif c2_on and not c1_on:
                 # Only C2 on -> total power = climate + HP
                 self.assertEqual(
-                    actual_power, power_with_one,
-                    f"When only C2 ON: should have {power_with_one}W, got {actual_power}W"
+                    actual_power, power_with_one, f"When only C2 ON: should have {power_with_one}W, got {actual_power}W"
                 )
             elif c1_on and c2_on:
                 # Both on -> total power = 2 climates + HP
                 self.assertEqual(
-                    actual_power, power_with_both,
-                    f"When both ON: should have {power_with_both}W, got {actual_power}W"
+                    actual_power, power_with_both, f"When both ON: should have {power_with_both}W, got {actual_power}W"
                 )
 
 
@@ -1328,7 +1327,7 @@ class TestEdgeCases(TestCase):
         heat_pump = MockPilotedDevice(name="heat_pump", power=0)
         climate = MockClimateLoad(name="climate", power=1500, piloted_device_name="heat_pump")
         heat_pump.clients.append(climate)
-        heat_pump.prepare_slots_for_piloted_device_budget( 10)
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
 
         # Should return 0 since heat pump power is 0
         delta = heat_pump.possible_delta_power_for_slot(0, add=True)
@@ -1385,4 +1384,5 @@ class TestEdgeCases(TestCase):
 
 if __name__ == "__main__":
     import unittest
+
     unittest.main()

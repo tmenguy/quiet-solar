@@ -5,30 +5,33 @@ from datetime import datetime, timedelta
 from datetime import time as dt_time
 
 import pytz
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 
-from ..const import CONSTRAINT_TYPE_MANDATORY_END_TIME, CONSTRAINT_TYPE_FILLER_AUTO, SOLVER_STEP_S
+from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_END_TIME
 from ..ha_model.device import HADeviceMixin
-from ..home_model.commands import LoadCommand, CMD_IDLE
-from ..home_model.constraints import TimeBasedSimplePowerLoadConstraint, DATETIME_MAX_UTC
+from ..home_model.commands import CMD_IDLE, LoadCommand
+from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE
-
-
 
 bistate_modes = [
-"bistate_mode_auto",
-"bistate_mode_exact_calendar",
-"bistate_mode_default",
+    "bistate_mode_auto",
+    "bistate_mode_exact_calendar",
+    "bistate_mode_default",
 ]
 
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
 USER_OVERRIDE_STATE_BACK_DURATION_S = 60
 
-ConstraintItemType = namedtuple("ConstraintItem", ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push", "degraded_type"], defaults=(None, None, 0.0, False, False, None))
+ConstraintItemType = namedtuple(
+    "ConstraintItem",
+    ["start_schedule", "end_schedule", "target_value", "has_user_forced_constraint", "agenda_push", "degraded_type"],
+    defaults=(None, None, 0.0, False, False, None),
+)
 
 _LOGGER = logging.getLogger(__name__)
-class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
+
+class QSBiStateDuration(HADeviceMixin, AbstractLoad):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.bistate_mode = "bistate_mode_auto"
@@ -36,7 +39,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.default_on_duration: float | None = 1.0
         self.default_on_finish_time: dt_time | None = dt_time(hour=0, minute=0, second=0)
 
-        self.override_duration: float | None  = DEFAULT_USER_OVERRIDE_DURATION_S // 3600
+        self.override_duration: float | None = DEFAULT_USER_OVERRIDE_DURATION_S // 3600
 
         # to be overcharged by the child class
         self._state_on = "on"
@@ -47,20 +50,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.is_load_time_sensitive = True
 
-        self.qs_bistate_current_duration_h : float = 0.0
-        self.qs_bistate_current_on_h : float = 0.0
+        self.qs_bistate_current_duration_h: float = 0.0
+        self.qs_bistate_current_on_h: float = 0.0
 
-    def update_current_metrics(self, time:datetime, end_range: dt_time | None = None):
+    def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
 
         self.qs_bistate_current_on_h = 0
         self.qs_bistate_current_duration_h = 0
 
         if self._constraints:
             ct = self._constraints[0]
-            self.qs_bistate_current_on_h = ct.convert_target_value_to_time(ct.current_value)/3600.0
-            self.qs_bistate_current_duration_h = ct.convert_target_value_to_time(ct.target_value)/3600.0
+            self.qs_bistate_current_on_h = ct.convert_target_value_to_time(ct.current_value) / 3600.0
+            self.qs_bistate_current_duration_h = ct.convert_target_value_to_time(ct.target_value) / 3600.0
 
-    async def user_set_default_on_duration(self, float_value: float, for_init:bool = False):
+    async def user_set_default_on_duration(self, float_value: float, for_init: bool = False):
         self.default_on_duration = float_value
         if for_init is False:
             time = datetime.now(pytz.UTC)
@@ -68,7 +71,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.home.force_next_solve()
             await self.home.update_all_states(time)
 
-    async def user_set_bistate_mode(self, option: str, for_init:bool = False):
+    async def user_set_bistate_mode(self, option: str, for_init: bool = False):
         if option not in self.get_bistate_modes():
             _LOGGER.error(f"bistate_mode: {option} is not a valid bistate_mode")
             return
@@ -79,7 +82,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.home.force_next_solve()
             await self.home.update_all_states(time)
 
-    def get_power_from_switch_state(self, state : str | None) -> float | None:
+    def get_power_from_switch_state(self, state: str | None) -> float | None:
         if state is None:
             return None
         if state == self._state_on:
@@ -106,16 +109,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
     def get_platforms(self):
         parent = super().get_platforms()
         parent = set(parent)
-        parent.update([ Platform.SENSOR, Platform.SWITCH, Platform.SELECT, Platform.TIME, Platform.NUMBER ])
+        parent.update([Platform.SENSOR, Platform.SWITCH, Platform.SELECT, Platform.TIME, Platform.NUMBER])
         return list(parent)
 
     @abstractmethod
     def get_virtual_current_constraint_translation_key(self) -> str | None:
-       """ return the translation key for the current constraint """
+        """return the translation key for the current constraint"""
 
     @abstractmethod
     def get_select_translation_key(self) -> str | None:
-        """ return the translation key for the select """
+        """return the translation key for the select"""
 
     def expected_state_from_command(self, command: LoadCommand):
         if command is None:
@@ -133,7 +136,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         return self.expected_state_from_command(command)
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
-        """ check the states of the switch to see if the command is set """
+        """check the states of the switch to see if the command is set"""
         state = self.hass.states.get(self.bistate_entity)
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE] or state.state is None:
@@ -153,7 +156,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         if override_state is not None:
             _LOGGER.info(
-                f"External state set...intercept execute_command {command} for load {self.name} to stay in state {override_state}")
+                f"External state set...intercept execute_command {command} for load {self.name} to stay in state {override_state}"
+            )
 
             state = self.hass.states.get(self.bistate_entity)
 
@@ -165,11 +169,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         return await self.execute_command_system(time, command, override_state)
 
     @abstractmethod
-    async def execute_command_system(self, time: datetime, command: LoadCommand, state:str|None) -> bool | None:
-        """ execute the command on the system """
+    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
+        """execute the command on the system"""
 
-    async def _build_mode_constraint_items(self, time: datetime, bistate_mode: str,
-                                           do_push_constraint_after: datetime | None) -> list[ConstraintItemType]:
+    async def _build_mode_constraint_items(
+        self, time: datetime, bistate_mode: str, do_push_constraint_after: datetime | None
+    ) -> list[ConstraintItemType]:
         """Build constraint items for the current bistate mode.
 
         Override in subclasses to handle custom modes (e.g. pool auto/winter).
@@ -181,35 +186,40 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             start_schedule = do_push_constraint_after
             ct = None
             if start_schedule is None or start_schedule < end_schedule:
-                ct = ConstraintItemType(start_schedule=start_schedule,
-                                         end_schedule=end_schedule,
-                                         target_value=25*3600.0, # 25 hours, more than a day will force the load to be on
-                                         has_user_forced_constraint=True,
-                                         agenda_push=False)
+                ct = ConstraintItemType(
+                    start_schedule=start_schedule,
+                    end_schedule=end_schedule,
+                    target_value=25 * 3600.0,  # 25 hours, more than a day will force the load to be on
+                    has_user_forced_constraint=True,
+                    agenda_push=False,
+                )
                 constraints.append(ct)
             _LOGGER.debug(
-                f"_build_mode_constraint_items: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}")
+                f"_build_mode_constraint_items: bistate _bistate_mode_on {self._bistate_mode_on} for load {self.name} {ct}"
+            )
         elif bistate_mode == "bistate_mode_default":
-            if self.default_on_duration is not None and  self.default_on_finish_time is not None:
-                end_schedule = self.get_next_time_from_hours(local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True)
+            if self.default_on_duration is not None and self.default_on_finish_time is not None:
+                end_schedule = self.get_next_time_from_hours(
+                    local_hours=self.default_on_finish_time, time_utc_now=time, output_in_utc=True
+                )
                 start_schedule = do_push_constraint_after
                 ct = None
                 if start_schedule is None or start_schedule < end_schedule:
-                    ct = ConstraintItemType(start_schedule=start_schedule,
-                                            end_schedule=end_schedule,
-                                            target_value=self.default_on_duration * 3600.0,
-                                            has_user_forced_constraint=False,
-                                            agenda_push=False)
+                    ct = ConstraintItemType(
+                        start_schedule=start_schedule,
+                        end_schedule=end_schedule,
+                        target_value=self.default_on_duration * 3600.0,
+                        has_user_forced_constraint=False,
+                        agenda_push=False,
+                    )
                     constraints.append(ct)
-                _LOGGER.debug(
-                    f"_build_mode_constraint_items: bistate bistate_mode_default for load {self.name} {ct}")
+                _LOGGER.debug(f"_build_mode_constraint_items: bistate bistate_mode_default for load {self.name} {ct}")
         else:
             events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
 
             for ev in events:
                 start_schedule, end_schedule = ev
                 if start_schedule is not None and end_schedule is not None:
-
                     if do_push_constraint_after is not None and end_schedule < do_push_constraint_after:
                         continue
 
@@ -226,19 +236,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         # bistate mode auto, start should be None or after the overridden time if any
                         start_schedule = do_push_constraint_after
 
-                    ct = ConstraintItemType(start_schedule=start_schedule,
-                                            end_schedule=end_schedule,
-                                            target_value=target_value,
-                                            has_user_forced_constraint=False,
-                                            agenda_push=True)
+                    ct = ConstraintItemType(
+                        start_schedule=start_schedule,
+                        end_schedule=end_schedule,
+                        target_value=target_value,
+                        has_user_forced_constraint=False,
+                        agenda_push=True,
+                    )
                     constraints.append(ct)
                     _LOGGER.debug(
-                        f"_build_mode_constraint_items: bistate calendar {bistate_mode} for load {self.name} {ct}")
+                        f"_build_mode_constraint_items: bistate calendar {bistate_mode} for load {self.name} {ct}"
+                    )
 
         return constraints
 
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
-        """ check the load activity and set proper constraints """
+        """check the load activity and set proper constraints"""
         do_force_next_solve = False
 
         bistate_mode = self.bistate_mode
@@ -256,26 +269,38 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # - we detect that the current command is not one that has been set by the system
             # - we store this command and state change time
             # if not done we create a constraint,marked as user, with the proper command detected parameter (ex for an HVAC it could be multiple)
-            if self.external_user_initiated_state_time is not None and (time - self.external_user_initiated_state_time).total_seconds() > (3600.0*self.override_duration):
+            if self.external_user_initiated_state_time is not None and (
+                time - self.external_user_initiated_state_time
+            ).total_seconds() > (3600.0 * self.override_duration):
                 _LOGGER.info(
-                    f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} ")
+                    f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} "
+                )
                 # we need to reset the external user initiated state
                 self.reset_override_state_and_set_reset_ask_time(time)
                 do_force_next_solve = True
-                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None # a proper constraint re-evaluation for the load will be done "normally"
-                self.constraint_reset_and_reset_commands_if_needed(keep_commands=True) #remove any constraint if any we will add it back if needed below
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
+                    None  # a proper constraint re-evaluation for the load will be done "normally"
+                )
+                self.constraint_reset_and_reset_commands_if_needed(
+                    keep_commands=True
+                )  # remove any constraint if any we will add it back if needed below
             else:
-
                 if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
                     # do nothing below, just ask for a proper constraint evaluation to kill the current override:
                     has_a_running_override = False
                     do_force_next_solve = True
                     self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
-                    self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # remove any constraint if any we will add it back if needed below
+                    self.constraint_reset_and_reset_commands_if_needed(
+                        keep_commands=True
+                    )  # remove any constraint if any we will add it back if needed below
 
                 else:
                     for i, ct in enumerate(self._constraints):
-                        if ct.load_param is not None and ct.load_info is not None and ct.load_info.get("originator","") == "user_override":
+                        if (
+                            ct.load_param is not None
+                            and ct.load_info is not None
+                            and ct.load_info.get("originator", "") == "user_override"
+                        ):
                             # we do have already a constraint for this override state
                             override_constraint = ct
                             break
@@ -286,15 +311,24 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     expected_state_running = "UNKNOWN"
                     current_state = None
 
-                    if state is not None and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE] and state.state is not None:
+                    if (
+                        state is not None
+                        and state.state not in [STATE_UNKNOWN, STATE_UNAVAILABLE]
+                        and state.state is not None
+                    ):
                         current_state = state.state
 
                     if current_state is not None:
-
-                        if self.external_user_initiated_state is not None and current_state == self.external_user_initiated_state:
+                        if (
+                            self.external_user_initiated_state is not None
+                            and current_state == self.external_user_initiated_state
+                        ):
                             # we are still in the same override ... all is good
                             is_command_overridden_state_changed = False
-                        elif self.external_user_initiated_state is not None and current_state != self.external_user_initiated_state:
+                        elif (
+                            self.external_user_initiated_state is not None
+                            and current_state != self.external_user_initiated_state
+                        ):
                             # hum : we changed the state from the override ... it is like a new override
                             # should we wait a bit to see if the user is changing back the state ?
                             is_command_overridden_state_changed = True
@@ -313,15 +347,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     expected_state_running = self.expected_state_from_command(self.running_command)
 
                             if (expected_state is not None and current_state == expected_state) or (
-                                    expected_state_running is not None and current_state == expected_state_running):
+                                expected_state_running is not None and current_state == expected_state_running
+                            ):
                                 is_command_overridden_state_changed = False
                             else:
                                 is_command_overridden_state_changed = True
 
-
                     if self.asked_for_reset_user_initiated_state_time is not None:
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
-                                float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0):
+                            float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
+                        ):
                             # small time window after asking for reset, do not consider the command overridden
                             # too soon to launch an override again
                             is_command_overridden_state_changed = False
@@ -330,16 +365,18 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             self.asked_for_reset_user_initiated_state_time = None
 
                     if is_command_overridden_state_changed:
-
                         _LOGGER.info(
-                            f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}")
+                            f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}"
+                        )
 
                         # the user did something different ... just OVERRIDE the automation for a given time
                         self.external_user_initiated_state = current_state
                         self.external_user_initiated_state_time = time
 
                         # remove any overridden constraint if any
-                        self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # remove any constraint if any we will add it back if needed below
+                        self.constraint_reset_and_reset_commands_if_needed(
+                            keep_commands=True
+                        )  # remove any constraint if any we will add it back if needed below
 
                         # we will create a constraint if the asked state is not idle ...
                         if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
@@ -347,29 +384,35 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             do_force_next_solve = True
                             # all constraint removed above : command_and_constraint_reset
                         else:
-                            end_schedule = time + timedelta(seconds=(3600.0*self.override_duration))
+                            end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
                             override_constraint = TimeBasedSimplePowerLoadConstraint(
                                 type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
                                 degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
                                 time=time,
                                 load=self,
                                 load_param=self.external_user_initiated_state,
-                                load_info={"originator":"user_override"},
+                                load_info={"originator": "user_override"},
                                 from_user=True,
                                 start_of_constraint=time,
                                 end_of_constraint=end_schedule,
                                 power=self.power_use,
                                 initial_value=0,
-                                target_value=3600.0*self.override_duration
+                                target_value=3600.0 * self.override_duration,
                             )
 
                             if self.push_live_constraint(time, override_constraint):
                                 _LOGGER.info(
-                                    f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint")
+                                    f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint"
+                                )
                                 do_force_next_solve = True
 
-                    if self.external_user_initiated_state is not None and self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
-                        do_push_constraint_after = self.external_user_initiated_state_time + timedelta(seconds=(3600.0*self.override_duration))
+                    if (
+                        self.external_user_initiated_state is not None
+                        and self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state
+                    ):
+                        do_push_constraint_after = self.external_user_initiated_state_time + timedelta(
+                            seconds=(3600.0 * self.override_duration)
+                        )
 
                     if override_constraint is not None and override_constraint.end_of_constraint != DATETIME_MAX_UTC:
                         do_push_constraint_after = override_constraint.end_of_constraint + timedelta(seconds=1)
@@ -381,8 +424,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 found_override = False
                 removed_one = False
                 for i, ct in enumerate(self._constraints):
-                    if ct.load_param is not None and ct.load_info is not None and ct.load_info.get("originator",
-                                                                                                   "") == "user_override":
+                    if (
+                        ct.load_param is not None
+                        and ct.load_info is not None
+                        and ct.load_info.get("originator", "") == "user_override"
+                    ):
                         # we do have already a constraint for this override state
                         found_override = True
                     else:
@@ -396,7 +442,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self._constraints = [c for c in self._constraints if c is not None]
                         self.set_live_constraints(time, self._constraints)
                 else:
-
                     if override_constraint is not None:
                         do_force_next_solve = True
                         self.set_live_constraints(time, [override_constraint])
@@ -410,33 +455,31 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
 
             _LOGGER.debug(
-                f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}")
+                f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}"
+            )
         else:
-
             constraints = await self._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
             if len(constraints) > 0:
-
                 agend_cts = []
                 for ct in constraints:
-
                     type = CONSTRAINT_TYPE_MANDATORY_END_TIME
                     if ct.has_user_forced_constraint is False and self.is_best_effort_only_load():
-                        type = CONSTRAINT_TYPE_FILLER_AUTO # will be after battery filling lowest priority
+                        type = CONSTRAINT_TYPE_FILLER_AUTO  # will be after battery filling lowest priority
 
                     degraded_type = ct.degraded_type if ct.degraded_type is not None else CONSTRAINT_TYPE_FILLER_AUTO
 
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
-                            type=type,
-                            degraded_type=degraded_type,
-                            time=time,
-                            load=self,
-                            from_user=ct.has_user_forced_constraint,
-                            start_of_constraint=ct.start_schedule,
-                            end_of_constraint=ct.end_schedule,
-                            power=self.power_use,
-                            initial_value=0,
-                            target_value=ct.target_value
+                        type=type,
+                        degraded_type=degraded_type,
+                        time=time,
+                        load=self,
+                        from_user=ct.has_user_forced_constraint,
+                        start_of_constraint=ct.start_schedule,
+                        end_of_constraint=ct.end_schedule,
+                        power=self.power_use,
+                        initial_value=0,
+                        target_value=ct.target_value,
                     )
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
@@ -445,14 +488,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         do_force_next_solve = push_res or do_force_next_solve
                         if push_res:
                             _LOGGER.info(
-                                f"check_load_activity_and_constraints: bistate load {self.name} pushed non-agenda constraint {load_mandatory}")
+                                f"check_load_activity_and_constraints: bistate load {self.name} pushed non-agenda constraint {load_mandatory}"
+                            )
 
                 if len(agend_cts) > 0:
                     push_res = self.push_agenda_constraints(time, agend_cts)
                     do_force_next_solve = push_res or do_force_next_solve
                     if push_res:
                         _LOGGER.info(
-                            f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}")
+                            f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
+                        )
 
         self.update_current_metrics(time)
 

@@ -1,14 +1,10 @@
 """Tests for quiet_solar integration setup and unload."""
 
-from unittest.mock import patch
-
 import pytest
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 
-from custom_components.quiet_solar.const import DOMAIN, DATA_HANDLER
-
+from custom_components.quiet_solar.const import DATA_HANDLER, DOMAIN
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -55,6 +51,7 @@ async def test_setup_car_entry_with_home(
 
     # Create a new car config entry (not from fixture to avoid auto-setup)
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CAR_CONFIG
 
     car_entry = MockConfigEntry(
@@ -103,6 +100,7 @@ async def test_setup_charger_entry_with_home(
 
     # Create charger config entry
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CHARGER_CONFIG
 
     charger_entry = MockConfigEntry(
@@ -126,6 +124,7 @@ async def test_setup_person_entry_with_dependencies(
 ) -> None:
     """Test setting up person entry with all dependencies."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     # Set up home
@@ -182,6 +181,7 @@ async def test_setup_solar_entry(
 ) -> None:
     """Test setting up solar entry after home is set up."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -207,6 +207,7 @@ async def test_setup_battery_entry(
 ) -> None:
     """Test setting up battery entry after home is set up."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_BATTERY_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -232,6 +233,7 @@ async def test_unload_car_entry(
 ) -> None:
     """Test unloading car entry."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -262,6 +264,7 @@ async def test_unload_charger_entry(
 ) -> None:
     """Test unloading charger entry."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -292,6 +295,7 @@ async def test_multiple_devices_setup(
 ) -> None:
     """Test setting up multiple devices."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
+
     from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG, MOCK_SOLAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -343,4 +347,3 @@ async def test_multiple_devices_setup(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     assert len(data_handler.home._cars) >= 1
     assert len(data_handler.home._chargers) >= 1
-

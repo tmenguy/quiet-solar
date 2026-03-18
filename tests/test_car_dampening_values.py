@@ -1,5 +1,5 @@
-import unittest
 import datetime
+import unittest
 from unittest.mock import MagicMock, patch
 
 from custom_components.quiet_solar.ha_model.car import QSCar
@@ -258,7 +258,8 @@ class TestCarDampeningSave(unittest.TestCase):
                 )
 
             self.assertEqual(
-                len(car._salvable_dampening), 0,
+                len(car._salvable_dampening),
+                0,
                 f"Should not save for car_percent={percent}",
             )
             mock_hass.config_entries.async_update_entry.assert_not_called()

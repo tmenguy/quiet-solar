@@ -1,37 +1,53 @@
 import logging
 from bisect import bisect_left, bisect_right
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from operator import itemgetter
-from typing import Mapping, Any, Callable
-
-import pytz
-from homeassistant.components.recorder.history import state_changes_during_period
-from homeassistant.components.recorder.models import LazyState
-from homeassistant.components.recorder import get_instance as recorder_get_instance
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE, UnitOfPower, ATTR_UNIT_OF_MEASUREMENT, Platform, \
-    ATTR_ENTITY_ID, UnitOfElectricCurrent, UnitOfLength
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, State, callback, Event, EventStateChangedData
-from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util.unit_conversion import PowerConverter, DistanceConverter
-from homeassistant.components import calendar
-
-from ..const import CONF_ACCURATE_POWER_SENSOR, DOMAIN, DATA_HANDLER, COMMAND_BASED_POWER_SENSOR, \
-    CONF_CALENDAR, SENSOR_CONSTRAINT_SENSOR, CONF_MOBILE_APP, CONF_MOBILE_APP_URL, \
-    FLOATING_PERIOD_S, DEVICE_STATUS_CHANGE_CONSTRAINT, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED, \
-    CONF_PHASE_1_AMPS_SENSOR, \
-    CONF_PHASE_2_AMPS_SENSOR, CONF_PHASE_3_AMPS_SENSOR, CONF_TYPE_NAME_HADeviceMixin, DEVICE_STATUS_CHANGE_ERROR, \
-    DEVICE_STATUS_CHANGE_NOTIFY, CONF_POWER, DATA_SKIP_RELOAD_ENTRY_IDS
-from ..home_model.home_utils import get_average_time_series
-from ..home_model.load import AbstractLoad, AbstractDevice
+from typing import Any
 
 import numpy as np
+import pytz
+from homeassistant.components import calendar
+from homeassistant.components.recorder import get_instance as recorder_get_instance
+from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.models import LazyState
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_UNIT_OF_MEASUREMENT,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
+    UnitOfElectricCurrent,
+    UnitOfLength,
+    UnitOfPower,
+)
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util.unit_conversion import DistanceConverter, PowerConverter
 
-
-from homeassistant.core import HomeAssistant
-
-
+from ..const import (
+    COMMAND_BASED_POWER_SENSOR,
+    CONF_ACCURATE_POWER_SENSOR,
+    CONF_CALENDAR,
+    CONF_PHASE_1_AMPS_SENSOR,
+    CONF_PHASE_2_AMPS_SENSOR,
+    CONF_PHASE_3_AMPS_SENSOR,
+    CONF_POWER,
+    DATA_HANDLER,
+    DATA_SKIP_RELOAD_ENTRY_IDS,
+    DEVICE_STATUS_CHANGE_CONSTRAINT,
+    DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
+    DEVICE_STATUS_CHANGE_ERROR,
+    DEVICE_STATUS_CHANGE_NOTIFY,
+    DOMAIN,
+    FLOATING_PERIOD_S,
+    SENSOR_CONSTRAINT_SENSOR,
+    CONF_TYPE_NAME_HADeviceMixin,
+)
+from ..home_model.home_utils import get_average_time_series
+from ..home_model.load import AbstractDevice, AbstractLoad
 
 UNAVAILABLE_STATE_VALUES = [STATE_UNKNOWN, STATE_UNAVAILABLE]
 
@@ -43,15 +59,16 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def compute_energy_Wh_rieman_sum(
-        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-        conservative: bool = False,
-        clip_to_zero_under_power: None | float = None) -> tuple[float, float]:
+    power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+    conservative: bool = False,
+    clip_to_zero_under_power: None | float = None,
+) -> tuple[float, float]:
     """Compute energy from power with a rieman sum."""
 
     energy = 0
     duration_h = 0
     if power_data and len(power_data) > 1:
-
         # compute a rieman sum, as best as possible , trapezoidal, taking pessimistic asumption
         # as we don't want to artificially go up the previous one
         # (except in rare exceptions like reset, 0 , etc)
@@ -60,9 +77,12 @@ def compute_energy_Wh_rieman_sum(
             prev_value = 0.0
 
         for i in range(len(power_data) - 1):
-
-            next_value = power_data[i+1][1]
-            if clip_to_zero_under_power is not None and next_value is not None and next_value < clip_to_zero_under_power:
+            next_value = power_data[i + 1][1]
+            if (
+                clip_to_zero_under_power is not None
+                and next_value is not None
+                and next_value < clip_to_zero_under_power
+            ):
                 next_value = 0.0
 
             dt_h = float((power_data[i + 1][0] - power_data[i][0]).total_seconds()) / 3600.0
@@ -73,9 +93,7 @@ def compute_energy_Wh_rieman_sum(
             else:
                 d_p_w = abs(float(next_value - prev_value))
 
-            d_nrj_wh = dt_h * (
-                    min(next_value, prev_value) + 0.5 * d_p_w
-            )
+            d_nrj_wh = dt_h * (min(next_value, prev_value) + 0.5 * d_p_w)
 
             energy += d_nrj_wh
 
@@ -140,8 +158,11 @@ def convert_distance_to_km(value: float, attributes: dict | None = None) -> (flo
 
     return value, new_attr
 
+
 def get_average_power_energy_based(
-        power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]]):
+    power_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+):
     if len(power_data) == 0:
         return 0
     elif len(power_data) == 1:
@@ -160,10 +181,13 @@ def get_average_power_energy_based(
     return val
 
 
-def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                      last_timing: datetime | None = None,
-                      min_val: float | None = None,
-                      max_val: float | None = None):
+def get_median_sensor(
+    sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+    last_timing: datetime | None = None,
+    min_val: float | None = None,
+    max_val: float | None = None,
+):
     if len(sensor_data) == 0:
         return 0
     elif len(sensor_data) == 1:
@@ -171,7 +195,7 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
         if val is None:
             val = 0.0
     else:
-        vals : list[float] = []
+        vals: list[float] = []
         add_last = 0
         if last_timing is not None:
             add_last = 1
@@ -190,13 +214,13 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
             if i == len(sensor_data):
                 dt = (last_timing - sensor_data[i - 1][0]).total_seconds()
             else:
-                dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
+                dt = (sensor_data[i][0] - sensor_data[i - 1][0]).total_seconds()
 
             if dt == 0:
                 dt = 1
 
             num_add = int(dt) + 1
-            vals.extend([float(value)]*num_add)
+            vals.extend([float(value)] * num_add)
 
         if vals:
             val = np.median(vals)
@@ -205,7 +229,10 @@ def get_median_sensor(sensor_data: list[tuple[datetime | None, str | float | Non
     # do not change units
     return val
 
-async def load_from_history(hass, entity_id:str, start_time: datetime, end_time: datetime, no_attributes=True) -> list[LazyState]:
+
+async def load_from_history(
+    hass, entity_id: str, start_time: datetime, end_time: datetime, no_attributes=True
+) -> list[LazyState]:
 
     if hass is None:
         return []
@@ -222,19 +249,26 @@ async def load_from_history(hass, entity_id:str, start_time: datetime, end_time:
         ).get(entity_id, [])
 
     try:
-        states : list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(load_history_from_db, start_time, end_time)
+        states: list[LazyState] = await recorder_get_instance(hass).async_add_executor_job(
+            load_history_from_db, start_time, end_time
+        )
     except Exception as err:
-        _LOGGER.error(f"Error loading history for entity {entity_id} from {start_time} to {end_time}: {err}", exc_info=True, stack_info=True)
+        _LOGGER.error(
+            f"Error loading history for entity {entity_id} from {start_time} to {end_time}: {err}",
+            exc_info=True,
+            stack_info=True,
+        )
         states = []
     # states : list[LazyState] = await self.hass.async_add_executor_job(load_history_from_db, start_time, end_time)
     return states
 
-MAX_STATE_HISTORY_S = 3600*24*3  # 3 days
+
+MAX_STATE_HISTORY_S = 3600 * 24 * 3  # 3 days
 
 DAMPENING_TIME_S = 20 * 60
 
-class HADeviceMixin:
 
+class HADeviceMixin:
     conf_type_name = CONF_TYPE_NAME_HADeviceMixin
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, **kwargs):
@@ -271,15 +305,17 @@ class HADeviceMixin:
         self._entity_probed_state_attached_unfiltered: dict[str, bool] = {}
         self._entity_probed_state_conversion_fn: dict[str, Callable[[float, dict], float] | None] = {}
         self._entity_probed_state_transform_fn: dict[str, Callable[[float, dict], float] | None] = {}
-        self._entity_probed_state_non_ha_entity_get_state: dict[str, Callable[[str, datetime | None], tuple[
-                                                                                                          datetime | None, float | str | None, dict | None] | None] | None] = {}
+        self._entity_probed_state_non_ha_entity_get_state: dict[
+            str, Callable[[str, datetime | None], tuple[datetime | None, float | str | None, dict | None] | None] | None
+        ] = {}
         self._entity_probed_state: dict[
-            str, list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]] = {}
+            str, list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+        ] = {}
         self._entity_probed_last_valid_state: dict[
-            str, tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict] | None] = {}
+            str, tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict] | None
+        ] = {}
 
-        self._entity_probed_state_invalid_values: dict[
-            str,set[str]] = {}
+        self._entity_probed_state_invalid_values: dict[str, set[str]] = {}
 
         self._entity_probed_auto = set()
         self._entity_on_change = set()
@@ -295,8 +331,9 @@ class HADeviceMixin:
         self.attach_amps_to_probe(self.phase_2_amps_sensor)
         self.attach_amps_to_probe(self.phase_3_amps_sensor)
 
-        self.attach_power_to_probe(self.command_based_power_sensor,
-                                   non_ha_entity_get_state=self.command_power_state_getter)
+        self.attach_power_to_probe(
+            self.command_based_power_sensor, non_ha_entity_get_state=self.command_power_state_getter
+        )
 
         self._unsub = None
 
@@ -320,21 +357,23 @@ class HADeviceMixin:
 
                 duration_from_start = (time - self._dampen_start_transition).total_seconds()
 
-                if  duration_from_start > DAMPENING_TIME_S and duration_from_start < DAMPENING_TIME_S*1.5:
-
+                if duration_from_start > DAMPENING_TIME_S and duration_from_start < DAMPENING_TIME_S * 1.5:
                     if self.accurate_power_sensor is not None:
                         # ok we do have some data
                         if self._power_use_conf is None:
-                            min_val = self.get_average_sensor(self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time)
+                            min_val = self.get_average_sensor(
+                                self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time
+                            )
                             if min_val is not None:
                                 min_val = min_val / 3.0
                         else:
                             min_val = self._power_use_conf / 3.0
 
-                        power = self.get_median_sensor(self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time, min_val=min_val)
+                        power = self.get_median_sensor(
+                            self.accurate_power_sensor, num_seconds=duration_from_start - 30, time=time, min_val=min_val
+                        )
                         if power is not None and power > 0:
-                            if self._power_use_conf is None or power > self._power_use_conf/3.0:
-
+                            if self._power_use_conf is None or power > self._power_use_conf / 3.0:
                                 self._dampened_computed_power_use = power
 
                                 if self.config_entry:
@@ -346,12 +385,14 @@ class HADeviceMixin:
             else:
                 self._dampen_start_transition = None
 
-    async def _async_bootstrap_from_history(self, entity_id:str, time: datetime):
+    async def _async_bootstrap_from_history(self, entity_id: str, time: datetime):
 
         end_time = time
-        start_time = end_time - timedelta(seconds=MAX_STATE_HISTORY_S+1)
+        start_time = end_time - timedelta(seconds=MAX_STATE_HISTORY_S + 1)
 
-        states : list[LazyState] = await load_from_history(self.hass, entity_id, start_time, end_time, no_attributes=False)
+        states: list[LazyState] = await load_from_history(
+            self.hass, entity_id, start_time, end_time, no_attributes=False
+        )
         if states:
             for state in states:
                 self.add_to_history(entity_id=entity_id, state=state, time=state.last_changed)
@@ -364,9 +405,7 @@ class HADeviceMixin:
                 for entity_id in self._entities_to_fill_from_history:
                     self.hass.async_create_task(self._async_bootstrap_from_history(entity_id, time))
         except Exception as e:
-            _LOGGER.error("root_device_post_home_init: exception: %s", e,
-                          exc_info=True, stack_info=True)
-
+            _LOGGER.error("root_device_post_home_init: exception: %s", e, exc_info=True, stack_info=True)
 
         self.device_post_home_init(time)
 
@@ -383,20 +422,23 @@ class HADeviceMixin:
         local_tomorrow = local_constraint_day + timedelta(days=1)
         return local_tomorrow.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
-
-    def get_next_time_from_hours(self, local_hours:dt_time, time_utc_now:datetime | None = None, output_in_utc=True) -> datetime | None:
+    def get_next_time_from_hours(
+        self, local_hours: dt_time, time_utc_now: datetime | None = None, output_in_utc=True
+    ) -> datetime | None:
 
         if time_utc_now is None:
             time_utc_now = datetime.now(tz=pytz.UTC)
 
         dt_now_local = time_utc_now.replace(tzinfo=pytz.UTC).astimezone(tz=None)
 
-        next_time = datetime(year=dt_now_local.year,
-                             month=dt_now_local.month,
-                             day=dt_now_local.day,
-                             hour=local_hours.hour,
-                             minute=local_hours.minute,
-                             second=local_hours.second)
+        next_time = datetime(
+            year=dt_now_local.year,
+            month=dt_now_local.month,
+            day=dt_now_local.day,
+            hour=local_hours.hour,
+            minute=local_hours.minute,
+            second=local_hours.second,
+        )
         next_time = next_time.astimezone(tz=None)
         if next_time < dt_now_local:
             next_time = next_time + timedelta(days=1)
@@ -405,7 +447,6 @@ class HADeviceMixin:
             next_time = next_time.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
         return next_time
-
 
     # NO MORE USED
     # async def clean_next_qs_scheduled_event(self, time:datetime, start_time_to_check:datetime|None = None, end_time_to_check:datetime|None = None,) -> bool:
@@ -473,10 +514,13 @@ class HADeviceMixin:
     #     except Exception as err:
     #         _LOGGER.error(f"Error setting calendar {self.calendar} {err}", exc_info=True, stack_info=True)
 
-
-    async def get_next_scheduled_event(self, time:datetime, give_currently_running_event:bool=True) -> tuple[datetime | None, datetime | None]:
-        ret = await self.get_next_scheduled_events(time, give_currently_running_event=give_currently_running_event, max_number_of_events=1)
-        if len (ret) == 0:
+    async def get_next_scheduled_event(
+        self, time: datetime, give_currently_running_event: bool = True
+    ) -> tuple[datetime | None, datetime | None]:
+        ret = await self.get_next_scheduled_events(
+            time, give_currently_running_event=give_currently_running_event, max_number_of_events=1
+        )
+        if len(ret) == 0:
             return None, None
         return ret[0]
 
@@ -550,9 +594,7 @@ class HADeviceMixin:
         domain = calendar.DOMAIN
 
         try:
-            resp = await self.hass.services.async_call(
-                domain, service, data, blocking=True, return_response=True
-            )
+            resp = await self.hass.services.async_call(domain, service, data, blocking=True, return_response=True)
             for cals in resp:
                 events = resp[cals].get("events", [])
                 for event in events:
@@ -603,13 +645,13 @@ class HADeviceMixin:
 
         return results
 
-
     def attach_exposed_has_entity(self, ha_object):
         self._exposed_entities.add(ha_object)
         self.ha_entities[ha_object.entity_description.key] = ha_object
 
-    def command_power_state_getter(self, entity_id: str, time: datetime | None) -> (
-            tuple[datetime | None, float | str | None, dict | None] | None):
+    def command_power_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         if not isinstance(self, AbstractLoad):
             return None
@@ -647,7 +689,9 @@ class HADeviceMixin:
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR
 
-    async def on_device_state_change(self, time: datetime, device_change_type:str, title: str|None =None, message: str|None =None):
+    async def on_device_state_change(
+        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+    ):
         await self.on_device_state_change_helper(time, device_change_type, title=title, message=message)
 
     async def on_device_state_change_helper(self, time: datetime, device_change_type: str, **kwargs):
@@ -657,7 +701,6 @@ class HADeviceMixin:
         mobile_app_url = kwargs.get("mobile_app_url", self.mobile_app_url)
         title = kwargs.get("title", f"What will happen for {load_name}?")
         message = kwargs.get("message", None)
-
 
         if message is None:
             if device_change_type == DEVICE_STATUS_CHANGE_CONSTRAINT:
@@ -685,8 +728,7 @@ class HADeviceMixin:
         _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
 
         if mobile_app is not None and message is not None:
-
-            data={
+            data = {
                 "title": title,
                 "message": message,
             }
@@ -704,7 +746,11 @@ class HADeviceMixin:
                     service_data=data,
                 )
             except Exception as err:
-                _LOGGER.error(f"Error sending notification for load {load_name} app: {mobile_app} {err}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"Error sending notification for load {load_name} app: {mobile_app} {err}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
     def get_best_power_HA_entity(self):
         if self.accurate_power_sensor is not None:
@@ -720,13 +766,7 @@ class HADeviceMixin:
             best = self.command_based_power_sensor
         return best
 
-
-
-
-    def is_sensor_growing(self,
-                          entity_id,
-                          num_seconds: float | None = None,
-                          time = None) -> bool | None:
+    def is_sensor_growing(self, entity_id, num_seconds: float | None = None, time=None) -> bool | None:
 
         if entity_id is None:
             return None
@@ -748,27 +788,24 @@ class HADeviceMixin:
             if max_v is None or v[1] > max_v:
                 max_v = v[1]
 
-
         return vals[-1] >= max_v and max_v > min_v and len(vals) > 1
 
-
-    def get_sensor_latest_possible_valid_value(self,
-                                               entity_id,
-                                               tolerance_seconds: float | None = None,
-                                               time = None) -> str | float | None:
+    def get_sensor_latest_possible_valid_value(
+        self, entity_id, tolerance_seconds: float | None = None, time=None
+    ) -> str | float | None:
 
         return self.get_sensor_latest_possible_valid_time_value_attr(entity_id, tolerance_seconds, time)[1]
 
-    def get_sensor_latest_possible_valid_value_and_attr(self, entity_id, time = None) -> tuple[str | float | None, Mapping[str, Any] | None | dict]:
+    def get_sensor_latest_possible_valid_value_and_attr(
+        self, entity_id, time=None
+    ) -> tuple[str | float | None, Mapping[str, Any] | None | dict]:
 
         res = self.get_sensor_latest_possible_valid_time_value_attr(entity_id, None, time)
         return res[1], res[2]
 
-
-    def get_sensor_latest_possible_valid_time_value_attr(self,
-                                               entity_id,
-                                               tolerance_seconds: float | None = None,
-                                               time = None) -> tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]:
+    def get_sensor_latest_possible_valid_time_value_attr(
+        self, entity_id, tolerance_seconds: float | None = None, time=None
+    ) -> tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]:
         if entity_id is None:
             return None, None, None
 
@@ -777,14 +814,12 @@ class HADeviceMixin:
             return None, None, None
 
         if time is None:
-
             if tolerance_seconds is None or tolerance_seconds == 0:
                 return last_valid[0], last_valid[1], last_valid[2]
 
             time = datetime.now(tz=pytz.UTC)
 
         if time >= last_valid[0]:
-
             if tolerance_seconds is None or tolerance_seconds == 0:
                 return last_valid[0], last_valid[1], last_valid[2]
 
@@ -812,10 +847,9 @@ class HADeviceMixin:
                 return None, None, None
             return vals[-1][0], vals[-1][1], vals[-1][2]
 
-    def get_device_power_latest_possible_valid_value(self,
-                                                     tolerance_seconds: float | None,
-                                                     time:datetime,
-                                                     ignore_auto_load:bool= False) -> float:
+    def get_device_power_latest_possible_valid_value(
+        self, tolerance_seconds: float | None, time: datetime, ignore_auto_load: bool = False
+    ) -> float:
 
         if ignore_auto_load and isinstance(self, AbstractLoad) and self.load_is_auto_to_be_boosted:
             return 0.0
@@ -826,8 +860,7 @@ class HADeviceMixin:
             return 0.0
         return p
 
-
-    def get_device_amps_consumption(self, tolerance_seconds: float | None, time:datetime) -> list[float|int] | None:
+    def get_device_amps_consumption(self, tolerance_seconds: float | None, time: datetime) -> list[float | int] | None:
 
         # first check if we do have an amp sensor for the phases
         p = self.get_device_power_latest_possible_valid_value(tolerance_seconds=tolerance_seconds, time=time)
@@ -838,13 +871,15 @@ class HADeviceMixin:
             is_3p = self.current_3p
 
             if p is not None:
-                pM =  self.get_phase_amps_from_power(power=p, is_3p=is_3p)
+                pM = self.get_phase_amps_from_power(power=p, is_3p=is_3p)
 
         return self._get_device_amps_consumption(pM, tolerance_seconds, time, multiplier=1, is_3p=is_3p)
 
-    def _get_device_amps_consumption(self, pM:list[float|int]|None, tolerance_seconds: float | None, time: datetime, multiplier=1, is_3p=False) -> list[float|int] | None:
+    def _get_device_amps_consumption(
+        self, pM: list[float | int] | None, tolerance_seconds: float | None, time: datetime, multiplier=1, is_3p=False
+    ) -> list[float | int] | None:
 
-        ret: list[float | int | None]  = [None, None, None]
+        ret: list[float | int | None] = [None, None, None]
 
         good_mono_p = None
         mono_phase = 0
@@ -856,7 +891,7 @@ class HADeviceMixin:
                 continue
             p_val = self.get_sensor_latest_possible_valid_value(sensor, tolerance_seconds, time)
             if p_val is not None:
-                p_val = p_val*multiplier
+                p_val = p_val * multiplier
                 if mono_phase == i:
                     good_mono_p = p_val
                 elif good_mono_p is None:
@@ -885,13 +920,14 @@ class HADeviceMixin:
         else:
             return ret
 
-
-    def get_median_sensor(self,
-                          entity_id: str | None,
-                          num_seconds: float | None,
-                          time: datetime,
-                          min_val: float | None = None,
-                          max_val: float | None = None) -> float | None:
+    def get_median_sensor(
+        self,
+        entity_id: str | None,
+        num_seconds: float | None,
+        time: datetime,
+        min_val: float | None = None,
+        max_val: float | None = None,
+    ) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
@@ -899,12 +935,14 @@ class HADeviceMixin:
             return None
         return get_median_sensor(entity_id_values, time, min_val=min_val, max_val=max_val)
 
-    def get_average_sensor(self,
-                           entity_id: str | None,
-                           num_seconds: float | None,
-                           time: datetime,
-                           min_val: float | None = None,
-                           max_val: float | None = None) -> float | None:
+    def get_average_sensor(
+        self,
+        entity_id: str | None,
+        num_seconds: float | None,
+        time: datetime,
+        min_val: float | None = None,
+        max_val: float | None = None,
+    ) -> float | None:
         if entity_id is None:
             return None
         entity_id_values = self.get_state_history_data(entity_id, num_seconds, time)
@@ -913,23 +951,29 @@ class HADeviceMixin:
         return get_average_time_series(entity_id_values, last_timing=time, min_val=min_val, max_val=max_val)
 
     def get_median_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
-        return self.get_median_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)
-
-
+        return self.get_median_sensor(
+            self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time
+        )
 
     def get_average_power(self, num_seconds: float | None, time, use_fallback_command=True) -> float | None:
-        return self.get_average_sensor(self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time)
+        return self.get_average_sensor(
+            self._get_power_measure(fall_back_on_command=use_fallback_command), num_seconds, time
+        )
 
+    def get_device_power_values(
+        self, duration_before_s: float, time: datetime, use_fallback_command=True
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
+        return self.get_state_history_data(
+            self._get_power_measure(fall_back_on_command=use_fallback_command), duration_before_s, time
+        )
 
-
-    def get_device_power_values(self, duration_before_s: float, time: datetime, use_fallback_command=True) -> list[
-        tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
-        return self.get_state_history_data(self._get_power_measure(fall_back_on_command=use_fallback_command), duration_before_s, time)
-
-
-    def get_device_real_energy(self, start_time: datetime, end_time:datetime, clip_to_zero_under_power: float | None = None) -> float | None:
+    def get_device_real_energy(
+        self, start_time: datetime, end_time: datetime, clip_to_zero_under_power: float | None = None
+    ) -> float | None:
         duration_before_s = (end_time - start_time).total_seconds()
-        val = self.get_state_history_data(self._get_power_measure(fall_back_on_command=False), duration_before_s, end_time)
+        val = self.get_state_history_data(
+            self._get_power_measure(fall_back_on_command=False), duration_before_s, end_time
+        )
         if not val:
             return None
         return compute_energy_Wh_rieman_sum(val, clip_to_zero_under_power=clip_to_zero_under_power)[0]
@@ -941,14 +985,16 @@ class HADeviceMixin:
     #         return None
     #     return compute_energy_Wh_rieman_sum(val)[0]
 
-    def get_last_state_value_duration(self,
-                                      entity_id: str,
-                                      states_vals: list[str]| set[str],
-                                      num_seconds_before: float | None,
-                                      time: datetime,
-                                      invert_val_probe=False,
-                                      allowed_max_holes_s: float | None = None,
-                                      count_only_duration=False) -> (float | None, list[tuple[float, datetime, str]]):
+    def get_last_state_value_duration(
+        self,
+        entity_id: str,
+        states_vals: list[str] | set[str],
+        num_seconds_before: float | None,
+        time: datetime,
+        invert_val_probe=False,
+        allowed_max_holes_s: float | None = None,
+        count_only_duration=False,
+    ) -> (float | None, list[tuple[float, datetime, str]]):
 
         states_vals = set(states_vals)
         if entity_id in self._entity_probed_state:
@@ -965,7 +1011,6 @@ class HADeviceMixin:
                 elif time == values[0][0]:
                     from_idx = 0
                 else:
-
                     if time >= values[-1][0]:
                         from_idx = len(values) - 1
                     else:
@@ -985,7 +1030,6 @@ class HADeviceMixin:
             else:
                 allowed_max_holes_s = num_seconds_before / 2.0
 
-
         state_status_duration = 0
 
         # check the last states
@@ -998,7 +1042,6 @@ class HADeviceMixin:
         ok_ranges = []
 
         for i in range(from_idx, -1, -1):
-
             ts, state, attr = values[i]
 
             if i < from_idx:
@@ -1044,9 +1087,10 @@ class HADeviceMixin:
     def register_all_on_change_states(self):
 
         if len(self._entity_on_change) > 0:
+
             @callback
             def async_threshold_sensor_state_listener(
-                    event: Event[EventStateChangedData],
+                event: Event[EventStateChangedData],
             ) -> None:
                 """Handle sensor state changes."""
                 new_state = event.data["new_state"]
@@ -1068,21 +1112,43 @@ class HADeviceMixin:
 
         self.dampen_power_use(time)
 
-    def attach_power_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
-                              non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
-                                                                                            float | str | None, datetime | None, dict | None] | None] = None, reload_from_history:bool=False):
-        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
-                                      conversion_fn=convert_power_to_w, update_on_change_only=True,
-                                      non_ha_entity_get_state=non_ha_entity_get_state, reload_from_history=reload_from_history)
+    def attach_power_to_probe(
+        self,
+        entity_id: str | None,
+        transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+        non_ha_entity_get_state: Callable[
+            [str, datetime | None], tuple[float | str | None, datetime | None, dict | None] | None
+        ] = None,
+        reload_from_history: bool = False,
+    ):
+        self.attach_ha_state_to_probe(
+            entity_id=entity_id,
+            is_numerical=True,
+            transform_fn=transform_fn,
+            conversion_fn=convert_power_to_w,
+            update_on_change_only=True,
+            non_ha_entity_get_state=non_ha_entity_get_state,
+            reload_from_history=reload_from_history,
+        )
 
-    def attach_amps_to_probe(self, entity_id: str | None, transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
-                              non_ha_entity_get_state: Callable[[str, datetime | None], tuple[
-                                                                                            float | str | None, datetime | None, dict | None] | None] = None):
-        self.attach_ha_state_to_probe(entity_id=entity_id, is_numerical=True, transform_fn=transform_fn,
-                                      conversion_fn=convert_current_to_amps, update_on_change_only=True,
-                                      non_ha_entity_get_state=non_ha_entity_get_state)
+    def attach_amps_to_probe(
+        self,
+        entity_id: str | None,
+        transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+        non_ha_entity_get_state: Callable[
+            [str, datetime | None], tuple[float | str | None, datetime | None, dict | None] | None
+        ] = None,
+    ):
+        self.attach_ha_state_to_probe(
+            entity_id=entity_id,
+            is_numerical=True,
+            transform_fn=transform_fn,
+            conversion_fn=convert_current_to_amps,
+            update_on_change_only=True,
+            non_ha_entity_get_state=non_ha_entity_get_state,
+        )
 
-    def get_unfiltered_entity_name(self, entity_id: str | None, strict : bool =False) -> str| None:
+    def get_unfiltered_entity_name(self, entity_id: str | None, strict: bool = False) -> str | None:
         if entity_id is None:
             return None
 
@@ -1097,22 +1163,26 @@ class HADeviceMixin:
     def get_filtered_entity_from_unfiltered(self, entity_id: str) -> str:
 
         if entity_id.endswith("_no_filters"):
-            filtered_entity =  entity_id[:-len("_no_filters")]
+            filtered_entity = entity_id[: -len("_no_filters")]
             if self._entity_probed_state_attached_unfiltered.get(filtered_entity, False) is True:
                 return filtered_entity
 
-
         return entity_id
 
-    def attach_ha_state_to_probe(self, entity_id: str | None, is_numerical: bool = False,
-                                 transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
-                                 conversion_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
-                                 update_on_change_only: bool = True,
-                                 non_ha_entity_get_state: str | None | Callable[[str, datetime | None], tuple[
-                                                                                               float | str | None, datetime | None, dict | None] | None] = None,
-                                 state_invalid_values: set[str]|list[str]|None = None,
-                                 attach_unfiltered:bool = False,
-                                 reload_from_history: bool = False):
+    def attach_ha_state_to_probe(
+        self,
+        entity_id: str | None,
+        is_numerical: bool = False,
+        transform_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+        conversion_fn: Callable[[float, dict], tuple[float, dict]] | None = None,
+        update_on_change_only: bool = True,
+        non_ha_entity_get_state: str
+        | None
+        | Callable[[str, datetime | None], tuple[float | str | None, datetime | None, dict | None] | None] = None,
+        state_invalid_values: set[str] | list[str] | None = None,
+        attach_unfiltered: bool = False,
+        reload_from_history: bool = False,
+    ):
         if entity_id is None:
             return
 
@@ -1144,26 +1214,27 @@ class HADeviceMixin:
             self._entity_on_change.add(entity_id)
             self._entity_probed_auto.add(entity_id)
 
-
         if attach_unfiltered:
             unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
             if unfiltered_internal is not None:
-                self.attach_ha_state_to_probe(entity_id=unfiltered_internal,
-                                              is_numerical=is_numerical,
-                                              transform_fn=transform_fn,
-                                              conversion_fn=conversion_fn,
-                                              update_on_change_only=update_on_change_only,
-                                              non_ha_entity_get_state="FAKE_GETTER",
-                                              state_invalid_values=None,
-                                              attach_unfiltered=False
+                self.attach_ha_state_to_probe(
+                    entity_id=unfiltered_internal,
+                    is_numerical=is_numerical,
+                    transform_fn=transform_fn,
+                    conversion_fn=conversion_fn,
+                    update_on_change_only=update_on_change_only,
+                    non_ha_entity_get_state="FAKE_GETTER",
+                    state_invalid_values=None,
+                    attach_unfiltered=False,
                 )
 
             # store a first version
         if self.hass:
             self.add_to_history(entity_id)
 
-    def _clean_times_arrays(self, current_time: datetime, time_array: list[datetime], value_arrays: list[list]) -> list[
-        datetime]:
+    def _clean_times_arrays(
+        self, current_time: datetime, time_array: list[datetime], value_arrays: list[list]
+    ) -> list[datetime]:
         if len(time_array) == 0:
             return time_array
 
@@ -1174,7 +1245,9 @@ class HADeviceMixin:
 
         return time_array
 
-    def add_to_history(self, entity_id: str, time: datetime = None, state: State = None, ignore_unfiltered: bool = True):
+    def add_to_history(
+        self, entity_id: str, time: datetime = None, state: State = None, ignore_unfiltered: bool = True
+    ):
 
         state_getter = self._entity_probed_state_non_ha_entity_get_state[entity_id]
 
@@ -1182,7 +1255,7 @@ class HADeviceMixin:
             if ignore_unfiltered:
                 return
             else:
-                unfiltered_id =  self.get_filtered_entity_from_unfiltered(entity_id)
+                unfiltered_id = self.get_filtered_entity_from_unfiltered(entity_id)
                 if unfiltered_id is not None and unfiltered_id != entity_id:
                     self.add_to_history(unfiltered_id, time, state, ignore_unfiltered=True)
                 return
@@ -1197,10 +1270,9 @@ class HADeviceMixin:
             unfiltered_internal = self.get_unfiltered_entity_name(entity_id, strict=True)
 
             if unfiltered_internal is not None:
-                to_fill = [(self._entity_probed_state_invalid_values[entity_id], entity_id) , ([] , unfiltered_internal) ]
+                to_fill = [(self._entity_probed_state_invalid_values[entity_id], entity_id), ([], unfiltered_internal)]
             else:
                 to_fill = [(self._entity_probed_state_invalid_values[entity_id], entity_id)]
-
 
             for tf in to_fill:
                 invalid_vals, local_entity_id = tf
@@ -1231,7 +1303,7 @@ class HADeviceMixin:
             if time is not None:
                 state_time = time
 
-            self._add_state_history(entity_id, value, state_time , state, state_attr)
+            self._add_state_history(entity_id, value, state_time, state, state_attr)
 
     def _add_state_history(self, entity_id, value, state_time, state, state_attr):
         if state_attr is None:
@@ -1243,7 +1315,7 @@ class HADeviceMixin:
         if self._entity_probed_state_is_numerical[entity_id]:
             try:
                 value = float(value)
-            except Exception as e:
+            except Exception:
                 value = None
 
         if value is not None:
@@ -1281,9 +1353,9 @@ class HADeviceMixin:
                 # is entered only when state_time < val_array[-1][0].
                 # Given state_time < val_array[-1][0], bisect_left will always find an insertion point before the last element,
                 # so insert_idx can never equal len(val_array).
-                #if insert_idx == len(val_array):
+                # if insert_idx == len(val_array):
                 #    val_array.append(to_add)
-                #else:
+                # else:
                 if val_array[insert_idx][0] == state_time:
                     val_array[insert_idx] = to_add
                 else:
@@ -1292,9 +1364,9 @@ class HADeviceMixin:
         while len(val_array) > 1 and (val_array[-1][0] - val_array[0][0]).total_seconds() > MAX_STATE_HISTORY_S:
             val_array.pop(0)
 
-    def get_state_history_data(self, entity_id: str, num_seconds_before: float | None, to_ts: datetime,
-                               keep_invalid_states=False) -> list[
-        tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
+    def get_state_history_data(
+        self, entity_id: str, num_seconds_before: float | None, to_ts: datetime, keep_invalid_states=False
+    ) -> list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]:
         hist_f = self._entity_probed_state.get(entity_id, [])
 
         if not hist_f:
@@ -1317,7 +1389,6 @@ class HADeviceMixin:
         elif to_ts == hist_f[0][0]:
             ret = hist_f[:1]
         else:
-
             in_s = bisect_left(hist_f, from_ts, key=itemgetter(0))
 
             ret = None
@@ -1349,7 +1420,7 @@ class HADeviceMixin:
             return ret
 
     def get_platforms(self) -> list[str]:
-        """ returns associated platforms for this device """
+        """returns associated platforms for this device"""
         platforms = set()
         platforms.update([Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR])
 
@@ -1358,7 +1429,6 @@ class HADeviceMixin:
 
         return list(platforms)
 
-
-    def get_attached_virtual_devices(self) -> list['HADeviceMixin']:
-        """ returns associated virtual devices for this device """
+    def get_attached_virtual_devices(self) -> list[HADeviceMixin]:
+        """returns associated virtual devices for this device"""
         return []

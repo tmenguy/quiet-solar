@@ -1,34 +1,34 @@
 """Tests for quiet_solar home.py functionality."""
 
-import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
+import pytest
 import pytz
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
-
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_HOME_VOLTAGE,
-    CONF_IS_3P,
     CONF_GRID_POWER_SENSOR,
+    CONF_HOME_VOLTAGE,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.solar import QSSolar
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE
 from custom_components.quiet_solar.home_model.load import AbstractDevice
-from custom_components.quiet_solar.ha_model.device import HADeviceMixin
-import numpy as np
+
 
 class _HashableNS(SimpleNamespace):
     """SimpleNamespace with __hash__ for use in sets."""
+
     __hash__ = object.__hash__
 
 
@@ -40,20 +40,22 @@ class _FakeCharger:
 
 
 from custom_components.quiet_solar.ha_model.home import (
-    QSHomeMode,
-    QSHomeConsumptionHistoryAndForecast,
-    QSSolarHistoryVals,
-    QSforecastValueSensor,
-    get_time_from_state,
-    _segments_weak_sub_on_main_overlap,
-    _segments_strong_overlap,
+    BEGINING_OF_TIME,
     BUFFER_SIZE_IN_INTERVALS,
     NUM_INTERVALS_PER_DAY,
-    BEGINING_OF_TIME,
+    QSforecastValueSensor,
+    QSHomeConsumptionHistoryAndForecast,
+    QSHomeMode,
+    QSSolarHistoryVals,
+    _segments_strong_overlap,
+    _segments_weak_sub_on_main_overlap,
+    get_time_from_state,
 )
+
 
 class _HashableNS(SimpleNamespace):
     """SimpleNamespace with __hash__ for use in sets."""
+
     __hash__ = object.__hash__
 
 
@@ -73,6 +75,7 @@ async def test_home_initialization(hass: HomeAssistant, home_config_entry: Confi
 async def test_home_voltage_configuration(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home voltage configuration."""
     from .const import MOCK_HOME_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
@@ -83,6 +86,7 @@ async def test_home_voltage_configuration(hass: HomeAssistant, home_config_entry
 async def test_home_grid_power_sensor(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home grid power sensor configuration."""
     from .const import MOCK_HOME_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
@@ -90,7 +94,9 @@ async def test_home_grid_power_sensor(hass: HomeAssistant, home_config_entry: Co
     assert home.grid_active_power_sensor == MOCK_HOME_CONFIG[CONF_GRID_POWER_SENSOR]
 
 
-async def test_home_sensor_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_sensor_entities(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home sensor entities are created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -99,7 +105,9 @@ async def test_home_sensor_entities(hass: HomeAssistant, home_config_entry: Conf
     assert len(sensor_entries) >= 10
 
 
-async def test_home_select_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_select_entities(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home select entities are created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -108,7 +116,9 @@ async def test_home_select_entities(hass: HomeAssistant, home_config_entry: Conf
     assert len(select_entries) >= 1
 
 
-async def test_home_switch_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_switch_entities(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home has no switch entities (off-grid switch was replaced by select)."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -117,7 +127,9 @@ async def test_home_switch_entities(hass: HomeAssistant, home_config_entry: Conf
     assert len(switch_entries) == 0
 
 
-async def test_home_button_entities(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_button_entities(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home button entities are created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -129,10 +141,16 @@ async def test_home_button_entities(hass: HomeAssistant, home_config_entry: Conf
 async def test_home_with_solar(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home with solar inverter configured."""
     from .const import MOCK_SOLAR_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
-    solar_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_test",
-                                  title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="quiet_solar_solar_test")
+    solar_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="quiet_solar_solar_test",
+    )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
     await hass.async_block_till_done()
@@ -142,10 +160,16 @@ async def test_home_with_solar(hass: HomeAssistant, home_config_entry: ConfigEnt
 async def test_home_with_battery(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home with battery configured."""
     from .const import MOCK_BATTERY_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
-    battery_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_BATTERY_CONFIG, entry_id="battery_test",
-                                    title=f"battery: {MOCK_BATTERY_CONFIG['name']}", unique_id="quiet_solar_battery_test")
+    battery_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_BATTERY_CONFIG,
+        entry_id="battery_test",
+        title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
+        unique_id="quiet_solar_battery_test",
+    )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
     await hass.async_block_till_done()
@@ -178,7 +202,9 @@ async def test_home_reset_button(hass: HomeAssistant, home_config_entry: ConfigE
     assert state is not None
 
 
-async def test_home_forecast_sensors(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_forecast_sensors(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home forecast sensor entities are created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -188,7 +214,9 @@ async def test_home_forecast_sensors(hass: HomeAssistant, home_config_entry: Con
     assert len(forecast_sensors) >= 6
 
 
-async def test_home_consumption_sensors(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_consumption_sensors(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home consumption sensor entities are created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -198,7 +226,9 @@ async def test_home_consumption_sensors(hass: HomeAssistant, home_config_entry: 
     assert len(consumption_sensors) >= 2
 
 
-async def test_home_available_power_sensor(hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry) -> None:
+async def test_home_available_power_sensor(
+    hass: HomeAssistant, home_config_entry: ConfigEntry, entity_registry: er.EntityRegistry
+) -> None:
     """Test home available power sensor is created."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -233,6 +263,7 @@ async def test_home_device_registry(hass: HomeAssistant, home_config_entry: Conf
 async def test_home_get_platforms(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home returns correct platforms."""
     from homeassistant.const import Platform
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
@@ -246,44 +277,67 @@ async def test_home_get_platforms(hass: HomeAssistant, home_config_entry: Config
 
 async def test_home_with_full_setup(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home with full setup (solar, battery, charger, car, person)."""
-    from .const import (
-        MOCK_SOLAR_CONFIG, MOCK_BATTERY_CONFIG,
-        MOCK_CHARGER_CONFIG, MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
-    )
+    from .const import MOCK_BATTERY_CONFIG, MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG, MOCK_PERSON_CONFIG, MOCK_SOLAR_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     # Create solar
-    solar_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_SOLAR_CONFIG, entry_id="solar_full_test",
-                                  title=f"solar: {MOCK_SOLAR_CONFIG['name']}", unique_id="quiet_solar_solar_full_test")
+    solar_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_SOLAR_CONFIG,
+        entry_id="solar_full_test",
+        title=f"solar: {MOCK_SOLAR_CONFIG['name']}",
+        unique_id="quiet_solar_solar_full_test",
+    )
     solar_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(solar_entry.entry_id)
     await hass.async_block_till_done()
 
     # Create battery
-    battery_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_BATTERY_CONFIG, entry_id="battery_full_test",
-                                    title=f"battery: {MOCK_BATTERY_CONFIG['name']}", unique_id="quiet_solar_battery_full_test")
+    battery_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_BATTERY_CONFIG,
+        entry_id="battery_full_test",
+        title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
+        unique_id="quiet_solar_battery_full_test",
+    )
     battery_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(battery_entry.entry_id)
     await hass.async_block_till_done()
 
     # Create charger
-    charger_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CHARGER_CONFIG, entry_id="charger_full_test",
-                                    title=f"charger: {MOCK_CHARGER_CONFIG['name']}", unique_id="quiet_solar_charger_full_test")
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_full_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_full_test",
+    )
     charger_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(charger_entry.entry_id)
     await hass.async_block_till_done()
 
     # Create car
-    car_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_full_test",
-                                title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="quiet_solar_car_full_test")
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_full_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_full_test",
+    )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
 
     # Create person
-    person_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_PERSON_CONFIG, entry_id="person_full_test",
-                                   title=f"person: {MOCK_PERSON_CONFIG['name']}", unique_id="quiet_solar_person_full_test")
+    person_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_PERSON_CONFIG,
+        entry_id="person_full_test",
+        title=f"person: {MOCK_PERSON_CONFIG['name']}",
+        unique_id="quiet_solar_person_full_test",
+    )
     person_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(person_entry.entry_id)
     await hass.async_block_till_done()
@@ -361,12 +415,18 @@ async def test_home_persons_list_empty(hass: HomeAssistant, home_config_entry: C
 async def test_home_with_car_populated(hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
     """Test home cars list is populated when car is added."""
     from .const import MOCK_CAR_CONFIG
+
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     # Add car
-    car_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CAR_CONFIG, entry_id="car_pop_test",
-                                title=f"car: {MOCK_CAR_CONFIG['name']}", unique_id="quiet_solar_car_pop_test")
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_pop_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_pop_test",
+    )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
     await hass.async_block_till_done()
@@ -377,9 +437,9 @@ async def test_home_with_car_populated(hass: HomeAssistant, home_config_entry: C
     assert len(home._cars) == 1
 
     # Get car by name
-    car = home.get_car_by_name(MOCK_CAR_CONFIG['name'])
+    car = home.get_car_by_name(MOCK_CAR_CONFIG["name"])
     assert car is not None
-    assert car.name == MOCK_CAR_CONFIG['name']
+    assert car.name == MOCK_CAR_CONFIG["name"]
 
 
 async def test_home_off_grid_limits_and_reset(
@@ -641,9 +701,7 @@ async def test_home_best_persons_cars_allocations_basic(
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
-        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
-            return_value=(False, 40.0, 80.0, 10.0)
-        ),
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
     car_b = SimpleNamespace(
         name="Car B",
@@ -652,26 +710,20 @@ async def test_home_best_persons_cars_allocations_basic(
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
-        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
-            return_value=(True, 90.0, 60.0, 0.0)
-        ),
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(True, 90.0, 60.0, 0.0)),
     )
 
     person_a = _HashableNS(
         name="Person A",
         preferred_car="Car A",
-        update_person_forecast=MagicMock(
-            return_value=(datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC), 30.0)
-        ),
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC), 30.0)),
         get_authorized_cars=MagicMock(return_value=[car_a, car_b]),
         notify_of_forecast_if_needed=AsyncMock(),
     )
     person_b = _HashableNS(
         name="Person B",
         preferred_car="Car B",
-        update_person_forecast=MagicMock(
-            return_value=(datetime(2026, 1, 16, 9, 0, tzinfo=pytz.UTC), 20.0)
-        ),
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 16, 9, 0, tzinfo=pytz.UTC), 20.0)),
         get_authorized_cars=MagicMock(return_value=[car_a, car_b]),
         notify_of_forecast_if_needed=AsyncMock(),
     )
@@ -738,13 +790,9 @@ async def test_home_compute_and_store_person_car_forecasts(
     home._persons = [person]
 
     leave_time = datetime(2026, 1, 14, 18, 0, tzinfo=pytz.UTC)
-    home._compute_mileage_for_period_per_person = AsyncMock(
-        return_value={person: (25.0, leave_time)}
-    )
+    home._compute_mileage_for_period_per_person = AsyncMock(return_value={person: (25.0, leave_time)})
 
-    await home._compute_and_store_person_car_forecasts(
-        datetime(2026, 1, 15, 0, 0, tzinfo=pytz.UTC), day_shift=1
-    )
+    await home._compute_and_store_person_car_forecasts(datetime(2026, 1, 15, 0, 0, tzinfo=pytz.UTC), day_shift=1)
 
     person.add_to_mileage_history.assert_called()
 
@@ -1130,9 +1178,7 @@ async def test_home_forecast_getters_and_compute(
     ) == (None, 8.0)
 
     with patch.object(home, "_compute_non_controlled_forecast_intl", return_value=[(None, 5.0)]):
-        forecast = await home.compute_non_controlled_forecast(
-            datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
-        )
+        forecast = await home.compute_non_controlled_forecast(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
 
     assert forecast == [(None, 5.0)]
 
@@ -1784,9 +1830,7 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
-        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
-            return_value=(False, 40.0, 80.0, 10.0)
-        ),
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
     car_unused = SimpleNamespace(
         name="Car Unused",
@@ -1795,17 +1839,13 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
-        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(
-            return_value=(False, 40.0, 80.0, 10.0)
-        ),
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
 
     person = _HashableNS(
         name="Person A",
         preferred_car=None,
-        update_person_forecast=MagicMock(
-            return_value=(None, 30.0)
-        ),
+        update_person_forecast=MagicMock(return_value=(None, 30.0)),
         get_authorized_cars=MagicMock(return_value=[car_main, SimpleNamespace(name="Other")]),
         notify_of_forecast_if_needed=AsyncMock(),
     )
@@ -2025,12 +2065,8 @@ async def test_home_forecast_getters_without_sources(
     assert home.get_non_controlled_consumption_best_stored_value_getter(
         datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     ) == (None, None)
-    assert home.get_solar_from_current_forecast_getter(
-        datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
-    ) == (None, None)
-    assert home.get_solar_from_current_forecast(
-        datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
-    ) == []
+    assert home.get_solar_from_current_forecast_getter(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == (None, None)
+    assert home.get_solar_from_current_forecast(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == []
 
 
 async def test_update_loads_constraints_resets_daily_on_day_change(

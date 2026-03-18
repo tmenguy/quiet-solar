@@ -1,17 +1,28 @@
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Coroutine, Any
+from typing import Any
 
-from homeassistant.components.button import ButtonEntityDescription, ButtonEntity
+from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, BUTTON_HOME_RESET_HISTORY, BUTTON_HOME_SERIALIZE_FOR_DEBUG, BUTTON_CAR_NEXT_CHARGE_FORCE_NOW, \
-    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE, BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT, BUTTON_LOAD_RESET_OVERRIDE_STATE, \
-    BUTTON_DEVICE_CLEAN_AND_RESET, BUTTON_HOME_GENERATE_YAML_DASHBOARD, BUTTON_HOME_LIGHT_RESET_HISTORY, \
-    BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS, BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA
+from .const import (
+    BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
+    BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
+    BUTTON_DEVICE_CLEAN_AND_RESET,
+    BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
+    BUTTON_HOME_GENERATE_YAML_DASHBOARD,
+    BUTTON_HOME_LIGHT_RESET_HISTORY,
+    BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA,
+    BUTTON_HOME_RESET_HISTORY,
+    BUTTON_HOME_SERIALIZE_FOR_DEBUG,
+    BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
+    BUTTON_LOAD_RESET_OVERRIDE_STATE,
+    DOMAIN,
+)
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
@@ -20,9 +31,9 @@ from .home_model.load import AbstractDevice, AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
+
 def create_ha_button_for_QSHome(device: QSHome):
     entities = []
-
 
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_HOME_RESET_HISTORY,
@@ -56,7 +67,6 @@ def create_ha_button_for_QSHome(device: QSHome):
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_serialize_debug))
 
-
     home_generate_yaml = QSButtonEntityDescription(
         key=BUTTON_HOME_GENERATE_YAML_DASHBOARD,
         translation_key=BUTTON_HOME_GENERATE_YAML_DASHBOARD,
@@ -64,7 +74,6 @@ def create_ha_button_for_QSHome(device: QSHome):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_generate_yaml))
-
 
     return entities
 
@@ -76,7 +85,7 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         async_press=lambda x: x.device.user_force_charge_now(),
-        is_available=lambda x: x.device.can_force_a_charge_now()
+        is_available=lambda x: x.device.can_force_a_charge_now(),
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_force_next_charge))
@@ -85,12 +94,15 @@ def create_ha_button_for_QSChargerGeneric(device: QSChargerGeneric):
         key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         async_press=lambda x: x.device.user_add_default_charge(),
-        is_available=lambda x: x.device.can_add_default_charge()
+        is_available=lambda x: x.device.can_add_default_charge(),
     )
 
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge))
+    entities.append(
+        QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge)
+    )
 
     return entities
+
 
 def create_ha_button_for_QSCar(device: QSCar):
     entities = []
@@ -99,7 +111,7 @@ def create_ha_button_for_QSCar(device: QSCar):
         key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         translation_key=BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
         async_press=lambda x: x.device.user_force_charge_now(),
-        is_available=lambda x: x.device.can_force_a_charge_now()
+        is_available=lambda x: x.device.can_force_a_charge_now(),
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_force_next_charge))
@@ -108,16 +120,18 @@ def create_ha_button_for_QSCar(device: QSCar):
         key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         translation_key=BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
         async_press=lambda x: x.device.user_add_default_charge(),
-        is_available=lambda x: x.device.can_add_default_charge()
+        is_available=lambda x: x.device.can_add_default_charge(),
     )
 
-    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge))
+    entities.append(
+        QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge)
+    )
 
     return entities
 
+
 def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     entities = []
-
 
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
@@ -126,7 +140,6 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
-
 
     if device.support_user_override():
         qs_reset_override = QSButtonEntityDescription(
@@ -139,9 +152,9 @@ def create_ha_button_for_AbstractLoad(device: AbstractLoad):
 
     return entities
 
+
 def create_ha_button_for_AbstractDevice(device: AbstractDevice):
     entities = []
-
 
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_DEVICE_CLEAN_AND_RESET,
@@ -151,7 +164,6 @@ def create_ha_button_for_AbstractDevice(device: AbstractDevice):
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
 
-
     qs_reset_history = QSButtonEntityDescription(
         key=BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
         translation_key=BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
@@ -159,7 +171,6 @@ def create_ha_button_for_AbstractDevice(device: AbstractDevice):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_history))
-
 
     return entities
 
@@ -184,6 +195,7 @@ def create_ha_button(device: AbstractDevice):
 
     return ret
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -193,7 +205,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_button(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_button(attached_device))
@@ -203,6 +214,7 @@ async def async_setup_entry(
 
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -210,8 +222,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry button: exception loading %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry button: exception loading %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
 
@@ -219,15 +232,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 @dataclass(frozen=True, kw_only=True)
 class QSButtonEntityDescription(ButtonEntityDescription):
     """Class describing  button entities."""
+
     async_press: Callable[[Any], Coroutine]
     is_available: Callable[[Any], bool] | None = None
-
 
 
 class QSButtonEntity(QSDeviceEntity, ButtonEntity):
     """Mixin for button specific attributes."""
 
     entity_description: QSButtonEntityDescription
+
     def __init__(
         self,
         data_handler,
@@ -253,11 +267,9 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
         if self.device.home:
             await self.device.home.force_update_all()
 
-
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
         self._set_availabiltiy()
 
         self.async_write_ha_state()
-

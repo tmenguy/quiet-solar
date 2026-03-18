@@ -1,33 +1,31 @@
 """Extended tests for QSClimateDuration in ha_model/climate_controller.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
-from homeassistant.const import CONF_NAME
+import pytest
+import pytz
 from homeassistant.components import climate
 from homeassistant.components.climate import HVACMode
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-import pytz
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_CLIMATE_HVAC_MODE_ON,
+    CONF_SWITCH,
+    DATA_HANDLER,
+    DOMAIN,
+    SENSOR_CONSTRAINT_SENSOR_CLIMATE,
+)
 from custom_components.quiet_solar.ha_model.climate_controller import (
     QSClimateDuration,
-    get_hvac_modes,
 )
-from custom_components.quiet_solar.home_model.commands import CMD_ON, CMD_OFF, CMD_IDLE
-from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CLIMATE,
-    CONF_CLIMATE_HVAC_MODE_ON,
-    CONF_CLIMATE_HVAC_MODE_OFF,
-    SENSOR_CONSTRAINT_SENSOR_CLIMATE,
-    CONF_SWITCH,
-)
-
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON
 from tests.factories import create_minimal_home_model
 
 
@@ -53,20 +51,18 @@ def climate_home(hass: HomeAssistant):
     return home
 
 
-def test_init_with_default_hvac_modes(
-    hass: HomeAssistant, climate_config_entry, climate_home
-):
+def test_init_with_default_hvac_modes(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test initialization with default HVAC modes."""
     device = QSClimateDuration(
         hass=hass,
         config_entry=climate_config_entry,
         home=climate_home,
-            **{
-                CONF_NAME: "Living Room Climate",
-                CONF_SWITCH: "switch.climate_helper",
-                CONF_CLIMATE: "climate.living_room",
-            }
-        )
+        **{
+            CONF_NAME: "Living Room Climate",
+            CONF_SWITCH: "switch.climate_helper",
+            CONF_CLIMATE: "climate.living_room",
+        },
+    )
 
     assert device.name == "Living Room Climate"
     assert device.climate_entity == "climate.living_room"
@@ -75,22 +71,20 @@ def test_init_with_default_hvac_modes(
     assert device.is_load_time_sensitive is True
 
 
-def test_init_with_custom_hvac_modes(
-    hass: HomeAssistant, climate_config_entry, climate_home
-):
+def test_init_with_custom_hvac_modes(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test initialization with custom HVAC modes."""
     device = QSClimateDuration(
         hass=hass,
         config_entry=climate_config_entry,
         home=climate_home,
-            **{
-                CONF_NAME: "Bedroom Climate",
-                CONF_SWITCH: "switch.climate_helper",
-                CONF_CLIMATE: "climate.bedroom",
-                CONF_CLIMATE_HVAC_MODE_ON: "heat",
-                CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
-            }
-        )
+        **{
+            CONF_NAME: "Bedroom Climate",
+            CONF_SWITCH: "switch.climate_helper",
+            CONF_CLIMATE: "climate.bedroom",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
+        },
+    )
 
     assert device._state_on == "heat"
     assert device._state_off == "fan_only"
@@ -98,20 +92,18 @@ def test_init_with_custom_hvac_modes(
     assert device._bistate_mode_off == "fan_only"
 
 
-def test_init_bistate_entity_equals_climate_entity(
-    hass: HomeAssistant, climate_config_entry, climate_home
-):
+def test_init_bistate_entity_equals_climate_entity(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test that bistate_entity is set to climate_entity."""
     device = QSClimateDuration(
         hass=hass,
         config_entry=climate_config_entry,
         home=climate_home,
-            **{
-                CONF_NAME: "Test Climate",
-                CONF_SWITCH: "switch.climate_helper",
-                CONF_CLIMATE: "climate.test",
-            }
-        )
+        **{
+            CONF_NAME: "Test Climate",
+            CONF_SWITCH: "switch.climate_helper",
+            CONF_CLIMATE: "climate.test",
+        },
+    )
 
     assert device.bistate_entity == "climate.test"
 
@@ -127,7 +119,7 @@ def climate_device(hass: HomeAssistant, climate_config_entry, climate_home):
             CONF_NAME: "Test Climate",
             CONF_SWITCH: "switch.climate_helper",
             CONF_CLIMATE: "climate.test",
-        }
+        },
     )
 
 
@@ -180,7 +172,7 @@ def climate_device_execute(hass: HomeAssistant, climate_config_entry, climate_ho
             CONF_CLIMATE: "climate.test",
             CONF_CLIMATE_HVAC_MODE_ON: "heat",
             CONF_CLIMATE_HVAC_MODE_OFF: "off",
-        }
+        },
     )
 
 
@@ -203,15 +195,11 @@ def recorded_service_calls(hass: HomeAssistant):
 
 
 @pytest.mark.asyncio
-async def test_execute_command_turn_on(
-    climate_device_execute, recorded_service_calls
-):
+async def test_execute_command_turn_on(climate_device_execute, recorded_service_calls):
     """Test execute_command_system with CMD_ON sets HVAC to heat."""
     time = datetime.datetime.now(pytz.UTC)
 
-    result = await climate_device_execute.execute_command_system(
-        time, CMD_ON, state=None
-    )
+    result = await climate_device_execute.execute_command_system(time, CMD_ON, state=None)
 
     assert result is False
     climate_calls = [c for c in recorded_service_calls if c[0] == climate.DOMAIN]
@@ -220,15 +208,11 @@ async def test_execute_command_turn_on(
 
 
 @pytest.mark.asyncio
-async def test_execute_command_turn_off(
-    climate_device_execute, recorded_service_calls
-):
+async def test_execute_command_turn_off(climate_device_execute, recorded_service_calls):
     """Test execute_command_system with CMD_OFF sets HVAC to off."""
     time = datetime.datetime.now(pytz.UTC)
 
-    result = await climate_device_execute.execute_command_system(
-        time, CMD_OFF, state=None
-    )
+    result = await climate_device_execute.execute_command_system(time, CMD_OFF, state=None)
 
     assert result is False
     climate_calls = [c for c in recorded_service_calls if c[0] == climate.DOMAIN]
@@ -236,15 +220,11 @@ async def test_execute_command_turn_off(
 
 
 @pytest.mark.asyncio
-async def test_execute_command_idle(
-    climate_device_execute, recorded_service_calls
-):
+async def test_execute_command_idle(climate_device_execute, recorded_service_calls):
     """Test execute_command_system with CMD_IDLE sets HVAC to off."""
     time = datetime.datetime.now(pytz.UTC)
 
-    result = await climate_device_execute.execute_command_system(
-        time, CMD_IDLE, state=None
-    )
+    result = await climate_device_execute.execute_command_system(time, CMD_IDLE, state=None)
 
     assert result is False
     climate_calls = [c for c in recorded_service_calls if c[0] == climate.DOMAIN]
@@ -252,15 +232,11 @@ async def test_execute_command_idle(
 
 
 @pytest.mark.asyncio
-async def test_execute_command_with_override_state(
-    climate_device_execute, recorded_service_calls
-):
+async def test_execute_command_with_override_state(climate_device_execute, recorded_service_calls):
     """Test execute_command_system with explicit state override."""
     time = datetime.datetime.now(pytz.UTC)
 
-    result = await climate_device_execute.execute_command_system(
-        time, CMD_ON, state="cool"
-    )
+    result = await climate_device_execute.execute_command_system(time, CMD_ON, state="cool")
 
     assert result is False
     climate_calls = [c for c in recorded_service_calls if c[0] == climate.DOMAIN]
@@ -278,14 +254,10 @@ async def test_execute_command_invalid_raises(climate_device_execute):
     invalid_cmd = LoadCommand(command="invalid", power_consign=0)
 
     with pytest.raises(ValueError, match="Invalid command"):
-        await climate_device_execute.execute_command_system(
-            time, invalid_cmd, state=None
-        )
+        await climate_device_execute.execute_command_system(time, invalid_cmd, state=None)
 
 
-def test_get_possibles_modes(
-    hass: HomeAssistant, climate_config_entry, climate_home
-):
+def test_get_possibles_modes(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test get_possibles_modes returns modes from registry."""
     device = QSClimateDuration(
         hass=hass,
@@ -295,7 +267,7 @@ def test_get_possibles_modes(
             CONF_NAME: "Test Climate",
             CONF_SWITCH: "switch.climate_helper",
             CONF_CLIMATE: "climate.test",
-        }
+        },
     )
     mock_entry = MagicMock()
     mock_entry.capabilities = {"hvac_modes": ["off", "heat", "cool", "auto"]}

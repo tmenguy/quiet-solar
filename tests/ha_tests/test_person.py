@@ -1,25 +1,21 @@
 """Tests for quiet_solar person.py functionality."""
 
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
-
 import pytz
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_PERSON_PERSON_ENTITY,
     CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_PERSON_ENTITY,
     CONF_PERSON_PREFERRED_CAR,
+    DOMAIN,
 )
-
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -29,7 +25,7 @@ async def test_person_initialization(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person device initialization."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -64,7 +60,7 @@ async def test_person_initialization(
     # Verify person device was created
     person_device = hass.data[DOMAIN].get(person_entry.entry_id)
     assert person_device is not None
-    assert person_device.name == MOCK_PERSON_CONFIG['name']
+    assert person_device.name == MOCK_PERSON_CONFIG["name"]
 
 
 async def test_person_entity_configuration(
@@ -72,7 +68,7 @@ async def test_person_entity_configuration(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person entity configuration."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -110,7 +106,7 @@ async def test_person_authorized_cars(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person authorized cars configuration."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -148,7 +144,7 @@ async def test_person_preferred_car(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person preferred car configuration."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -186,7 +182,7 @@ async def test_person_home_state(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person home state tracking."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     # Set person state to home
     hass.states.async_set("person.test_person", "home")
@@ -227,7 +223,7 @@ async def test_person_away_state(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person away state tracking."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     # Set person state to not_home
     hass.states.async_set("person.test_person", "not_home")
@@ -269,7 +265,7 @@ async def test_person_sensor_entities(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test person sensor entities are created."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -299,9 +295,7 @@ async def test_person_sensor_entities(
     await hass.async_block_till_done()
 
     # Check sensor entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, person_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, person_entry.entry_id)
 
     sensor_entries = [e for e in entity_entries if e.domain == "sensor"]
 
@@ -315,7 +309,7 @@ async def test_person_select_entities(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test person select entities are created."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -345,9 +339,7 @@ async def test_person_select_entities(
     await hass.async_block_till_done()
 
     # Check select entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, person_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, person_entry.entry_id)
 
     select_entries = [e for e in entity_entries if e.domain == "select"]
 
@@ -361,7 +353,7 @@ async def test_multiple_persons(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test multiple persons can be created."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -425,12 +417,14 @@ async def test_person_with_multiple_cars(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person with multiple authorized cars."""
-    from .const import MOCK_CAR_CONFIG
     from homeassistant.const import CONF_NAME
+
     from custom_components.quiet_solar.const import (
         DEVICE_TYPE,
         CONF_TYPE_NAME_QSPerson,
     )
+
+    from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -495,7 +489,7 @@ async def test_person_button_entities(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test person button entities are created."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -525,9 +519,7 @@ async def test_person_button_entities(
     await hass.async_block_till_done()
 
     # Check button entities
-    entity_entries = er.async_entries_for_config_entry(
-        entity_registry, person_entry.entry_id
-    )
+    entity_entries = er.async_entries_for_config_entry(entity_registry, person_entry.entry_id)
 
     button_entries = [e for e in entity_entries if e.domain == "button"]
 
@@ -540,8 +532,9 @@ async def test_person_get_platforms(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person returns correct platforms."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
     from homeassistant.const import Platform
+
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -582,7 +575,7 @@ async def test_person_get_tracker_id(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person get_tracker_id method."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -623,7 +616,7 @@ async def test_person_unload(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person unload."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -666,9 +659,11 @@ async def test_person_should_recompute_history(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test person should_recompute_history method."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
     from datetime import datetime
+
     import pytz
+
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -711,7 +706,7 @@ async def test_person_forecast_from_history(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test forecast generation from history."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -744,9 +739,7 @@ async def test_person_forecast_from_history(
     leave_time = datetime(2026, 1, 15, 18, 0, tzinfo=pytz.UTC)
     person_device.add_to_mileage_history(now, 42.0, leave_time)
 
-    predicted_leave, predicted_mileage = person_device.update_person_forecast(
-        now, force_update=True
-    )
+    predicted_leave, predicted_mileage = person_device.update_person_forecast(now, force_update=True)
 
     assert predicted_mileage == 42.0
     assert predicted_leave is not None
@@ -759,7 +752,7 @@ async def test_person_tracker_id_override(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test tracker id uses override when set."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -796,8 +789,9 @@ async def test_person_notify_forecast_daily_constraints(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Test forecast notification for daily constraints."""
-    from .const import MOCK_PERSON_CONFIG, MOCK_CAR_CONFIG
     from custom_components.quiet_solar.const import PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS
+
+    from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -828,15 +822,11 @@ async def test_person_notify_forecast_daily_constraints(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     car_device.current_forecasted_person = person_device
     car_device.charger = MagicMock()
-    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(
-        return_value=(True, 70.0, 60.0, None)
-    )
+    car_device.get_adapt_target_percent_soc_to_reach_range_km = MagicMock(return_value=(True, 70.0, 60.0, None))
 
     person_device.mobile_app = "notify"
     person_device.notification_dt_time = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC).time()
-    person_device._last_forecast_notification_call_time = datetime(
-        2026, 1, 14, 8, 0, tzinfo=pytz.UTC
-    )
+    person_device._last_forecast_notification_call_time = datetime(2026, 1, 14, 8, 0, tzinfo=pytz.UTC)
     person_device.predicted_mileage = 50.0
     person_device.predicted_leave_time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     person_device.on_device_state_change = AsyncMock()
@@ -848,4 +838,3 @@ async def test_person_notify_forecast_daily_constraints(
     )
 
     person_device.on_device_state_change.assert_awaited()
-

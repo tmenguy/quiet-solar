@@ -1,27 +1,25 @@
 """Tests for QSDynamicGroup in ha_model/dynamic_group.py."""
+
 from __future__ import annotations
 
 import datetime
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+import pytz
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-import pytz
-
-from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
     CONF_IS_3P,
-    MAX_POWER_INFINITE,
+    DATA_HANDLER,
+    DOMAIN,
     MAX_AMP_INFINITE,
+    MAX_POWER_INFINITE,
 )
-
+from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from tests.factories import create_minimal_home_model
 
 
@@ -60,9 +58,7 @@ def dyn_group_hass_data(hass: HomeAssistant, dyn_group_data_handler):
 
 
 @pytest.fixture
-def dyn_group_device(
-    hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
-):
+def dyn_group_device(hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data):
     """QSDynamicGroup instance (3p, 32A) for tests."""
     return QSDynamicGroup(
         hass=hass,
@@ -72,7 +68,7 @@ def dyn_group_device(
             CONF_NAME: "Test Group",
             CONF_IS_3P: True,
             CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-        }
+        },
     )
 
 
@@ -84,10 +80,7 @@ class TestQSDynamicGroupInit:
     ):
         """Test initialization with default values."""
         device = QSDynamicGroup(
-            hass=hass,
-            config_entry=dyn_group_config_entry,
-            home=dyn_group_home,
-            **{CONF_NAME: "Test Group"}
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home, **{CONF_NAME: "Test Group"}
         )
 
         assert device.name == "Test Group"
@@ -106,7 +99,7 @@ class TestQSDynamicGroupInit:
             **{
                 CONF_NAME: "Test Group",
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
 
         assert device.dyn_group_max_phase_current_conf == 32
@@ -123,7 +116,7 @@ class TestQSDynamicGroupInit:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
 
         assert device._dyn_group_max_phase_current_for_budget == [32, 32, 32]
@@ -140,7 +133,7 @@ class TestQSDynamicGroupInit:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: False,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
 
         total = sum(device._dyn_group_max_phase_current_for_budget)
@@ -177,7 +170,7 @@ class TestQSDynamicGroupProperties:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: False,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
 
         mock_child = MagicMock()
@@ -238,9 +231,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         result = dyn_group_device.is_current_acceptable(
-            new_amps=[20.0, 20.0, 20.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[20.0, 20.0, 20.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         assert result is True
@@ -250,9 +241,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         result = dyn_group_device.is_current_acceptable(
-            new_amps=[40.0, 40.0, 40.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[40.0, 40.0, 40.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         assert result is False
@@ -262,9 +251,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         acceptable, diff = dyn_group_device.is_current_acceptable_and_diff(
-            new_amps=[20.0, 20.0, 20.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[20.0, 20.0, 20.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         assert acceptable is True
@@ -274,9 +261,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         acceptable, diff = dyn_group_device.is_current_acceptable_and_diff(
-            new_amps=[40.0, 40.0, 40.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[40.0, 40.0, 40.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         assert acceptable is False
@@ -286,9 +271,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         acceptable, diff = dyn_group_device.is_delta_current_acceptable(
-            delta_amps=[5.0, 5.0, 5.0],
-            time=time,
-            new_amps_consumption=[15.0, 15.0, 15.0]
+            delta_amps=[5.0, 5.0, 5.0], time=time, new_amps_consumption=[15.0, 15.0, 15.0]
         )
 
         assert acceptable is True
@@ -298,9 +281,7 @@ class TestQSDynamicGroupCurrentAcceptable:
         time = datetime.datetime.now(pytz.UTC)
 
         acceptable, diff = dyn_group_device.is_delta_current_acceptable(
-            delta_amps=[30.0, 30.0, 30.0],
-            time=time,
-            new_amps_consumption=[40.0, 40.0, 40.0]
+            delta_amps=[30.0, 30.0, 30.0], time=time, new_amps_consumption=[40.0, 40.0, 40.0]
         )
 
         assert acceptable is False
@@ -313,10 +294,7 @@ class TestQSDynamicGroupPowerAggregation:
         """Test get_device_power_latest_possible_valid_value with no children."""
         time = datetime.datetime.now(pytz.UTC)
 
-        result = dyn_group_device.get_device_power_latest_possible_valid_value(
-            tolerance_seconds=None,
-            time=time
-        )
+        result = dyn_group_device.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=time)
 
         assert result == 0.0
 
@@ -324,10 +302,7 @@ class TestQSDynamicGroupPowerAggregation:
         """Test get_device_power_latest_possible_valid_value with children (simplified)."""
         time = datetime.datetime.now(pytz.UTC)
 
-        result = dyn_group_device.get_device_power_latest_possible_valid_value(
-            tolerance_seconds=None,
-            time=time
-        )
+        result = dyn_group_device.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=time)
 
         assert result == 0.0
 
@@ -338,10 +313,7 @@ class TestQSDynamicGroupPowerAggregation:
         dyn_group_device.accurate_power_sensor = "sensor.total_power"
         dyn_group_device.get_sensor_latest_possible_valid_value = MagicMock(return_value=2000.0)
 
-        result = dyn_group_device.get_device_power_latest_possible_valid_value(
-            tolerance_seconds=None,
-            time=time
-        )
+        result = dyn_group_device.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=time)
 
         assert result == 2000.0
 
@@ -355,10 +327,7 @@ class TestQSDynamicGroupMinMaxPower:
     ):
         """QSDynamicGroup with default config (no CONF_IS_3P/MAX_PHASE_AMPS) for min/max tests."""
         return QSDynamicGroup(
-            hass=hass,
-            config_entry=dyn_group_config_entry,
-            home=dyn_group_home,
-            **{CONF_NAME: "Test Group"}
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home, **{CONF_NAME: "Test Group"}
         )
 
     def test_get_min_max_power_no_children(self, dyn_group_device_minmax):
@@ -402,9 +371,7 @@ class TestQSDynamicGroupBudgeting:
 
         father_budget = [20.0, 20.0, 20.0]
 
-        dyn_group_device.prepare_slots_for_amps_budget(
-            time, num_slots=4, from_father_budget=father_budget
-        )
+        dyn_group_device.prepare_slots_for_amps_budget(time, num_slots=4, from_father_budget=father_budget)
 
         assert dyn_group_device.available_amps_for_group is not None
         assert len(dyn_group_device.available_amps_for_group) == 4
@@ -440,7 +407,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         # Create a mock father device for delegation tests
         father = MagicMock()
@@ -461,7 +428,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.father_device = None
         device.get_device_amps_consumption = MagicMock(return_value=[10.0, 10.0, 10.0])
@@ -471,7 +438,7 @@ class TestQSDynamicGroupCoverageExtensions:
         acceptable, diff = device.is_delta_current_acceptable(
             delta_amps=[5.0, 5.0, 5.0],
             time=time,
-            new_amps_consumption=[50.0, 50.0, 50.0]  # Exceeds 32A limit
+            new_amps_consumption=[50.0, 50.0, 50.0],  # Exceeds 32A limit
         )
 
         assert acceptable is False
@@ -490,7 +457,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.father_device = None
         # Current consumption is 25A per phase
@@ -501,7 +468,7 @@ class TestQSDynamicGroupCoverageExtensions:
         acceptable, diff = device.is_delta_current_acceptable(
             delta_amps=[10.0, 10.0, 10.0],  # 25 + 10 = 35 > 32
             time=time,
-            new_amps_consumption=[30.0, 30.0, 30.0]  # Within 32A but computation will exceed
+            new_amps_consumption=[30.0, 30.0, 30.0],  # Within 32A but computation will exceed
         )
 
         assert acceptable is False
@@ -517,7 +484,7 @@ class TestQSDynamicGroupCoverageExtensions:
         acceptable, diff = device.is_delta_current_acceptable(
             delta_amps=[5.0, 5.0, 5.0],
             time=time,
-            new_amps_consumption=[10.0, 10.0, 10.0]  # Within limits
+            new_amps_consumption=[10.0, 10.0, 10.0],  # Within limits
         )
 
         # Should delegate to father
@@ -535,7 +502,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.father_device = None
         device.get_device_amps_consumption = MagicMock(return_value=[10.0, 10.0, 10.0])
@@ -545,7 +512,7 @@ class TestQSDynamicGroupCoverageExtensions:
         acceptable, diff = device.is_current_acceptable_and_diff(
             new_amps=[20.0, 20.0, 20.0],
             estimated_current_amps=None,  # None to trigger the elif branch
-            time=time
+            time=time,
         )
 
         assert acceptable is True
@@ -562,7 +529,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.father_device = None
         # Return None for phases_amps
@@ -571,9 +538,7 @@ class TestQSDynamicGroupCoverageExtensions:
 
         # Call with phases_amps=None to trigger lines 113-115
         acceptable, diff = device.is_current_acceptable_and_diff(
-            new_amps=[20.0, 20.0, 20.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[20.0, 20.0, 20.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         assert acceptable is True
@@ -590,7 +555,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.father_device = None
         # High current consumption
@@ -604,7 +569,7 @@ class TestQSDynamicGroupCoverageExtensions:
         acceptable, diff = device.is_current_acceptable_and_diff(
             new_amps=[30.0, 30.0, 30.0],  # Within limit at start
             estimated_current_amps=[20.0, 20.0, 20.0],
-            time=time
+            time=time,
         )
 
         assert acceptable is False
@@ -621,7 +586,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         father = MagicMock()
         father.is_delta_current_acceptable = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
@@ -630,9 +595,7 @@ class TestQSDynamicGroupCoverageExtensions:
         time = datetime.datetime.now(pytz.UTC)
 
         acceptable, diff = device.is_current_acceptable_and_diff(
-            new_amps=[15.0, 15.0, 15.0],
-            estimated_current_amps=[10.0, 10.0, 10.0],
-            time=time
+            new_amps=[15.0, 15.0, 15.0], estimated_current_amps=[10.0, 10.0, 10.0], time=time
         )
 
         # Should delegate to father
@@ -650,16 +613,13 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.accurate_power_sensor = "sensor.power"
         device.get_sensor_latest_possible_valid_value = MagicMock(return_value=None)
         time = datetime.datetime.now(pytz.UTC)
 
-        result = device.get_device_power_latest_possible_valid_value(
-            tolerance_seconds=None,
-            time=time
-        )
+        result = device.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=time)
 
         assert result == 0.0
 
@@ -677,7 +637,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         device.accurate_power_sensor = None  # Ensure we go through children path
 
@@ -695,10 +655,7 @@ class TestQSDynamicGroupCoverageExtensions:
         device._childrens = [child1, child2, child3]
         time = datetime.datetime.now(pytz.UTC)
 
-        result = device.get_device_power_latest_possible_valid_value(
-            tolerance_seconds=None,
-            time=time
-        )
+        result = device.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=time)
 
         # 1000 + 500 = 1500 (None is skipped)
         assert result == 1500.0
@@ -715,7 +672,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         # Force dyn_group_max_phase_current_for_budget to be None
         device._dyn_group_max_phase_current_for_budget = None
@@ -744,7 +701,7 @@ class TestQSDynamicGroupCoverageExtensions:
                 CONF_NAME: "Test Group",
                 CONF_IS_3P: True,
                 CONF_DYN_GROUP_MAX_PHASE_AMPS: 32,
-            }
+            },
         )
         father = MagicMock()
         father.update_available_amps_for_group = MagicMock()

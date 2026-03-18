@@ -1,25 +1,26 @@
 """Tests for time platform."""
+
 from __future__ import annotations
 
-from datetime import datetime, time as dt_time
-from unittest.mock import MagicMock, AsyncMock, patch
+from datetime import datetime
+from datetime import time as dt_time
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytz
-
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
+from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.time import (
-    create_ha_time,
-    create_ha_time_for_QSCharger,
-    create_ha_time_for_QSCar,
-    create_ha_time_for_QSBiStateDuration,
     QSBaseTime,
     QSTimeEntityDescription,
     async_setup_entry,
     async_unload_entry,
+    create_ha_time,
+    create_ha_time_for_QSBiStateDuration,
+    create_ha_time_for_QSCar,
+    create_ha_time_for_QSCharger,
 )
-from custom_components.quiet_solar.const import DOMAIN
 from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
 
@@ -137,11 +138,7 @@ def test_create_ha_time_for_non_time_device():
 
 def test_qs_time_entity_description():
     """Test QSTimeEntityDescription dataclass."""
-    desc = QSTimeEntityDescription(
-        key="test_time",
-        translation_key="test",
-        qs_default_option="default_value"
-    )
+    desc = QSTimeEntityDescription(key="test_time", translation_key="test", qs_default_option="default_value")
 
     assert desc.key == "test_time"
     assert desc.translation_key == "test"
@@ -292,7 +289,7 @@ async def test_qs_base_time_restore_state():
     # Mock the restore state mechanism
     mock_last_state = State("time.test", "14:30:00")
 
-    with patch.object(time_entity, 'async_get_last_state', return_value=mock_last_state):
+    with patch.object(time_entity, "async_get_last_state", return_value=mock_last_state):
         await time_entity.async_added_to_hass()
 
     assert time_entity._attr_native_value == dt_time(hour=14, minute=30, second=0)
@@ -321,7 +318,7 @@ async def test_qs_base_time_restore_state_unknown():
     # Mock unknown state
     mock_last_state = State("time.test", STATE_UNKNOWN)
 
-    with patch.object(time_entity, 'async_get_last_state', return_value=mock_last_state):
+    with patch.object(time_entity, "async_get_last_state", return_value=mock_last_state):
         await time_entity.async_added_to_hass()
 
     # Should use device default
@@ -350,7 +347,7 @@ async def test_qs_base_time_restore_state_unavailable():
     # Mock unavailable state
     mock_last_state = State("time.test", STATE_UNAVAILABLE)
 
-    with patch.object(time_entity, 'async_get_last_state', return_value=mock_last_state):
+    with patch.object(time_entity, "async_get_last_state", return_value=mock_last_state):
         await time_entity.async_added_to_hass()
 
     # Should use device default
@@ -374,7 +371,7 @@ async def test_qs_base_time_restore_state_none():
     time_entity = QSBaseTime(mock_handler, mock_device, mock_description)
     time_entity.async_write_ha_state = MagicMock()
 
-    with patch.object(time_entity, 'async_get_last_state', return_value=None):
+    with patch.object(time_entity, "async_get_last_state", return_value=None):
         await time_entity.async_added_to_hass()
 
     # Should use fallback 7:00:00
@@ -495,8 +492,8 @@ async def test_async_setup_entry_no_device(fake_hass, mock_config_entry):
 @pytest.mark.asyncio
 async def test_async_setup_entry_with_attached_devices(fake_hass, mock_config_entry):
     """Test time platform setup with attached virtual devices."""
-    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
     from custom_components.quiet_solar.ha_model.car import QSCar
+    from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
 
     # Main device (charger)
     mock_device = MagicMock(spec=QSChargerGeneric)
@@ -587,7 +584,6 @@ def test_create_ha_time_multiple_types():
     """Test create_ha_time for device that is both Charger and BiStateDuration."""
     # In practice this wouldn't happen, but test the logic
     from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
-    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
     # Create a mock that is only QSChargerGeneric
     mock_device = MagicMock(spec=QSChargerGeneric)

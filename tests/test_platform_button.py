@@ -1,21 +1,22 @@
 """Tests for button platform."""
+
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
 
 from custom_components.quiet_solar.button import (
-    create_ha_button,
-    create_ha_button_for_QSHome,
-    create_ha_button_for_QSChargerGeneric,
-    create_ha_button_for_QSCar,
-    create_ha_button_for_AbstractLoad,
     QSButtonEntity,
+    QSButtonEntityDescription,
     async_setup_entry,
-    async_unload_entry, QSButtonEntityDescription,
+    async_unload_entry,
+    create_ha_button_for_AbstractLoad,
+    create_ha_button_for_QSCar,
+    create_ha_button_for_QSChargerGeneric,
+    create_ha_button_for_QSHome,
 )
 from custom_components.quiet_solar.const import DOMAIN
 from tests.factories import create_minimal_home_model
@@ -29,9 +30,9 @@ def test_create_ha_button_for_home():
     mock_home.reset_forecasts = AsyncMock()
     mock_home.dump_for_debug = AsyncMock()
     mock_home.generate_yaml_for_dashboard = AsyncMock()
-    
+
     entities = create_ha_button_for_QSHome(mock_home)
-    
+
     assert len(entities) == 5  # Reset history, serialize debug, generate yaml
     assert all(isinstance(e, QSButtonEntity) for e in entities)
 
@@ -44,9 +45,9 @@ def test_create_ha_button_for_charger():
     mock_charger.user_add_default_charge = AsyncMock()
     mock_charger.can_force_a_charge_now = MagicMock(return_value=True)
     mock_charger.can_add_default_charge = MagicMock(return_value=True)
-    
+
     entities = create_ha_button_for_QSChargerGeneric(mock_charger)
-    
+
     assert len(entities) == 2  # Force charge now, add default charge
     assert all(isinstance(e, QSButtonEntity) for e in entities)
 
@@ -60,16 +61,16 @@ def test_create_ha_button_for_car():
     mock_car.user_clean_and_reset = AsyncMock()
     mock_car.can_force_a_charge_now = MagicMock(return_value=True)
     mock_car.can_add_default_charge = MagicMock(return_value=True)
-    
+
     entities = create_ha_button_for_QSCar(mock_car)
-    
+
     assert len(entities) == 2  # Force charge, add default
 
 
 def test_create_ha_button_for_load():
     """Test creating buttons for load device."""
     from custom_components.quiet_solar.home_model.load import AbstractLoad
-    
+
     mock_load = MagicMock(spec=AbstractLoad)
     mock_load.data_handler = MagicMock()
     mock_load.device_id = "test_load"
@@ -80,16 +81,16 @@ def test_create_ha_button_for_load():
     mock_load.user_clean_and_reset = AsyncMock()
     mock_load.async_reset_override_state = AsyncMock()
     mock_load.support_user_override = MagicMock(return_value=True)
-    
+
     entities = create_ha_button_for_AbstractLoad(mock_load)
-    
+
     assert len(entities) == 2  # Mark done,  reset override
 
 
 def test_create_ha_button_for_load_no_override():
     """Test creating buttons for load without override support."""
     from custom_components.quiet_solar.home_model.load import AbstractLoad
-    
+
     mock_load = MagicMock(spec=AbstractLoad)
     mock_load.data_handler = MagicMock()
     mock_load.device_id = "test_load"
@@ -99,9 +100,9 @@ def test_create_ha_button_for_load_no_override():
     mock_load.mark_current_constraint_has_done = AsyncMock()
     mock_load.user_clean_and_reset = AsyncMock()
     mock_load.support_user_override = MagicMock(return_value=False)
-    
+
     entities = create_ha_button_for_AbstractLoad(mock_load)
-    
+
     assert len(entities) == 1  # Only mark done and clean/reset
 
 
@@ -116,9 +117,9 @@ def test_qs_button_entity_init():
     mock_description.translation_key = "test"
     mock_description.is_available = None
     mock_description.async_press = AsyncMock()
-    
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
-    
+
     assert button.device == mock_device
     assert button.entity_description == mock_description
 
@@ -130,22 +131,19 @@ async def test_qs_button_entity_press():
     mock_handler.hass = MagicMock()
     mock_handler.force_update_all = AsyncMock()
     mock_device = create_mock_device("test")
-    
+
     press_called = False
+
     async def mock_press(entity):
         nonlocal press_called
         press_called = True
 
-    mock_description = QSButtonEntityDescription(
-        key="test_button",
-        translation_key="test",
-        async_press=mock_press
-    )
-    
+    mock_description = QSButtonEntityDescription(key="test_button", translation_key="test", async_press=mock_press)
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
-    
+
     await button.async_press()
-    
+
     assert press_called is True
 
 
@@ -181,10 +179,10 @@ def test_qs_button_entity_availability_disabled_device():
     mock_description.translation_key = "test"
     mock_description.is_available = None
     mock_description.async_press = AsyncMock()
-    
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
     button._set_availabiltiy()
-    
+
     assert button._attr_available is False
 
 
@@ -199,10 +197,10 @@ def test_qs_button_entity_availability_custom_function():
     mock_description.translation_key = "test"
     mock_description.is_available = lambda entity: entity.device.name == "Mock Device"
     mock_description.async_press = AsyncMock()
-    
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
     button._set_availabiltiy()
-    
+
     assert button._attr_available is True
 
 
@@ -217,10 +215,10 @@ def test_qs_button_entity_availability_custom_function_false():
     mock_description.translation_key = "test"
     mock_description.is_available = lambda entity: False
     mock_description.async_press = AsyncMock()
-    
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
     button._set_availabiltiy()
-    
+
     assert button._attr_available is False
 
 
@@ -235,14 +233,14 @@ def test_qs_button_entity_update_callback():
     mock_description.translation_key = "test"
     mock_description.is_available = None
     mock_description.async_press = AsyncMock()
-    
+
     button = QSButtonEntity(mock_handler, mock_device, mock_description)
     button.hass = mock_handler.hass  # Set hass on the button entity
     button.async_write_ha_state = MagicMock()
-    
+
     test_time = datetime.now(pytz.UTC)
     button.async_update_callback(test_time)
-    
+
     button.async_write_ha_state.assert_called_once()
 
 
@@ -252,12 +250,12 @@ async def test_async_setup_entry(fake_hass, mock_config_entry):
     mock_device = create_mock_device("home")
     mock_device.data_handler = MagicMock()
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
-    
+
     mock_add_entities = MagicMock()
-    
-    with patch('custom_components.quiet_solar.button.create_ha_button', return_value=[MagicMock()]):
+
+    with patch("custom_components.quiet_solar.button.create_ha_button", return_value=[MagicMock()]):
         await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-        
+
         mock_add_entities.assert_called_once()
 
 
@@ -265,9 +263,9 @@ async def test_async_setup_entry(fake_hass, mock_config_entry):
 async def test_async_setup_entry_no_device(fake_hass, mock_config_entry):
     """Test button platform setup with no device."""
     mock_add_entities = MagicMock()
-    
+
     await async_setup_entry(fake_hass, mock_config_entry, mock_add_entities)
-    
+
     mock_add_entities.assert_not_called()
 
 
@@ -278,9 +276,9 @@ async def test_async_unload_entry(fake_hass, mock_config_entry):
     mock_home = create_minimal_home_model()
     mock_device.home = mock_home
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
-    
+
     result = await async_unload_entry(fake_hass, mock_config_entry)
-    
+
     assert result is True
     mock_home.remove_device.assert_called_once()
 
@@ -293,7 +291,7 @@ async def test_async_unload_entry_handles_exception(fake_hass, mock_config_entry
     mock_home.remove_device = MagicMock(side_effect=Exception("Test error"))
     mock_device.home = mock_home
     fake_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_device
-    
+
     result = await async_unload_entry(fake_hass, mock_config_entry)
-    
+
     assert result is True

@@ -8,46 +8,36 @@ This test file achieves 80%+ coverage by testing:
 - Device initialization and state restoration
 - Platform support
 """
+
 from __future__ import annotations
 
 import datetime
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
-from datetime import timedelta, time as dt_time
-
-from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
-    CONF_NAME,
-)
 import pytz
-
-from custom_components.quiet_solar.ha_model.person import (
-    QSPerson,
-    FORECAST_AUTO_REFRESH_RATE_S,
+from homeassistant.const import (
+    CONF_NAME,
+    Platform,
 )
-from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_PERSON_PERSON_ENTITY,
-    CONF_PERSON_TRACKER,
-    CONF_PERSON_AUTHORIZED_CARS,
-    CONF_PERSON_PREFERRED_CAR,
-    CONF_PERSON_NOTIFICATION_TIME,
-    CONF_MOBILE_APP,
-    CONF_MOBILE_APP_URL,
-    PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
-    PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
-    PERSON_NOTIFY_REASON_CHANGED_CAR,
-    DEVICE_STATUS_CHANGE_NOTIFY,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
-)
-
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.quiet_solar.const import (
+    CONF_MOBILE_APP,
+    CONF_PERSON_AUTHORIZED_CARS,
+    CONF_PERSON_NOTIFICATION_TIME,
+    CONF_PERSON_PERSON_ENTITY,
+    CONF_PERSON_PREFERRED_CAR,
+    DATA_HANDLER,
+    DOMAIN,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    PERSON_NOTIFY_REASON_CHANGED_CAR,
+)
+from custom_components.quiet_solar.ha_model.person import (
+    QSPerson,
+)
 from tests.factories import create_minimal_home_model
 
 
@@ -106,6 +96,7 @@ def create_person(hass, person_config_entry, person_home, person_hass_data):
 # ============================================================================
 # Tests for mileage history management
 # ============================================================================
+
 
 class TestQSPersonMileageHistory:
     """Test mileage history tracking and management."""
@@ -213,6 +204,7 @@ class TestQSPersonMileageHistory:
 # Tests for weekday-based prediction
 # ============================================================================
 
+
 class TestQSPersonWeekdayPrediction:
     """Test weekday-based mileage prediction."""
 
@@ -280,6 +272,7 @@ class TestQSPersonWeekdayPrediction:
 # ============================================================================
 # Tests for person forecast computation
 # ============================================================================
+
 
 class TestQSPersonForecast:
     """Test person forecast computation."""
@@ -370,6 +363,7 @@ class TestQSPersonForecast:
 # Tests for notification logic
 # ============================================================================
 
+
 class TestQSPersonNotification:
     """Test person notification logic."""
 
@@ -388,10 +382,12 @@ class TestQSPersonNotification:
     @pytest.mark.asyncio
     async def test_notify_with_mobile_app(self, create_person):
         """Test notification with mobile app configured."""
-        person = create_person(**{
-            CONF_MOBILE_APP: "mobile_app_test",
-            CONF_PERSON_NOTIFICATION_TIME: "08:00:00",
-        })
+        person = create_person(
+            **{
+                CONF_MOBILE_APP: "mobile_app_test",
+                CONF_PERSON_NOTIFICATION_TIME: "08:00:00",
+            }
+        )
 
         person.on_device_state_change = AsyncMock()
 
@@ -401,10 +397,7 @@ class TestQSPersonNotification:
         # Current time is after notification time
         time = datetime.datetime(2024, 6, 15, 9, 0, 0, tzinfo=pytz.UTC)
 
-        await person.notify_of_forecast_if_needed(
-            time=time,
-            notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR
-        )
+        await person.notify_of_forecast_if_needed(time=time, notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
 
         # Should have called notification
         person.on_device_state_change.assert_called()
@@ -412,19 +405,18 @@ class TestQSPersonNotification:
     @pytest.mark.asyncio
     async def test_notify_reason_changed_car_always_notifies(self, create_person):
         """Test CHANGED_CAR reason always triggers notification."""
-        person = create_person(**{
-            CONF_MOBILE_APP: "mobile_app_test",
-        })
+        person = create_person(
+            **{
+                CONF_MOBILE_APP: "mobile_app_test",
+            }
+        )
 
         person.on_device_state_change = AsyncMock()
         person._last_forecast_notification_call_time = datetime.datetime.now(pytz.UTC)
 
         time = datetime.datetime.now(pytz.UTC)
 
-        await person.notify_of_forecast_if_needed(
-            time=time,
-            notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR
-        )
+        await person.notify_of_forecast_if_needed(time=time, notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
 
         # Should have been called
         person.on_device_state_change.assert_called()
@@ -433,6 +425,7 @@ class TestQSPersonNotification:
 # ============================================================================
 # Tests for should_recompute_history
 # ============================================================================
+
 
 class TestQSPersonShouldRecomputeHistory:
     """Test should_recompute_history method."""
@@ -449,9 +442,7 @@ class TestQSPersonShouldRecomputeHistory:
 
     def test_should_recompute_not_initialized(self, create_person):
         """Test should_recompute_history returns True when not initialized."""
-        person = create_person(**{
-            CONF_PERSON_AUTHORIZED_CARS: ["car1"]
-        })
+        person = create_person(**{CONF_PERSON_AUTHORIZED_CARS: ["car1"]})
         person.has_been_initialized = False
 
         time = datetime.datetime.now(pytz.UTC)
@@ -461,9 +452,7 @@ class TestQSPersonShouldRecomputeHistory:
 
     def test_should_recompute_already_initialized(self, create_person):
         """Test should_recompute_history returns False when already initialized."""
-        person = create_person(**{
-            CONF_PERSON_AUTHORIZED_CARS: ["car1"]
-        })
+        person = create_person(**{CONF_PERSON_AUTHORIZED_CARS: ["car1"]})
         person.has_been_initialized = True
 
         time = datetime.datetime.now(pytz.UTC)
@@ -475,6 +464,7 @@ class TestQSPersonShouldRecomputeHistory:
 # ============================================================================
 # Tests for get_authorized_cars
 # ============================================================================
+
 
 class TestQSPersonGetAuthorizedCars:
     """Test get_authorized_cars method."""
@@ -492,9 +482,7 @@ class TestQSPersonGetAuthorizedCars:
         """Test get_authorized_cars returns valid QSCar instances."""
         from custom_components.quiet_solar.ha_model.car import QSCar
 
-        person = create_person(**{
-            CONF_PERSON_AUTHORIZED_CARS: ["car1", "car2"]
-        })
+        person = create_person(**{CONF_PERSON_AUTHORIZED_CARS: ["car1", "car2"]})
 
         mock_car1 = MagicMock(spec=QSCar)
         mock_car2 = MagicMock(spec=QSCar)
@@ -516,9 +504,7 @@ class TestQSPersonGetAuthorizedCars:
 
     def test_get_authorized_cars_filters_invalid(self, create_person, person_home):
         """Test get_authorized_cars filters out non-QSCar objects."""
-        person = create_person(**{
-            CONF_PERSON_AUTHORIZED_CARS: ["car1", "invalid_car"]
-        })
+        person = create_person(**{CONF_PERSON_AUTHORIZED_CARS: ["car1", "invalid_car"]})
 
         mock_car = MagicMock()
         # Not a QSCar spec, so should be filtered
@@ -539,6 +525,7 @@ class TestQSPersonGetAuthorizedCars:
 # Tests for get_preferred_car
 # ============================================================================
 
+
 class TestQSPersonGetPreferredCar:
     """Test get_preferred_car method."""
 
@@ -554,9 +541,7 @@ class TestQSPersonGetPreferredCar:
         """Test get_preferred_car returns car when valid."""
         from custom_components.quiet_solar.ha_model.car import QSCar
 
-        person = create_person(**{
-            CONF_PERSON_PREFERRED_CAR: "my_car"
-        })
+        person = create_person(**{CONF_PERSON_PREFERRED_CAR: "my_car"})
 
         mock_car = MagicMock(spec=QSCar)
         person_home.get_car_by_name = MagicMock(return_value=mock_car)
@@ -569,6 +554,7 @@ class TestQSPersonGetPreferredCar:
 # ============================================================================
 # Tests for platform support
 # ============================================================================
+
 
 class TestQSPersonPlatforms:
     """Test person platform support."""
@@ -594,6 +580,7 @@ class TestQSPersonPlatforms:
 # Tests for serialization
 # ============================================================================
 
+
 class TestQSPersonSerialization:
     """Test person mileage prediction serialization."""
 
@@ -615,9 +602,7 @@ class TestQSPersonSerialization:
     def test_get_person_mileage_serialized_prediction_with_forecast(self, create_person):
         """Test get_person_mileage_serialized_prediction with forecast data."""
         person = create_person()
-        person.serializable_historical_data = [
-            {"day": "2024-06-14", "mileage": 50.0, "leave_time": "08:00"}
-        ]
+        person.serializable_historical_data = [{"day": "2024-06-14", "mileage": 50.0, "leave_time": "08:00"}]
         person.has_been_initialized = True
         person._last_request_prediction_time = datetime.datetime.now(pytz.UTC)
 
@@ -633,6 +618,7 @@ class TestQSPersonSerialization:
 # Tests for device_post_home_init
 # ============================================================================
 
+
 class TestQSPersonDevicePostHomeInit:
     """Test device_post_home_init method."""
 
@@ -640,7 +626,9 @@ class TestQSPersonDevicePostHomeInit:
         """Test device_post_home_init with no sensor entity."""
         person = create_person()
         person.ha_entities = {}
-        person.historical_mileage_data = [(datetime.datetime(2024, 6, 1, tzinfo=pytz.UTC), 10.0, datetime.datetime(2024, 6, 1, 8, tzinfo=pytz.UTC), 0)]
+        person.historical_mileage_data = [
+            (datetime.datetime(2024, 6, 1, tzinfo=pytz.UTC), 10.0, datetime.datetime(2024, 6, 1, 8, tzinfo=pytz.UTC), 0)
+        ]
         person.predicted_mileage = 15.0
         person.predicted_leave_time = datetime.datetime(2024, 6, 2, tzinfo=pytz.UTC)
 
@@ -667,13 +655,9 @@ class TestQSPersonDevicePostHomeInit:
             "100km",
             {
                 "historical_data": [
-                    {
-                        "day": "2024-06-14T00:00:00+00:00",
-                        "mileage": 50.0,
-                        "leave_time": "2024-06-14T08:00:00+00:00"
-                    }
+                    {"day": "2024-06-14T00:00:00+00:00", "mileage": 50.0, "leave_time": "2024-06-14T08:00:00+00:00"}
                 ],
-                "has_been_initialized": True
+                "has_been_initialized": True,
             },
         )
         if set_result is not None:
@@ -690,6 +674,7 @@ class TestQSPersonDevicePostHomeInit:
 # ============================================================================
 # Tests for reset
 # ============================================================================
+
 
 class TestQSPersonReset:
     """Test person reset method."""

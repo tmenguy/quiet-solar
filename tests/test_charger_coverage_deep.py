@@ -3,6 +3,7 @@
 Uses REAL objects (QSCar, QSChargerGeneric, constraints) wherever possible.
 Only mocks what truly requires Home Assistant (sensor state reads, service calls).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,18 +15,17 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CAR_BATTERY_CAPACITY,
+    CONF_CAR_CHARGE_PERCENT_SENSOR,
     CONF_CAR_CHARGER_MAX_CHARGE,
     CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGE_PERCENT_SENSOR,
     CONF_CAR_IS_INVITED,
-    CONF_CAR_PLUGGED,
-    CONF_CAR_TRACKER,
-    CONF_CHARGER_MAX_CHARGE,
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
     CONF_CHARGER_LATITUDE,
     CONF_CHARGER_LONGITUDE,
+    CONF_CHARGER_MAX_CHARGE,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
     CONF_CHARGER_MIN_CHARGE,
     CONF_CHARGER_PLUGGED,
     CONF_CHARGER_STATUS_SENSOR,
@@ -35,7 +35,6 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MONO_PHASE,
-    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
@@ -66,7 +65,6 @@ from custom_components.quiet_solar.home_model.commands import (
 from custom_components.quiet_solar.home_model.constraints import (
     DATETIME_MAX_UTC,
     LoadConstraint,
-    MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
 )
 
@@ -93,8 +91,7 @@ def _make_hass() -> MagicMock:
     return hass
 
 
-def _make_home(battery=None, voltage=230.0, home_load_power=500.0,
-               max_production_power=3000.0):
+def _make_home(battery=None, voltage=230.0, home_load_power=500.0, max_production_power=3000.0):
     """Create a mock home.  Home has no simple real constructor so we mock it."""
     home = MagicMock()
     home.name = "TestHome"
@@ -123,22 +120,30 @@ def _make_home(battery=None, voltage=230.0, home_load_power=500.0,
     # Provide realistic power values for budget capping in
     # budgeting_algorithm_minimize_diffs when battery discharge is involved.
     _now = datetime.now(pytz.UTC)
-    home.get_device_power_values = MagicMock(return_value=[
-        (_now - timedelta(seconds=30), home_load_power, {}),
-        (_now - timedelta(seconds=15), home_load_power, {}),
-        (_now, home_load_power, {}),
-    ])
-    home.get_home_max_available_production_power = MagicMock(
-        return_value=max_production_power
+    home.get_device_power_values = MagicMock(
+        return_value=[
+            (_now - timedelta(seconds=30), home_load_power, {}),
+            (_now - timedelta(seconds=15), home_load_power, {}),
+            (_now, home_load_power, {}),
+        ]
     )
+    home.get_home_max_available_production_power = MagicMock(return_value=max_production_power)
 
     return home
 
 
-def _make_real_car(hass, home, name="TestCar", battery_capacity=60000,
-                   min_charge=6, max_charge=32, default_charge=80.0,
-                   minimum_ok_charge=20.0, is_invited=False,
-                   has_soc_sensor=True) -> QSCar:
+def _make_real_car(
+    hass,
+    home,
+    name="TestCar",
+    battery_capacity=60000,
+    min_charge=6,
+    max_charge=32,
+    default_charge=80.0,
+    minimum_ok_charge=20.0,
+    is_invited=False,
+    has_soc_sensor=True,
+) -> QSCar:
     """Create a REAL QSCar with minimal HA mocking."""
     kwargs = {
         "name": name,
@@ -154,7 +159,7 @@ def _make_real_car(hass, home, name="TestCar", battery_capacity=60000,
         CONF_DEVICE_EFFICIENCY: 90.0,
     }
     if has_soc_sensor:
-        kwargs[CONF_CAR_CHARGE_PERCENT_SENSOR] = f"sensor.{name.lower().replace(' ','_')}_soc"
+        kwargs[CONF_CAR_CHARGE_PERCENT_SENSOR] = f"sensor.{name.lower().replace(' ', '_')}_soc"
     car = QSCar(**kwargs)
     # Force percent mode on if SOC sensor is set (the real __init__ may fail to
     # auto-detect because hass.states returns None during construction)
@@ -189,15 +194,18 @@ def _make_charger_group(home, chargers, max_amps=None):
     return group
 
 
-def _create_charger(hass, home, name="TestCharger", is_3p=False,
-                    min_charge=6, max_charge=32, **extra) -> QSChargerGeneric:
+def _create_charger(
+    hass, home, name="TestCharger", is_3p=False, min_charge=6, max_charge=32, **extra
+) -> QSChargerGeneric:
     """Create a REAL QSChargerGeneric."""
     config_entry = MagicMock()
     config_entry.entry_id = f"test_entry_{name}"
     config_entry.data = {}
 
     config = {
-        "name": name, "hass": hass, "home": home,
+        "name": name,
+        "hass": hass,
+        "home": home,
         "config_entry": config_entry,
         CONF_CHARGER_MIN_CHARGE: min_charge,
         CONF_CHARGER_MAX_CHARGE: max_charge,
@@ -249,7 +257,6 @@ def _make_battery(asked_charge=0.0):
 
 
 class TestCheckChargerStatus:
-
     def _ch(self):
         hass = _make_hass()
         home = _make_home()
@@ -316,7 +323,6 @@ class TestCheckChargerStatus:
 
 
 class TestGetStableDynamicChargeStatus:
-
     def _setup(self, is_3p=False):
         hass = _make_hass()
         home = _make_home()
@@ -586,8 +592,7 @@ class TestCheckLoadActivityAndConstraints:
 
         result = await charger.check_load_activity_and_constraints(now)
         assert result is True
-        user_cts = [c for c in charger._constraints
-                    if c is not None and c.from_user and c.is_mandatory]
+        user_cts = [c for c in charger._constraints if c is not None and c.from_user and c.is_mandatory]
         assert len(user_cts) >= 1
 
     @pytest.mark.asyncio
@@ -634,8 +639,11 @@ class TestCheckLoadActivityAndConstraints:
         car.get_next_scheduled_event = AsyncMock(return_value=(now + timedelta(hours=12), None))
 
         await charger.check_load_activity_and_constraints(now)
-        agenda_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("originator") == "agenda"]
+        agenda_cts = [
+            c
+            for c in charger._constraints
+            if c is not None and c.load_info and c.load_info.get("originator") == "agenda"
+        ]
         assert len(agenda_cts) >= 1
 
     @pytest.mark.asyncio
@@ -645,8 +653,11 @@ class TestCheckLoadActivityAndConstraints:
         charger.get_best_car = MagicMock(return_value=car)
         car.get_next_scheduled_event = AsyncMock(return_value=(now - timedelta(hours=1), None))
         await charger.check_load_activity_and_constraints(now)
-        agenda_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("originator") == "agenda"]
+        agenda_cts = [
+            c
+            for c in charger._constraints
+            if c is not None and c.load_info and c.load_info.get("originator") == "agenda"
+        ]
         assert len(agenda_cts) == 0
 
     @pytest.mark.asyncio
@@ -659,18 +670,27 @@ class TestCheckLoadActivityAndConstraints:
         car.get_car_charge_percent = lambda time=None, *a, **kw: 80.0
 
         completed_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=2), load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=now - timedelta(hours=1),
-            initial_value=50.0, target_value=80.0, power_steps=charger._power_steps,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=2),
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=now - timedelta(hours=1),
+            initial_value=50.0,
+            target_value=80.0,
+            power_steps=charger._power_steps,
             support_auto=True,
         )
         charger._last_completed_constraint = completed_ct
 
         car.get_next_scheduled_event = AsyncMock(return_value=(now + timedelta(hours=12), None))
         await charger.check_load_activity_and_constraints(now)
-        agenda_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("originator") == "agenda"]
+        agenda_cts = [
+            c
+            for c in charger._constraints
+            if c is not None and c.load_info and c.load_info.get("originator") == "agenda"
+        ]
         assert len(agenda_cts) == 0
 
     @pytest.mark.asyncio
@@ -682,18 +702,27 @@ class TestCheckLoadActivityAndConstraints:
         car.get_car_charge_percent = lambda time=None, *a, **kw: 30.0
 
         completed_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=2), load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=now - timedelta(hours=1),
-            initial_value=20.0, target_value=80.0, power_steps=charger._power_steps,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=2),
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=now - timedelta(hours=1),
+            initial_value=20.0,
+            target_value=80.0,
+            power_steps=charger._power_steps,
             support_auto=True,
         )
         charger._last_completed_constraint = completed_ct
 
         car.get_next_scheduled_event = AsyncMock(return_value=(now + timedelta(hours=12), None))
         await charger.check_load_activity_and_constraints(now)
-        agenda_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("originator") == "agenda"]
+        agenda_cts = [
+            c
+            for c in charger._constraints
+            if c is not None and c.load_info and c.load_info.get("originator") == "agenda"
+        ]
         assert len(agenda_cts) >= 1
 
     @pytest.mark.asyncio
@@ -745,10 +774,16 @@ class TestCheckLoadActivityAndConstraints:
         charger.detach_car()
 
         boot_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=boot_time, load=charger, load_param=car.name,
-            from_user=True, end_of_constraint=now + timedelta(hours=6),
-            initial_value=40.0, target_value=80.0, power_steps=saved_power_steps,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=boot_time,
+            load=charger,
+            load_param=car.name,
+            from_user=True,
+            end_of_constraint=now + timedelta(hours=6),
+            initial_value=40.0,
+            target_value=80.0,
+            power_steps=saved_power_steps,
             support_auto=True,
         )
         charger._boot_car = car
@@ -766,7 +801,6 @@ class TestCheckLoadActivityAndConstraints:
 
 
 class TestComputeIsBeforeBattery:
-
     def _setup(self):
         hass = _make_hass()
         home = _make_home()
@@ -783,14 +817,16 @@ class TestComputeIsBeforeBattery:
 
     def test_green_cap_overrides(self):
         ch, _, now = self._setup()
-        ct = MagicMock(); ct.is_before_battery = True
+        ct = MagicMock()
+        ct.is_before_battery = True
         ch.get_current_active_constraint = MagicMock(return_value=ct)
         ch.current_command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=1000)
         assert ch.compute_is_before_battery(ct, now) is False
 
     def test_price_forces_before(self):
         ch, _, now = self._setup()
-        ct = MagicMock(); ct.is_before_battery = False
+        ct = MagicMock()
+        ct.is_before_battery = False
         ch.get_current_active_constraint = MagicMock(return_value=ct)
         ch.current_command = copy_command(CMD_AUTO_PRICE, power_consign=1000)
         assert ch.compute_is_before_battery(ct, now) is True
@@ -798,7 +834,8 @@ class TestComputeIsBeforeBattery:
     def test_bump_solar_restores_ct(self):
         ch, car, now = self._setup()
         car.qs_bump_solar_charge_priority = True
-        ct = MagicMock(); ct.is_before_battery = True
+        ct = MagicMock()
+        ct.is_before_battery = True
         ch.get_current_active_constraint = MagicMock(return_value=ct)
         ch.current_command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=1000)
         assert ch.compute_is_before_battery(ct, now) is True
@@ -810,7 +847,6 @@ class TestComputeIsBeforeBattery:
 
 
 class TestBudgetingAlgorithmMinimizeDiffs:
-
     def _setup(self, n=2, battery=None, max_amps=None):
         hass = _make_hass()
         home = _make_home(battery=battery)
@@ -891,7 +927,6 @@ class TestBudgetingAlgorithmMinimizeDiffs:
 
 
 class TestApplyBudgetStrategy:
-
     def _setup(self, n=2):
         hass = _make_hass()
         home = _make_home()
@@ -910,7 +945,8 @@ class TestApplyBudgetStrategy:
             cs.current_active_phase_number = 1
             cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
             cs.possible_num_phases = [1, 3]
-            cs.budgeted_amp = 10; cs.budgeted_num_phases = 1
+            cs.budgeted_amp = 10
+            cs.budgeted_num_phases = 1
             cs.charge_score = 100 + i * 10
             cs.can_be_started_and_stopped = True
             cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
@@ -933,7 +969,8 @@ class TestApplyBudgetStrategy:
         group, _, css, now = self._setup()
         group.apply_budgets = AsyncMock()
         group.dynamic_group.is_current_acceptable = MagicMock(side_effect=[False])
-        css[0].budgeted_amp = 6; css[1].budgeted_amp = 14
+        css[0].budgeted_amp = 6
+        css[1].budgeted_amp = 14
         await group.apply_budget_strategy(css, 2300, now)
         assert len(group.remaining_budget_to_apply) > 0
 
@@ -1026,8 +1063,12 @@ class TestApplyBudgetStrategy:
 
         # Verify the remaining includes the original phase-switch chargers (A and B)
         remaining_charger_names = {cs.charger.name for cs in remaining}
-        assert "ChA" in remaining_charger_names, f"ChA should be in remaining (increasing part of phase switch), got {remaining_charger_names}"
-        assert "ChB" in remaining_charger_names, f"ChB should be in remaining (increasing part of phase switch), got {remaining_charger_names}"
+        assert "ChA" in remaining_charger_names, (
+            f"ChA should be in remaining (increasing part of phase switch), got {remaining_charger_names}"
+        )
+        assert "ChB" in remaining_charger_names, (
+            f"ChB should be in remaining (increasing part of phase switch), got {remaining_charger_names}"
+        )
 
     @pytest.mark.asyncio
     async def test_remaining_cs_error_branch_unexpected_phase(self):
@@ -1229,8 +1270,7 @@ class TestApplyBudgetStrategy:
 
         # Copies with budgeted_num_phases=1 should be in decreasing
         dec_copies_with_1_phase = [
-            cs for cs in called_cs
-            if cs.charger.name in ("ChA", "ChB") and cs.budgeted_num_phases == 1
+            cs for cs in called_cs if cs.charger.name in ("ChA", "ChB") and cs.budgeted_num_phases == 1
         ]
         assert len(dec_copies_with_1_phase) >= 1, (
             f"Expected copies with num_phases=1 in decreasing, got phases: "
@@ -1244,7 +1284,6 @@ class TestApplyBudgetStrategy:
 
 
 class TestApplyBudgets:
-
     def _setup(self):
         hass = _make_hass()
         home = _make_home()
@@ -1260,7 +1299,8 @@ class TestApplyBudgets:
         cs.current_active_phase_number = 1
         cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
         cs.possible_num_phases = [1]
-        cs.budgeted_amp = 12; cs.budgeted_num_phases = 1
+        cs.budgeted_amp = 12
+        cs.budgeted_num_phases = 1
         cs.charge_score = 100
         cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
@@ -1301,15 +1341,16 @@ class TestApplyBudgets:
 
 
 class TestCanChangeBudget:
-
     def _cs(self, budgeted=10, phases=1, possible=None, p_phases=None):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=False)
         car = _make_real_car(hass, home)
         _init_charger_states(ch, amperage=10, num_phases=1)
         _plug_car(ch, car, datetime.now(pytz.UTC))
         cs = QSChargerStatus(ch)
-        cs.budgeted_amp = budgeted; cs.budgeted_num_phases = phases
+        cs.budgeted_amp = budgeted
+        cs.budgeted_num_phases = phases
         cs.possible_amps = possible or [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         cs.possible_num_phases = p_phases or [1]
         cs.current_real_max_charging_amp = budgeted
@@ -1347,7 +1388,8 @@ class TestCanChangeBudget:
         assert a is None
 
     def test_none_budgeted(self):
-        cs = self._cs(); cs.budgeted_amp = None
+        cs = self._cs()
+        cs.budgeted_amp = None
         a, _ = cs.can_change_budget(increase=True)
         assert a is None
 
@@ -1358,9 +1400,9 @@ class TestCanChangeBudget:
 
 
 class TestDevicePostHomeInit:
-
     def test_user_attached(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
@@ -1369,22 +1411,28 @@ class TestDevicePostHomeInit:
         assert ch._boot_car is not None and ch._boot_car.name == "TestCar"
 
     def test_constraint_based(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
-        ct = MagicMock(); ct.load_param = "TestCar"; ct.name = "ct"
+        ct = MagicMock()
+        ct.load_param = "TestCar"
+        ct.name = "ct"
         ch._constraints = [ct]
         ch.device_post_home_init(datetime.now(pytz.UTC))
         assert ch._boot_car is not None
 
     def test_force_no_charger_skipped(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         car.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
         _init_charger_states(ch)
-        ct = MagicMock(); ct.load_param = "TestCar"; ct.name = "ct"
+        ct = MagicMock()
+        ct.load_param = "TestCar"
+        ct.name = "ct"
         ch._constraints = [ct]
         ch.device_post_home_init(datetime.now(pytz.UTC))
         assert ch._boot_car is None
@@ -1396,24 +1444,28 @@ class TestDevicePostHomeInit:
 
 
 class TestOnDeviceStateChange:
-
     @pytest.mark.asyncio
     async def test_with_car_no_person(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
-        car.mobile_app = "notify.car"; car.mobile_app_url = "http://car"
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
+        car.mobile_app = "notify.car"
+        car.mobile_app_url = "http://car"
         ch.on_device_state_change_helper = AsyncMock()
         await ch.on_device_state_change(datetime.now(pytz.UTC), "test")
         assert ch.on_device_state_change_helper.call_args[1]["mobile_app"] == "notify.car"
 
     @pytest.mark.asyncio
     async def test_without_car(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
-        ch.mobile_app = "notify.ch"; ch.mobile_app_url = "http://ch"
+        ch.mobile_app = "notify.ch"
+        ch.mobile_app_url = "http://ch"
         ch.on_device_state_change_helper = AsyncMock()
         await ch.on_device_state_change(datetime.now(pytz.UTC), "test")
         assert ch.on_device_state_change_helper.call_args[1]["mobile_app"] == "notify.ch"
@@ -1425,27 +1477,32 @@ class TestOnDeviceStateChange:
 
 
 class TestStartStopCharge:
-
     @pytest.mark.asyncio
     async def test_stop_exception_handled(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch, charge_state=True)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch, charge_state=True)
         ch.is_charge_enabled = MagicMock(return_value=True)
         ch.low_level_stop_charge = AsyncMock(side_effect=Exception("boom"))
         await ch.stop_charge(datetime.now(pytz.UTC))  # no raise
 
     @pytest.mark.asyncio
     async def test_start_exception_handled(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch, charge_state=False)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch, charge_state=False)
         ch.is_charge_disabled = MagicMock(return_value=True)
         ch.low_level_start_charge = AsyncMock(side_effect=Exception("boom"))
         await ch.start_charge(datetime.now(pytz.UTC))
 
     @pytest.mark.asyncio
     async def test_stop_when_already_off(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch, charge_state=False)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch, charge_state=False)
         ch.is_charge_enabled = MagicMock(return_value=False)
         ch.low_level_stop_charge = AsyncMock()
         await ch.stop_charge(datetime.now(pytz.UTC))
@@ -1453,8 +1510,10 @@ class TestStartStopCharge:
 
     @pytest.mark.asyncio
     async def test_start_when_already_on(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch, charge_state=True)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch, charge_state=True)
         ch.is_charge_disabled = MagicMock(return_value=False)
         ch.low_level_start_charge = AsyncMock()
         await ch.start_charge(datetime.now(pytz.UTC))
@@ -1467,15 +1526,21 @@ class TestStartStopCharge:
 
 
 class TestDuplicate:
-
     def test_independence(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         cs = QSChargerStatus(ch)
-        cs.possible_amps = [0, 6, 7]; cs.possible_num_phases = [1, 3]
-        cs.budgeted_amp = 8; cs.budgeted_num_phases = 1; cs.charge_score = 150
-        cs.is_before_battery = True; cs.bump_solar = True
+        cs.possible_amps = [0, 6, 7]
+        cs.possible_num_phases = [1, 3]
+        cs.budgeted_amp = 8
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 150
+        cs.is_before_battery = True
+        cs.bump_solar = True
         d = cs.duplicate()
         d.possible_amps.append(99)
         assert 99 not in cs.possible_amps
@@ -1488,11 +1553,13 @@ class TestDuplicate:
 
 
 class TestCheckPluggedVal:
-
     def test_car_fallback_plugged(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.get_last_state_value_duration = MagicMock(return_value=(None, None))
         ch.get_sensor_latest_possible_valid_value = MagicMock(return_value=QSChargerStates.PLUGGED)
         # Real car.is_car_plugged returns None by default (no sensor data)
@@ -1502,8 +1569,10 @@ class TestCheckPluggedVal:
         assert result is None
 
     def test_no_duration_direct(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch)
         ch.get_sensor_latest_possible_valid_value = MagicMock(return_value=QSChargerStates.PLUGGED)
         assert ch._check_plugged_val(datetime.now(pytz.UTC), check_for_val=True) is True
 
@@ -1514,22 +1583,27 @@ class TestCheckPluggedVal:
 
 
 class TestCheckChargeState:
-
     def test_not_plugged(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch)
         ch.is_optimistic_plugged = MagicMock(return_value=False)
         assert ch.check_charge_state(datetime.now(pytz.UTC), check_for_val=True) is False
 
     def test_plugged_none(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch)
         ch.is_optimistic_plugged = MagicMock(return_value=None)
         assert ch.check_charge_state(datetime.now(pytz.UTC)) is None
 
     def test_plugged_with_status(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); _init_charger_states(ch)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _init_charger_states(ch)
         ch.is_optimistic_plugged = MagicMock(return_value=True)
         ch.get_car_charge_enabled_status_vals = MagicMock(return_value=["Charging"])
         ch._check_charger_status = MagicMock(return_value=True)
@@ -1542,10 +1616,10 @@ class TestCheckChargeState:
 
 
 class TestDynHandle:
-
     @pytest.mark.asyncio
     async def test_no_actionable(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         group = _make_charger_group(home, [ch])
@@ -1554,16 +1628,22 @@ class TestDynHandle:
 
     @pytest.mark.asyncio
     async def test_remaining_budget(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
         _init_charger_states(ch, amperage=10, num_phases=1)
         _plug_car(ch, car, datetime.now(pytz.UTC) - timedelta(hours=1))
         group = _make_charger_group(home, [ch])
 
         cs = QSChargerStatus(ch)
-        cs.current_real_max_charging_amp = 10; cs.current_active_phase_number = 1
-        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]; cs.possible_num_phases = [1]
-        cs.budgeted_amp = 12; cs.budgeted_num_phases = 1; cs.charge_score = 100
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = 12
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 100
         cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
         now = datetime.now(pytz.UTC)
@@ -1577,17 +1657,24 @@ class TestDynHandle:
     @pytest.mark.asyncio
     async def test_with_battery(self):
         bat = _make_battery(asked_charge=500)
-        hass = _make_hass(); home = _make_home(battery=bat)
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
+        hass = _make_hass()
+        home = _make_home(battery=bat)
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
         _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
         _plug_car(ch, car, datetime.now(pytz.UTC) - timedelta(hours=1))
         group = _make_charger_group(home, [ch])
 
         cs = QSChargerStatus(ch)
-        cs.current_real_max_charging_amp = 10; cs.current_active_phase_number = 1
-        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]; cs.possible_num_phases = [1]
-        cs.budgeted_amp = 10; cs.budgeted_num_phases = 1; cs.charge_score = 100
-        cs.command = copy_command(CMD_AUTO_GREEN_ONLY); cs.is_before_battery = False
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = 10
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 100
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+        cs.is_before_battery = False
         cs.accurate_current_power = 2300.0
 
         now = datetime.now(pytz.UTC)
@@ -1610,8 +1697,10 @@ class TestDynHandle:
         The car's update_dampening_value is replaced with a MagicMock so we can
         track calls, since the real method needs full power-step data from sensors.
         """
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home, name="Ch0"); car = _make_real_car(hass, home, name="Car0")
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="Ch0")
+        car = _make_real_car(hass, home, name="Car0")
         _init_charger_states(ch, charge_state=True, amperage=current_amp, num_phases=num_phases)
         _plug_car(ch, car, datetime.now(pytz.UTC) - timedelta(hours=1))
 
@@ -1626,10 +1715,13 @@ class TestDynHandle:
         cs = QSChargerStatus(ch)
         cs.current_real_max_charging_amp = current_amp
         cs.current_active_phase_number = num_phases
-        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]; cs.possible_num_phases = [1]
-        cs.budgeted_amp = current_amp; cs.budgeted_num_phases = num_phases
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = current_amp
+        cs.budgeted_num_phases = num_phases
         cs.charge_score = 100
-        cs.command = copy_command(CMD_AUTO_GREEN_ONLY); cs.is_before_battery = False
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+        cs.is_before_battery = False
         cs.accurate_current_power = None  # key: NOT set -> charger NOT in dampened_chargers
 
         pv = [(now - timedelta(seconds=i), 500.0) for i in range(10)]
@@ -1706,8 +1798,7 @@ class TestDynHandle:
         assert car.update_dampening_value.called
         # Find the call with amperage_transition (not the simple dampening one)
         transition_calls = [
-            c for c in car.update_dampening_value.call_args_list
-            if c[1].get("amperage_transition") is not None
+            c for c in car.update_dampening_value.call_args_list if c[1].get("amperage_transition") is not None
         ]
         assert len(transition_calls) >= 1
         tc = transition_calls[0][1]
@@ -1749,8 +1840,7 @@ class TestDynHandle:
 
         # Verify no transition call happened (only the simple dampening, if any)
         transition_calls = [
-            c for c in car.update_dampening_value.call_args_list
-            if c[1].get("amperage_transition") is not None
+            c for c in car.update_dampening_value.call_args_list if c[1].get("amperage_transition") is not None
         ]
         assert len(transition_calls) == 0
 
@@ -1783,8 +1873,7 @@ class TestDynHandle:
         await group.dyn_handle(now)
 
         transition_calls = [
-            c for c in car.update_dampening_value.call_args_list
-            if c[1].get("amperage_transition") is not None
+            c for c in car.update_dampening_value.call_args_list if c[1].get("amperage_transition") is not None
         ]
         assert len(transition_calls) == 0
 
@@ -1813,8 +1902,7 @@ class TestDynHandle:
 
         # No transition should happen (sets don't match)
         transition_calls = [
-            c for c in car.update_dampening_value.call_args_list
-            if c[1].get("amperage_transition") is not None
+            c for c in car.update_dampening_value.call_args_list if c[1].get("amperage_transition") is not None
         ]
         assert len(transition_calls) == 0
 
@@ -1825,12 +1913,13 @@ class TestDynHandle:
 
 
 class TestGetAmpsPhaseSwitch:
-
     def _cs(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=True)
         car = _make_real_car(hass, home)
-        _init_charger_states(ch, num_phases=1); _plug_car(ch, car, datetime.now(pytz.UTC))
+        _init_charger_states(ch, num_phases=1)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         cs = QSChargerStatus(ch)
         cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         cs.possible_num_phases = [1, 3]
@@ -1851,17 +1940,16 @@ class TestGetAmpsPhaseSwitch:
 # QSChargerOCPP and QSChargerWallbox specific tests
 # =============================================================================
 
-from custom_components.quiet_solar.ha_model.charger import (
-    QSOCPPv16v201ChargePointStatus,
-)
+from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+
 from custom_components.quiet_solar.const import (
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
-    CONF_CHARGER_PAUSE_RESUME_SWITCH,
-    CONF_CHARGER_CHARGING_CURRENT_SENSOR,
 )
-from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
-from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+from custom_components.quiet_solar.ha_model.charger import (
+    QSOCPPv16v201ChargePointStatus,
+)
 
 
 def _make_entity_entry(entity_id):
@@ -2245,19 +2333,22 @@ class TestQSChargerOCPP:
 
     def test_low_level_charge_check_now_on(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "on"
+        state = MagicMock()
+        state.state = "on"
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is True
 
     def test_low_level_charge_check_now_off(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "off"
+        state = MagicMock()
+        state.state = "off"
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is False
 
     def test_low_level_charge_check_now_unavailable(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = STATE_UNAVAILABLE
+        state = MagicMock()
+        state.state = STATE_UNAVAILABLE
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is None
 
@@ -2317,19 +2408,22 @@ class TestQSChargerOCPP:
 
     def test_get_max_charging_amp_per_phase(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "16.0"
+        state = MagicMock()
+        state.state = "16.0"
         hass.states.get = MagicMock(return_value=state)
         assert ch.get_max_charging_amp_per_phase() == 16.0
 
     def test_get_max_charging_amp_per_phase_unavailable(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = STATE_UNAVAILABLE
+        state = MagicMock()
+        state.state = STATE_UNAVAILABLE
         hass.states.get = MagicMock(return_value=state)
         assert ch.get_max_charging_amp_per_phase() is None
 
     def test_get_max_charging_amp_per_phase_bad_value(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "not_a_number"
+        state = MagicMock()
+        state.state = "not_a_number"
         hass.states.get = MagicMock(return_value=state)
         assert ch.get_max_charging_amp_per_phase() is None
 
@@ -2337,7 +2431,8 @@ class TestQSChargerOCPP:
         """When charging_current_sensor is set, reads from it."""
         hass, _, ch = self._setup()
         ch.charger_charging_current_sensor = "sensor.ocpp_current"
-        state = MagicMock(); state.state = "12.5"
+        state = MagicMock()
+        state.state = "12.5"
         hass.states.get = MagicMock(return_value=state)
         assert ch.get_charging_current() == 12.5
 
@@ -2345,7 +2440,8 @@ class TestQSChargerOCPP:
         """When no charging_current_sensor, delegates to get_max_charging_amp_per_phase."""
         hass, _, ch = self._setup()
         ch.charger_charging_current_sensor = None
-        state = MagicMock(); state.state = "10.0"
+        state = MagicMock()
+        state.state = "10.0"
         hass.states.get = MagicMock(return_value=state)
         assert ch.get_charging_current() == 10.0
 
@@ -2421,7 +2517,9 @@ class TestQSChargerWallbox:
     def test_low_level_plug_check_now_on(self):
         """Wallbox: if pause_resume switch has any valid state, car is plugged."""
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "on"; state.last_updated = datetime.now(pytz.UTC)
+        state = MagicMock()
+        state.state = "on"
+        state.last_updated = datetime.now(pytz.UTC)
         hass.states.get = MagicMock(return_value=state)
         res, _ = ch.low_level_plug_check_now(datetime.now(pytz.UTC))
         assert res is True
@@ -2429,7 +2527,9 @@ class TestQSChargerWallbox:
     def test_low_level_plug_check_now_off(self):
         """Wallbox: switch off still means plugged (switch exists)."""
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "off"; state.last_updated = datetime.now(pytz.UTC)
+        state = MagicMock()
+        state.state = "off"
+        state.last_updated = datetime.now(pytz.UTC)
         hass.states.get = MagicMock(return_value=state)
         res, _ = ch.low_level_plug_check_now(datetime.now(pytz.UTC))
         assert res is True
@@ -2437,7 +2537,9 @@ class TestQSChargerWallbox:
     def test_low_level_plug_check_now_unavailable(self):
         """Wallbox: unavailable switch means not plugged."""
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = STATE_UNAVAILABLE; state.last_updated = datetime.now(pytz.UTC)
+        state = MagicMock()
+        state.state = STATE_UNAVAILABLE
+        state.last_updated = datetime.now(pytz.UTC)
         hass.states.get = MagicMock(return_value=state)
         res, _ = ch.low_level_plug_check_now(datetime.now(pytz.UTC))
         assert res is False
@@ -2453,19 +2555,22 @@ class TestQSChargerWallbox:
 
     def test_low_level_charge_check_now_on(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "on"
+        state = MagicMock()
+        state.state = "on"
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is True
 
     def test_low_level_charge_check_now_off(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = "off"
+        state = MagicMock()
+        state.state = "off"
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is False
 
     def test_low_level_charge_check_now_unavailable(self):
         hass, _, ch = self._setup()
-        state = MagicMock(); state.state = STATE_UNAVAILABLE
+        state = MagicMock()
+        state.state = STATE_UNAVAILABLE
         hass.states.get = MagicMock(return_value=state)
         assert ch.low_level_charge_check_now(datetime.now(pytz.UTC)) is False
 
@@ -2504,14 +2609,20 @@ class TestFindChargerEntityId:
     def test_single_match(self):
         ch = self._ch()
         entries = [_make_entity_entry("switch.charger_charge_control")]
-        device = MagicMock(); device.id = "d1"; device.name = "charger"; device.name_by_user = None
+        device = MagicMock()
+        device.id = "d1"
+        device.name = "charger"
+        device.name_by_user = None
         result = ch._find_charger_entity_id(device, entries, "switch.", "_charge_control")
         assert result == "switch.charger_charge_control"
 
     def test_no_match_falls_back_to_computed(self):
         ch = self._ch()
         entries = [_make_entity_entry("switch.other_entity")]
-        device = MagicMock(); device.id = "d1"; device.name = "My Charger"; device.name_by_user = None
+        device = MagicMock()
+        device.id = "d1"
+        device.name = "My Charger"
+        device.name_by_user = None
         result = ch._find_charger_entity_id(device, entries, "switch.", "_charge_control")
         assert result == "switch.my_charger_charge_control"  # slugified fallback
 
@@ -2521,7 +2632,10 @@ class TestFindChargerEntityId:
             _make_entity_entry("switch.ch_ctrl"),
             _make_entity_entry("switch.charger_charge_ctrl"),
         ]
-        device = MagicMock(); device.id = "d1"; device.name = "charger"; device.name_by_user = None
+        device = MagicMock()
+        device.id = "d1"
+        device.name = "charger"
+        device.name_by_user = None
         result = ch._find_charger_entity_id(device, entries, "switch.", "_ctrl")
         assert result == "switch.charger_charge_ctrl"  # longest
 
@@ -2533,7 +2647,10 @@ class TestFindChargerEntityId:
     def test_user_name_used_for_computed(self):
         ch = self._ch()
         entries = []
-        device = MagicMock(); device.id = "d1"; device.name = "orig"; device.name_by_user = "My Custom Name"
+        device = MagicMock()
+        device.id = "d1"
+        device.name = "orig"
+        device.name_by_user = "My Custom Name"
         result = ch._find_charger_entity_id(device, entries, "sensor.", "_status")
         assert result == "sensor.my_custom_name_status"
 
@@ -2542,16 +2659,13 @@ class TestFindChargerEntityId:
 # Targeted tests to push coverage from 94% to 95%+
 # =============================================================================
 
-from custom_components.quiet_solar.ha_model.charger import (
-    CHARGER_MAX_POWER_AMPS_PRECISION_W,
-    TIME_OK_BETWEEN_BUDGET_RESET_S,
-    TIME_OK_SHOULD_BUDGET_RESET_S,
-)
 from custom_components.quiet_solar.const import (
     CAR_CHARGE_NO_POWER_ERROR,
     CAR_CHARGE_TYPE_FAULTED,
-    CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_NOT_CHARGING,
+)
+from custom_components.quiet_solar.ha_model.charger import (
+    TIME_OK_SHOULD_BUDGET_RESET_S,
 )
 
 
@@ -2572,10 +2686,12 @@ class TestGetAmpsFromPowerSteps:
     """Cover lines 1830, 1837, 1842 in _get_amps_from_power_steps."""
 
     def _ch(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=False, min_charge=6, max_charge=32)
         car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         return ch, car
 
     def test_below_min_not_safe_returns_none(self):
@@ -2614,7 +2730,8 @@ class TestIsChargerGroupPowerZero:
     """Cover line 1748."""
 
     def test_returns_none_when_no_power(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         # father_device.get_average_power returns None
@@ -2622,14 +2739,16 @@ class TestIsChargerGroupPowerZero:
         assert ch.is_charger_group_power_zero(datetime.now(pytz.UTC), 30.0) is None
 
     def test_returns_true_when_below_threshold(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.father_device.get_average_power = MagicMock(return_value=50.0)  # < 70W threshold
         assert ch.is_charger_group_power_zero(datetime.now(pytz.UTC), 30.0) is True
 
     def test_returns_false_when_above_threshold(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.father_device.get_average_power = MagicMock(return_value=2300.0)
@@ -2641,7 +2760,8 @@ class TestGetChargeType:
 
     def test_charge_no_power_error(self):
         """Line 3582: possible_charge_error_start_time set -> CAR_CHARGE_NO_POWER_ERROR."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.is_charger_faulted = MagicMock(return_value=False)
@@ -2651,7 +2771,8 @@ class TestGetChargeType:
         assert ct is None
 
     def test_faulted(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.is_charger_faulted = MagicMock(return_value=True)
@@ -2659,7 +2780,8 @@ class TestGetChargeType:
         assert charge_type == CAR_CHARGE_TYPE_FAULTED
 
     def test_not_plugged(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.is_charger_faulted = MagicMock(return_value=False)
@@ -2668,9 +2790,12 @@ class TestGetChargeType:
         assert charge_type == CAR_CHARGE_TYPE_NOT_PLUGGED
 
     def test_not_charging_with_car(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.is_charger_faulted = MagicMock(return_value=False)
         ch.possible_charge_error_start_time = None
         charge_type, ct = ch.get_charge_type()
@@ -2683,7 +2808,8 @@ class TestCheckIfRebootHappened:
     @pytest.mark.asyncio
     async def test_no_status_sensor(self):
         """Line 3556: no charger_status_sensor -> returns True."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.charger_status_sensor = None
@@ -2697,7 +2823,8 @@ class TestCheckIfRebootHappened:
 
     def test_is_state_set_false(self):
         """Line 3559: _is_state_set returns False when inner states are None."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         ch._inner_expected_charge_state = None
         ch._inner_amperage = None
@@ -2710,9 +2837,12 @@ class TestCheckPluggedValCarFallback:
 
     def test_car_confirms_plugged(self):
         """Lines 3315-3316: car.is_car_plugged returns True, charger says PLUGGED -> True."""
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         # Duration check returns None -> triggers car fallback
         ch.get_last_state_value_duration = MagicMock(return_value=(None, None))
         # But latest state is PLUGGED
@@ -2724,9 +2854,12 @@ class TestCheckPluggedValCarFallback:
 
     def test_car_confirms_unplugged(self):
         """Lines 3317-3318: car not plugged, charger says UN_PLUGGED -> False."""
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.get_last_state_value_duration = MagicMock(return_value=(None, None))
         ch.get_sensor_latest_possible_valid_value = MagicMock(return_value=QSChargerStates.UN_PLUGGED)
         car.is_car_plugged = MagicMock(return_value=False)
@@ -2738,7 +2871,8 @@ class TestCheckChargeStateUnknownSensor:
     """Cover line 3379: check_charge_state falls through to None when status sensor unknown."""
 
     def test_status_sensor_unknown_returns_none(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch.is_optimistic_plugged = MagicMock(return_value=True)
@@ -2746,7 +2880,8 @@ class TestCheckChargeStateUnknownSensor:
         # _check_charger_status returns None
         ch._check_charger_status = MagicMock(return_value=None)
         # charger_status_sensor exists but state is unknown
-        state = MagicMock(); state.state = STATE_UNKNOWN
+        state = MagicMock()
+        state.state = STATE_UNKNOWN
         hass.states.get = MagicMock(return_value=state)
         result = ch.check_charge_state(datetime.now(pytz.UTC))
         assert result is None
@@ -2756,12 +2891,15 @@ class TestCanChangeBudgetEdgeCases:
     """Cover lines 394, 415, 438 in can_change_budget."""
 
     def _cs(self, budgeted, phases, possible, p_phases=None):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=True)
         car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         cs = QSChargerStatus(ch)
-        cs.budgeted_amp = budgeted; cs.budgeted_num_phases = phases
+        cs.budgeted_amp = budgeted
+        cs.budgeted_num_phases = phases
         cs.possible_amps = possible
         cs.possible_num_phases = p_phases or [1]
         cs.current_real_max_charging_amp = budgeted
@@ -2784,7 +2922,7 @@ class TestCanChangeBudgetEdgeCases:
         # Hard to trigger without phase switch. With phase switch:
         cs = self._cs(budgeted=6, phases=3, possible=[0, 6, 7, 8], p_phases=[1, 3])
         # 6*3=18 total. Normal increase: 7*3=21 > 18 -> valid.
-        # Phase switch: 6//3=2 -> 1phase. 2*1=2 < 18 -> not increase. 
+        # Phase switch: 6//3=2 -> 1phase. 2*1=2 < 18 -> not increase.
         # probe_amp_cb(2) -> 3, 3*1=3 < 18 -> still not increase -> None
         # So net result with phase switch option: normal increase wins at 7A/3phase
         amp, phases = cs.can_change_budget(allow_state_change=True, allow_phase_change=True, increase=True)
@@ -2808,7 +2946,8 @@ class TestGetBestCarEdgeCases:
     def test_user_selected_car_force_no_charger(self):
         """Line 2358: user selected car has FORCE_CAR_NO_CHARGER_CONNECTED -> car set to None,
         falls through to scoring which returns default generic car."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
@@ -2822,7 +2961,8 @@ class TestGetBestCarEdgeCases:
 
     def test_disabled_charger_skipped(self):
         """Line 2366: disabled charger skipped in active charger scan."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, name="Ch0")
         ch2 = _create_charger(hass, home, name="Ch1")
         ch2.qs_enable_device = False  # disabled
@@ -2836,11 +2976,13 @@ class TestGetBestCarEdgeCases:
 
     def test_car_attached_to_multiple_chargers_detached(self):
         """Lines 2370-2371: car manually attached to two chargers -> second one detached."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch1 = _create_charger(hass, home, name="Ch1")
         ch2 = _create_charger(hass, home, name="Ch2")
         car = _make_real_car(hass, home)
-        _init_charger_states(ch1); _init_charger_states(ch2)
+        _init_charger_states(ch1)
+        _init_charger_states(ch2)
         # Both chargers claim the same car
         ch1.user_attached_car_name = "TestCar"
         ch2.user_attached_car_name = "TestCar"
@@ -2856,8 +2998,10 @@ class TestDynHandleBudgetResetTiming:
     """Cover lines 788, 792-793, 795-796 in dyn_handle."""
 
     def _build(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
         _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
         _plug_car(ch, car, datetime.now(pytz.UTC) - timedelta(hours=1))
         car.update_dampening_value = MagicMock(return_value=False)
@@ -2866,10 +3010,15 @@ class TestDynHandleBudgetResetTiming:
         vtime = now - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 10)
 
         cs = QSChargerStatus(ch)
-        cs.current_real_max_charging_amp = 10; cs.current_active_phase_number = 1
-        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]; cs.possible_num_phases = [1]
-        cs.budgeted_amp = 10; cs.budgeted_num_phases = 1; cs.charge_score = 100
-        cs.command = copy_command(CMD_AUTO_GREEN_ONLY); cs.is_before_battery = False
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = 10
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 100
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+        cs.is_before_battery = False
         cs.accurate_current_power = None
 
         ch.is_charging_power_zero = MagicMock(return_value=False)
@@ -2920,27 +3069,39 @@ class TestApplyBudgetsMismatchAborts:
     @pytest.mark.asyncio
     async def test_partial_charger_mismatch_aborts(self):
         """Lines 1530, 1533: some chargers in actionable but not in cs_to_apply -> abort."""
-        hass = _make_hass(); home = _make_home(); now = datetime.now(pytz.UTC)
+        hass = _make_hass()
+        home = _make_home()
+        now = datetime.now(pytz.UTC)
 
         ch1 = _create_charger(hass, home, name="Ch1")
         ch2 = _create_charger(hass, home, name="Ch2")
         car1 = _make_real_car(hass, home, name="Car1")
         car2 = _make_real_car(hass, home, name="Car2")
-        _init_charger_states(ch1, amperage=10); _init_charger_states(ch2, amperage=10)
-        _plug_car(ch1, car1, now); _plug_car(ch2, car2, now)
+        _init_charger_states(ch1, amperage=10)
+        _init_charger_states(ch2, amperage=10)
+        _plug_car(ch1, car1, now)
+        _plug_car(ch2, car2, now)
         ch1._ensure_correct_state = AsyncMock()
         ch2._ensure_correct_state = AsyncMock()
 
         cs1 = QSChargerStatus(ch1)
-        cs1.current_real_max_charging_amp = 10; cs1.current_active_phase_number = 1
-        cs1.budgeted_amp = 12; cs1.budgeted_num_phases = 1; cs1.charge_score = 100
-        cs1.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]; cs1.possible_num_phases = [1]
+        cs1.current_real_max_charging_amp = 10
+        cs1.current_active_phase_number = 1
+        cs1.budgeted_amp = 12
+        cs1.budgeted_num_phases = 1
+        cs1.charge_score = 100
+        cs1.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
+        cs1.possible_num_phases = [1]
         cs1.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
         cs2 = QSChargerStatus(ch2)
-        cs2.current_real_max_charging_amp = 10; cs2.current_active_phase_number = 1
-        cs2.budgeted_amp = 10; cs2.budgeted_num_phases = 1; cs2.charge_score = 80
-        cs2.possible_amps = [0, 6, 7, 8, 9, 10]; cs2.possible_num_phases = [1]
+        cs2.current_real_max_charging_amp = 10
+        cs2.current_active_phase_number = 1
+        cs2.budgeted_amp = 10
+        cs2.budgeted_num_phases = 1
+        cs2.charge_score = 80
+        cs2.possible_amps = [0, 6, 7, 8, 9, 10]
+        cs2.possible_num_phases = [1]
         cs2.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
         group = _make_charger_group(home, [ch1, ch2])
@@ -2960,11 +3121,14 @@ class TestDevicePostHomeInitEdge:
 
     def test_stored_constraint_car_not_found(self):
         """Lines 2573-2575: constraint load_param references non-existent car -> skipped."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         # Constraint references a car that doesn't exist
-        ct = MagicMock(); ct.load_param = "NonExistentCar"; ct.name = "ghost_ct"
+        ct = MagicMock()
+        ct.load_param = "NonExistentCar"
+        ct.name = "ghost_ct"
         ch._constraints = [ct]
         ch.device_post_home_init(datetime.now(pytz.UTC))
         assert ch._boot_car is None
@@ -2975,7 +3139,8 @@ class TestGetStableGreenCapCannotStop:
 
     def test_green_cap_zero_charging_cant_stop(self):
         """Line 1996: possible_amps = [min_charge] when must stop but can't change state."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=False)
         car = _make_real_car(hass, home)
         _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
@@ -3007,11 +3172,13 @@ class TestEnsureCorrectStateGroup:
     @pytest.mark.asyncio
     async def test_charger_none_skipped(self):
         """Lines 556-557: charger returns res=None -> warning and continue."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch1 = _create_charger(hass, home, name="Ch1")
         ch2 = _create_charger(hass, home, name="Ch2")
         car2 = _make_real_car(hass, home, name="Car2")
-        _init_charger_states(ch1); _init_charger_states(ch2)
+        _init_charger_states(ch1)
+        _init_charger_states(ch2)
         _plug_car(ch2, car2, datetime.now(pytz.UTC))
         now = datetime.now(pytz.UTC)
         vcst2 = now - timedelta(seconds=10)
@@ -3031,12 +3198,14 @@ class TestEnsureCorrectStateGroup:
     @pytest.mark.asyncio
     async def test_multiple_vcst_takes_latest(self):
         """Line 567: verified_correct_state_time updated to latest vcst among chargers."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch1 = _create_charger(hass, home, name="Ch1")
         ch2 = _create_charger(hass, home, name="Ch2")
         car1 = _make_real_car(hass, home, name="Car1")
         car2 = _make_real_car(hass, home, name="Car2")
-        _init_charger_states(ch1); _init_charger_states(ch2)
+        _init_charger_states(ch1)
+        _init_charger_states(ch2)
         _plug_car(ch1, car1, datetime.now(pytz.UTC))
         _plug_car(ch2, car2, datetime.now(pytz.UTC))
         now = datetime.now(pytz.UTC)
@@ -3071,7 +3240,8 @@ class TestEnsureCorrectStateCharger:
     """
 
     def _setup(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="EnsureCh")
         car = _make_real_car(hass, home, name="EnsureCar")
         now = datetime.now(pytz.UTC)
@@ -3239,16 +3409,20 @@ class TestUpdatePowerStepsAndMinMax:
 
     def test_get_min_max_power_with_car(self):
         """Line 3196: returns min/max from power_steps."""
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         mn, mx = ch.get_min_max_power()
         assert mn > 0
         assert mx > mn
 
     def test_get_min_max_power_no_car(self):
         """Line 3193-3194: no car -> (0,0)."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         mn, mx = ch.get_min_max_power()
@@ -3256,9 +3430,12 @@ class TestUpdatePowerStepsAndMinMax:
 
     def test_update_power_steps_removes_zero(self):
         """Line 3176: 0 is removed from the power step set."""
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         # All power steps should be > 0 (no zero step)
         for step in ch._power_steps:
             assert step.power_consign > 0
@@ -3269,8 +3446,10 @@ class TestApplyBudgetsStateChangeNullLastChange:
 
     @pytest.mark.asyncio
     async def test_state_change_null_last_change(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
         now = datetime.now(pytz.UTC)
         _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
         _plug_car(ch, car, now - timedelta(hours=1))
@@ -3280,10 +3459,13 @@ class TestApplyBudgetsStateChangeNullLastChange:
         ch._expected_charge_state.last_change_asked = None
 
         cs = QSChargerStatus(ch)
-        cs.current_real_max_charging_amp = 10; cs.current_active_phase_number = 1
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
         cs.budgeted_amp = 3  # Below min -> triggers state change to False
-        cs.budgeted_num_phases = 1; cs.charge_score = 100
-        cs.possible_amps = [0, 6, 7, 8, 9, 10]; cs.possible_num_phases = [1]
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 100
+        cs.possible_amps = [0, 6, 7, 8, 9, 10]
+        cs.possible_num_phases = [1]
         cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
         group = _make_charger_group(home, [ch])
@@ -3298,7 +3480,8 @@ class TestCheckIfRebootNoStatusVals:
     @pytest.mark.asyncio
     async def test_no_reboot_status_vals(self):
         """Line 3552: get_car_status_rebooting_vals returns [] -> returns True."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)  # Generic has empty rebooting vals
         _init_charger_states(ch)
         result = ch.check_if_reboot_happened(
@@ -3315,7 +3498,8 @@ class TestEnsureCorrectStateChargerLevel:
 
     @pytest.mark.asyncio
     async def test_unavailable_returns_none(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch._do_update_charger_state = AsyncMock()
@@ -3326,7 +3510,8 @@ class TestEnsureCorrectStateChargerLevel:
 
     @pytest.mark.asyncio
     async def test_no_car_returns_true_no_vcst(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home)
         _init_charger_states(ch)
         ch._do_update_charger_state = AsyncMock()
@@ -3339,9 +3524,12 @@ class TestEnsureCorrectStateChargerLevel:
     @pytest.mark.asyncio
     async def test_short_unplug_returns_false(self):
         """Plugged for duration but not instant -> short unplug."""
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         ch._do_update_charger_state = AsyncMock()
         ch.is_charger_unavailable = MagicMock(return_value=False)
         # Not plugged for duration: False, but not plugged instant: True
@@ -3351,9 +3539,12 @@ class TestEnsureCorrectStateChargerLevel:
 
     @pytest.mark.asyncio
     async def test_running_command_returns_false(self):
-        hass = _make_hass(); home = _make_home()
-        ch = _create_charger(hass, home); car = _make_real_car(hass, home)
-        _init_charger_states(ch); _plug_car(ch, car, datetime.now(pytz.UTC))
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
         ch._do_update_charger_state = AsyncMock()
         ch.is_charger_unavailable = MagicMock(return_value=False)
         ch.is_not_plugged = MagicMock(return_value=False)
@@ -3373,7 +3564,8 @@ class TestConstraintUpdateValueCallback:
     """
 
     def _setup(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="CbCh")
         car = _make_real_car(hass, home, name="CbCar")
         now = datetime.now(pytz.UTC)
@@ -3388,10 +3580,16 @@ class TestConstraintUpdateValueCallback:
         ch.on_device_state_change = AsyncMock()
 
         ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=1), load=ch, load_param=car.name,
-            from_user=False, end_of_constraint=now + timedelta(hours=6),
-            initial_value=40.0, target_value=80.0, power_steps=ch._power_steps,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=1),
+            load=ch,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=now + timedelta(hours=6),
+            initial_value=40.0,
+            target_value=80.0,
+            power_steps=ch._power_steps,
             support_auto=True,
         )
         ct.last_value_update = now - timedelta(minutes=30)
@@ -3514,24 +3712,28 @@ class TestCanSetAmpsWhenNotCharging:
     and that generic chargers still can."""
 
     def test_generic_charger_allows_amps_when_idle(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, name="GenericCh")
         assert ch.can_set_amps_when_not_charging() is True
 
     def test_ocpp_charger_blocks_amps_when_idle(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="OcppCh")
         assert ch.can_set_amps_when_not_charging() is False
 
     def test_wallbox_charger_allows_amps_when_idle(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_wallbox_charger(hass, home, name="WbCh")
         assert ch.can_set_amps_when_not_charging() is True
 
     @pytest.mark.asyncio
     async def test_set_max_charging_current_blocked_for_ocpp_when_not_charging(self):
         """set_max_charging_current must not call low_level when OCPP is idle."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="OcppGuard")
         ch.is_charge_enabled = MagicMock(return_value=False)
         ch.low_level_set_max_charging_current = AsyncMock()
@@ -3543,7 +3745,8 @@ class TestCanSetAmpsWhenNotCharging:
     @pytest.mark.asyncio
     async def test_set_max_charging_current_allowed_for_ocpp_when_charging(self):
         """set_max_charging_current must call low_level when OCPP is actively charging."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="OcppAllow")
         ch.is_charge_enabled = MagicMock(return_value=True)
         ch.low_level_set_max_charging_current = AsyncMock(return_value=True)
@@ -3556,7 +3759,8 @@ class TestCanSetAmpsWhenNotCharging:
     @pytest.mark.asyncio
     async def test_set_charging_current_allowed_for_wallbox_when_not_charging(self):
         """Wallbox supports setting amps when idle, so low_level must be called."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_wallbox_charger(hass, home, name="WbGuard")
         ch.is_charge_enabled = MagicMock(return_value=False)
         ch.low_level_set_charging_current = AsyncMock(return_value=True)
@@ -3569,7 +3773,8 @@ class TestCanSetAmpsWhenNotCharging:
     @pytest.mark.asyncio
     async def test_set_charging_current_allowed_for_wallbox_when_charging(self):
         """set_charging_current must call low_level when Wallbox is actively charging."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_wallbox_charger(hass, home, name="WbAllow")
         ch.is_charge_enabled = MagicMock(return_value=True)
         ch.low_level_set_charging_current = AsyncMock(return_value=True)
@@ -3582,7 +3787,8 @@ class TestCanSetAmpsWhenNotCharging:
     @pytest.mark.asyncio
     async def test_set_max_charging_current_allowed_for_generic_when_not_charging(self):
         """Generic charger should still allow amps when not charging."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, name="GenAllow")
         ch.is_charge_enabled = MagicMock(return_value=False)
         ch.low_level_set_max_charging_current = AsyncMock(return_value=True)
@@ -3598,7 +3804,8 @@ class TestStopChargeGatedBehindAmps:
     and proceeds with stop once amps match or retries are exhausted."""
 
     def _setup(self):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="StopGateCh")
         car = _make_real_car(hass, home, name="StopGateCar")
         now = datetime.now(pytz.UTC)
@@ -3656,7 +3863,8 @@ class TestStopChargeGatedBehindAmps:
     @pytest.mark.asyncio
     async def test_stop_still_works_for_generic_charger_without_gate(self):
         """Generic chargers should also gate stop behind amps confirmation."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, name="GenStopCh")
         car = _make_real_car(hass, home, name="GenStopCar")
         now = datetime.now(pytz.UTC)
@@ -3683,7 +3891,8 @@ class TestStopChargeGatedBehindAmps:
     @pytest.mark.asyncio
     async def test_low_level_never_called_for_ocpp_during_full_stop_start_cycle(self):
         """Full cycle: stop (with gate) -> start -> verify low_level amps never called while idle."""
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_ocpp_charger(hass, home, name="FullCycleCh")
         car = _make_real_car(hass, home, name="FullCycleCar")
         now = datetime.now(pytz.UTC)
@@ -3708,11 +3917,11 @@ class TestStopChargeGatedBehindAmps:
         await ch._ensure_correct_state(now)
         # set_charging_current should have been attempted (charger is enabled)
         # but stop_charge should NOT have been called yet (amps not confirmed)
-        stop_calls = [c for c in hass.services.async_call.call_args_list
-                      if len(c[0]) >= 2 and "turn_off" in str(c)]
+        stop_calls = [c for c in hass.services.async_call.call_args_list if len(c[0]) >= 2 and "turn_off" in str(c)]
         # There should be an amps call but no stop (turn_off on switch)
-        assert all("turn_off" not in str(c) or "switch" not in str(c[0][0])
-                    for c in hass.services.async_call.call_args_list)
+        assert all(
+            "turn_off" not in str(c) or "switch" not in str(c[0][0]) for c in hass.services.async_call.call_args_list
+        )
 
         # Phase 2: Charger is now stopped (simulate external stop or amps confirmed + stop)
         hass.services.async_call.reset_mock()
@@ -3799,10 +4008,8 @@ class TestBudgetingMultipleChargers:
     async def test_budget_shave_current_reduces_low_score(self):
         """Lines 1359-1365: _shave_current_budgets loops to reduce lowest score charger."""
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
-        group.dynamic_group.is_current_acceptable = MagicMock(
-            side_effect=[False, False, True])
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(True, [0.0, 0.0, 0.0]))
+        group.dynamic_group.is_current_acceptable = MagicMock(side_effect=[False, False, True])
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
         result, current_ok = await group._shave_current_budgets([cs1, cs2], now)
         assert current_ok is True
 
@@ -3813,8 +4020,7 @@ class TestBudgetingMultipleChargers:
         cs1.possible_amps = [10]
         cs2.possible_amps = [10]
         group.dynamic_group.is_current_acceptable = MagicMock(return_value=False)
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(False, [5.0, 0.0, 0.0]))
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(False, [5.0, 0.0, 0.0]))
         _, current_ok = await group._shave_current_budgets([cs1, cs2], now)
         assert current_ok is False
 
@@ -3830,16 +4036,20 @@ class TestBudgetingMultipleChargers:
         cs2.can_be_started_and_stopped = True
 
         call_count = [0]
+
         def _acceptable(**kwargs):
             call_count[0] += 1
             return call_count[0] > 6
+
         group.dynamic_group.is_current_acceptable = MagicMock(side_effect=_acceptable)
         reduction_call_count = [0]
+
         def _and_diff(**kw):
             reduction_call_count[0] += 1
             if reduction_call_count[0] % 2 == 1:
                 return (False, [5.0, 0.0, 0.0])
             return (True, [2.0, 0.0, 0.0])
+
         group.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=_and_diff)
         mandatory = [10.0, 0.0, 0.0]
         current = [20.0, 0.0, 0.0]
@@ -3853,8 +4063,7 @@ class TestBudgetingMultipleChargers:
         cs1.possible_amps = [0]
         cs2.possible_amps = [0]
         group.dynamic_group.is_current_acceptable = MagicMock(return_value=False)
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(False, [5.0, 0.0, 0.0]))
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(False, [5.0, 0.0, 0.0]))
         mandatory = [10.0, 0.0, 0.0]
         current = [20.0, 0.0, 0.0]
         result = await group._shave_mandatory_budgets([cs1, cs2], current, mandatory, now)
@@ -3868,23 +4077,21 @@ class TestBudgetingMultipleChargers:
         cs1.current_real_max_charging_amp = 10
         ch1.qs_bump_solar_charge_priority = True
 
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], True, False))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, False))
         group.get_budget_diffs = MagicMock(return_value=(0.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
 
         success, should_reset, done_reset = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, True, now)
+            [cs1, cs2], 2000.0, 1000.0, True, now
+        )
         assert success is True
 
     @pytest.mark.asyncio
     async def test_budgeting_cant_shave_error(self):
         """Lines 926-928: _do_prepare_and_shave_budgets returns current_ok=False twice -> error."""
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], False, False))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], False, False))
         group.get_budget_diffs = MagicMock(return_value=(0.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, True, now)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 2000.0, 1000.0, True, now)
         assert success is False
 
     @pytest.mark.asyncio
@@ -3893,6 +4100,7 @@ class TestBudgetingMultipleChargers:
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
 
         call_count = [0]
+
         async def _mock_prepare(acs, do_reset, time):
             call_count[0] += 1
             return acs, True, False
@@ -3902,14 +4110,15 @@ class TestBudgetingMultipleChargers:
 
         _now = datetime.now(pytz.UTC)
         home = group.home
-        home.get_device_power_values = MagicMock(return_value=[
-            (_now - timedelta(seconds=30), 4000.0, {}),
-            (_now, 4000.0, {}),
-        ])
+        home.get_device_power_values = MagicMock(
+            return_value=[
+                (_now - timedelta(seconds=30), 4000.0, {}),
+                (_now, 4000.0, {}),
+            ]
+        )
         home.get_home_max_available_production_power = MagicMock(return_value=3000.0)
 
-        success, should_reset, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, True, now)
+        success, should_reset, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 2000.0, 1000.0, True, now)
         assert call_count[0] >= 2
 
     @pytest.mark.asyncio
@@ -3918,12 +4127,10 @@ class TestBudgetingMultipleChargers:
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
         cs1.get_diff_power = MagicMock(return_value=None)
 
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], True, False))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, False))
         group.get_budget_diffs = MagicMock(return_value=(500.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, False, now)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 2000.0, 1000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -3933,7 +4140,8 @@ class TestBudgetingMultipleChargers:
         cs1.current_active_phase_number = 2
         cs1.possible_num_phases = [1, 3]
         current_amps, has_phase, mandatory = await group._do_prepare_budgets_for_algo(
-            [cs1, cs2], do_reset_allocation=False)
+            [cs1, cs2], do_reset_allocation=False
+        )
         assert cs1.budgeted_num_phases == 1
 
     @pytest.mark.asyncio
@@ -3945,12 +4153,13 @@ class TestBudgetingMultipleChargers:
         cs1.budgeted_amp = 20
 
         call_count = [0]
+
         def _acceptable(**kwargs):
             call_count[0] += 1
             return call_count[0] > 2
+
         group.dynamic_group.is_current_acceptable = MagicMock(side_effect=_acceptable)
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(True, [0.0, 0.0, 0.0]))
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
         _, current_ok = await group._shave_current_budgets([cs1, cs2], now)
         assert current_ok is True
 
@@ -3958,9 +4167,11 @@ class TestBudgetingMultipleChargers:
         """Line 825: reduction goes in right direction."""
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
         group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            side_effect=[(False, [5.0, 0.0, 0.0]), (True, [2.0, 0.0, 0.0])])
+            side_effect=[(False, [5.0, 0.0, 0.0]), (True, [2.0, 0.0, 0.0])]
+        )
         new_res, do_update = group._update_and_prob_for_amps_reduction(
-            [10.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0], now)
+            [10.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0], now
+        )
         assert new_res is True
         assert do_update is True
 
@@ -3970,12 +4181,10 @@ class TestBudgetingMultipleChargers:
         *_, group, ch1, ch2, _, _, cs1, cs2, now = self._setup_two_chargers()
         cs1.possible_num_phases = [1, 3]
 
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], True, True))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, True))
         group.get_budget_diffs = MagicMock(return_value=(0.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, False, now)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 2000.0, 1000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -3985,12 +4194,10 @@ class TestBudgetingMultipleChargers:
         cs1.charge_score = 50
         cs2.charge_score = 200
 
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], True, False))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, False))
         group.get_budget_diffs = MagicMock(return_value=(-100.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 100.0, 50.0, False, now)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 100.0, 50.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -4007,12 +4214,10 @@ class TestBudgetingMultipleChargers:
         ch2._expected_charge_state.last_change_asked = now
         ch2._expected_charge_state._num_set = 5
 
-        group._do_prepare_and_shave_budgets = AsyncMock(
-            return_value=([cs1, cs2], True, False))
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, False))
         group.get_budget_diffs = MagicMock(return_value=(0.0, [10.0, 0.0, 0.0], [10.0, 0.0, 0.0]))
 
-        success, should_reset, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 2000.0, 1000.0, True, now)
+        success, should_reset, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 2000.0, 1000.0, True, now)
         assert should_reset is True
 
 
@@ -4029,9 +4234,9 @@ class TestGetCarScore:
     def _setup(self):
         hass = _make_hass()
         home = _make_home()
-        ch = _create_charger(hass, home, name="ScoreCh",
-                             **{CONF_CHARGER_LATITUDE: 48.8566,
-                                CONF_CHARGER_LONGITUDE: 2.3522})
+        ch = _create_charger(
+            hass, home, name="ScoreCh", **{CONF_CHARGER_LATITUDE: 48.8566, CONF_CHARGER_LONGITUDE: 2.3522}
+        )
         car = _make_real_car(hass, home, name="ScoreCar")
         now = datetime.now(pytz.UTC)
         _init_charger_states(ch, charge_state=True, amperage=10)
@@ -4169,6 +4374,7 @@ class TestExecuteCommandEdges:
         _, _, ch, _, now = self._setup()
         ch.is_optimistic_plugged = MagicMock(return_value=False)
         from custom_components.quiet_solar.home_model.commands import CMD_IDLE
+
         result = await ch.execute_command(now, CMD_IDLE)
         assert result is True
 
@@ -4351,8 +4557,9 @@ class TestMinorChargerPaths:
         """Lines 464, 487: get_consign_amps_values with 3-to-1 phase."""
         hass = _make_hass()
         home = _make_home()
-        ch = _create_charger(hass, home, name="Consign3P", is_3p=True,
-                             **{CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH: "switch.phase_sw"})
+        ch = _create_charger(
+            hass, home, name="Consign3P", is_3p=True, **{CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH: "switch.phase_sw"}
+        )
         car = _make_real_car(hass, home, name="ConsignCar")
         now = datetime.now(pytz.UTC)
         _init_charger_states(ch, num_phases=3)
@@ -4416,8 +4623,8 @@ class TestMinorChargerPaths:
         _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.is_car_stopped_asking_current = MagicMock(return_value=False)
         is_charged, result = ch.is_car_charged(
-            datetime.now(pytz.UTC), current_charge=99, target_charge=100,
-            is_target_percent=True)
+            datetime.now(pytz.UTC), current_charge=99, target_charge=100, is_target_percent=True
+        )
         assert is_charged is False
         assert result == 99
 
@@ -4431,8 +4638,12 @@ class TestMinorChargerPaths:
         _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.is_car_stopped_asking_current = MagicMock(return_value=False)
         is_charged, result = ch.is_car_charged(
-            datetime.now(pytz.UTC), current_charge=79.5, target_charge=80.0,
-            is_target_percent=True, accept_bigger_tolerance=True)
+            datetime.now(pytz.UTC),
+            current_charge=79.5,
+            target_charge=80.0,
+            is_target_percent=True,
+            accept_bigger_tolerance=True,
+        )
         assert is_charged is True
 
     def test_is_car_charged_wh_tolerance(self):
@@ -4445,8 +4656,12 @@ class TestMinorChargerPaths:
         _plug_car(ch, car, datetime.now(pytz.UTC))
         ch.is_car_stopped_asking_current = MagicMock(return_value=False)
         is_charged, result = ch.is_car_charged(
-            datetime.now(pytz.UTC), current_charge=49500.0, target_charge=50000.0,
-            is_target_percent=False, accept_bigger_tolerance=True)
+            datetime.now(pytz.UTC),
+            current_charge=49500.0,
+            target_charge=50000.0,
+            is_target_percent=False,
+            accept_bigger_tolerance=True,
+        )
         assert is_charged is True
 
     def test_apply_budget_strategy_none_power(self):
@@ -4566,7 +4781,6 @@ class TestGetAmpsFromPowerStepsPrecisionUp:
     """Line 1892: amp adjusted upward when steps[amp+1] is within precision."""
 
     def test_precision_bump_up(self):
-        from custom_components.quiet_solar.ha_model.charger import CHARGER_MAX_POWER_AMPS_PRECISION_W
 
         hass = _make_hass()
         home = _make_home()
@@ -4747,10 +4961,16 @@ class TestAgendaConstraintNotKilledWhenEventClose:
         charger.is_car_stopped_asking_current = MagicMock(return_value=True)
 
         completed_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=4), load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=now - timedelta(hours=2),
-            initial_value=50.0, target_value=80.0, power_steps=charger._power_steps,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=4),
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=now - timedelta(hours=2),
+            initial_value=50.0,
+            target_value=80.0,
+            power_steps=charger._power_steps,
             support_auto=True,
         )
         charger._last_completed_constraint = completed_ct
@@ -4795,11 +5015,17 @@ class TestUpdateExistingUserConstraintTarget:
         charger.get_best_car = MagicMock(return_value=car)
 
         user_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=1), load=charger, load_param=car.name,
-            from_user=True, end_of_constraint=now + timedelta(hours=8),
-            initial_value=30.0, target_value=70.0,
-            power_steps=charger._power_steps, support_auto=True,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=1),
+            load=charger,
+            load_param=car.name,
+            from_user=True,
+            end_of_constraint=now + timedelta(hours=8),
+            initial_value=30.0,
+            target_value=70.0,
+            power_steps=charger._power_steps,
+            support_auto=True,
         )
         charger.push_live_constraint(now - timedelta(hours=1), user_ct)
 
@@ -4854,28 +5080,39 @@ class TestAutoConstraintCleanedPreventsPersonReAdd:
         person_min_target_charge = 50.0
 
         car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target_charge, person))
+            return_value=(False, next_usage_time, person_min_target_charge, person)
+        )
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
         car.set_next_charge_target_percent = AsyncMock()
         car.do_next_charge_time = None
         car.do_force_next_charge = False
 
         old_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=2), load=charger, load_param=car.name,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=2),
+            load=charger,
+            load_param=car.name,
             from_user=False,
             end_of_constraint=next_usage_time + timedelta(minutes=5),
-            initial_value=30.0, target_value=person_min_target_charge + 1.0,
-            power_steps=charger._power_steps, support_auto=True,
+            initial_value=30.0,
+            target_value=person_min_target_charge + 1.0,
+            power_steps=charger._power_steps,
+            support_auto=True,
         )
         old_ct.load_info = {"person": "Alice"}
         charger._auto_constraints_cleaned_at_user_reset = [old_ct]
 
         await charger.check_load_activity_and_constraints(now)
 
-        person_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("person") == "Alice"
-                      and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME]
+        person_cts = [
+            c
+            for c in charger._constraints
+            if c is not None
+            and c.load_info
+            and c.load_info.get("person") == "Alice"
+            and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        ]
         assert len(person_cts) == 0
 
 
@@ -4919,7 +5156,8 @@ class TestPersonConstraintCreatedAndUpdated:
         person_min_target_charge = 60.0
 
         car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target_charge, person))
+            return_value=(False, next_usage_time, person_min_target_charge, person)
+        )
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
         car.set_next_charge_target_percent = AsyncMock()
         car.do_next_charge_time = None
@@ -4928,9 +5166,14 @@ class TestPersonConstraintCreatedAndUpdated:
 
         await charger.check_load_activity_and_constraints(now)
 
-        person_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("person") == "Bob"
-                      and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME]
+        person_cts = [
+            c
+            for c in charger._constraints
+            if c is not None
+            and c.load_info
+            and c.load_info.get("person") == "Bob"
+            and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        ]
         assert len(person_cts) >= 1
         assert person_cts[0].target_value == person_min_target_charge
 
@@ -4952,17 +5195,22 @@ class TestPersonConstraintCreatedAndUpdated:
         new_target = 65.0
 
         existing_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=1), load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=old_usage_time,
-            initial_value=30.0, target_value=old_target,
-            power_steps=charger._power_steps, support_auto=True,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=1),
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=old_usage_time,
+            initial_value=30.0,
+            target_value=old_target,
+            power_steps=charger._power_steps,
+            support_auto=True,
         )
         existing_ct.load_info = {"person": "Carol"}
         charger.push_live_constraint(now - timedelta(hours=1), existing_ct)
 
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(False, new_usage_time, new_target, person))
+        car.get_best_person_next_need = AsyncMock(return_value=(False, new_usage_time, new_target, person))
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
         car.set_next_charge_target_percent = AsyncMock()
         car.do_next_charge_time = None
@@ -4971,9 +5219,14 @@ class TestPersonConstraintCreatedAndUpdated:
 
         await charger.check_load_activity_and_constraints(now)
 
-        person_cts = [c for c in charger._constraints
-                      if c is not None and c.load_info and c.load_info.get("person") == "Carol"
-                      and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME]
+        person_cts = [
+            c
+            for c in charger._constraints
+            if c is not None
+            and c.load_info
+            and c.load_info.get("person") == "Carol"
+            and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        ]
         assert len(person_cts) >= 1
         assert person_cts[0].end_of_constraint == new_usage_time
         assert person_cts[0].target_value == new_target
@@ -5016,8 +5269,11 @@ class TestIntermediateTargetGreaterThanTarget:
 
         await charger.check_load_activity_and_constraints(now)
 
-        filler_cts = [c for c in charger._constraints
-                      if c is not None and c.type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO)]
+        filler_cts = [
+            c
+            for c in charger._constraints
+            if c is not None and c.type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_FILLER_AUTO)
+        ]
         assert len(filler_cts) >= 1
 
 
@@ -5062,17 +5318,24 @@ class TestRemoveAllPersonConstraints:
         person_min_target_charge = 50.0
 
         old_person_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=1), load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=next_usage_time,
-            initial_value=30.0, target_value=person_min_target_charge,
-            power_steps=charger._power_steps, support_auto=True,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=1),
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=next_usage_time,
+            initial_value=30.0,
+            target_value=person_min_target_charge,
+            power_steps=charger._power_steps,
+            support_auto=True,
         )
         old_person_ct.load_info = {"person": "Dave"}
         charger.push_live_constraint(now - timedelta(hours=1), old_person_ct)
 
         car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target_charge, person))
+            return_value=(False, next_usage_time, person_min_target_charge, person)
+        )
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
         car.do_next_charge_time = None
         car.do_force_next_charge = False
@@ -5090,8 +5353,8 @@ class TestOCPPCustomChargingProfile:
     """Lines 4511-4512: OCPP init with use_ocpp_custom_charging_profile=True."""
 
     def test_ocpp_custom_charging_profile_entities(self):
-        from custom_components.quiet_solar.ha_model.charger import QSChargerOCPP
         from custom_components.quiet_solar.const import CONF_CHARGER_DEVICE_OCPP
+        from custom_components.quiet_solar.ha_model.charger import QSChargerOCPP
 
         hass = _make_hass()
         home = _make_home()
@@ -5119,9 +5382,7 @@ class TestOCPPCustomChargingProfile:
         fake_device.name_by_user = None
 
         # Force use_ocpp_custom_charging_profile=True during init via descriptor
-        QSChargerOCPP.use_ocpp_custom_charging_profile = property(
-            lambda self: True, lambda self, v: None
-        )
+        QSChargerOCPP.use_ocpp_custom_charging_profile = property(lambda self: True, lambda self, v: None)
         try:
             with (
                 patch("custom_components.quiet_solar.ha_model.charger.device_registry") as mock_dev_reg,
@@ -5193,11 +5454,17 @@ class TestForceConstraintThenUserTimeOverrides:
         car.do_next_charge_time = now + timedelta(hours=6)
 
         asap_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000, type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-            time=now, load=charger, load_param=car.name,
-            from_user=False, end_of_constraint=DATETIME_MAX_UTC,
-            initial_value=0.0, target_value=80.0,
-            power_steps=charger._power_steps, support_auto=True,
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+            time=now,
+            load=charger,
+            load_param=car.name,
+            from_user=False,
+            end_of_constraint=DATETIME_MAX_UTC,
+            initial_value=0.0,
+            target_value=80.0,
+            power_steps=charger._power_steps,
+            support_auto=True,
         )
         charger._constraints = [asap_ct]
         charger.set_live_constraints(now, charger._constraints)
@@ -5248,9 +5515,7 @@ class TestDynHandleDisabledCharger:
 
         vcst = now - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 10)
         group.ensure_correct_state = AsyncMock(return_value=([cs], vcst))
-        group.budgeting_algorithm_minimize_diffs = AsyncMock(
-            return_value=(False, False, False)
-        )
+        group.budgeting_algorithm_minimize_diffs = AsyncMock(return_value=(False, False, False))
 
         await group.dyn_handle(now)
 
@@ -5370,19 +5635,12 @@ class TestCalendarCloseWithLastCompleted:
         charger._last_completed_constraint = completed_ct
 
         start_time = now + timedelta(hours=4)
-        car.get_next_scheduled_event = AsyncMock(
-            return_value=(start_time, start_time + timedelta(hours=2))
-        )
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(None, None, None, None)
-        )
+        car.get_next_scheduled_event = AsyncMock(return_value=(start_time, start_time + timedelta(hours=2)))
+        car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
 
         await charger.check_load_activity_and_constraints(now)
 
-        agenda_cts = [
-            c for c in charger._constraints
-            if c is not None and c.is_mandatory and not c.from_user
-        ]
+        agenda_cts = [c for c in charger._constraints if c is not None and c.is_mandatory and not c.from_user]
         assert len(agenda_cts) >= 1
 
 
@@ -5431,9 +5689,7 @@ class TestPersonConstraintBlockedByAutoReset:
         next_usage_time = now + timedelta(hours=10)
         person_min_target = 60.0
 
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, person_min_target, person_mock))
 
         old_ct = MultiStepsPowerLoadConstraintChargePercent(
             total_capacity_wh=60000,
@@ -5453,9 +5709,7 @@ class TestPersonConstraintBlockedByAutoReset:
         await charger.check_load_activity_and_constraints(now)
 
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Alice"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Alice"
         ]
         assert len(person_cts) == 0
 
@@ -5506,16 +5760,12 @@ class TestPersonConstraintCreation:
         next_usage_time = now + timedelta(hours=12)
         person_min_target = 60.0
 
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, person_min_target, person_mock))
 
         await charger.check_load_activity_and_constraints(now)
 
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Bob"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Bob"
         ]
         assert len(person_cts) >= 1
         assert person_cts[0].target_value == person_min_target
@@ -5537,9 +5787,7 @@ class TestPersonConstraintCreation:
         new_usage_time = now + timedelta(hours=14)
         new_min_target = 65.0
 
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(False, new_usage_time, new_min_target, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(False, new_usage_time, new_min_target, person_mock))
 
         existing_person_ct = MultiStepsPowerLoadConstraintChargePercent(
             total_capacity_wh=60000,
@@ -5561,9 +5809,7 @@ class TestPersonConstraintCreation:
         await charger.check_load_activity_and_constraints(now)
 
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Carol"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Carol"
         ]
         assert len(person_cts) >= 1
         ct = person_cts[0]
@@ -5586,16 +5832,12 @@ class TestPersonConstraintCreation:
         next_usage_time = now + timedelta(hours=10)
         person_min_target = 60.0
 
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(False, next_usage_time, person_min_target, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, person_min_target, person_mock))
 
         await charger.check_load_activity_and_constraints(now)
 
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Dave"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Dave"
         ]
         assert len(person_cts) == 0
 
@@ -5614,9 +5856,7 @@ class TestIntermediateTargetGreaterThanTarget:
         hass = _make_hass()
         home = _make_home()
         charger = _create_charger(hass, home)
-        car = _make_real_car(
-            hass, home, default_charge=80.0, minimum_ok_charge=90.0
-        )
+        car = _make_real_car(hass, home, default_charge=80.0, minimum_ok_charge=90.0)
         now = datetime.now(pytz.UTC)
 
         _init_charger_states(charger)
@@ -5634,9 +5874,7 @@ class TestIntermediateTargetGreaterThanTarget:
         car.do_force_next_charge = False
         car.do_next_charge_time = None
         car.get_car_charge_percent = lambda time=None, *a, **kw: 10.0
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(None, None, None, None)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
         result = await charger.check_load_activity_and_constraints(now)
@@ -5659,13 +5897,15 @@ class TestCanChangeBudgetLine419:
     """
 
     def _cs(self, budgeted=10, phases=1, possible=None, p_phases=None):
-        hass = _make_hass(); home = _make_home()
+        hass = _make_hass()
+        home = _make_home()
         ch = _create_charger(hass, home, is_3p=False)
         car = _make_real_car(hass, home)
         _init_charger_states(ch, amperage=budgeted, num_phases=phases)
         _plug_car(ch, car, datetime.now(pytz.UTC))
         cs = QSChargerStatus(ch)
-        cs.budgeted_amp = budgeted; cs.budgeted_num_phases = phases
+        cs.budgeted_amp = budgeted
+        cs.budgeted_num_phases = phases
         cs.possible_amps = possible or [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         cs.possible_num_phases = p_phases or [1]
         cs.current_real_max_charging_amp = budgeted
@@ -5736,9 +5976,7 @@ class TestEnsureCorrectStateLine748:
         actionable_chargers = [cs1, cs2]
         verified_correct_state_time = past
 
-        group.ensure_correct_state = AsyncMock(
-            return_value=(actionable_chargers, verified_correct_state_time)
-        )
+        group.ensure_correct_state = AsyncMock(return_value=(actionable_chargers, verified_correct_state_time))
 
         group.dynamic_group.get_median_sensor = MagicMock(return_value=4600.0)
 
@@ -5759,9 +5997,7 @@ class TestEnsureCorrectStateLine748:
         group.apply_budgets = AsyncMock()
         group.remaining_budget_to_apply = []
 
-        group.budgeting_algorithm_minimize_diffs = AsyncMock(
-            return_value=(True, False, False)
-        )
+        group.budgeting_algorithm_minimize_diffs = AsyncMock(return_value=(True, False, False))
         group.apply_budget_strategy = AsyncMock()
 
         await group.dyn_handle(now)
@@ -5825,9 +6061,7 @@ class TestBudgetMinimizeDiffsLine1085:
 
         group = _make_charger_group(home, chargers)
 
-        ok, *_ = await group.budgeting_algorithm_minimize_diffs(
-            css, -100, -100, False, now
-        )
+        ok, *_ = await group.budgeting_algorithm_minimize_diffs(css, -100, -100, False, now)
         assert ok is True
         # 1A reduction (~230W) exceeds the 100W deficit → only first charger reduced
         assert css[0].budgeted_amp == 9
@@ -5857,7 +6091,36 @@ class TestShaveBudgetsLine1339:
         cs = QSChargerStatus(ch)
         cs.current_real_max_charging_amp = 30
         cs.current_active_phase_number = 1
-        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+        cs.possible_amps = [
+            0,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+        ]
         cs.possible_num_phases = [1, 3]
         cs.budgeted_amp = 30
         cs.budgeted_num_phases = 1
@@ -5868,13 +6131,17 @@ class TestShaveBudgetsLine1339:
 
         # Max amps per phase is only 15 — the 1-phase 30A budget exceeds this
         group = _make_charger_group(home, [ch], max_amps=[15.0, 15.0, 15.0])
+
         # Make is_current_acceptable return False for 1-phase 30A, True for 3-phase 10A
         def _is_acceptable(new_amps, estimated_current_amps, time):
             return max(new_amps) <= 15.0
+
         group.dynamic_group.is_current_acceptable = MagicMock(side_effect=_is_acceptable)
+
         def _is_acceptable_and_diff(new_amps, estimated_current_amps, time):
             acceptable = max(new_amps) <= 15.0
             return acceptable, [na - ea for na, ea in zip(new_amps, estimated_current_amps)]
+
         group.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=_is_acceptable_and_diff)
 
         await group._shave_current_budgets([cs], now)
@@ -6016,7 +6283,8 @@ class TestApplyBudgetsLine1577:
         cs1.current_active_phase_number = 1
         cs1.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12]
         cs1.possible_num_phases = [1]
-        cs1.budgeted_amp = 12; cs1.budgeted_num_phases = 1
+        cs1.budgeted_amp = 12
+        cs1.budgeted_num_phases = 1
         cs1.charge_score = 100
         cs1.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
@@ -6025,7 +6293,8 @@ class TestApplyBudgetsLine1577:
         cs2.current_active_phase_number = 1
         cs2.possible_amps = [0, 6, 7, 8, 9, 10]
         cs2.possible_num_phases = [1]
-        cs2.budgeted_amp = 8; cs2.budgeted_num_phases = 1
+        cs2.budgeted_amp = 8
+        cs2.budgeted_num_phases = 1
         cs2.charge_score = 50
         cs2.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
@@ -6106,7 +6375,6 @@ class TestGetCarScoreLine2350:
     def test_long_relationship_bump_via_flipping_invited(self):
         from custom_components.quiet_solar.ha_model.charger import (
             CAR_CHARGER_LONG_RELATIONSHIP_S,
-            CHARGER_CHECK_STATE_WINDOW_S,
         )
 
         hass = _make_hass()
@@ -6147,9 +6415,7 @@ class TestGetCarScoreLine2350:
         ch.car = flip_car
         ch.car_attach_time = attach_time
 
-        ch.get_continuous_plug_duration = MagicMock(
-            return_value=float(CAR_CHARGER_LONG_RELATIONSHIP_S + 500)
-        )
+        ch.get_continuous_plug_duration = MagicMock(return_value=float(CAR_CHARGER_LONG_RELATIONSHIP_S + 500))
         ch.charger_latitude = None
         ch.charger_longitude = None
 
@@ -6196,18 +6462,14 @@ class TestPersonAssignmentLines2966_2970:
         person_mock = MagicMock()
         person_mock.name = "Alice"
         person_mock.notify_of_forecast_if_needed = AsyncMock()
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(None, None, None, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, person_mock))
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
         await charger.check_load_activity_and_constraints(now)
 
         # Should not crash and person-based constraints should NOT be pushed
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Alice"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Alice"
         ]
         assert len(person_cts) == 0
 
@@ -6242,17 +6504,13 @@ class TestPersonAssignmentLines2966_2970:
         person_mock.name = "Bob"
         person_mock.notify_of_forecast_if_needed = AsyncMock()
         # is_person_covered = True => line 2970: person = None
-        car.get_best_person_next_need = AsyncMock(
-            return_value=(True, next_usage_time, person_min_target, person_mock)
-        )
+        car.get_best_person_next_need = AsyncMock(return_value=(True, next_usage_time, person_min_target, person_mock))
         car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
         await charger.check_load_activity_and_constraints(now)
 
         person_cts = [
-            c for c in charger._constraints
-            if c is not None and c.load_info
-            and c.load_info.get("person") == "Bob"
+            c for c in charger._constraints if c is not None and c.load_info and c.load_info.get("person") == "Bob"
         ]
         assert len(person_cts) == 0
 
@@ -6280,10 +6538,7 @@ class TestCheckIfRebootHappenedLine3622:
         ch.charger_reboot_button = "button.reboot"
 
         now = datetime.now(pytz.UTC)
-        result = await ch.check_if_reboot_happened(
-            from_time=now - timedelta(seconds=200),
-            to_time=now
-        )
+        result = await ch.check_if_reboot_happened(from_time=now - timedelta(seconds=200), to_time=now)
         assert result is True
 
     @pytest.mark.asyncio
@@ -6299,10 +6554,7 @@ class TestCheckIfRebootHappenedLine3622:
         ch.charger_reboot_button = "button.reboot"
 
         now = datetime.now(pytz.UTC)
-        result = await ch.check_if_reboot_happened(
-            from_time=now - timedelta(seconds=200),
-            to_time=now
-        )
+        result = await ch.check_if_reboot_happened(from_time=now - timedelta(seconds=200), to_time=now)
         assert result is True
 
     @pytest.mark.asyncio
@@ -6322,16 +6574,15 @@ class TestCheckIfRebootHappenedLine3622:
 
         # First call (invert_val_probe=False): returns long enough contiguous status
         # Second call (invert_val_probe=True): returns None for no_reboot_time
-        ch.get_last_state_value_duration = MagicMock(side_effect=[
-            (3 * CHARGER_STATE_REFRESH_INTERVAL_S, None),  # contiguous_status: long enough
-            (None, None),  # no_reboot_time: None => doesn't satisfy the inner if
-        ])
+        ch.get_last_state_value_duration = MagicMock(
+            side_effect=[
+                (3 * CHARGER_STATE_REFRESH_INTERVAL_S, None),  # contiguous_status: long enough
+                (None, None),  # no_reboot_time: None => doesn't satisfy the inner if
+            ]
+        )
 
         now = datetime.now(pytz.UTC)
-        result = await ch.check_if_reboot_happened(
-            from_time=now - timedelta(seconds=200),
-            to_time=now
-        )
+        result = await ch.check_if_reboot_happened(from_time=now - timedelta(seconds=200), to_time=now)
         # Falls through the inner if (no_reboot_time is None), exits the outer if block,
         # hits line 3622: return True
         assert result is True

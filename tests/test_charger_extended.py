@@ -2,70 +2,41 @@
 Extended tests for charger.py to improve coverage.
 Focuses on QSChargerStatus, QSChargerGroup, and QSChargerGeneric methods.
 """
+
 import unittest
-from unittest.mock import MagicMock, Mock, patch, AsyncMock, PropertyMock
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
+from datetime import time as dt_time
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytz
-import pytest
-import asyncio
 
 # Import from Home Assistant
-from homeassistant.const import CONF_NAME, STATE_UNKNOWN, STATE_UNAVAILABLE
-
-from custom_components.quiet_solar.ha_model.home import QSHome
-from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
+from custom_components.quiet_solar.const import (
+    CHARGER_NO_CAR_CONNECTED,
+    CONF_CHARGER_CONSUMPTION,
+    CONF_CHARGER_MAX_CHARGE,
+    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
+    CONF_CHARGER_MIN_CHARGE,
+    CONF_CHARGER_PLUGGED,
+    CONF_CHARGER_STATUS_SENSOR,
+    CONF_IS_3P,
+    CONF_MONO_PHASE,
+    DATA_HANDLER,
+    DOMAIN,
+)
 from custom_components.quiet_solar.ha_model.charger import (
-    QSChargerWallbox,
-    QSChargerOCPP,
+    STATE_CMD_RETRY_NUMBER,
+    QSChargerGeneric,
     QSChargerGroup,
     QSChargerStatus,
-    QSStateCmd,
-    QSChargerStates,
-    QSChargerGeneric,
-    WallboxChargerStatus,
     QSOCPPv16v201ChargePointStatus,
-    STATE_CMD_RETRY_NUMBER,
-    CHARGER_ADAPTATION_WINDOW_S,
-    TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S,
-    TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S,
-    TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES,
+    QSStateCmd,
+    WallboxChargerStatus,
 )
-from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
-    CMD_AUTO_GREEN_ONLY,
-    CMD_AUTO_GREEN_CAP,
-    CMD_AUTO_GREEN_CONSIGN,
-    CMD_AUTO_PRICE,
-    CMD_ON,
-    CMD_OFF,
-    LoadCommand,
-    copy_command
-)
-from custom_components.quiet_solar.const import (
-    CONF_DYN_GROUP_MAX_PHASE_AMPS,
-    CONF_MONO_PHASE,
-    CONF_CHARGER_DEVICE_WALLBOX,
-    CONF_CHARGER_DEVICE_OCPP,
-    CONF_CHARGER_MIN_CHARGE,
-    CONF_CHARGER_MAX_CHARGE,
-    CONF_CHARGER_CONSUMPTION,
-    CONF_CHARGER_STATUS_SENSOR,
-    CONF_CHARGER_PLUGGED,
-    CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
-    CONF_CHARGER_PAUSE_RESUME_SWITCH,
-    CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
-    CONF_CHARGER_REBOOT_BUTTON,
-    CONF_CHARGER_LONGITUDE,
-    CONF_CHARGER_LATITUDE,
-    CONF_IS_3P,
-    DOMAIN,
-    DATA_HANDLER,
-    CHARGER_NO_CAR_CONNECTED,
-    CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGER_MAX_CHARGE,
-    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    copy_command,
 )
 from tests.factories import create_minimal_home_model
 
@@ -76,11 +47,7 @@ def create_mock_hass():
     hass.states = MagicMock()
     hass.states.get = MagicMock(return_value=None)
     hass.services = MagicMock()
-    hass.data = {
-        DOMAIN: {
-            DATA_HANDLER: MagicMock()
-        }
-    }
+    hass.data = {DOMAIN: {DATA_HANDLER: MagicMock()}}
     return hass
 
 
@@ -119,7 +86,7 @@ def create_charger_generic(hass, home, name="TestCharger", **extra_config):
     }
     config.update(extra_config)
 
-    with patch('custom_components.quiet_solar.ha_model.charger.entity_registry'):
+    with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
         charger = QSChargerGeneric(**config)
 
     return charger
@@ -208,7 +175,7 @@ class TestQSChargerStatus(unittest.TestCase):
 
     def test_get_amps_from_values_1_phase(self):
         """Test get_amps_from_values for 1-phase charger."""
-        with patch.object(type(self.charger), 'mono_phase_index', new_callable=PropertyMock) as mock_idx:
+        with patch.object(type(self.charger), "mono_phase_index", new_callable=PropertyMock) as mock_idx:
             mock_idx.return_value = 0
             result = self.status.get_amps_from_values(16, 1)
 
@@ -237,14 +204,14 @@ class TestQSChargerStatus(unittest.TestCase):
 
     def test_get_diff_power(self):
         """Test get_diff_power method."""
-        with patch.object(self.charger, 'get_delta_dampened_power', return_value=2000.0):
+        with patch.object(self.charger, "get_delta_dampened_power", return_value=2000.0):
             result = self.status.get_diff_power(10, 3, 15, 3)
 
         self.assertEqual(result, 2000.0)
 
     def test_get_diff_power_none_result(self):
         """Test get_diff_power when it returns None."""
-        with patch.object(self.charger, 'get_delta_dampened_power', return_value=None):
+        with patch.object(self.charger, "get_delta_dampened_power", return_value=None):
             result = self.status.get_diff_power(10, 3, 15, 3)
 
         self.assertIsNone(result)
@@ -253,7 +220,7 @@ class TestQSChargerStatus(unittest.TestCase):
         """Test get_amps_phase_switch from 1 to 3 phases."""
         self.status.possible_amps = [6, 10, 16, 32]
 
-        with patch.object(type(self.charger), 'mono_phase_index', new_callable=PropertyMock) as mock_idx:
+        with patch.object(type(self.charger), "mono_phase_index", new_callable=PropertyMock) as mock_idx:
             mock_idx.return_value = 0
             try_amp, to_phase, try_amps = self.status.get_amps_phase_switch(15, 1)
 
@@ -265,7 +232,7 @@ class TestQSChargerStatus(unittest.TestCase):
         """Test get_amps_phase_switch from 3 to 1 phase."""
         self.status.possible_amps = [6, 10, 16, 32]
 
-        with patch.object(type(self.charger), 'mono_phase_index', new_callable=PropertyMock) as mock_idx:
+        with patch.object(type(self.charger), "mono_phase_index", new_callable=PropertyMock) as mock_idx:
             mock_idx.return_value = 0
             try_amp, to_phase, try_amps = self.status.get_amps_phase_switch(10, 3)
 
@@ -281,9 +248,7 @@ class TestQSChargerStatus(unittest.TestCase):
         self.status.possible_num_phases = [3]
 
         next_amp, next_phases = self.status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=True, allow_phase_change=False, increase=True
         )
 
         self.assertEqual(next_amp, 7)
@@ -297,9 +262,7 @@ class TestQSChargerStatus(unittest.TestCase):
         self.status.possible_num_phases = [3]
 
         next_amp, next_phases = self.status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=False
+            allow_state_change=True, allow_phase_change=False, increase=False
         )
 
         self.assertEqual(next_amp, 6)
@@ -313,9 +276,7 @@ class TestQSChargerStatus(unittest.TestCase):
         self.status.possible_num_phases = [3]
 
         next_amp, next_phases = self.status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=False
+            allow_state_change=True, allow_phase_change=False, increase=False
         )
 
         self.assertEqual(next_amp, 0)
@@ -330,7 +291,7 @@ class TestQSChargerStatus(unittest.TestCase):
         next_amp, next_phases = self.status.can_change_budget(
             allow_state_change=False,  # Can't change state
             allow_phase_change=False,
-            increase=False
+            increase=False,
         )
 
         self.assertIsNone(next_amp)
@@ -343,9 +304,7 @@ class TestQSChargerStatus(unittest.TestCase):
         self.status.possible_num_phases = [3]
 
         next_amp, next_phases = self.status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=True, allow_phase_change=False, increase=True
         )
 
         self.assertIsNone(next_amp)  # Can't increase beyond max
@@ -358,9 +317,7 @@ class TestQSChargerStatus(unittest.TestCase):
         self.status.possible_num_phases = [3]
 
         next_amp, next_phases = self.status.can_change_budget(
-            allow_state_change=True,
-            allow_phase_change=False,
-            increase=True
+            allow_state_change=True, allow_phase_change=False, increase=True
         )
 
         self.assertIsNone(next_amp)
@@ -375,12 +332,13 @@ class TestQSChargerStatus(unittest.TestCase):
         mock_car.get_charge_power_per_phase_A.return_value = ([1000, 2000, 3000, 4000, 5000, 6000] * 6, None, None)
         self.charger.car = mock_car
 
-        with patch.object(self.charger, 'can_do_3_to_1_phase_switch', return_value=False), \
-             patch.object(type(self.charger), 'physical_3p', new_callable=PropertyMock) as mock_3p, \
-             patch.object(self.charger, '_get_amps_from_power_steps', return_value=16), \
-             patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
-             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
-
+        with (
+            patch.object(self.charger, "can_do_3_to_1_phase_switch", return_value=False),
+            patch.object(type(self.charger), "physical_3p", new_callable=PropertyMock) as mock_3p,
+            patch.object(self.charger, "_get_amps_from_power_steps", return_value=16),
+            patch.object(type(self.charger), "min_charge", new_callable=PropertyMock) as mock_min,
+            patch.object(type(self.charger), "max_charge", new_callable=PropertyMock) as mock_max,
+        ):
             mock_3p.return_value = True
             mock_min.return_value = 6
             mock_max.return_value = 32
@@ -393,8 +351,10 @@ class TestQSChargerStatus(unittest.TestCase):
         """Test get_consign_amps_values without power consign (minimum)."""
         self.status.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=None)
 
-        with patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
-             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
+        with (
+            patch.object(type(self.charger), "min_charge", new_callable=PropertyMock) as mock_min,
+            patch.object(type(self.charger), "max_charge", new_callable=PropertyMock) as mock_max,
+        ):
             mock_min.return_value = 6
             mock_max.return_value = 32
 
@@ -406,8 +366,10 @@ class TestQSChargerStatus(unittest.TestCase):
         """Test get_consign_amps_values without power consign (maximum)."""
         self.status.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=None)
 
-        with patch.object(type(self.charger), 'min_charge', new_callable=PropertyMock) as mock_min, \
-             patch.object(type(self.charger), 'max_charge', new_callable=PropertyMock) as mock_max:
+        with (
+            patch.object(type(self.charger), "min_charge", new_callable=PropertyMock) as mock_min,
+            patch.object(type(self.charger), "max_charge", new_callable=PropertyMock) as mock_max,
+        ):
             mock_min.return_value = 6
             mock_max.return_value = 32
 
@@ -639,7 +601,7 @@ class TestQSChargerGenericExtended(unittest.TestCase):
         mock_car2.name = "Car2"
         self.home._cars = [mock_car1, mock_car2]
 
-        with patch.object(self.charger, 'is_optimistic_plugged', return_value=True):
+        with patch.object(self.charger, "is_optimistic_plugged", return_value=True):
             options = self.charger.get_car_options()
 
         self.assertIn("Car1", options)
@@ -648,7 +610,7 @@ class TestQSChargerGenericExtended(unittest.TestCase):
 
     def test_get_car_options_unplugged(self):
         """Test get_car_options when charger is unplugged."""
-        with patch.object(self.charger, 'is_optimistic_plugged', return_value=False):
+        with patch.object(self.charger, "is_optimistic_plugged", return_value=False):
             options = self.charger.get_car_options()
 
         self.assertEqual(options, [CHARGER_NO_CAR_CONNECTED])
@@ -786,8 +748,10 @@ class TestQSChargerGenericExtended(unittest.TestCase):
 
         time = datetime.now(pytz.UTC)
 
-        with patch.object(self.charger, 'compute_is_before_battery', return_value=False), \
-             patch.object(type(self.charger), 'qs_bump_solar_charge_priority', new_callable=PropertyMock) as mock_bump:
+        with (
+            patch.object(self.charger, "compute_is_before_battery", return_value=False),
+            patch.object(type(self.charger), "qs_bump_solar_charge_priority", new_callable=PropertyMock) as mock_bump,
+        ):
             mock_bump.return_value = False
             result = self.charger.get_normalized_score(mock_constraint, time)
 
@@ -996,7 +960,7 @@ class TestQSChargerGenericConstraints(unittest.TestCase):
 
         time = datetime.now(pytz.UTC)
 
-        with patch.object(self.charger, 'get_current_active_constraint', return_value=None):
+        with patch.object(self.charger, "get_current_active_constraint", return_value=None):
             result = self.charger.compute_is_before_battery(mock_constraint, time)
 
         self.assertTrue(result)
@@ -1070,5 +1034,5 @@ class TestQSChargerGroupApplyBudgets(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.charger_group.know_reduced_state_real_power, 5000.0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

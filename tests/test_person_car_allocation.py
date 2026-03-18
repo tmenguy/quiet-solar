@@ -6,17 +6,16 @@ with lightweight fakes instead of full HA integration.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytz
 
-from custom_components.quiet_solar.ha_model.home import QSHome
-from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_PERSON_ATTACHED,
-    SENSOR_CAR_PERSON_FORECAST,
 )
+from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.home import QSHome
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,8 +65,7 @@ class _FakeCar:
 class _FakePerson:
     """Minimal person with a fixed forecast and car authorizations."""
 
-    def __init__(self, name, preferred_car, authorized_car_names,
-                 forecast_leave_time=None, forecast_mileage=None):
+    def __init__(self, name, preferred_car, authorized_car_names, forecast_leave_time=None, forecast_mileage=None):
         self.name = name
         self.preferred_car = preferred_car
         self.authorized_cars = list(authorized_car_names)
@@ -78,10 +76,7 @@ class _FakePerson:
     def get_authorized_cars(self):
         if self.home is None:
             return []
-        return [
-            c for c in self.home._cars
-            if c.name in self.authorized_cars
-        ]
+        return [c for c in self.home._cars if c.name in self.authorized_cars]
 
     def update_person_forecast(self, time=None, force_update=False):
         return self._forecast_leave, self._forecast_mileage
@@ -120,6 +115,7 @@ class _FakeHome:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _person_name(car):
     """Return the person name assigned to a car, or None."""
     if car.current_forecasted_person is None:
@@ -147,27 +143,35 @@ def _build_scenario():
     zoe = _FakeCar("Zoe", remaining_km=150, has_charger=True)
     idbuzz = _FakeCar("IDBuzz", remaining_km=10, has_charger=True)
 
-    leave = datetime.now(timezone.utc).replace(hour=7, minute=30, second=0) + timedelta(days=1)
+    leave = datetime.now(UTC).replace(hour=7, minute=30, second=0) + timedelta(days=1)
 
     arthur = _FakePerson(
-        "Arthur", preferred_car="Twingo",
+        "Arthur",
+        preferred_car="Twingo",
         authorized_car_names=["Zoe", "Twingo"],
-        forecast_leave_time=leave, forecast_mileage=100.0,
+        forecast_leave_time=leave,
+        forecast_mileage=100.0,
     )
     magali = _FakePerson(
-        "Magali", preferred_car="Zoe",
+        "Magali",
+        preferred_car="Zoe",
         authorized_car_names=["Tesla", "Twingo", "Zoe", "IDBuzz"],
-        forecast_leave_time=leave, forecast_mileage=20.0,
+        forecast_leave_time=leave,
+        forecast_mileage=20.0,
     )
     thomas = _FakePerson(
-        "Thomas", preferred_car="Tesla",
+        "Thomas",
+        preferred_car="Tesla",
         authorized_car_names=["Tesla", "Twingo", "Zoe", "IDBuzz"],
-        forecast_leave_time=leave, forecast_mileage=30.0,
+        forecast_leave_time=leave,
+        forecast_mileage=30.0,
     )
     brice = _FakePerson(
-        "Brice", preferred_car=None,
+        "Brice",
+        preferred_car=None,
         authorized_car_names=["Twingo", "Zoe"],
-        forecast_leave_time=None, forecast_mileage=None,
+        forecast_leave_time=None,
+        forecast_mileage=None,
     )
 
     cars = [tesla, twingo, zoe, idbuzz]
@@ -181,6 +185,7 @@ def _build_scenario():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestSetUserPersonEdgeCases:
     """Cover edge-case branches in set_user_person_for_car."""
 
@@ -188,9 +193,7 @@ class TestSetUserPersonEdgeCases:
     async def test_invalid_person_name_becomes_force_no_person(self):
         """Passing an unknown person name should log an error and convert to
         FORCE_CAR_NO_PERSON_ATTACHED (car.py lines 316-317)."""
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
         await twingo.set_user_person_for_car("GhostPerson")
@@ -201,9 +204,7 @@ class TestSetUserPersonEdgeCases:
     async def test_same_value_noop(self):
         """Calling set_user_person_for_car with the already-set value should
         return immediately without touching the allocation (car.py line 322)."""
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
         await twingo.set_user_person_for_car("Arthur")
@@ -217,9 +218,7 @@ class TestSetUserPersonEdgeCases:
     async def test_forecasted_matches_skips_reallocation(self):
         """When the manual selection matches the already-forecasted person,
         no reallocation is needed (car.py line 331)."""
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
         # Arthur is auto-assigned to Twingo (his preferred car);
@@ -250,20 +249,24 @@ class TestPersonSwapNotification:
         """
         time_now = datetime(2026, 3, 15, 23, 00, tzinfo=pytz.UTC)
         leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
-        #leave = datetime.now(timezone.utc).replace(hour=7, minute=30) + timedelta(days=1)
+        # leave = datetime.now(timezone.utc).replace(hour=7, minute=30) + timedelta(days=1)
 
         car_a = _FakeCar("CarA", remaining_km=80, has_charger=False)
         car_b = _FakeCar("CarB", remaining_km=40, has_charger=False)
 
         person_x = _FakePerson(
-            "PersonX", preferred_car=None,
+            "PersonX",
+            preferred_car=None,
             authorized_car_names=["CarA", "CarB"],
-            forecast_leave_time=leave, forecast_mileage=70.0,
+            forecast_leave_time=leave,
+            forecast_mileage=70.0,
         )
         person_y = _FakePerson(
-            "PersonY", preferred_car=None,
+            "PersonY",
+            preferred_car=None,
             authorized_car_names=["CarA", "CarB"],
-            forecast_leave_time=leave, forecast_mileage=30.0,
+            forecast_leave_time=leave,
+            forecast_mileage=30.0,
         )
 
         home = _FakeHome([car_a, car_b], [person_x, person_y])
@@ -304,9 +307,7 @@ class TestCacheHitReApply:
     async def test_corrupted_person_restored_from_cache(self):
         """If current_forecasted_person is overwritten between allocation runs,
         a cache-hit call should restore it from the cached result."""
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
         assert _person_name(tesla) == "Thomas"
@@ -331,24 +332,14 @@ class TestPersonCarAllocationScenario:
         Magali → Zoe    (preferred, plugged, covered)
         IDBuzz → nobody (10 km, nobody left needs it)
         """
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
         result = await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
-        assert _person_name(tesla) == "Thomas", (
-            f"Tesla should be Thomas, got {_person_name(tesla)}"
-        )
-        assert _person_name(twingo) == "Arthur", (
-            f"Twingo should be Arthur, got {_person_name(twingo)}"
-        )
-        assert _person_name(zoe) == "Magali", (
-            f"Zoe should be Magali, got {_person_name(zoe)}"
-        )
-        assert _person_name(idbuzz) is None, (
-            f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"
-        )
+        assert _person_name(tesla) == "Thomas", f"Tesla should be Thomas, got {_person_name(tesla)}"
+        assert _person_name(twingo) == "Arthur", f"Twingo should be Arthur, got {_person_name(twingo)}"
+        assert _person_name(zoe) == "Magali", f"Zoe should be Magali, got {_person_name(zoe)}"
+        assert _person_name(idbuzz) is None, f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"
 
     @pytest.mark.asyncio
     async def test_manual_override_triggers_reassignment(self):
@@ -360,9 +351,7 @@ class TestPersonCarAllocationScenario:
         Thomas → Tesla   (unchanged)
         IDBuzz → nobody
         """
-        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = (
-            _build_scenario()
-        )
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
         # --- step 1: run the initial automatic allocation ---
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
@@ -372,15 +361,7 @@ class TestPersonCarAllocationScenario:
 
         # --- verify the reassignment ---
         assert twingo.user_selected_person_name_for_car == "Arthur"
-        assert _person_name(twingo) == "Arthur", (
-            f"Twingo should be Arthur (manual), got {_person_name(twingo)}"
-        )
-        assert _person_name(zoe) == "Magali", (
-            f"Zoe should be Magali after reassignment, got {_person_name(zoe)}"
-        )
-        assert _person_name(tesla) == "Thomas", (
-            f"Tesla should still be Thomas, got {_person_name(tesla)}"
-        )
-        assert _person_name(idbuzz) is None, (
-            f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"
-        )
+        assert _person_name(twingo) == "Arthur", f"Twingo should be Arthur (manual), got {_person_name(twingo)}"
+        assert _person_name(zoe) == "Magali", f"Zoe should be Magali after reassignment, got {_person_name(zoe)}"
+        assert _person_name(tesla) == "Thomas", f"Tesla should still be Thomas, got {_person_name(tesla)}"
+        assert _person_name(idbuzz) is None, f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"

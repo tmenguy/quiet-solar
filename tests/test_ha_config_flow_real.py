@@ -3,18 +3,20 @@
 This test file uses real config flow to create entries and verifies
 that the resulting integration works correctly with real HA.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.climate import HVACMode
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import CONF_NAME
-from homeassistant.components.climate import HVACMode
 from custom_components.quiet_solar.const import (
     CONF_ACCURATE_POWER_SENSOR,
     CONF_BATTERY_CAPACITY,
@@ -32,17 +34,21 @@ from custom_components.quiet_solar.const import (
     CONF_CLIMATE,
     CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_CLIMATE_HVAC_MODE_ON,
-    CONF_HOME_VOLTAGE,
     CONF_HOME_END_OFF_PEAK_RANGE_1,
     CONF_HOME_END_OFF_PEAK_RANGE_2,
     CONF_HOME_OFF_PEAK_PRICE,
     CONF_HOME_PEAK_PRICE,
     CONF_HOME_START_OFF_PEAK_RANGE_1,
     CONF_HOME_START_OFF_PEAK_RANGE_2,
+    CONF_HOME_VOLTAGE,
     CONF_IS_3P,
     CONF_POWER,
     CONF_SOLAR_FORECAST_PROVIDER,
     CONF_SWITCH,
+    DEVICE_TYPE,
+    DOMAIN,
+    POOL_TEMP_STEPS,
+    SOLCAST_SOLAR_DOMAIN,
     CONF_TYPE_NAME_QSBattery,
     CONF_TYPE_NAME_QSChargerGeneric,
     CONF_TYPE_NAME_QSChargerOCPP,
@@ -53,16 +59,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSOnOffDuration,
     CONF_TYPE_NAME_QSPool,
     CONF_TYPE_NAME_QSSolar,
-    DEVICE_TYPE,
-    DOMAIN,
-    OPEN_METEO_SOLAR_DOMAIN,
-    POOL_TEMP_STEPS,
-    SOLCAST_SOLAR_DOMAIN,
 )
-from custom_components.quiet_solar.config_flow import HA_OPTIONS_FLOW_VERSION_THRESHOLD
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -94,28 +91,18 @@ def _charger_user_input(name: str, power_sensor: str) -> dict:
 
 
 async def _create_home_entry(hass: HomeAssistant, name: str = "Test Home"):
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _home_user_input(name)
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _home_user_input(name))
     assert result["type"] == FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     return result["result"]
 
 
 async def _start_flow_to_step(hass: HomeAssistant, step_id: str):
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert result["type"] == FlowResultType.MENU
-    return await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": step_id}
-    )
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": step_id})
 
 
 async def test_config_flow_creates_working_home(
@@ -123,23 +110,17 @@ async def test_config_flow_creates_working_home(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test that config flow creates a functioning home device."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
     assert result["type"] == FlowResultType.MENU
     assert result["menu_options"] == [CONF_TYPE_NAME_QSHome]
 
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome})
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == CONF_TYPE_NAME_QSHome
 
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _home_user_input("Test Home")
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _home_user_input("Test Home"))
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["title"] == "home: Test Home"
@@ -157,29 +138,21 @@ async def test_config_flow_home_then_charger(
     hass: HomeAssistant,
 ) -> None:
     """Test setting up home followed by charger via config flow."""
-    home_flow = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    home_flow = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     home_flow = await hass.config_entries.flow.async_configure(
         home_flow["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
     )
-    result = await hass.config_entries.flow.async_configure(
-        home_flow["flow_id"], _home_user_input("Test Home")
-    )
+    result = await hass.config_entries.flow.async_configure(home_flow["flow_id"], _home_user_input("Test Home"))
     assert result["type"] == FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
 
     hass.states.async_set("sensor.test_power", "100", {"unit_of_measurement": "W"})
 
-    charger_flow = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    charger_flow = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert charger_flow["type"] == FlowResultType.MENU
     assert CONF_TYPE_NAME_QSHome not in charger_flow["menu_options"]
 
-    charger_flow = await hass.config_entries.flow.async_configure(
-        charger_flow["flow_id"], {"next_step_id": "charger"}
-    )
+    charger_flow = await hass.config_entries.flow.async_configure(charger_flow["flow_id"], {"next_step_id": "charger"})
     assert charger_flow["type"] == FlowResultType.MENU
 
     charger_flow = await hass.config_entries.flow.async_configure(
@@ -198,10 +171,8 @@ async def test_config_flow_device_without_home(
 ) -> None:
     """Test that devices can be added before home (cached)."""
     # Try to add charger without home
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
     # Should show menu to create home first
     assert result["type"] == FlowResultType.MENU
     assert result["menu_options"] == [CONF_TYPE_NAME_QSHome]
@@ -211,15 +182,9 @@ async def test_config_flow_unique_ids(
     hass: HomeAssistant,
 ) -> None:
     """Test that config flow creates unique IDs."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _home_user_input("Test Home")
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _home_user_input("Test Home"))
     entry = result["result"]
     assert entry.unique_id == "Quiet Solar: Test Home home"
 
@@ -228,27 +193,19 @@ async def test_config_flow_data_cleanup(
     hass: HomeAssistant,
 ) -> None:
     """Test that config flow cleans up None values."""
-    home_flow = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    home_flow = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     home_flow = await hass.config_entries.flow.async_configure(
         home_flow["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
     )
-    result = await hass.config_entries.flow.async_configure(
-        home_flow["flow_id"], _home_user_input("Test Home")
-    )
+    result = await hass.config_entries.flow.async_configure(home_flow["flow_id"], _home_user_input("Test Home"))
     assert result["type"] == FlowResultType.CREATE_ENTRY
 
     await hass.async_block_till_done()
 
     hass.states.async_set("sensor.test_power", "100", {"unit_of_measurement": "W"})
 
-    charger_flow = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    charger_flow = await hass.config_entries.flow.async_configure(
-        charger_flow["flow_id"], {"next_step_id": "charger"}
-    )
+    charger_flow = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    charger_flow = await hass.config_entries.flow.async_configure(charger_flow["flow_id"], {"next_step_id": "charger"})
     charger_flow = await hass.config_entries.flow.async_configure(
         charger_flow["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSChargerGeneric}
     )
@@ -499,14 +456,7 @@ async def test_config_flow_entry_title_format(
     hass: HomeAssistant,
 ) -> None:
     """Test that entry titles are formatted correctly."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _home_user_input("Test Home")
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": CONF_TYPE_NAME_QSHome})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _home_user_input("Test Home"))
     assert result["title"] == "home: Test Home"
-

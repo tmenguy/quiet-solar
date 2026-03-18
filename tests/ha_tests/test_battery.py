@@ -9,13 +9,11 @@ import pytz
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
-    CONF_BATTERY_CHARGE_PERCENT_SENSOR,
     CONF_BATTERY_IS_DC_COUPLED,
     CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
@@ -25,7 +23,6 @@ from custom_components.quiet_solar.const import (
     DOMAIN,
 )
 from custom_components.quiet_solar.ha_model.battery import QSBattery
-
 from tests.factories import create_minimal_home_model
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
@@ -125,12 +122,11 @@ def battery_with_numbers(
 class TestClampChargePower:
     """Unit tests covering every branch of QSBattery.clamp_charge_power."""
 
-    async def test_charging_clamped_to_max(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_charging_clamped_to_max(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Power >= 0 and exceeds max_charge_power -> clamped."""
         hass.states.async_set(
-            "number.battery_max_charge", "5000",
+            "number.battery_max_charge",
+            "5000",
             {"unit_of_measurement": "W"},
         )
 
@@ -143,7 +139,8 @@ class TestClampChargePower:
     ) -> None:
         """Power >= 0 and below max_charge_power -> unchanged."""
         hass.states.async_set(
-            "number.battery_max_charge", "5000",
+            "number.battery_max_charge",
+            "5000",
             {"unit_of_measurement": "W"},
         )
 
@@ -175,9 +172,7 @@ class TestClampChargePower:
 
         assert result == 8000.0
 
-    async def test_charging_entity_unavailable(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_charging_entity_unavailable(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Power >= 0, max charge entity STATE_UNAVAILABLE -> passes through."""
         hass.states.async_set("number.battery_max_charge", STATE_UNAVAILABLE)
 
@@ -185,12 +180,11 @@ class TestClampChargePower:
 
         assert result == 8000.0
 
-    async def test_discharging_clamped_to_max(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_discharging_clamped_to_max(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Power < 0 and exceeds max_discharge_power -> clamped to -max."""
         hass.states.async_set(
-            "number.battery_max_discharge", "5000",
+            "number.battery_max_discharge",
+            "5000",
             {"unit_of_measurement": "W"},
         )
 
@@ -203,7 +197,8 @@ class TestClampChargePower:
     ) -> None:
         """Power < 0 and within max_discharge_power -> unchanged."""
         hass.states.async_set(
-            "number.battery_max_discharge", "5000",
+            "number.battery_max_discharge",
+            "5000",
             {"unit_of_measurement": "W"},
         )
 
@@ -235,9 +230,7 @@ class TestClampChargePower:
 
         assert result == -8000.0
 
-    async def test_discharging_entity_unavailable(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_discharging_entity_unavailable(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Power < 0, max discharge entity STATE_UNAVAILABLE -> passes through."""
         hass.states.async_set("number.battery_max_discharge", STATE_UNAVAILABLE)
 
@@ -245,12 +238,11 @@ class TestClampChargePower:
 
         assert result == -8000.0
 
-    async def test_zero_power(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_zero_power(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Power == 0 takes the >= 0 branch and returns 0."""
         hass.states.async_set(
-            "number.battery_max_charge", "5000",
+            "number.battery_max_charge",
+            "5000",
             {"unit_of_measurement": "W"},
         )
 
@@ -258,12 +250,11 @@ class TestClampChargePower:
 
         assert result == 0.0
 
-    async def test_charging_with_kw_unit(
-        self, hass: HomeAssistant, battery_with_numbers: QSBattery
-    ) -> None:
+    async def test_charging_with_kw_unit(self, hass: HomeAssistant, battery_with_numbers: QSBattery) -> None:
         """Max charge entity reports in kW; convert_power_to_w handles it."""
         hass.states.async_set(
-            "number.battery_max_charge", "3",
+            "number.battery_max_charge",
+            "3",
             {"unit_of_measurement": "kW"},
         )
 
@@ -280,9 +271,7 @@ class TestClampChargePower:
 class TestClampChargePowerEndToEnd:
     """Exercise clamp_charge_power through the home consumption getter."""
 
-    async def test_dc_coupled_charge_clamped(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry
-    ) -> None:
+    async def test_dc_coupled_charge_clamped(self, hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
         """DC-coupled battery without charge sensor: inferred charge is clamped.
 
         solar_input=8000, inverter_output=3000 -> inferred=5000, max_charge=4000 -> clamped to 4000.
@@ -327,11 +316,15 @@ class TestClampChargePowerEndToEnd:
 
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_active_power, now, 3000.0,
+            home.solar_plant.solar_inverter_active_power,
+            now,
+            3000.0,
         )
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_input_active_power, now, 8000.0,
+            home.solar_plant.solar_inverter_input_active_power,
+            now,
+            8000.0,
         )
         _inject_sensor_value(home, home.grid_active_power_sensor, now, -500.0)
 
@@ -348,9 +341,7 @@ class TestClampChargePowerEndToEnd:
         # Let's verify the clamping happened by checking the inferred value
         assert home.solar_plant.solar_production == 8000.0
 
-    async def test_dc_coupled_discharge_clamped(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry
-    ) -> None:
+    async def test_dc_coupled_discharge_clamped(self, hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
         """DC-coupled battery without charge sensor: inferred discharge is clamped.
 
         solar_input=2000, inverter_output=5000 -> inferred=-3000, max_discharge=2000 -> clamped to -2000.
@@ -395,11 +386,15 @@ class TestClampChargePowerEndToEnd:
 
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_active_power, now, 5000.0,
+            home.solar_plant.solar_inverter_active_power,
+            now,
+            5000.0,
         )
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_input_active_power, now, 2000.0,
+            home.solar_plant.solar_inverter_input_active_power,
+            now,
+            2000.0,
         )
         _inject_sensor_value(home, home.grid_active_power_sensor, now, -200.0)
 
@@ -450,11 +445,15 @@ class TestClampChargePowerEndToEnd:
         _inject_sensor_value(home.battery, home.battery.charge_discharge_sensor, now, 1500.0)
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_active_power, now, 3000.0,
+            home.solar_plant.solar_inverter_active_power,
+            now,
+            3000.0,
         )
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_input_active_power, now, 8000.0,
+            home.solar_plant.solar_inverter_input_active_power,
+            now,
+            8000.0,
         )
         _inject_sensor_value(home, home.grid_active_power_sensor, now, -200.0)
 
@@ -464,9 +463,7 @@ class TestClampChargePowerEndToEnd:
         # battery_charge_clamped = 1500 (directly from sensor, not clamped)
         assert home.solar_plant.solar_production == 8000.0
 
-    async def test_non_dc_coupled_bypasses_clamp(
-        self, hass: HomeAssistant, home_config_entry: ConfigEntry
-    ) -> None:
+    async def test_non_dc_coupled_bypasses_clamp(self, hass: HomeAssistant, home_config_entry: ConfigEntry) -> None:
         """Non-DC-coupled battery never triggers clamp_charge_power."""
         from .const import MOCK_BATTERY_WITH_NUMBERS_CONFIG, MOCK_SOLAR_WITH_INPUT_CONFIG
 
@@ -510,11 +507,15 @@ class TestClampChargePowerEndToEnd:
 
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_active_power, now, 3000.0,
+            home.solar_plant.solar_inverter_active_power,
+            now,
+            3000.0,
         )
         _inject_sensor_value(
             home.solar_plant,
-            home.solar_plant.solar_inverter_input_active_power, now, 8000.0,
+            home.solar_plant.solar_inverter_input_active_power,
+            now,
+            8000.0,
         )
         _inject_sensor_value(home, home.grid_active_power_sensor, now, -200.0)
 

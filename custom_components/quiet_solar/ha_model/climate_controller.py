@@ -4,15 +4,18 @@ from typing import Any
 
 from homeassistant.components import climate
 from homeassistant.components.climate import HVACMode
-
-from .bistate_duration import QSBiStateDuration
-from ..const import SENSOR_CONSTRAINT_SENSOR_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF, \
-    CONF_CLIMATE, CONF_TYPE_NAME_QSClimateDuration
-
-from ..home_model.commands import LoadCommand, CMD_ON
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN, STATE_UNAVAILABLE
-
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.helpers import entity_registry as er
+
+from ..const import (
+    CONF_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_CLIMATE_HVAC_MODE_ON,
+    SENSOR_CONSTRAINT_SENSOR_CLIMATE,
+    CONF_TYPE_NAME_QSClimateDuration,
+)
+from ..home_model.commands import CMD_ON, LoadCommand
+from .bistate_duration import QSBiStateDuration
 
 
 def get_hvac_modes(hass, entity_id):
@@ -20,9 +23,11 @@ def get_hvac_modes(hass, entity_id):
     entry = registry.async_get(entity_id)
     return entry.capabilities.get("hvac_modes", [HVACMode.AUTO.value, HVACMode.OFF.value])
 
-_LOGGER = logging.getLogger(__name__)
-class QSClimateDuration(QSBiStateDuration):
 
+_LOGGER = logging.getLogger(__name__)
+
+
+class QSClimateDuration(QSBiStateDuration):
     conf_type_name = CONF_TYPE_NAME_QSClimateDuration
 
     def __init__(self, **kwargs):
@@ -38,7 +43,6 @@ class QSClimateDuration(QSBiStateDuration):
         self._bistate_mode_off = self._state_off
         self.bistate_entity = self.climate_entity
         self.is_load_time_sensitive = True
-
 
     @property
     def climate_state_on(self):
@@ -59,19 +63,18 @@ class QSClimateDuration(QSBiStateDuration):
         self._bistate_mode_off = value
 
     def get_possibles_modes(self):
-        """ return the possible modes for the climate entity """
+        """return the possible modes for the climate entity"""
         return get_hvac_modes(self.hass, self.climate_entity)
-
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CLIMATE
 
     def get_select_translation_key(self) -> str | None:
-        """ return the translation key for the select """
+        """return the translation key for the select"""
         return "climate_mode"
 
     # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command:LoadCommand, state:str|None) -> bool | None:
+    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
 
         if state is not None:
             hvac_mode = state
@@ -83,7 +86,6 @@ class QSClimateDuration(QSBiStateDuration):
             else:
                 raise ValueError("Invalid command")
 
-
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.bistate_entity}
         service = climate.SERVICE_SET_HVAC_MODE
 
@@ -91,8 +93,6 @@ class QSClimateDuration(QSBiStateDuration):
         domain = climate.DOMAIN
 
         # exception catched above execute_command
-        await self.hass.services.async_call(
-            domain, service, data
-        )
+        await self.hass.services.async_call(domain, service, data)
 
         return False

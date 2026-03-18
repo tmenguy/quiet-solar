@@ -1,25 +1,20 @@
 """Tests for LoadConstraint.has_a_following_constraint() method."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
 
-import pytest
 import pytz
 
-from custom_components.quiet_solar.home_model.constraints import (
-    LoadConstraint,
-    MultiStepsPowerLoadConstraint,
-    TimeBasedSimplePowerLoadConstraint,
-    DATETIME_MAX_UTC,
-    DATETIME_MIN_UTC,
-)
-from custom_components.quiet_solar.home_model.commands import LoadCommand
 from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
-    CONSTRAINT_TYPE_FILLER,
-    CONSTRAINT_TYPE_MANDATORY_END_TIME,
     SOLVER_STEP_S,
+)
+from custom_components.quiet_solar.home_model.commands import LoadCommand
+from custom_components.quiet_solar.home_model.constraints import (
+    DATETIME_MAX_UTC,
+    DATETIME_MIN_UTC,
+    TimeBasedSimplePowerLoadConstraint,
 )
 
 
@@ -77,6 +72,7 @@ def _make_constraint(load, start=None, end=None, type=CONSTRAINT_TYPE_FILLER_AUT
 # Single constraint - no following
 # =============================================================================
 
+
 def test_single_constraint_returns_false():
     """A lone constraint has no follower."""
     load = _FakeLoad()
@@ -88,6 +84,7 @@ def test_single_constraint_returns_false():
 # =============================================================================
 # Constraint not found in load's list
 # =============================================================================
+
 
 def test_constraint_not_in_load_list_returns_false():
     """A constraint not in the load's _constraints returns False."""
@@ -102,6 +99,7 @@ def test_constraint_not_in_load_list_returns_false():
 # Last constraint in list - no following
 # =============================================================================
 
+
 def test_last_constraint_returns_false():
     """The last constraint in the list has no follower."""
     load = _FakeLoad()
@@ -114,6 +112,7 @@ def test_last_constraint_returns_false():
 # =============================================================================
 # Two constraints with direct continuity (no gap)
 # =============================================================================
+
 
 def test_two_constraints_continuous():
     """Two constraints where next starts exactly when current ends -> True."""
@@ -147,6 +146,7 @@ def test_two_constraints_overlap():
 # Two constraints with a gap larger than SOLVER_STEP_S
 # =============================================================================
 
+
 def test_two_constraints_large_gap():
     """Two constraints with a gap larger than SOLVER_STEP_S -> False."""
     load = _FakeLoad()
@@ -160,6 +160,7 @@ def test_two_constraints_large_gap():
 # =============================================================================
 # Special datetime values: DATETIME_MAX_UTC and DATETIME_MIN_UTC
 # =============================================================================
+
 
 def test_current_has_infinite_end():
     """Current constraint has DATETIME_MAX_UTC end (no end) -> True."""
@@ -201,6 +202,7 @@ def test_next_has_none_start():
 # Three constraints - middle one checks
 # =============================================================================
 
+
 def test_three_constraints_middle_has_following():
     """Middle constraint has a direct follower."""
     load = _FakeLoad()
@@ -229,6 +231,7 @@ def test_three_constraints_gap_after_middle():
 # =============================================================================
 # Empty constraints list
 # =============================================================================
+
 
 def test_empty_constraints_list():
     """Load has no constraints at all."""

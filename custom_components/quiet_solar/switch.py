@@ -1,21 +1,25 @@
 import logging
-from dataclasses import dataclass, asdict
+from collections.abc import Callable, Coroutine
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Callable, Any, Coroutine
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from . import DOMAIN
-from .const import SWITCH_CAR_NEXT_CHARGE_FULL, SWITCH_BEST_EFFORT_GREEN_ONLY, ENTITY_ID_FORMAT, \
-    SWITCH_ENABLE_DEVICE, SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY
+from .const import (
+    SWITCH_BEST_EFFORT_GREEN_ONLY,
+    SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+    SWITCH_ENABLE_DEVICE,
+)
+from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
-from .entity import QSDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +35,9 @@ def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
     )
 
-    entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
+    entities.append(
+        QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority)
+    )
 
     return entities
 
@@ -44,14 +50,16 @@ def create_ha_switch_for_QSCar(device: QSCar):
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
     )
 
-    entities.append(QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority))
+    entities.append(
+        QSSwitchEntityChargerOrCar(data_handler=device.data_handler, device=device, description=qs_bump_solar_priority)
+    )
 
     return entities
+
 
 def create_ha_switch_for_QSPool(device: QSPool):
     entities = []
     return entities
-
 
 
 def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
@@ -67,17 +75,20 @@ def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
             key=SWITCH_BEST_EFFORT_GREEN_ONLY,
             translation_key=SWITCH_BEST_EFFORT_GREEN_ONLY,
         )
-        entities.append(QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_green_only_description))
-
+        entities.append(
+            QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_green_only_description)
+        )
 
     qs_load_enabled_description = QSSwitchEntityDescription(
         key=SWITCH_ENABLE_DEVICE,
         translation_key=SWITCH_ENABLE_DEVICE,
     )
-    entities.append(QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_load_enabled_description))
-
+    entities.append(
+        QSSwitchEntityWithRestore(data_handler=data_handler, device=device, description=qs_load_enabled_description)
+    )
 
     return entities
+
 
 def create_ha_switch(device: AbstractDevice):
 
@@ -96,6 +107,7 @@ def create_ha_switch(device: AbstractDevice):
 
     return ret
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -105,7 +117,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_switch(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_switch(attached_device))
@@ -115,6 +126,7 @@ async def async_setup_entry(
 
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -122,21 +134,24 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry switch: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry switch: exception for device %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
+
 
 @dataclass(frozen=True, kw_only=True)
 class QSSwitchEntityDescription(SwitchEntityDescription):
     """Class describing qs switch button entities."""
-    async_switch: Callable[[AbstractDevice, bool, bool], Coroutine] | None = None
 
+    async_switch: Callable[[AbstractDevice, bool, bool], Coroutine] | None = None
 
 
 @dataclass
 class QSExtraStoredData(ExtraStoredData):
     """Object to hold extra stored data."""
+
     native_is_on: bool | None
 
     def as_dict(self) -> dict[str, Any]:
@@ -151,13 +166,15 @@ class QSExtraStoredData(ExtraStoredData):
                 restored["native_is_on"],
             )
         except Exception as e:
-            _LOGGER.error("QSExtraStoredData.from_dict switch exception %s %s", restored, e, exc_info=True,
-                          stack_info=True)
+            _LOGGER.error(
+                "QSExtraStoredData.from_dict switch exception %s %s", restored, e, exc_info=True, stack_info=True
+            )
             return None
 
-class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
+class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
     entity_description: QSSwitchEntityDescription
+
     def __init__(
         self,
         data_handler,
@@ -175,12 +192,11 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
             self._attr_available = True
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
         self._set_availabiltiy()
 
         if hasattr(self.device, self.entity_description.key):
-
             attr_val = getattr(self.device, self.entity_description.key, False)
 
             if attr_val != self._attr_is_on:
@@ -191,7 +207,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         _LOGGER.info(f"QSSwitchEntity:async_turn_on : {self.entity_description.key} on {self.device.name}")
 
-        for_init = kwargs.pop('for_init', False)
+        for_init = kwargs.pop("for_init", False)
 
         if self.entity_description.async_switch is not None:
             await self.entity_description.async_switch(self.device, True, for_init)
@@ -208,7 +224,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         _LOGGER.info(f"QSSwitchEntity:async_turn_off : {self.entity_description.key} on {self.device.name}")
 
-        for_init = kwargs.pop('for_init', False)
+        for_init = kwargs.pop("for_init", False)
 
         if self.entity_description.async_switch is not None:
             await self.entity_description.async_switch(self.device, False, for_init)
@@ -218,7 +234,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         self._attr_is_on = False
         self._set_availabiltiy()
         self.async_write_ha_state()
-        if self.device.home  and not for_init:
+        if self.device.home and not for_init:
             await self.device.home.force_update_all()
 
 
@@ -243,9 +259,7 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
         self._attr_is_on = None
 
         last_sensor_state = await self.async_get_last_switch_data()
-        if (
-            not last_sensor_state
-        ):
+        if not last_sensor_state:
             pass
         else:
             self._attr_is_on = last_sensor_state.native_is_on
@@ -256,7 +270,6 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
             else:
                 self._attr_is_on = False
 
-
         if self._attr_is_on:
             await self.async_turn_on(for_init=True)
         else:
@@ -264,7 +277,6 @@ class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):
 
 
 class QSSwitchEntityChargerOrCar(QSSwitchEntityWithRestore):
-
     def car(self) -> QSCar | None:
         """Return the car associated with this charger."""
         if isinstance(self.device, QSChargerGeneric):
@@ -293,7 +305,3 @@ class QSSwitchEntityChargerOrCar(QSSwitchEntityWithRestore):
                 self._attr_available = False
         else:
             self._attr_available = True
-
-
-
-

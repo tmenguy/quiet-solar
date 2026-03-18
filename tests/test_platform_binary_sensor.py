@@ -1,17 +1,18 @@
 """Tests for binary sensor platform."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from tests.factories import create_minimal_home_model
 from custom_components.quiet_solar.binary_sensor import (
     QSBaseBinarySensor,
     QSBinarySensorEntityDescription,
     async_unload_entry,
 )
 from custom_components.quiet_solar.const import DOMAIN
+from tests.factories import create_minimal_home_model
 
 
 def _make_device() -> MagicMock:

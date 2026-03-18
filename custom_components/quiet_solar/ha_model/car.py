@@ -1,32 +1,48 @@
 import bisect
 import logging
-from operator import itemgetter
 from datetime import datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from datetime import time as dt_time
+from operator import itemgetter
+from typing import TYPE_CHECKING, Any
 
 import pytz
-from haversine import haversine, Unit
-from homeassistant.components.recorder.models import LazyState
-from homeassistant.const import Platform, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_ENTITY_ID
-from homeassistant.components.recorder.history import state_changes_during_period
-from homeassistant.components.recorder import get_instance as recorder_get_instance
+from haversine import Unit, haversine
 from homeassistant.components import number
+from homeassistant.components.recorder import get_instance as recorder_get_instance
+from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.models import LazyState
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 
-from .device import convert_distance_to_km, load_from_history
-
-from ..const import CONF_CAR_PLUGGED, CONF_CAR_TRACKER, CONF_CAR_CHARGE_PERCENT_SENSOR, \
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER, \
-    CONF_CAR_BATTERY_CAPACITY, CONF_CAR_CHARGER_MIN_CHARGE, CONF_CAR_CHARGER_MAX_CHARGE, \
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P, MAX_POSSIBLE_AMPERAGE, \
-    CONF_DEFAULT_CAR_CHARGE, CONF_CAR_IS_INVITED, FORCE_CAR_NO_CHARGER_CONNECTED, \
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, CONF_MINIMUM_OK_CAR_CHARGE, CONF_TYPE_NAME_QSCar, \
-    CAR_CHARGE_TYPE_NOT_PLUGGED, CONF_CAR_ODOMETER_SENSOR, CONF_CAR_ESTIMATED_RANGE_SENSOR, \
-    CAR_EFFICIENCY_KM_PER_KWH, CAR_HARD_WIRED_CHARGER, FORCE_CAR_NO_PERSON_ATTACHED, SENSOR_CAR_PERSON_FORECAST, \
-    CAR_CHARGE_TYPE_PERSON_AUTOMATED, CAR_USE_PERCENT_MODE_SENSOR
+from ..const import (
+    CAR_CHARGE_TYPE_NOT_PLUGGED,
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
+    CAR_EFFICIENCY_KM_PER_KWH,
+    CAR_HARD_WIRED_CHARGER,
+    CAR_USE_PERCENT_MODE_SENSOR,
+    CONF_CAR_BATTERY_CAPACITY,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
+    CONF_CAR_CHARGE_PERCENT_SENSOR,
+    CONF_CAR_CHARGER_MAX_CHARGE,
+    CONF_CAR_CHARGER_MIN_CHARGE,
+    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
+    CONF_CAR_ESTIMATED_RANGE_SENSOR,
+    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
+    CONF_CAR_IS_INVITED,
+    CONF_CAR_ODOMETER_SENSOR,
+    CONF_CAR_PLUGGED,
+    CONF_CAR_TRACKER,
+    CONF_DEFAULT_CAR_CHARGE,
+    CONF_MINIMUM_OK_CAR_CHARGE,
+    FORCE_CAR_NO_CHARGER_CONNECTED,
+    FORCE_CAR_NO_PERSON_ATTACHED,
+    MAX_POSSIBLE_AMPERAGE,
+    CONF_TYPE_NAME_QSCar,
+)
 from ..ha_model.device import HADeviceMixin
 from ..home_model.constraints import DATETIME_MAX_UTC
 from ..home_model.load import AbstractDevice
-from datetime import time as dt_time
+from .device import convert_distance_to_km, load_from_history
 
 if TYPE_CHECKING:
     from ..ha_model.person import QSPerson
@@ -36,16 +52,16 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_CHARGE_POWER_W = 70
 
-CAR_MAX_EFFICIENCY_HISTORY_S = 3600*24*31
+CAR_MAX_EFFICIENCY_HISTORY_S = 3600 * 24 * 31
 
-CAR_DEFAULT_CAPACITY = 100000 # 100 kWh
+CAR_DEFAULT_CAPACITY = 100000  # 100 kWh
 
 CAR_MINIMUM_LEFT_RANGE_KM = 40.0
 
 CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S = 3600
 
-class QSCar(HADeviceMixin, AbstractDevice):
 
+class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
 
     def __init__(self, **kwargs):
@@ -61,18 +77,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._conf_car_charge_percent_max_number_steps = kwargs.pop(CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS, None)
         if self._conf_car_charge_percent_max_number_steps == "":
             self._conf_car_charge_percent_max_number_steps = None
-        self.car_battery_capacity = kwargs.pop( CONF_CAR_BATTERY_CAPACITY, None)
+        self.car_battery_capacity = kwargs.pop(CONF_CAR_BATTERY_CAPACITY, None)
         self.car_default_charge = kwargs.pop(CONF_DEFAULT_CAR_CHARGE, 100.0)
         self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 30.0)
 
-        self.car_efficiency_km_per_kwh_sensor : str = CAR_EFFICIENCY_KM_PER_KWH
-        self.car_use_percent_mode_sensor : str = CAR_USE_PERCENT_MODE_SENSOR
+        self.car_efficiency_km_per_kwh_sensor: str = CAR_EFFICIENCY_KM_PER_KWH
+        self.car_use_percent_mode_sensor: str = CAR_USE_PERCENT_MODE_SENSOR
 
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
-        self.car_charger_min_charge : int = int(max(0,kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
+        self.car_charger_min_charge: int = int(max(0, kwargs.pop(CONF_CAR_CHARGER_MIN_CHARGE, 6)))
         self._conf_car_charger_min_charge = self.car_charger_min_charge
-        self.car_charger_max_charge : int = min(MAX_POSSIBLE_AMPERAGE, int(max(0, kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE, 32))))
+        self.car_charger_max_charge: int = min(
+            MAX_POSSIBLE_AMPERAGE, int(max(0, kwargs.pop(CONF_CAR_CHARGER_MAX_CHARGE, 32)))
+        )
         self._conf_car_charger_max_charge = self.car_charger_max_charge
         self.car_use_custom_power_charge_values = kwargs.pop(CONF_CAR_CUSTOM_POWER_CHARGE_VALUES, False)
         if self.car_use_custom_power_charge_values is False:
@@ -84,7 +102,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
         self._last_dampening_update = None
 
-
         self.theoretical_amp_to_power_1p = [-1] * (MAX_POSSIBLE_AMPERAGE)
         self.theoretical_amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
 
@@ -95,7 +112,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.conf_customized_amp_to_power_3p = [-1] * (MAX_POSSIBLE_AMPERAGE)
 
         self.car_charge_percent_max_number_steps = []
-        if self._conf_car_charge_percent_max_number_steps and isinstance(self._conf_car_charge_percent_max_number_steps, str):
+        if self._conf_car_charge_percent_max_number_steps and isinstance(
+            self._conf_car_charge_percent_max_number_steps, str
+        ):
             vals_str = self._conf_car_charge_percent_max_number_steps.split(",")
             self.car_charge_percent_max_number_steps = []
             for val in vals_str:
@@ -111,53 +130,61 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if len(self.car_charge_percent_max_number_steps) > 0:
                 self.car_charge_percent_max_number_steps.sort()
                 if self.car_charge_percent_max_number_steps[-1] != 100:
-                  self.car_charge_percent_max_number_steps.append(100)
+                    self.car_charge_percent_max_number_steps.append(100)
 
         super().__init__(**kwargs)
 
         self._conf_calendar = self.calendar
 
         for a in range(len(self.theoretical_amp_to_power_1p)):
-
             val_1p = float(self.voltage * a)
-            val_3p = 3*val_1p
+            val_3p = 3 * val_1p
 
             self.amp_to_power_1p[a] = self.theoretical_amp_to_power_1p[a] = val_1p
             self.amp_to_power_3p[a] = self.theoretical_amp_to_power_3p[a] = val_3p
 
         self.can_dampen_strongly_dynamically = True
         if self.car_use_custom_power_charge_values:
-
             self.can_dampen_strongly_dynamically = False
 
             for a in range(self.car_charger_min_charge, self.car_charger_max_charge + 1):
                 val = float(kwargs.pop(f"charge_{a}", -1))
                 if val >= 0:
                     if self.car_is_custom_power_charge_values_3p:
-                        self.conf_customized_amp_to_power_3p[a] = self.customized_amp_to_power_3p[a] = self.amp_to_power_3p[a] = val
-                        if a*3 >= self.car_charger_min_charge and a*3 <= self.car_charger_max_charge:
-                            self.conf_customized_amp_to_power_1p[a*3] = self.customized_amp_to_power_1p[a*3] = self.amp_to_power_1p[a*3] = val
+                        self.conf_customized_amp_to_power_3p[a] = self.customized_amp_to_power_3p[
+                            a
+                        ] = self.amp_to_power_3p[a] = val
+                        if a * 3 >= self.car_charger_min_charge and a * 3 <= self.car_charger_max_charge:
+                            self.conf_customized_amp_to_power_1p[a * 3] = self.customized_amp_to_power_1p[
+                                a * 3
+                            ] = self.amp_to_power_1p[a * 3] = val
 
                     else:
-                        self.conf_customized_amp_to_power_1p[a] = self.customized_amp_to_power_1p[a] = self.amp_to_power_1p[a] = val
-                        if a % 3 == 0 and a // 3 >= self.car_charger_min_charge and a // 3 <= self.car_charger_max_charge:
-                            self.conf_customized_amp_to_power_3p[a//3] = self.customized_amp_to_power_3p[a//3] = self.amp_to_power_3p[a//3] = val
+                        self.conf_customized_amp_to_power_1p[a] = self.customized_amp_to_power_1p[
+                            a
+                        ] = self.amp_to_power_1p[a] = val
+                        if (
+                            a % 3 == 0
+                            and a // 3 >= self.car_charger_min_charge
+                            and a // 3 <= self.car_charger_max_charge
+                        ):
+                            self.conf_customized_amp_to_power_3p[a // 3] = self.customized_amp_to_power_3p[
+                                a // 3
+                            ] = self.amp_to_power_3p[a // 3] = val
 
         self._salvable_dampening = {}
 
         self._dampening_deltas = {}
         self._dampening_deltas_graph = {}
 
-
         self.charger = None
 
         self.do_force_next_charge = False
-        self.do_next_charge_time : datetime | None = None
-
+        self.do_next_charge_time: datetime | None = None
 
         self._reset_charge_targets()
 
-        self.user_attached_charger_name : str | None = None
+        self.user_attached_charger_name: str | None = None
 
         self.default_charge_time: dt_time | None = None
 
@@ -165,58 +192,57 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         # Efficiency learning state
         self._km_per_kwh: float | None = None
-        self._efficiency_segments: list[tuple[float, float, float, float, datetime]] = []  # delta_km, delta_soc, soc_from, soc_to, time of finishing
+        self._efficiency_segments: list[
+            tuple[float, float, float, float, datetime]
+        ] = []  # delta_km, delta_soc, soc_from, soc_to, time of finishing
 
         # self._efficiency_deltas = {}
         # self._efficiency_deltas_graph = {}
 
-        self._decreasing_segments: list[list[tuple[float, float]|None|int]] = []
+        self._decreasing_segments: list[list[tuple[float, float] | None | int]] = []
         self._dec_seg_count = 0
 
-        self.current_forecasted_person : QSPerson | None = None
-        self._current_forecasted_person_name_from_boot : str | None = None
+        self.current_forecasted_person: QSPerson | None = None
+        self._current_forecasted_person_name_from_boot: str | None = None
 
         self.reset()
 
-        self._use_percent_mode = True # to have a default value, overriden by the call below if necessary
+        self._use_percent_mode = True  # to have a default value, overriden by the call below if necessary
         self._use_percent_mode = self.can_use_charge_percent_constraints()
 
-        self.user_selected_person_name_for_car : str | None = None
+        self.user_selected_person_name_for_car: str | None = None
 
-        self.attach_ha_state_to_probe(self.car_charge_percent_sensor,
-                                      is_numerical=True,
-                                      reload_from_history=True)
+        self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True, reload_from_history=True)
 
-        self.attach_ha_state_to_probe(self.car_plugged,
-                                      is_numerical=False,
-                                      reload_from_history=True)
+        self.attach_ha_state_to_probe(self.car_plugged, is_numerical=False, reload_from_history=True)
 
-        self.attach_ha_state_to_probe(self.car_tracker,
-                                      is_numerical=False,
-                                      reload_from_history=True)
+        self.attach_ha_state_to_probe(self.car_tracker, is_numerical=False, reload_from_history=True)
 
-        self.attach_ha_state_to_probe(self.car_odometer_sensor,
-                                      conversion_fn=convert_distance_to_km,
-                                      is_numerical=True)
+        self.attach_ha_state_to_probe(self.car_odometer_sensor, conversion_fn=convert_distance_to_km, is_numerical=True)
 
-        self.attach_ha_state_to_probe(self.car_estimated_range_sensor,
-                                      conversion_fn=convert_distance_to_km,
-                                      is_numerical=True,
-                                      reload_from_history=True)
+        self.attach_ha_state_to_probe(
+            self.car_estimated_range_sensor,
+            conversion_fn=convert_distance_to_km,
+            is_numerical=True,
+            reload_from_history=True,
+        )
 
-        self.attach_ha_state_to_probe(self.car_efficiency_km_per_kwh_sensor,
-                                      is_numerical=True,
-                                      non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter)
+        self.attach_ha_state_to_probe(
+            self.car_efficiency_km_per_kwh_sensor,
+            is_numerical=True,
+            non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter,
+        )
 
-        self.attach_ha_state_to_probe(self.car_use_percent_mode_sensor,
-                                      is_numerical=True,
-                                      non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter)
-
+        self.attach_ha_state_to_probe(
+            self.car_use_percent_mode_sensor,
+            is_numerical=True,
+            non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter,
+        )
 
     def _car_person_option(self, person_name: str):
         return person_name
 
-    def update_to_be_saved_extra_device_info(self, data_to_update:dict):
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
         # do not use the property, but teh underlying model
         data_to_update["user_selected_person_name_for_car"] = self.user_selected_person_name_for_car
@@ -230,8 +256,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         super().use_saved_extra_device_info(stored_load_info)
         # do not use the property to not trigger an unnecessary compute of the people allocation
         self.user_selected_person_name_for_car = stored_load_info.get("user_selected_person_name_for_car", None)
-        self._current_forecasted_person_name_from_boot = stored_load_info.get("current_forecasted_person_name_from_boot", None)
-
+        self._current_forecasted_person_name_from_boot = stored_load_info.get(
+            "current_forecasted_person_name_from_boot", None
+        )
 
     def device_post_home_init(self, time: datetime):
         """Initialize person assignment from persisted state at startup."""
@@ -255,7 +282,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     elif not self._is_person_authorized_for_car(self.user_selected_person_name_for_car):
                         _LOGGER.warning(
                             "device_post_home_init: Car:%s clearing stale Person:%s (not authorized)",
-                            self.name, self.user_selected_person_name_for_car,
+                            self.name,
+                            self.user_selected_person_name_for_car,
                         )
                         self.user_selected_person_name_for_car = None
                         self.current_forecasted_person = None
@@ -267,7 +295,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if self.hass is not None:
                 self.hass.async_create_task(self._async_bootstrap_efficiency_from_history(time))
         except Exception as e:
-            _LOGGER.error("device_post_home_init: exception for boostrap efficiency device: %s %s", self.name, e, exc_info=True, stack_info=True)
+            _LOGGER.error(
+                "device_post_home_init: exception for boostrap efficiency device: %s %s",
+                self.name,
+                e,
+                exc_info=True,
+                stack_info=True,
+            )
 
     def _is_person_authorized_for_car(self, person_name: str) -> bool:
         """Check if a person is authorized to drive this car."""
@@ -287,7 +321,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             _LOGGER.warning(
                 "Car:%s skipping auto-assignment of Person:%s (not authorized)",
-                self.name, self.current_forecasted_person.name,
+                self.name,
+                self.current_forecasted_person.name,
             )
 
     def get_car_person_readable_forecast_mileage(self):
@@ -299,14 +334,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
             return f"{person.name}: {forecast_str}"
 
-
     def get_car_persons_options(self) -> list[str]:
         options = []
         if self.home:
-
             # get the possible persons for the house and their needed charge
             for person in self.home._persons:
-
                 if self.name not in person.authorized_cars:
                     continue
 
@@ -316,7 +348,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         options.append(FORCE_CAR_NO_PERSON_ATTACHED)
         return options
-
 
     def get_car_person_option(self) -> str | None:
 
@@ -332,8 +363,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return None
 
-
-    async def set_user_person_for_car(self, option:str):
+    async def set_user_person_for_car(self, option: str):
 
         if option is None:
             option = FORCE_CAR_NO_PERSON_ATTACHED
@@ -341,12 +371,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if option != FORCE_CAR_NO_PERSON_ATTACHED and self.home:
             p_per = self.home.get_person_by_name(option)
             if p_per is None:
-                _LOGGER.error(f"set_user_person_for_car: WRONG PERSON OPTION PASSED {option}" )
+                _LOGGER.error(f"set_user_person_for_car: WRONG PERSON OPTION PASSED {option}")
                 option = FORCE_CAR_NO_PERSON_ATTACHED
             elif not self._is_person_authorized_for_car(option):
                 _LOGGER.warning(
                     "set_user_person_for_car: Car:%s Person:%s not authorized, ignoring",
-                    self.name, option,
+                    self.name,
+                    option,
                 )
                 return
 
@@ -365,7 +396,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
 
         if self.home:
-
             for car in self.home._cars:
                 if car.name != self.name and car.user_selected_person_name_for_car == new_value:
                     # reset the user_selected_person_name_for_car for this car
@@ -378,7 +408,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         res = None
 
         if self.car_odometer_sensor is not None:
-            car_odometers : list[LazyState] = await load_from_history(self.hass, self.car_odometer_sensor, from_time - timedelta(days=2), to_time, no_attributes=False)
+            car_odometers: list[LazyState] = await load_from_history(
+                self.hass, self.car_odometer_sensor, from_time - timedelta(days=2), to_time, no_attributes=False
+            )
 
             prev_state = None
             from_state = None
@@ -387,7 +419,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     continue
                 try:
                     v = float(odo_state.state)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
 
                 if odo_state.last_changed > from_time:
@@ -405,27 +437,32 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     continue
                 try:
                     v = float(odo_state.state)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
 
                 to_state = odo_state
                 break
 
             if from_state is None or to_state is None:
-                res =  None
+                res = None
             else:
-
                 from_km, _ = convert_distance_to_km(float(from_state.state), from_state.attributes)
                 to_km, _ = convert_distance_to_km(float(to_state.state), to_state.attributes)
 
                 return to_km - from_km
 
         if res is None and self.car_tracker is not None:
-            car_positions = await load_from_history(self.hass, self.car_tracker, from_time, to_time, no_attributes=False)
+            car_positions = await load_from_history(
+                self.hass, self.car_tracker, from_time, to_time, no_attributes=False
+            )
 
             prev_pos = None
             for car_position in car_positions:
-                if car_position is None or car_position.state == STATE_UNKNOWN or car_position.state == STATE_UNAVAILABLE:
+                if (
+                    car_position is None
+                    or car_position.state == STATE_UNKNOWN
+                    or car_position.state == STATE_UNAVAILABLE
+                ):
                     continue
 
                 state_attr: dict[str, Any] = car_position.attributes
@@ -451,15 +488,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return res
 
-    async def get_best_person_next_need(self, time:datetime) -> tuple[bool | None, datetime | None, float | None, Any | None]:
+    async def get_best_person_next_need(
+        self, time: datetime
+    ) -> tuple[bool | None, datetime | None, float | None, Any | None]:
 
         if self.home:
             person = self.current_forecasted_person
 
             if person is not None:
-
                 next_usage_time, p_mileage = person.update_person_forecast(time)
-                is_person_covered, current_soc, person_min_target_charge, diff_energy = self.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                is_person_covered, current_soc, person_min_target_charge, diff_energy = (
+                    self.get_adapt_target_percent_soc_to_reach_range_km(p_mileage, time)
+                )
 
                 if next_usage_time is not None:
                     # round the next usage time to the prev 30 minutes
@@ -471,9 +511,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return (None, None, None, None)
 
-
-
-    def car_use_percent_mode_sensor_state_getter(self, entity_id: str, time: datetime | None) ->  (tuple[datetime | None, float | str | None, dict | None] | None):
+    def car_use_percent_mode_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         if time is None:
             time = datetime.now(tz=pytz.UTC)
@@ -485,11 +525,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if res == "on":
             # now we have to check that the sensor is either invalid for a long time
-            last_valid_time, last_valid_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(self.car_charge_percent_sensor, tolerance_seconds = None, time=time)
+            last_valid_time, last_valid_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+                self.car_charge_percent_sensor, tolerance_seconds=None, time=time
+            )
 
             if last_valid_value is None or last_valid_time is None:
                 res = "off"
-            elif last_valid_time is None or (time - last_valid_time).total_seconds() > CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S:
+            elif (
+                last_valid_time is None
+                or (time - last_valid_time).total_seconds() > CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S
+            ):
                 res = "off"
             else:
                 res = "on"
@@ -498,7 +543,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return (time, res, {})
 
-    def car_efficiency_km_per_kwh_sensor_state_getter(self, entity_id: str,  time: datetime | None) -> (tuple[datetime | None, float | str | None, dict | None] | None):
+    def car_efficiency_km_per_kwh_sensor_state_getter(
+        self, entity_id: str, time: datetime | None
+    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
 
         # Learn efficiency only when car is unplugged and we have both sensors
         if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
@@ -526,7 +573,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             current_soc = self.get_car_charge_percent(time)
             car_estimate = self.get_car_estimated_range_km_from_sensor(time)
             if current_soc is not None and car_estimate is not None and current_soc > 0.0:
-                sample_eff = float(car_estimate) / ((float(current_soc) / 100.0) * (float(self.car_battery_capacity) / 1000.0))
+                sample_eff = float(car_estimate) / (
+                    (float(current_soc) / 100.0) * (float(self.car_battery_capacity) / 1000.0)
+                )
 
         if sample_eff is None:
             if prev_sample is not None and self._decreasing_segments[-1][2] == prev_seg_idx and prev_sample[0] > soc:
@@ -551,7 +600,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return (time, self._km_per_kwh, {})
 
-
     def get_car_charge_type(self) -> str:
         if self.charger is None:
             return CAR_CHARGE_TYPE_NOT_PLUGGED
@@ -566,7 +614,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.charger is None:
             return False
 
-        type, ct =  self.charger.get_charge_type()
+        type, ct = self.charger.get_charge_type()
         if type == CAR_CHARGE_TYPE_PERSON_AUTOMATED and ct is not None and ct.end_of_constraint != DATETIME_MAX_UTC:
             return await self.user_add_default_charge_at_datetime(ct.end_of_constraint)
 
@@ -599,8 +647,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
         return list(parent)
 
-
-    def _add_soc_odo_value_to_segments(self, soc:float, odo:float, time:datetime):
+    def _add_soc_odo_value_to_segments(self, soc: float, odo: float, time: datetime):
 
         current_vals = (soc, odo, time)
 
@@ -658,7 +705,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if (time - self._efficiency_segments[0][4]).total_seconds() > CAR_MAX_EFFICIENCY_HISTORY_S:
                         self._efficiency_segments.pop(0)
 
-
                     # to play a bit with graphs with known soc deltas ... not sure it is really useful
                     # self._efficiency_deltas[(from_soc, to_soc)] = delta_km
                     # self._efficiency_deltas[(to_soc, from_soc)] = -delta_km
@@ -668,17 +714,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     # ts = self._efficiency_deltas_graph.setdefault(to_soc, set())
                     # ts.add(from_soc)
 
-
                 else:
                     # bad segment, replace it with the new one
                     self._decreasing_segments[-1] = new_segment
-
 
     async def _async_bootstrap_efficiency_from_history(self, time: datetime):
         # pull last 14 days; compute efficiency only from segments where SOC decreases
         if self.hass is None:
             return
-        if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None or self.car_battery_capacity is None or self.car_battery_capacity <= 0:
+        if (
+            self.car_odometer_sensor is None
+            or self.car_charge_percent_sensor is None
+            or self.car_battery_capacity is None
+            or self.car_battery_capacity <= 0
+        ):
             return
 
         start_time = time - timedelta(days=31)
@@ -691,9 +740,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         try:
             odos = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_odometer_sensor)
-            socs = await recorder_get_instance(self.hass).async_add_executor_job(_load_hist, self.car_charge_percent_sensor)
+            socs = await recorder_get_instance(self.hass).async_add_executor_job(
+                _load_hist, self.car_charge_percent_sensor
+            )
         except Exception as e:
-            _LOGGER.error("_async_bootstrap_efficiency_from_history: exception getting odos and socs %s", e, exc_info=True, stack_info=True)
+            _LOGGER.error(
+                "_async_bootstrap_efficiency_from_history: exception getting odos and socs %s",
+                e,
+                exc_info=True,
+                stack_info=True,
+            )
             return
 
         if not odos or not socs:
@@ -707,7 +763,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     continue
                 try:
                     v = float(s.state)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 res.append((s.last_changed, v))
             res.sort(key=lambda x: x[0])
@@ -738,7 +794,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._add_soc_odo_value_to_segments(soc, odo, t)
 
         for d_seg in self._decreasing_segments:
-
             if d_seg[1] is None:
                 continue
 
@@ -763,7 +818,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 total_energy_kwh += energy_kwh
                 total_distance_km += delta_km
 
-
         if total_energy_kwh <= 0.0 or total_distance_km <= 1.0:
             return
 
@@ -783,7 +837,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.user_attached_charger_name = None
         self._qs_bump_solar_priority = False
 
-
     def attach_charger(self, charger):
         _LOGGER.info(f"Car {self.name} attaching charger {charger.name}")
         charger.attach_car(self, datetime.now(tz=pytz.UTC))
@@ -793,18 +846,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
             _LOGGER.info(f"Car {self.name} detached charger {self.charger.name}")
             self.charger.detach_car()
 
-
-    def get_continuous_plug_duration(self, time:datetime) -> float | None:
+    def get_continuous_plug_duration(self, time: datetime) -> float | None:
 
         if self.car_plugged is None:
             return None
 
-        return self.get_last_state_value_duration(self.car_plugged,
-                                                  states_vals=["on"],
-                                                  num_seconds_before=None,
-                                                  time=time)[0]
+        return self.get_last_state_value_duration(
+            self.car_plugged, states_vals=["on"], num_seconds_before=None, time=time
+        )[0]
 
-    def is_car_plugged(self, time:datetime, for_duration:float|None = None) -> bool | None:
+    def is_car_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
 
         if self.car_plugged is None:
             return None
@@ -813,11 +864,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for_duration = None
 
         if for_duration is not None:
-
-            contiguous_status = self.get_last_state_value_duration(self.car_plugged,
-                                                                   states_vals=["on"],
-                                                                   num_seconds_before=8*for_duration,
-                                                                   time=time)[0]
+            contiguous_status = self.get_last_state_value_duration(
+                self.car_plugged, states_vals=["on"], num_seconds_before=8 * for_duration, time=time
+            )[0]
             if contiguous_status is not None:
                 return contiguous_status >= for_duration and contiguous_status > 0
             else:
@@ -830,33 +879,34 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "on"
 
-    def get_car_coordinates(self, time:datetime) -> tuple[float, float] | tuple[None,None]:
+    def get_car_coordinates(self, time: datetime) -> tuple[float, float] | tuple[None, None]:
 
-            if self.car_tracker is None:
-                return None, None
+        if self.car_tracker is None:
+            return None, None
 
-            state, state_attr = self.get_sensor_latest_possible_valid_value_and_attr(entity_id=self.car_tracker, time=time)
+        state, state_attr = self.get_sensor_latest_possible_valid_value_and_attr(entity_id=self.car_tracker, time=time)
 
-            if state in [STATE_UNKNOWN, STATE_UNAVAILABLE, None]:
-                return None, None
+        if state in [STATE_UNKNOWN, STATE_UNAVAILABLE, None]:
+            return None, None
 
-            if state_attr is None:
-                return None, None
+        if state_attr is None:
+            return None, None
 
-            latitude: str | None  = state_attr.get("latitude", None)
-            longitude: str | None  = state_attr.get("longitude", None)
+        latitude: str | None = state_attr.get("latitude", None)
+        longitude: str | None = state_attr.get("longitude", None)
 
-            if latitude is None or longitude is None:
-                return None, None
+        if latitude is None or longitude is None:
+            return None, None
 
-            try:
-                return float(latitude), float(longitude)
-            except ValueError as e:
-                _LOGGER.error("get_car_coordinate conversion issue %s %s %s", latitude, longitude, e, exc_info=True,
-                              stack_info=True)
-                return None, None
+        try:
+            return float(latitude), float(longitude)
+        except ValueError as e:
+            _LOGGER.error(
+                "get_car_coordinate conversion issue %s %s %s", latitude, longitude, e, exc_info=True, stack_info=True
+            )
+            return None, None
 
-    def is_car_home(self, time:datetime, for_duration:float|None = None) -> bool | None:
+    def is_car_home(self, time: datetime, for_duration: float | None = None) -> bool | None:
 
         if self.car_tracker is None:
             return None
@@ -865,11 +915,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for_duration = None
 
         if for_duration is not None:
-
-            contiguous_status = self.get_last_state_value_duration(self.car_tracker,
-                                                                   states_vals=["home"],
-                                                                   num_seconds_before=8*for_duration,
-                                                                   time=time)[0]
+            contiguous_status = self.get_last_state_value_duration(
+                self.car_tracker, states_vals=["home"], num_seconds_before=8 * for_duration, time=time
+            )[0]
             if contiguous_status is not None:
                 return contiguous_status >= for_duration and contiguous_status > 0
             else:
@@ -882,8 +930,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "home"
 
-    def get_car_charge_percent(self, time: datetime | None = None, tolerance_seconds: float | None = None ) -> float | None:
-        ret = self.get_sensor_latest_possible_valid_value(entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds)
+    def get_car_charge_percent(
+        self, time: datetime | None = None, tolerance_seconds: float | None = None
+    ) -> float | None:
+        ret = self.get_sensor_latest_possible_valid_value(
+            entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds
+        )
         return ret
 
     def get_car_charge_energy(self, time: datetime, tolerance_seconds: float | None = None) -> float | None:
@@ -897,31 +949,38 @@ class QSCar(HADeviceMixin, AbstractDevice):
         try:
             return float(res) * self.car_battery_capacity / 100.0
         except Exception as e:
-            _LOGGER.error("get_car_charge_energy exception: exception for car %s (%s %s) %s", self.name, res, self.car_battery_capacity, e, exc_info=True,
-                          stack_info=True)
+            _LOGGER.error(
+                "get_car_charge_energy exception: exception for car %s (%s %s) %s",
+                self.name,
+                res,
+                self.car_battery_capacity,
+                e,
+                exc_info=True,
+                stack_info=True,
+            )
             return None
 
-    def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float | None = None ) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds)
+    def get_car_odometer_km(self, time: datetime | None = None, tolerance_seconds: float | None = None) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(
+            entity_id=self.car_odometer_sensor, time=time, tolerance_seconds=tolerance_seconds
+        )
 
-    def get_car_estimated_range_km_from_sensor(self, time: datetime | None = None, tolerance_seconds: float| None = None) -> float | None:
-        return self.get_sensor_latest_possible_valid_value(entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds)
+    def get_car_estimated_range_km_from_sensor(
+        self, time: datetime | None = None, tolerance_seconds: float | None = None
+    ) -> float | None:
+        return self.get_sensor_latest_possible_valid_value(
+            entity_id=self.car_estimated_range_sensor, time=time, tolerance_seconds=tolerance_seconds
+        )
 
-    def is_car_charge_growing(self,
-                              num_seconds: float,
-                              time: datetime) -> bool | None:
+    def is_car_charge_growing(self, num_seconds: float, time: datetime) -> bool | None:
 
-        return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor,
-                               num_seconds=num_seconds,
-                              time=time)
-
+        return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor, num_seconds=num_seconds, time=time)
 
     def _get_delta_from_graph(self, deltas, deltas_graph, from_v, to_v):
 
         delta = None
 
         if len(deltas) > 0:
-
             delta = deltas.get((from_v, to_v))
 
             if delta is None and len(deltas) > 2:
@@ -931,22 +990,25 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 if path and len(path) > 1 and path[0] == from_v and path[-1] == to_v:
                     delta = 0
                     for i in range(1, len(path)):
-                        d = deltas.get((path[i-1], path[i]))
+                        d = deltas.get((path[i - 1], path[i]))
                         if d is None:
-                            _LOGGER.error(f"_get_delta_from_graph path in error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v} path[i-1] {path[i-1]} path[i] {path[i]}")
+                            _LOGGER.error(
+                                f"_get_delta_from_graph path in error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v} path[i-1] {path[i - 1]} path[i] {path[i]}"
+                            )
                             delta = None
                             break
 
                         delta += d
                 elif path:
                     _LOGGER.error(
-                        f"_get_delta_from_graph path error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v}")
+                        f"_get_delta_from_graph path error: Car {self.name} deltas {deltas} graph {deltas_graph} from_v {from_v} to_v {to_v}"
+                    )
 
         return delta
 
-
-
-    def get_computed_range_efficiency_km_per_percent(self, time:datetime|None, delta_soc:float=0.0) -> float | None:
+    def get_computed_range_efficiency_km_per_percent(
+        self, time: datetime | None, delta_soc: float = 0.0
+    ) -> float | None:
 
         if time is None:
             time = datetime.now(pytz.UTC)
@@ -971,7 +1033,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 best_segment = seg
 
         if best_segment is not None:
-            return (best_segment[0] / best_segment[1])
+            return best_segment[0] / best_segment[1]
 
         if self._km_per_kwh is not None:
             return (self._km_per_kwh * (float(self.car_battery_capacity) / 1000.0)) / 100.0
@@ -980,10 +1042,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return None
 
+    def get_adapt_target_percent_soc_to_reach_range_km(
+        self, target_range_km: float | None, time: datetime | None = None
+    ) -> tuple[bool | None, float | None, float | None, float | None]:
 
-    def get_adapt_target_percent_soc_to_reach_range_km(self, target_range_km: float | None, time: datetime | None = None) -> tuple[bool | None, float | None, float | None, float | None]:
-
-        km_per_percent = current_soc = current_range_km  = None
+        km_per_percent = current_soc = current_range_km = None
 
         minimum_ok_soc = self.get_car_minimum_ok_SOC()
 
@@ -993,7 +1056,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
 
         if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
-            _LOGGER.warning(f"get_adapt_target_percent_soc_to_reach_range_km: {self.name} error: km_per_percent {km_per_percent}, current_soc {current_soc}, current_range_km {current_range_km}, target_range_km {target_range_km}")
+            _LOGGER.warning(
+                f"get_adapt_target_percent_soc_to_reach_range_km: {self.name} error: km_per_percent {km_per_percent}, current_soc {current_soc}, current_range_km {current_range_km}, target_range_km {target_range_km}"
+            )
             return None, None, None, None
 
         target_range_km_a = target_range_km + CAR_MINIMUM_LEFT_RANGE_KM
@@ -1012,13 +1077,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             needed_soc = needed_soc_b
             target_range_km = target_range_km_b
 
-        diff_energy = (abs(needed_soc - current_soc)*self.car_battery_capacity)/100.0
+        diff_energy = (abs(needed_soc - current_soc) * self.car_battery_capacity) / 100.0
 
         if current_range_km >= target_range_km or current_soc >= needed_soc:
             return True, current_soc, needed_soc, diff_energy
         else:
             return False, current_soc, needed_soc, diff_energy
-
 
     def get_car_estimated_range_km(self, from_soc=100.0, to_soc=0.0, time: datetime | None = None) -> float | None:
 
@@ -1037,7 +1101,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             result = eff_perc * delta_soc
 
         return result
-
 
     def get_estimated_range_km(self, time: datetime | None = None) -> float | None:
 
@@ -1062,7 +1125,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.car_charge_percent_max_number is None:
             return
 
-        percent= asked_percent
+        percent = asked_percent
         # in fact stop the charge only at the "default charge" of the car else ... continue to charge
         if asked_percent <= self.car_default_charge:
             percent = self.car_default_charge
@@ -1083,11 +1146,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
             domain = number.DOMAIN
 
             try:
-                await self.hass.services.async_call(
-                    domain, service, data
-                )
+                await self.hass.services.async_call(domain, service, data)
             except Exception as exc:
-                _LOGGER.error(f"Car {self.name} failed to set max charge limit to {percent}%: {exc}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"Car {self.name} failed to set max charge limit to {percent}%: {exc}",
+                    exc_info=True,
+                    stack_info=True,
+                )
 
     def car_can_limit_its_soc(self):
         if self.car_charge_percent_max_number is None:
@@ -1098,7 +1163,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         result = None
         if self.car_charge_percent_max_number is not None:
-
             state = self.hass.states.get(self.car_charge_percent_max_number)
 
             if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
@@ -1107,8 +1171,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 try:
                     result = int(state.state)
                 except Exception as e:
-                    _LOGGER.error("get_max_charge_limit: exception for car %s (%s) %s", self.name, state.state, e, exc_info=True,
-                                  stack_info=True)
+                    _LOGGER.error(
+                        "get_max_charge_limit: exception for car %s (%s) %s",
+                        self.name,
+                        state.state,
+                        e,
+                        exc_info=True,
+                        stack_info=True,
+                    )
                     result = None
 
         return result
@@ -1133,7 +1203,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return None
 
-    def _get_power_from_stored_amps(self, from_amp: int | float, from_num_phase: int ) -> None|float:
+    def _get_power_from_stored_amps(self, from_amp: int | float, from_num_phase: int) -> None | float:
         if from_amp < self.car_charger_min_charge:
             from_power = 0.0
         else:
@@ -1144,12 +1214,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 from_power = self.amp_to_power_3p[from_amp]
         return from_power
 
-    def get_delta_dampened_power(self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int) -> float | None:
+    def get_delta_dampened_power(
+        self, from_amp: int | float, from_num_phase: int, to_amp: int | float, to_num_phase: int
+    ) -> float | None:
 
-        if from_amp*from_num_phase == to_amp*to_num_phase:
+        if from_amp * from_num_phase == to_amp * to_num_phase:
             return 0.0
 
-        power = self._get_delta_from_graph(deltas=self._dampening_deltas, deltas_graph=self._dampening_deltas_graph, from_v=from_amp*from_num_phase, to_v=to_amp*to_num_phase)
+        power = self._get_delta_from_graph(
+            deltas=self._dampening_deltas,
+            deltas_graph=self._dampening_deltas_graph,
+            from_v=from_amp * from_num_phase,
+            to_v=to_amp * to_num_phase,
+        )
 
         if power is None:
             from_power = self._get_power_from_stored_amps(from_amp, from_num_phase)
@@ -1168,19 +1245,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
     #         theoretical_power = theoretical_power * 3
     #     return theoretical_power
 
-    def _add_to_amps_power_graph(self, from_a: tuple[float,int], to_a:tuple[float,int], power_delta: int | float) -> bool:
+    def _add_to_amps_power_graph(
+        self, from_a: tuple[float, int], to_a: tuple[float, int], power_delta: int | float
+    ) -> bool:
         from_amp = int(from_a[0] * from_a[1])
         to_amp = int(to_a[0] * to_a[1])
 
         if from_amp == to_amp:
             return False
 
-
         if from_amp > to_amp:
-
             if power_delta > 0.0:
                 # we do not allow to add a delta that is positive from a higher amperage to a lower amperage
-                _LOGGER.warning(f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} > to_amp {to_a} with power_delta {power_delta} - ignoring this value")
+                _LOGGER.warning(
+                    f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} > to_amp {to_a} with power_delta {power_delta} - ignoring this value"
+                )
                 return False
 
             from_amp, to_amp = to_amp, from_amp
@@ -1189,7 +1268,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             if power_delta < 0.0:
                 # we do not allow to add a delta that is positive from a higher amperage to a lower amperage
-                _LOGGER.warning(f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} < to_amp {to_a} with power_delta {power_delta} - ignoring this value")
+                _LOGGER.warning(
+                    f"_add_to_amps_power_graph: {self.name}  from_amp {from_a} < to_amp {to_a} with power_delta {power_delta} - ignoring this value"
+                )
                 return False
 
         self._dampening_deltas[(from_amp, to_amp)] = power_delta
@@ -1202,7 +1283,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return True
 
-    def _can_accept_new_dampen_values(self, old_val:float, new_val:float) -> bool:
+    def _can_accept_new_dampen_values(self, old_val: float, new_val: float) -> bool:
 
         if old_val * new_val < 0:
             # should be same sign
@@ -1228,11 +1309,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             else:
                 return True
 
-
         ratio = new_val / old_val
 
         if ratio > 1.10:
-            #if growing too much ... we do nothing vs what was there before
+            # if growing too much ... we do nothing vs what was there before
             return False
 
         lower_ratio = 0.2
@@ -1240,24 +1320,30 @@ class QSCar(HADeviceMixin, AbstractDevice):
             lower_ratio = 0.7
 
         if ratio < lower_ratio:
-            #if going down too much ... we do nothing vs what was there before
+            # if going down too much ... we do nothing vs what was there before
             return False
 
         return True
 
-    def update_dampening_value(self, amperage: None | tuple[float,int] | tuple[int,int], amperage_transition: None | tuple[tuple[int,int] | tuple[float,int], tuple[int,int] | tuple[float,int]], power_value_or_delta: int | float, time:datetime, can_be_saved:bool = False) -> bool:
+    def update_dampening_value(
+        self,
+        amperage: None | tuple[float, int] | tuple[int, int],
+        amperage_transition: None | tuple[tuple[int, int] | tuple[float, int], tuple[int, int] | tuple[float, int]],
+        power_value_or_delta: int | float,
+        time: datetime,
+        can_be_saved: bool = False,
+    ) -> bool:
 
         do_update = False
 
-       # if self.can_dampen_strongly_dynamically is False:
-       #     _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
-       #     return False
+        # if self.can_dampen_strongly_dynamically is False:
+        #     _LOGGER.info(f"Car {self.name} cannot dampen dynamically, ignoring amperage {amperage} and amperage_transition {amperage_transition}")
+        #     return False
 
         if amperage_transition is None and amperage is None:
             return False
 
         if amperage_transition is not None:
-
             if amperage is None:
                 if amperage_transition[0][0] == 0:
                     amperage = amperage_transition[1]
@@ -1266,23 +1352,31 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     power_value_or_delta = -power_value_or_delta
 
             if amperage is None:
-
-                orig_delta = self.get_delta_dampened_power(amperage_transition[0][0], amperage_transition[0][1], amperage_transition[1][0], amperage_transition[1][1])
+                orig_delta = self.get_delta_dampened_power(
+                    amperage_transition[0][0],
+                    amperage_transition[0][1],
+                    amperage_transition[1][0],
+                    amperage_transition[1][1],
+                )
 
                 if orig_delta is not None:
-
                     if self._can_accept_new_dampen_values(orig_delta, power_value_or_delta) is False:
-                        _LOGGER.info(f"Car {self.name} cannot accept new dampening value for amperage_transition {amperage_transition} with power_value_or_delta {power_value_or_delta} orig_delta {orig_delta} - ignoring this value")
+                        _LOGGER.info(
+                            f"Car {self.name} cannot accept new dampening value for amperage_transition {amperage_transition} with power_value_or_delta {power_value_or_delta} orig_delta {orig_delta} - ignoring this value"
+                        )
                         return False
 
-                    if self._add_to_amps_power_graph(amperage_transition[0], amperage_transition[1], power_value_or_delta) is False:
+                    if (
+                        self._add_to_amps_power_graph(
+                            amperage_transition[0], amperage_transition[1], power_value_or_delta
+                        )
+                        is False
+                    ):
                         return False
 
                     do_update = True
 
-
         if amperage is not None:
-
             if amperage[0] < self.car_charger_min_charge or amperage[0] > self.car_charger_max_charge:
                 return False
 
@@ -1293,8 +1387,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             amps_val = int(amperage[0])
 
-            old_val =  self._get_power_from_stored_amps(amperage[0], amperage[1])
-
+            old_val = self._get_power_from_stored_amps(amperage[0], amperage[1])
 
             if power_value_or_delta < -MIN_CHARGE_POWER_W:
                 return False
@@ -1304,14 +1397,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             if self._can_accept_new_dampen_values(old_val, power_value_or_delta) is False:
                 _LOGGER.info(
-                    f"Car {self.name} cannot accept new dampening value for amperage {amperage} with power_value_or_delta {power_value_or_delta} orig_delta {old_val} - ignoring this value")
+                    f"Car {self.name} cannot accept new dampening value for amperage {amperage} with power_value_or_delta {power_value_or_delta} orig_delta {old_val} - ignoring this value"
+                )
                 return False
 
-
-            if power_value_or_delta >= MIN_CHARGE_POWER_W and self._add_to_amps_power_graph((0.0, amperage[1]),
-                                                                                            (amperage[0],
-                                                                                             amperage[1]),
-                                                                                            power_value_or_delta) is False:
+            if (
+                power_value_or_delta >= MIN_CHARGE_POWER_W
+                and self._add_to_amps_power_graph((0.0, amperage[1]), (amperage[0], amperage[1]), power_value_or_delta)
+                is False
+            ):
                 return False
 
             do_recompute_min_charge = False
@@ -1325,17 +1419,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if power_value_or_delta >= MIN_CHARGE_POWER_W:
                 if for_3p:
                     self.customized_amp_to_power_3p[amps_val] = float(power_value_or_delta)
-                    if 3*amps_val <= self.car_charger_max_charge and 3*amps_val >= self.car_charger_min_charge:
-                        self.customized_amp_to_power_1p[3*amps_val] = float(power_value_or_delta)
+                    if 3 * amps_val <= self.car_charger_max_charge and 3 * amps_val >= self.car_charger_min_charge:
+                        self.customized_amp_to_power_1p[3 * amps_val] = float(power_value_or_delta)
                 else:
                     self.customized_amp_to_power_1p[amps_val] = float(power_value_or_delta)
-                    if amps_val % 3 == 0 and amps_val//3 >= self.car_charger_min_charge and amps_val//3 <= self.car_charger_max_charge:
-                        self.customized_amp_to_power_3p[amps_val//3] = float(power_value_or_delta)
+                    if (
+                        amps_val % 3 == 0
+                        and amps_val // 3 >= self.car_charger_min_charge
+                        and amps_val // 3 <= self.car_charger_max_charge
+                    ):
+                        self.customized_amp_to_power_3p[amps_val // 3] = float(power_value_or_delta)
             elif amps_val <= self._conf_car_charger_min_charge + 2:
                 if is_value_strong_enough:
                     power_value_or_delta = 0.0
                     # limit the possibility to have amps 0
-                    for i in range(0, amps_val+1):
+                    for i in range(0, amps_val + 1):
                         # no need to do per phase for 0: the car won't take current on amps values only
                         self.customized_amp_to_power_3p[i] = 0.0
                         self.customized_amp_to_power_1p[i] = 0.0
@@ -1346,28 +1444,32 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.interpolate_power_steps(do_recompute_min_charge=do_recompute_min_charge)
             do_update = True
             if can_be_saved and self.config_entry and is_value_strong_enough:
+                if self.car_is_custom_power_charge_values_3p is None:
+                    self.car_is_custom_power_charge_values_3p = for_3p
 
-                 if self.car_is_custom_power_charge_values_3p is None:
-                     self.car_is_custom_power_charge_values_3p = for_3p
+                # only save what was set as conf
+                if for_3p == self.car_is_custom_power_charge_values_3p:
+                    # for now just store the measured one
+                    self._salvable_dampening[f"measured_{CONF_CAR_CUSTOM_POWER_CHARGE_VALUES}"] = (
+                        self.car_use_custom_power_charge_values
+                    )
+                    self._salvable_dampening[f"measured_{CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P}"] = (
+                        self.car_is_custom_power_charge_values_3p
+                    )
+                    self._salvable_dampening[f"measured_charge_{amps_val}"] = power_value_or_delta
 
-                 # only save what was set as conf
-                 if for_3p == self.car_is_custom_power_charge_values_3p:
-
-                     # for now just store the measured one
-                     self._salvable_dampening[f"measured_{CONF_CAR_CUSTOM_POWER_CHARGE_VALUES}"] = self.car_use_custom_power_charge_values
-                     self._salvable_dampening[f"measured_{CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P}"] = self.car_is_custom_power_charge_values_3p
-                     self._salvable_dampening[f"measured_charge_{amps_val}"] = power_value_or_delta
-
-                     if self._last_dampening_update is None or (time - self._last_dampening_update).total_seconds() > 300:
-                         self._last_dampening_update = time
-                         data = dict(self.config_entry.data)
-                         data.update(self._salvable_dampening)
-                         self.save_entry_data_no_reload(data)
+                    if (
+                        self._last_dampening_update is None
+                        or (time - self._last_dampening_update).total_seconds() > 300
+                    ):
+                        self._last_dampening_update = time
+                        data = dict(self.config_entry.data)
+                        data.update(self._salvable_dampening)
+                        self.save_entry_data_no_reload(data)
 
         return do_update
 
-    def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power) -> int|float:
-
+    def _interpolate_power_steps(self, customized_amp_to_power, theoretical_amp_to_power, amp_to_power) -> int | float:
 
         min_charge = self._conf_car_charger_min_charge
 
@@ -1394,7 +1496,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             prev_measured_val = theoretical_amp_to_power[min_charge]
             first = None
             second = None
-            for a in range(min_charge+1, self.car_charger_max_charge + 1):
+            for a in range(min_charge + 1, self.car_charger_max_charge + 1):
                 if customized_amp_to_power[a] > 0:
                     if first is None:
                         first = a
@@ -1405,32 +1507,31 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             # interpolate the first possible value if we do have some measures, else it will be the theoretical value
             if first is not None and second is not None:
-                first_possible_val = (min_charge - first) * ((customized_amp_to_power[second] -  customized_amp_to_power[first])/(second - first)) + customized_amp_to_power[first]
+                first_possible_val = (min_charge - first) * (
+                    (customized_amp_to_power[second] - customized_amp_to_power[first]) / (second - first)
+                ) + customized_amp_to_power[first]
                 if first_possible_val > 0:
                     prev_measured_val = min(first_possible_val, prev_measured_val)
 
-
         new_vals[min_charge] = prev_measured_val
 
-        for a in range(min_charge+1, self.car_charger_max_charge + 1):
-
+        for a in range(min_charge + 1, self.car_charger_max_charge + 1):
             measured = customized_amp_to_power[a]
 
             if a == self.car_charger_max_charge:
                 if measured < 0 or (prev_measured_val > 0 and measured > 0 and measured < prev_measured_val):
                     measured = max(prev_measured_val, theoretical_amp_to_power[self.car_charger_max_charge])
 
-
             if measured > prev_measured_val or a == self.car_charger_max_charge:
                 # only increasing values allowed
                 new_vals[a] = measured
                 if a > prev_measured_a + 1:
-                    for ap in range(prev_measured_a+1, a):
-                        new_vals[ap] = prev_measured_val + ((measured - prev_measured_val) * (ap - prev_measured_a) / (a - prev_measured_a))
+                    for ap in range(prev_measured_a + 1, a):
+                        new_vals[ap] = prev_measured_val + (
+                            (measured - prev_measured_val) * (ap - prev_measured_a) / (a - prev_measured_a)
+                        )
                 prev_measured_a = a
                 prev_measured_val = measured
-
-
 
         for a in range(0, len(theoretical_amp_to_power)):
             amp_to_power[a] = new_vals[a]
@@ -1446,12 +1547,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
             customized_amp_to_power_3p = self.customized_amp_to_power_3p
             customized_amp_to_power_1p = self.customized_amp_to_power_1p
 
-        min_charge_3p = self._interpolate_power_steps(customized_amp_to_power_3p,
-                                      self.theoretical_amp_to_power_3p,
-                                      self.amp_to_power_3p)
-        min_charge_1p = self._interpolate_power_steps(customized_amp_to_power_1p,
-                                      self.theoretical_amp_to_power_1p,
-                                      self.amp_to_power_1p)
+        min_charge_3p = self._interpolate_power_steps(
+            customized_amp_to_power_3p, self.theoretical_amp_to_power_3p, self.amp_to_power_3p
+        )
+        min_charge_1p = self._interpolate_power_steps(
+            customized_amp_to_power_1p, self.theoretical_amp_to_power_1p, self.amp_to_power_1p
+        )
 
         if use_conf_values:
             self.car_charger_min_charge = self._conf_car_charger_min_charge
@@ -1461,15 +1562,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.car_charger_min_charge = max(min_charge_3p, min_charge_1p)
             if init_car_min_charge != self.car_charger_min_charge:
                 _LOGGER.info(
-                    f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}")
+                    f"interpolate_power_steps: Car {self.name} updated min charge from {init_car_min_charge} to {self.car_charger_min_charge}"
+                )
 
-    def get_charge_power_per_phase_A(self, for_3p:bool) -> tuple[list[float], int, int]:
+    def get_charge_power_per_phase_A(self, for_3p: bool) -> tuple[list[float], int, int]:
         if for_3p:
             return self.amp_to_power_3p, self.car_charger_min_charge, self.car_charger_max_charge
         else:
             return self.amp_to_power_1p, self.car_charger_min_charge, self.car_charger_max_charge
 
-    async def user_add_default_charge_at_datetime(self, end_charge:datetime) -> bool:
+    async def user_add_default_charge_at_datetime(self, end_charge: datetime) -> bool:
 
         if self.can_add_default_charge() is False:
             return False
@@ -1503,7 +1605,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._fix_user_selected_person_from_forecast()
 
         if self.can_add_default_charge():
-
             res = await self.user_add_default_charge_at_dt_time(self.default_charge_time)
 
             if res and self.charger:
@@ -1522,7 +1623,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def user_force_charge_now(self):
         if self.can_force_a_charge_now():
-
             # fix the person name ... for whom the car is charging
             self._fix_user_selected_person_from_forecast()
 
@@ -1550,7 +1650,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
 
         return True
-
 
     def _reset_charge_targets(self):
         self._next_charge_target = None
@@ -1620,7 +1719,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         options.add(int(self.car_default_charge))
 
         v = int(self.get_car_target_SOC())
-        #always add the current set
+        # always add the current set
         options.add(v)
 
         options = list(options)
@@ -1631,7 +1730,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return options
 
-    def get_car_option_charge_from_value_percent(self, value:int|float):
+    def get_car_option_charge_from_value_percent(self, value: int | float):
         value = int(float(value))
         if value > 100:
             value = 100
@@ -1643,7 +1742,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return f"{value}%"
 
-    async def set_next_charge_target_percent(self, value:int|float|str, do_update_charger:bool=True) -> bool:
+    async def set_next_charge_target_percent(self, value: int | float | str, do_update_charger: bool = True) -> bool:
 
         if isinstance(value, str):
             if "default" in value:
@@ -1655,7 +1754,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     value = value.strip("%")
                     value = float(value)
                 except Exception as e:
-                    _LOGGER.error(f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'{e}", exc_info=True, stack_info=True)
+                    _LOGGER.error(
+                        f"Car {self.name} set_next_charge_target: invalid value {value}, must be an integer or 'default' or 'full'{e}",
+                        exc_info=True,
+                        stack_info=True,
+                    )
                     return False
 
         value = int(value)
@@ -1679,7 +1782,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_minimum_ok_SOC(self) -> int | float:
         return self.car_minimum_ok_charge
 
-
     def get_car_next_charge_values_options_energy(self):
 
         max_battery_energy = self.car_battery_capacity
@@ -1702,18 +1804,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return options
 
-    def get_car_option_charge_from_value_energy(self, value:int|float):
-        value = int(float(value))//1000 # kwh
+    def get_car_option_charge_from_value_energy(self, value: int | float):
+        value = int(float(value)) // 1000  # kwh
         return f"{value}kWh"
 
-    async def set_next_charge_target_energy(self, value:int|float|str) -> bool:
+    async def set_next_charge_target_energy(self, value: int | float | str) -> bool:
 
         if isinstance(value, str):
             try:
                 value = value.strip("kWh")
-                value = float(value)*1000.0
+                value = float(value) * 1000.0
             except Exception as e:
-                _LOGGER.error(f"Car {self.name} set_next_charge_target_energy: invalid value {value} {e}", exc_info=True, stack_info=True)
+                _LOGGER.error(
+                    f"Car {self.name} set_next_charge_target_energy: invalid value {value} {e}",
+                    exc_info=True,
+                    stack_info=True,
+                )
                 return False
         else:
             value = float(value) * 1000.0
@@ -1735,7 +1841,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_target_charge_option_energy(self):
         return self.get_car_option_charge_from_value_energy(self.get_car_target_charge_energy())
 
-
     @property
     def qs_bump_solar_charge_priority(self) -> bool:
         return self._qs_bump_solar_priority
@@ -1750,7 +1855,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 c.qs_bump_solar_charge_priority = False
             self._qs_bump_solar_priority = True
 
-    def get_charger_options(self)  -> list[str]:
+    def get_charger_options(self) -> list[str]:
 
         time = datetime.now(pytz.UTC)
 
@@ -1764,7 +1869,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         options.append(FORCE_CAR_NO_CHARGER_CONNECTED)
         return options
-
 
     def get_current_selected_charger_option(self) -> str | None:
         if self.user_attached_charger_name is not None:
@@ -1822,7 +1926,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.home:
             await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
-
     async def user_clean_constraints(self):
         charger = self.charger
         await super().user_clean_constraints()
@@ -1830,7 +1933,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await self.setup_car_charge_target_if_needed()
         if charger is not None:
             await charger.user_clean_constraints()
-
 
     @property
     def current_constraint_current_energy(self):

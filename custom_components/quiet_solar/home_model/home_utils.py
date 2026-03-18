@@ -1,6 +1,8 @@
 import copy
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Mapping, Any, Dict, Tuple
+from typing import Any
+
 import numpy as np
 
 
@@ -16,7 +18,7 @@ def is_amps_zero(amps: list[float | int]) -> bool:
 
 
 def are_amps_equal(left_amps: list[float | int], right_amps: list[float | int]) -> bool:
-    for i in [0,1,2]:
+    for i in [0, 1, 2]:
         if left_amps[i] != right_amps[i]:
             return False
     return True
@@ -72,12 +74,16 @@ def max_amps(left_amps: list[float | int], right_amps: list[float | int]) -> lis
     maxs = [max(left_amps[i], right_amps[i]) for i in range(3)]
     return maxs
 
-def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]] | list[tuple[datetime | None, str | float | None]],
-                            first_timing: datetime | None = None,
-                            last_timing: datetime | None = None,
-                            geometric_mean : bool = False,
-                            min_val: float | None = None,
-                            max_val: float | None = None) -> float:
+
+def get_average_time_series(
+    sensor_data: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+    first_timing: datetime | None = None,
+    last_timing: datetime | None = None,
+    geometric_mean: bool = False,
+    min_val: float | None = None,
+    max_val: float | None = None,
+) -> float:
 
     # remove None values, will actually use None as gaps, do the mean of the data we know
     if geometric_mean:
@@ -118,7 +124,7 @@ def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float
             elif i == 0:
                 dt = (sensor_data[i][0] - first_timing).total_seconds()
             else:
-                dt = (sensor_data[i][0] - sensor_data[i-1][0]).total_seconds()
+                dt = (sensor_data[i][0] - sensor_data[i - 1][0]).total_seconds()
                 if geometric_mean:
                     value += sensor_data[i][1]
                     value /= 2.0
@@ -127,7 +133,7 @@ def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float
                 dt = 1
 
             sum_time += dt
-            sum_vals += dt*float(value)
+            sum_vals += dt * float(value)
 
         if sum_time > 0:
             return sum_vals / sum_time
@@ -137,7 +143,7 @@ def get_average_time_series(sensor_data: list[tuple[datetime | None, str | float
     return val
 
 
-def hungarian_algorithm(cost_matrix: np.ndarray) -> Dict[int, int]:
+def hungarian_algorithm(cost_matrix: np.ndarray) -> dict[int, int]:
     """
     Pure numpy implementation of the Hungarian algorithm for minimum cost assignment.
 
@@ -198,7 +204,11 @@ def hungarian_algorithm(cost_matrix: np.ndarray) -> Dict[int, int]:
     # Fallback greedy assignment
     full_assignment = _greedy_assignment(cost_matrix)
     # Filter to original dimensions
-    return {i: full_assignment[i] for i in range(original_n_rows) if i in full_assignment and full_assignment[i] < original_n_cols}
+    return {
+        i: full_assignment[i]
+        for i in range(original_n_rows)
+        if i in full_assignment and full_assignment[i] < original_n_cols
+    }
 
 
 def _try_assign(cost_matrix: np.ndarray) -> np.ndarray | None:
@@ -240,8 +250,7 @@ def _try_assign(cost_matrix: np.ndarray) -> np.ndarray | None:
     return assignment if np.all(assignment >= 0) else None
 
 
-def _augment(row: int, cost_matrix: np.ndarray, assignment: np.ndarray,
-             assigned_cols: set) -> bool:
+def _augment(row: int, cost_matrix: np.ndarray, assignment: np.ndarray, assigned_cols: set) -> bool:
     """Try to find an augmenting path for an unassigned row."""
     n = len(cost_matrix)
     visited = set()
@@ -271,7 +280,7 @@ def _augment(row: int, cost_matrix: np.ndarray, assignment: np.ndarray,
     return dfs(row)
 
 
-def _find_minimum_cover(cost_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _find_minimum_cover(cost_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Find minimum line cover of zeros using König's theorem.
 
     Builds a maximum partial matching from zeros (greedy + augmentation)
@@ -335,7 +344,7 @@ def _find_minimum_cover(cost_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray
     return covered_rows, covered_cols
 
 
-def _greedy_assignment(cost_matrix: np.ndarray) -> Dict[int, int]:
+def _greedy_assignment(cost_matrix: np.ndarray) -> dict[int, int]:
     """Greedy fallback assignment."""
     n = len(cost_matrix)
     assignment = {}

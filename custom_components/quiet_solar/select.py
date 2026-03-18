@@ -1,36 +1,39 @@
 import logging
-from dataclasses import dataclass, asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
-
-from homeassistant.components.select import SelectEntityDescription, SelectEntity
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity, ExtraStoredData
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
+from .const import (
+    DOMAIN,
+    OFF_GRID_MODE_AUTO,
+    OFF_GRID_MODE_FORCE_OFF_GRID,
+    OFF_GRID_MODE_FORCE_ON_GRID,
+    SELECT_OFF_GRID_MODE,
+)
 from .entity import QSDeviceEntity
 from .ha_model.bistate_duration import QSBiStateDuration
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.home import QSHome, QSHomeMode
-
 from .home_model.load import AbstractDevice
-from .const import DOMAIN, SELECT_OFF_GRID_MODE, OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID
-
 
 _LOGGER = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True, kw_only=True)
 class QSSelectEntityDescription(SelectEntityDescription):
-    qs_default_option:str | None  = None
+    qs_default_option: str | None = None
     get_available_options_fn: Callable[[AbstractDevice, str], list[str] | None] | None = None
-    get_current_option_fn   : Callable[[AbstractDevice, str], str|None] | None = None
-    async_set_current_option_fn   : Callable[[AbstractDevice, str, str, bool], Any] | None = None
-
-
+    get_current_option_fn: Callable[[AbstractDevice, str], str | None] | None = None
+    async_set_current_option_fn: Callable[[AbstractDevice, str, str, bool], Any] | None = None
 
 
 def create_ha_select_for_QSCharger(device: QSChargerGeneric):
@@ -42,11 +45,11 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         get_available_options_fn=lambda device, key: device.get_car_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_car_option(),
         async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_car_by_name(option),
-
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
     return entities
+
 
 def create_ha_select_for_QSCar(device: QSCar):
     entities = []
@@ -56,12 +59,12 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_charger_for_car",
         get_available_options_fn=lambda device, key: device.get_charger_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_charger_option(),
-        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_charger_by_name(option),
-
+        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_charger_by_name(
+            option
+        ),
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
-
 
     # the selector will automatically be in kwh or % depending on the car capabilities
     selected_car_description = QSSelectEntityDescription(
@@ -71,8 +74,9 @@ def create_ha_select_for_QSCar(device: QSCar):
         get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
         async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_next_charge_target(option),
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description))
-
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description)
+    )
 
     # the person force selector
     selected_car_description = QSSelectEntityDescription(
@@ -96,11 +100,16 @@ def create_ha_select_for_QSBiStateDuration(device: QSBiStateDuration):
         translation_key=device.get_select_translation_key(),
         get_available_options_fn=lambda device, key: device.get_bistate_modes(),
         qs_default_option="bistate_mode_default",
-        async_set_current_option_fn = lambda device, key, option, for_init: device.user_set_bistate_mode(option, for_init=for_init),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_bistate_mode(
+            option, for_init=for_init
+        ),
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description)
+    )
 
     return entities
+
 
 def create_ha_select_for_QSClimateDuration(device: QSClimateDuration):
     entities = []
@@ -108,20 +117,25 @@ def create_ha_select_for_QSClimateDuration(device: QSClimateDuration):
     bistate_mode_description = QSSelectEntityDescription(
         key="climate_state_on",
         translation_key="climate_state_on",
-        options= device.get_possibles_modes(),
-        qs_default_option="heat"
+        options=device.get_possibles_modes(),
+        qs_default_option="heat",
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description)
+    )
 
     bistate_mode_description = QSSelectEntityDescription(
         key="climate_state_off",
         translation_key="climate_state_off",
-        options= device.get_possibles_modes(),
-        qs_default_option="off"
+        options=device.get_possibles_modes(),
+        qs_default_option="off",
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description))
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=bistate_mode_description)
+    )
 
     return entities
+
 
 def create_ha_select_for_QSHome(device: QSHome):
     entities = []
@@ -129,19 +143,25 @@ def create_ha_select_for_QSHome(device: QSHome):
     home_mode_description = QSSelectEntityDescription(
         key="home_mode",
         translation_key="home_mode",
-        options= list(map(str, QSHomeMode)),
-        qs_default_option=str(QSHomeMode.HOME_MODE_SENSORS_ONLY.value)
+        options=list(map(str, QSHomeMode)),
+        qs_default_option=str(QSHomeMode.HOME_MODE_SENSORS_ONLY.value),
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description))
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=home_mode_description)
+    )
 
     off_grid_mode_description = QSSelectEntityDescription(
         key=SELECT_OFF_GRID_MODE,
         translation_key=SELECT_OFF_GRID_MODE,
         options=[OFF_GRID_MODE_AUTO, OFF_GRID_MODE_FORCE_OFF_GRID, OFF_GRID_MODE_FORCE_ON_GRID],
         qs_default_option=OFF_GRID_MODE_AUTO,
-        async_set_current_option_fn=lambda device, key, option, for_init: device.async_set_off_grid_mode_option(option, for_init),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.async_set_off_grid_mode_option(
+            option, for_init
+        ),
     )
-    entities.append(QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=off_grid_mode_description))
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=off_grid_mode_description)
+    )
 
     return entities
 
@@ -165,6 +185,7 @@ def create_ha_select(device: AbstractDevice):
 
     return ret
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -174,7 +195,6 @@ async def async_setup_entry(
     device = hass.data[DOMAIN].get(entry.entry_id)
 
     if device:
-
         entities = create_ha_select(device)
         for attached_device in device.get_attached_virtual_devices():
             entities.extend(create_ha_select(attached_device))
@@ -184,6 +204,7 @@ async def async_setup_entry(
 
     return
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     device = hass.data[DOMAIN].get(entry.entry_id)
     if device:
@@ -191,13 +212,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             if device.home:
                 device.home.remove_device(device)
         except Exception as e:
-            _LOGGER.error("async_unload_entry select: exception for device %s %s", device.name, e, exc_info=True, stack_info=True)
-
+            _LOGGER.error(
+                "async_unload_entry select: exception for device %s %s", device.name, e, exc_info=True, stack_info=True
+            )
 
     return True
 
+
 class QSBaseSelect(QSDeviceEntity, SelectEntity):
     """Implementation of a Qs Select sensor."""
+
     def __init__(
         self,
         data_handler,
@@ -210,7 +234,9 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         self._set_availabiltiy()
         self._do_restore_default = False
 
-    def get_available_options(self, description:QSSelectEntityDescription|None = None, device:AbstractDevice|None=None) -> list[str] | None:
+    def get_available_options(
+        self, description: QSSelectEntityDescription | None = None, device: AbstractDevice | None = None
+    ) -> list[str] | None:
         """Return the available options."""
         if description is None:
             description = self.entity_description
@@ -236,9 +262,12 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
                 setattr(self.device, self.entity_description.key, option)
             except Exception as e:
                 _LOGGER.info(
-                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}")
+                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}"
+                )
         else:
-            await self.entity_description.async_set_current_option_fn(self.device, self.entity_description.key, option, for_init)
+            await self.entity_description.async_set_current_option_fn(
+                self.device, self.entity_description.key, option, for_init
+            )
         if self.device.home:
             await self.device.home.force_update_all()
 
@@ -252,7 +281,7 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
         self.async_write_ha_state()
 
     @callback
-    def async_update_callback(self, time:datetime) -> None:
+    def async_update_callback(self, time: datetime) -> None:
         """Update the entity's state."""
         if self.hass is None:
             return
@@ -313,6 +342,7 @@ class QSSimpleSelectRestore(QSBaseSelectRestore):
 @dataclass
 class QSExtraStoredDataSelect(ExtraStoredData):
     """Object to hold extra stored data."""
+
     user_selected_option: str | None
 
     def as_dict(self) -> dict[str, Any]:
@@ -327,11 +357,13 @@ class QSExtraStoredDataSelect(ExtraStoredData):
                 restored["user_selected_option"],
             )
         except Exception as e:
-            _LOGGER.error("QSExtraStoredDataSelect.from_dict exception %s %s", restored,e, exc_info=True, stack_info=True)
+            _LOGGER.error(
+                "QSExtraStoredDataSelect.from_dict exception %s %s", restored, e, exc_info=True, stack_info=True
+            )
             return None
 
-class QSUserOverrideSelectRestore(QSBaseSelectRestore):
 
+class QSUserOverrideSelectRestore(QSBaseSelectRestore):
     user_selected_option: str | None = None
 
     @property
@@ -365,5 +397,3 @@ class QSUserOverrideSelectRestore(QSBaseSelectRestore):
         """Select an option."""
         self.user_selected_option = option
         await super().async_select_option(option, for_init=for_init)
-
-

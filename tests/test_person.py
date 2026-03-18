@@ -1,19 +1,15 @@
 """Tests for QSPerson class."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
-
 import pytest
-import pytz
-
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from custom_components.quiet_solar.ha_model.person import QSPerson
-from custom_components.quiet_solar.ha_model.home import QSHome
-from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.const import DOMAIN
+from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.home import QSHome
+from custom_components.quiet_solar.ha_model.person import QSPerson
 
 
 @pytest.fixture

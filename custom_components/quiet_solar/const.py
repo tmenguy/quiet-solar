@@ -1,4 +1,4 @@
-SOLVER_STEP_S = 900 # 15 minutes
+SOLVER_STEP_S = 900  # 15 minutes
 
 MAX_POSSIBLE_AMPERAGE = 64
 
@@ -35,26 +35,32 @@ GRID_CONSUMPTION_SENSOR = "grid_consumption_sensor"
 
 DASHBOARD_NUM_SECTION_MAX = 8
 
-DASHBOARD_DEFAULT_SECTIONS = [("cars","mdi:car"), ("climates","mdi:home-thermometer"), ("pools","mdi:pool"), ("others","mdi:home"), ("settings","mdi:cog-outline")]
-DASHBOARD_DEFAULT_SECTIONS_DICT ={v[0]:v[1] for v in DASHBOARD_DEFAULT_SECTIONS}
+DASHBOARD_DEFAULT_SECTIONS = [
+    ("cars", "mdi:car"),
+    ("climates", "mdi:home-thermometer"),
+    ("pools", "mdi:pool"),
+    ("others", "mdi:home"),
+    ("settings", "mdi:cog-outline"),
+]
+DASHBOARD_DEFAULT_SECTIONS_DICT = {v[0]: v[1] for v in DASHBOARD_DEFAULT_SECTIONS}
 DASHBOARD_NO_SECTION = "Not in dashboard"
 DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY = "dashboard_device_section"
 
 LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
-    CONF_TYPE_NAME_QSHome:"settings",
-    CONF_TYPE_NAME_QSBattery:"settings",
-    CONF_TYPE_NAME_QSSolar:None,
+    CONF_TYPE_NAME_QSHome: "settings",
+    CONF_TYPE_NAME_QSBattery: "settings",
+    CONF_TYPE_NAME_QSSolar: None,
     "charger": None,
     CONF_TYPE_NAME_QSChargerOCPP: None,
-    CONF_TYPE_NAME_QSChargerWallbox:None,
-    CONF_TYPE_NAME_QSChargerGeneric:None,
-    CONF_TYPE_NAME_QSPerson:"settings",
-    CONF_TYPE_NAME_QSCar:"cars",
-    CONF_TYPE_NAME_QSPool:"pools",
-    CONF_TYPE_NAME_QSOnOffDuration:"others",
-    CONF_TYPE_NAME_QSClimateDuration:"climates",
-    CONF_TYPE_NAME_QSDynamicGroup:None,
-    CONF_TYPE_NAME_QSHeatPump:"climates"
+    CONF_TYPE_NAME_QSChargerWallbox: None,
+    CONF_TYPE_NAME_QSChargerGeneric: None,
+    CONF_TYPE_NAME_QSPerson: "settings",
+    CONF_TYPE_NAME_QSCar: "cars",
+    CONF_TYPE_NAME_QSPool: "pools",
+    CONF_TYPE_NAME_QSOnOffDuration: "others",
+    CONF_TYPE_NAME_QSClimateDuration: "climates",
+    CONF_TYPE_NAME_QSDynamicGroup: None,
+    CONF_TYPE_NAME_QSHeatPump: "climates",
 }
 
 
@@ -163,15 +169,7 @@ CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
 
 CONF_POOL_WINTER_IDX = 0
 CONF_POOL_DEFAULT_IDX = 4
-POOL_TEMP_STEPS = [
-    [-100, 10, 2],
-    [10, 12, 4],
-    [12, 16, 7],
-    [16, 24, 12],
-    [24, 27, 14],
-    [27, 30, 20],
-    [30, 99, 24]
-]
+POOL_TEMP_STEPS = [[-100, 10, 2], [10, 12, 4], [12, 16, 7], [16, 24, 12], [24, 27, 14], [27, 30, 20], [30, 99, 24]]
 
 
 SOLCAST_SOLAR_DOMAIN = "solcast_solar"
@@ -180,7 +178,7 @@ OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
 SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
 SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"
 SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "qs_home_non_controlled_consumption_power"
-FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "sensor."+SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
+FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER = "sensor." + SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER
 SENSOR_LOAD_CURRENT_COMMAND = "qs_load_current_command_sensor"
 SENSOR_LOAD_OVERRIDE_STATE = "qs_load_override_state_sensor"
 
@@ -207,7 +205,7 @@ SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM = "qs_car_autonomy_to_target_soc_km"
 SENSOR_PERSON_MILEAGE_PREDICTION_KM = "qs_person_mileage_prediction_km"
 
 SENSOR_BISTATE_CURRENT_DURATION_H = "qs_bistate_current_duration_h"
-SENSOR_BISTATE_CURRENT_ON_H= "qs_bistate_current_on_h"
+SENSOR_BISTATE_CURRENT_ON_H = "qs_bistate_current_on_h"
 
 BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"
@@ -216,19 +214,19 @@ BINARY_SENSOR_HOME_REAL_OFF_GRID = "qs_home_real_off_grid"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
-    "qs_no_control_forecast_15mn": 15*60,
-    "qs_no_control_forecast_30mn": 30*60,
-    "qs_no_control_forecast_1h": 60*60,
-    "qs_no_control_forecast_3h": 3*60*60,
-    "qs_no_control_forecast_6h": 6*60*60
+    "qs_no_control_forecast_15mn": 15 * 60,
+    "qs_no_control_forecast_30mn": 30 * 60,
+    "qs_no_control_forecast_1h": 60 * 60,
+    "qs_no_control_forecast_3h": 3 * 60 * 60,
+    "qs_no_control_forecast_6h": 6 * 60 * 60,
 }
 
 QSForecastSolarSensors = {
-    "qs_solar_forecast_15mn": 15*60,
-    "qs_solar_forecast_30mn": 30*60,
-    "qs_solar_forecast_1h": 60*60,
-    "qs_solar_forecast_3h": 3*60*60,
-    "qs_solar_forecast_6h": 6*60*60
+    "qs_solar_forecast_15mn": 15 * 60,
+    "qs_solar_forecast_30mn": 30 * 60,
+    "qs_solar_forecast_1h": 60 * 60,
+    "qs_solar_forecast_3h": 3 * 60 * 60,
+    "qs_solar_forecast_6h": 6 * 60 * 60,
 }
 
 CONF_OFF_GRID_ENTITY = "off_grid_entity"
@@ -277,7 +275,7 @@ FLOATING_PERIOD_S = 30 * 3600
 
 # better for serialization that using an IntEnum
 CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE = 9
-CONSTRAINT_TYPE_MANDATORY_END_TIME  = 7
+CONSTRAINT_TYPE_MANDATORY_END_TIME = 7
 CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN = 5
 CONSTRAINT_TYPE_FILLER = 3
 CONSTRAINT_TYPE_FILLER_AUTO = 1
@@ -308,7 +306,7 @@ CAR_HARD_WIRED_CHARGER = "Hard Wired Charger"
 MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12
 
-MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30 # keep last 14 days of data
+MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30  # keep last 14 days of data
 PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
 PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER = "daily_reminder_no_charger_car"
 PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
@@ -317,5 +315,5 @@ PREFERRED_CAR_ENERGY_THRESHOLD_KWH = 1.0
 PASS1_PREFERRED_CAR_PENALTY_KWH = 0.1
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 
-CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10*60, SOLVER_STEP_S//2)
+CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10 * 60, SOLVER_STEP_S // 2)
 LONG_ON_OFF_SWITCH_S = max(6 * CHANGE_ON_OFF_STATE_HYSTERESIS_S, max(4 * SOLVER_STEP_S, 3600))

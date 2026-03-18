@@ -8,55 +8,39 @@ This test file extends test_ha_car.py to achieve 80%+ coverage by testing:
 - Constraint conversion
 - Charger integration
 """
+
 from __future__ import annotations
 
 import datetime
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
-from datetime import timedelta, time as dt_time
+from datetime import timedelta
+from unittest.mock import MagicMock
 
+import pytest
+import pytz
 from homeassistant.const import (
-    Platform,
-    STATE_UNKNOWN,
-    STATE_UNAVAILABLE,
     CONF_NAME,
 )
-import pytz
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.ha_model.car import (
-    QSCar,
-    MIN_CHARGE_POWER_W,
-    CAR_MAX_EFFICIENCY_HISTORY_S,
-    CAR_DEFAULT_CAPACITY,
-    CAR_MINIMUM_LEFT_RANGE_KM,
-)
 from custom_components.quiet_solar.const import (
-    DOMAIN,
-    DATA_HANDLER,
-    CONF_CAR_PLUGGED,
-    CONF_CAR_TRACKER,
-    CONF_CAR_CHARGE_PERCENT_SENSOR,
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
+    CAR_HARD_WIRED_CHARGER,
     CONF_CAR_BATTERY_CAPACITY,
-    CONF_CAR_CHARGER_MIN_CHARGE,
-    CONF_CAR_CHARGER_MAX_CHARGE,
-    CONF_CAR_CUSTOM_POWER_CHARGE_VALUES,
-    CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
+    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
+    CONF_CAR_ESTIMATED_RANGE_SENSOR,
+    CONF_CAR_ODOMETER_SENSOR,
+    CONF_CAR_TRACKER,
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
-    CONF_CAR_IS_INVITED,
-    CONF_CAR_ODOMETER_SENSOR,
-    CONF_CAR_ESTIMATED_RANGE_SENSOR,
-    CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
-    CAR_HARD_WIRED_CHARGER,
+    DATA_HANDLER,
+    DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
 )
-
-from homeassistant.core import HomeAssistant
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
+from custom_components.quiet_solar.ha_model.car import (
+    CAR_DEFAULT_CAPACITY,
+    QSCar,
+)
 from tests.factories import create_minimal_home_model
 
 
@@ -124,12 +108,7 @@ def create_car(hass, car_config_entry, car_home, car_data_handler, car_hass_data
         }
         for k, v in extra_kwargs.items():
             config[_CAR_KWARG_TO_KEY.get(k, k)] = v
-        return QSCar(
-            hass=hass,
-            config_entry=car_config_entry,
-            home=car_home,
-            **config
-        )
+        return QSCar(hass=hass, config_entry=car_config_entry, home=car_home, **config)
 
     return _create_car
 
@@ -138,6 +117,7 @@ def create_car(hass, car_config_entry, car_home, car_data_handler, car_hass_data
 # Tests for car efficiency learning
 # ============================================================================
 
+
 class TestQSCarEfficiency:
     """Test car efficiency calculation and learning."""
 
@@ -145,14 +125,14 @@ class TestQSCarEfficiency:
         """Test efficiency segments list is initialized."""
         car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
-        assert hasattr(car, '_efficiency_segments')
+        assert hasattr(car, "_efficiency_segments")
         assert isinstance(car._efficiency_segments, list)
 
     def test_decreasing_segments_list_exists(self, create_car):
         """Test decreasing segments list is initialized."""
         car = create_car(CONF_CAR_BATTERY_CAPACITY=75000)
 
-        assert hasattr(car, '_decreasing_segments')
+        assert hasattr(car, "_decreasing_segments")
         assert isinstance(car._decreasing_segments, list)
 
     def test_add_soc_odo_value_tracking(self, create_car):
@@ -160,7 +140,7 @@ class TestQSCarEfficiency:
         car = create_car(
             CONF_CAR_BATTERY_CAPACITY=75000,
             CONF_CAR_ODOMETER_SENSOR="sensor.car_odometer",
-            CONF_CAR_ESTIMATED_RANGE_SENSOR="sensor.car_range"
+            CONF_CAR_ESTIMATED_RANGE_SENSOR="sensor.car_range",
         )
 
         time = datetime.datetime.now(pytz.UTC)
@@ -191,6 +171,7 @@ class TestQSCarEfficiency:
 # Tests for car dampening values
 # ============================================================================
 
+
 class TestQSCarDampening:
     """Test car charging dampening value management."""
 
@@ -198,14 +179,14 @@ class TestQSCarDampening:
         """Test theoretical amp to power conversion for 1 phase."""
         car = create_car()
 
-        assert hasattr(car, 'theoretical_amp_to_power_1p')
+        assert hasattr(car, "theoretical_amp_to_power_1p")
         assert car.theoretical_amp_to_power_1p[10] == pytest.approx(2300.0, abs=10)
 
     def test_theoretical_amp_to_power_3p(self, create_car):
         """Test theoretical amp to power conversion for 3 phase."""
         car = create_car()
 
-        assert hasattr(car, 'theoretical_amp_to_power_3p')
+        assert hasattr(car, "theoretical_amp_to_power_3p")
         assert car.theoretical_amp_to_power_3p[10] == pytest.approx(6900.0, abs=10)
 
     def test_get_charge_power_per_phase_A(self, create_car):
@@ -229,13 +210,14 @@ class TestQSCarDampening:
         """Test _dampening_deltas dictionary is initialized."""
         car = create_car()
 
-        assert hasattr(car, '_dampening_deltas')
+        assert hasattr(car, "_dampening_deltas")
         assert isinstance(car._dampening_deltas, dict)
 
 
 # ============================================================================
 # Tests for car range estimation
 # ============================================================================
+
 
 class TestQSCarRangeEstimation:
     """Test car range and SOC estimation."""
@@ -246,10 +228,7 @@ class TestQSCarRangeEstimation:
         car._km_per_kwh = 6.0
 
         time = datetime.datetime.now(pytz.UTC)
-        result = car.get_adapt_target_percent_soc_to_reach_range_km(
-            target_range_km=100.0,
-            time=time
-        )
+        result = car.get_adapt_target_percent_soc_to_reach_range_km(target_range_km=100.0, time=time)
 
         assert isinstance(result, tuple)
         assert len(result) == 4
@@ -265,6 +244,7 @@ class TestQSCarRangeEstimation:
 # Tests for car-person interaction
 # ============================================================================
 
+
 class TestQSCarPersonInteraction:
     """Test car-person allocation and interaction."""
 
@@ -275,9 +255,7 @@ class TestQSCarPersonInteraction:
 
         assert car.user_selected_person_name_for_car == "John"
 
-    def test_user_selected_person_property_setter_triggers_update(
-        self, create_car, hass, car_home
-    ):
+    def test_user_selected_person_property_setter_triggers_update(self, create_car, hass, car_home):
         """Verify direct attribute assignment works (property setter was removed)."""
         car = create_car()
         car.user_selected_person_name_for_car = "Jane"
@@ -303,7 +281,7 @@ class TestQSCarPersonInteraction:
         """Test current_forecasted_person attribute exists."""
         car = create_car()
 
-        assert hasattr(car, 'current_forecasted_person')
+        assert hasattr(car, "current_forecasted_person")
 
     def test_get_car_person_readable_forecast_no_person(self, create_car):
         """Test get_car_person_readable_forecast_mileage with no person."""
@@ -318,6 +296,7 @@ class TestQSCarPersonInteraction:
 # ============================================================================
 # Tests for car-charger integration
 # ============================================================================
+
 
 class TestQSCarChargerIntegration:
     """Test car-charger interaction."""
@@ -355,6 +334,7 @@ class TestQSCarChargerIntegration:
 # ============================================================================
 # Tests for car charge targets
 # ============================================================================
+
 
 class TestQSCarChargeTargets:
     """Test car charge target management."""
@@ -401,6 +381,7 @@ class TestQSCarChargeTargets:
 # Tests for car charge percent steps
 # ============================================================================
 
+
 class TestQSCarChargePercentSteps:
     """Test car charge percent step handling."""
 
@@ -426,15 +407,11 @@ class TestQSCarChargePercentSteps:
         """Test steps are sorted."""
         car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "80, 50, 90"})
 
-        assert car.car_charge_percent_max_number_steps == sorted(
-            car.car_charge_percent_max_number_steps
-        )
+        assert car.car_charge_percent_max_number_steps == sorted(car.car_charge_percent_max_number_steps)
 
     def test_charge_percent_steps_invalid_values_rejected(self, create_car):
         """Test invalid values result in empty list."""
-        car = create_car(**{
-            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "invalid, not_a_number"
-        })
+        car = create_car(**{CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS: "invalid, not_a_number"})
 
         assert car.car_charge_percent_max_number_steps == []
 
@@ -448,6 +425,7 @@ class TestQSCarChargePercentSteps:
 # ============================================================================
 # Tests for car save/restore state
 # ============================================================================
+
 
 class TestQSCarSaveRestoreState:
     """Test car state persistence."""
@@ -471,10 +449,7 @@ class TestQSCarSaveRestoreState:
         """Test use_saved_extra_device_info restores person info."""
         car = create_car()
 
-        stored_data = {
-            "user_selected_person_name_for_car": "John",
-            "current_forecasted_person_name_from_boot": "Jane"
-        }
+        stored_data = {"user_selected_person_name_for_car": "John", "current_forecasted_person_name_from_boot": "Jane"}
 
         car.use_saved_extra_device_info(stored_data)
 
@@ -485,6 +460,7 @@ class TestQSCarSaveRestoreState:
 # ============================================================================
 # Tests for car async operations
 # ============================================================================
+
 
 class TestQSCarAsyncOperations:
     """Test car async operations."""
@@ -497,10 +473,7 @@ class TestQSCarAsyncOperations:
         car.car_tracker = None
 
         time = datetime.datetime.now(pytz.UTC)
-        result = await car.get_car_mileage_on_period_km(
-            time - timedelta(hours=1),
-            time
-        )
+        result = await car.get_car_mileage_on_period_km(time - timedelta(hours=1), time)
 
         assert result is None or result == 0.0
 

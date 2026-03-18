@@ -1,5 +1,4 @@
-from dataclasses import dataclass, asdict
-
+from dataclasses import asdict, dataclass
 
 CMD_CST_ON = "on"
 CMD_CST_OFF = "off"
@@ -20,10 +19,11 @@ commands_scores = {
     CMD_CST_AUTO_GREEN_CONSIGN: 60,
     CMD_CST_GREEN_CHARGE_ONLY: 50,
     CMD_CST_AUTO_GREEN: 40,
-    CMD_CST_AUTO_GREEN_CAP: 30, # this one is less "free style" and is more constrained than the AUTO GREEN
+    CMD_CST_AUTO_GREEN_CAP: 30,  # this one is less "free style" and is more constrained than the AUTO GREEN
     CMD_CST_IDLE: 20,
     CMD_CST_OFF: 10,
 }
+
 
 @dataclass
 class LoadCommand:
@@ -34,10 +34,16 @@ class LoadCommand:
         return other is not None and self.command == other.command and self.power_consign == other.power_consign
 
     def to_dict(self) -> dict:
-        return asdict(self) #self.__dict_
+        return asdict(self)  # self.__dict_
 
     def is_auto(self) -> bool:
-        return self.command in [CMD_CST_AUTO_GREEN, CMD_CST_AUTO_CONSIGN, CMD_CST_AUTO_PRICE, CMD_CST_AUTO_GREEN_CAP, CMD_CST_AUTO_GREEN_CONSIGN]
+        return self.command in [
+            CMD_CST_AUTO_GREEN,
+            CMD_CST_AUTO_CONSIGN,
+            CMD_CST_AUTO_PRICE,
+            CMD_CST_AUTO_GREEN_CAP,
+            CMD_CST_AUTO_GREEN_CONSIGN,
+        ]
 
     def is_like(self, other) -> bool:
         if other is None:
@@ -51,7 +57,7 @@ class LoadCommand:
         return self.command == "off" or self.command == "idle"
 
 
-def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand) -> LoadCommand:
+def merge_commands(cmd1: LoadCommand, cmd2: LoadCommand) -> LoadCommand:
     """Merge two LoadCommand objects"""
     if cmd1 is None:
         return cmd2
@@ -68,17 +74,17 @@ def merge_commands(cmd1:LoadCommand, cmd2:LoadCommand) -> LoadCommand:
     return LoadCommand(command=command, power_consign=power_consign)
 
 
-
-
-def copy_command(cmd:LoadCommand|None, power_consign=None) -> LoadCommand |None:
+def copy_command(cmd: LoadCommand | None, power_consign=None) -> LoadCommand | None:
     if cmd is None:
         return None
     if power_consign is None:
-        power_consign=cmd.power_consign
+        power_consign = cmd.power_consign
     return LoadCommand(command=cmd.command, power_consign=power_consign)
 
-def copy_command_and_change_type(cmd:LoadCommand, new_type:str) -> LoadCommand:
+
+def copy_command_and_change_type(cmd: LoadCommand, new_type: str) -> LoadCommand:
     return LoadCommand(command=new_type, power_consign=cmd.power_consign)
+
 
 CMD_ON = LoadCommand(command=CMD_CST_ON, power_consign=0.0)
 CMD_AUTO_GREEN_ONLY = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
@@ -91,4 +97,4 @@ CMD_IDLE = LoadCommand(command=CMD_CST_IDLE, power_consign=0.0)
 
 CMD_GREEN_CHARGE_AND_DISCHARGE = LoadCommand(command=CMD_CST_AUTO_GREEN, power_consign=0.0)
 CMD_GREEN_CHARGE_ONLY = LoadCommand(command=CMD_CST_GREEN_CHARGE_ONLY, power_consign=0.0)
-CMD_FORCE_CHARGE = LoadCommand(command=CMD_CST_FORCE_CHARGE, power_consign=0.0) #can be on grid
+CMD_FORCE_CHARGE = LoadCommand(command=CMD_CST_FORCE_CHARGE, power_consign=0.0)  # can be on grid

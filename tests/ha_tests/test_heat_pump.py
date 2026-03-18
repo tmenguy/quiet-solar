@@ -1,9 +1,7 @@
 """Tests for quiet_solar ha_model/heat_pump.py."""
 
-import pytest
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import DOMAIN
