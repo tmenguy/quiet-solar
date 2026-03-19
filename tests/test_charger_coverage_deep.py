@@ -1940,7 +1940,7 @@ class TestGetAmpsPhaseSwitch:
 # QSChargerOCPP and QSChargerWallbox specific tests
 # =============================================================================
 
-from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+from custom_components.quiet_solar.ha_model.charger import WallboxChargerStatus
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
