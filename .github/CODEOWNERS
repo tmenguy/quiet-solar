@@ -1,0 +1,11 @@
+# Default owner
+* @tmenguy
+
+# Solver (critical)
+custom_components/quiet_solar/home_model/ @tmenguy
+
+# HA integration layer
+custom_components/quiet_solar/ha_model/ @tmenguy
+
+# CI/CD
+.github/ @tmenguy

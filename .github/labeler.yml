@@ -1,0 +1,63 @@
+"area:solver":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/home_model/solver.py
+          - custom_components/quiet_solar/home_model/constraints.py
+
+"area:charger":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ha_model/charger.py
+          - custom_components/quiet_solar/ha_model/dynamic_group.py
+
+"area:car":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ha_model/car.py
+
+"area:person":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ha_model/person.py
+
+"area:battery":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ha_model/battery.py
+
+"area:home":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ha_model/home.py
+          - custom_components/quiet_solar/data_handler.py
+
+"area:config":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/config_flow.py
+
+"area:platform":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/sensor.py
+          - custom_components/quiet_solar/switch.py
+          - custom_components/quiet_solar/number.py
+          - custom_components/quiet_solar/select.py
+          - custom_components/quiet_solar/button.py
+          - custom_components/quiet_solar/binary_sensor.py
+          - custom_components/quiet_solar/time.py
+
+"area:ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/quiet_solar/ui/**
+
+"area:ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+
+"area:tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/**
