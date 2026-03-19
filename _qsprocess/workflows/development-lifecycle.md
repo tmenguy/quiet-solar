@@ -198,25 +198,31 @@ fi
 echo "Next tag: $TAG"
 ```
 
-2. **Build the release notes.** Collect all merged PRs since the last release:
+2. **Update `manifest.json` version** to match the tag (without the `v` prefix):
 
 ```bash
-PREV_TAG=$(gh release list --limit 1 | awk '{print $1}')
-gh pr list --state merged --search "merged:>=$(gh release view "$PREV_TAG" --json publishedAt -q .publishedAt | cut -dT -f1)" --json number,title --jq '.[] | "- #\(.number): \(.title)"'
+VERSION="${TAG#v}"
+sed -i '' "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" custom_components/quiet_solar/manifest.json
 ```
 
-3. **Create the release:**
+3. **Commit the version bump and push the tag:**
 
 ```bash
-gh release create "$TAG" --title "$TAG" --notes "$(cat <<EOF
-## Changes since ${PREV_TAG}
-
-{{merged_pr_list_from_step_2}}
-EOF
-)" --target main
+git add custom_components/quiet_solar/manifest.json
+git commit -m "bump version to ${VERSION}"
+git push origin main
+git tag "$TAG"
+git push origin "$TAG"
 ```
 
-The release title is the tag only. The description lists all merged PRs (which reference their issues via `Fixes #N`).
+4. **GitHub Actions handles the rest.** The release pipeline (`.github/workflows/release.yml`) triggers on the tag push and:
+   - Runs the full test suite with 100% coverage
+   - Runs Ruff lint + format check and MyPy type check
+   - Validates HACS compatibility
+   - Checks that the tag version matches `manifest.json`
+   - Creates the GitHub Release with auto-generated changelog
+
+If any check fails, no release is created — fix the issue and re-tag.
 
 ---
 
