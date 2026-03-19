@@ -84,3 +84,4 @@ Before implementing any code, read these documents:
 - **Development lifecycle**: `_qsprocess/workflows/development-lifecycle.md` — issue → branch → develop → PR
 - **Code-level rules (42 rules)**: `_bmad-output/project-context.md` — naming, async, logging, error handling, testing anti-patterns
 - **Architecture & patterns (9 patterns)**: `_bmad-output/planning-artifacts/architecture.md` — component model, decision map, implementation patterns, project structure, CI/CD strategy
+- **Failure mode catalog**: `docs/failure-mode-catalog.md` — external dependency weaknesses, fallback behaviors, recovery paths (NFR20: update when new failure modes discovered)
