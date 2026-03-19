@@ -248,26 +248,26 @@ class TestQSCarRangeEstimation:
 class TestQSCarPersonInteraction:
     """Test car-person allocation and interaction."""
 
-    def test_user_selected_person_property_getter(self, create_car):
-        """Test user_selected_person_name_for_car getter."""
+    def test_user_selected_person_get_set(self, create_car):
+        """Test get/set_user_originated for person_name."""
         car = create_car()
-        car.user_selected_person_name_for_car = "John"
+        car.set_user_originated("person_name", "John")
 
-        assert car.user_selected_person_name_for_car == "John"
+        assert car.get_user_originated("person_name") == "John"
 
-    def test_user_selected_person_property_setter_triggers_update(self, create_car, hass, car_home):
-        """Verify direct attribute assignment works (property setter was removed)."""
+    def test_user_selected_person_set_triggers_update(self, create_car, hass, car_home):
+        """Verify set_user_originated for person_name works."""
         car = create_car()
-        car.user_selected_person_name_for_car = "Jane"
-        assert car.user_selected_person_name_for_car == "Jane"
+        car.set_user_originated("person_name", "Jane")
+        assert car.get_user_originated("person_name") == "Jane"
 
     def test_user_selected_person_no_person_attached(self, create_car):
         """Test setting FORCE_CAR_NO_PERSON_ATTACHED."""
         car = create_car()
 
-        car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+        car.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
 
-        assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+        assert car.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
     def test_car_person_option_format(self, create_car):
         """Test _car_person_option returns person name."""
@@ -318,11 +318,11 @@ class TestQSCarChargerIntegration:
         assert car.charger == mock_charger
 
     def test_user_attached_charger_name(self, create_car):
-        """Test user_attached_charger_name property."""
+        """Test get/set_user_originated for charger_name."""
         car = create_car()
-        car.user_attached_charger_name = "My Charger"
+        car.set_user_originated("charger_name", "My Charger")
 
-        assert car.user_attached_charger_name == "My Charger"
+        assert car.get_user_originated("charger_name") == "My Charger"
 
     def test_hard_wired_charger(self, create_car):
         """Test car with hard-wired charger."""
@@ -433,7 +433,7 @@ class TestQSCarSaveRestoreState:
     def test_update_to_be_saved_extra_device_info(self, create_car):
         """Test update_to_be_saved_extra_device_info saves person info."""
         car = create_car()
-        car.user_selected_person_name_for_car = "John"
+        car.set_user_originated("person_name", "John")
 
         mock_person = MagicMock()
         mock_person.name = "Jane"
@@ -442,18 +442,21 @@ class TestQSCarSaveRestoreState:
         data = {}
         car.update_to_be_saved_extra_device_info(data)
 
-        assert data["user_selected_person_name_for_car"] == "John"
+        assert data["_user_originated"]["person_name"] == "John"
         assert data["current_forecasted_person_name_from_boot"] == "Jane"
 
     def test_use_saved_extra_device_info(self, create_car):
         """Test use_saved_extra_device_info restores person info."""
         car = create_car()
 
-        stored_data = {"user_selected_person_name_for_car": "John", "current_forecasted_person_name_from_boot": "Jane"}
+        stored_data = {
+            "_user_originated": {"person_name": "John"},
+            "current_forecasted_person_name_from_boot": "Jane",
+        }
 
         car.use_saved_extra_device_info(stored_data)
 
-        assert car.user_selected_person_name_for_car == "John"
+        assert car.get_user_originated("person_name") == "John"
         assert car._current_forecasted_person_name_from_boot == "Jane"
 
 
@@ -505,7 +508,7 @@ class TestQSCarExtendedCoverage:
         from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
 
         car = create_car()
-        car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+        car.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
 
         time = datetime.datetime.now(pytz.UTC)
         car.device_post_home_init(time)
@@ -515,13 +518,13 @@ class TestQSCarExtendedCoverage:
     def test_device_post_home_init_user_selected_invalid_person(self, create_car, car_home):
         """Test device_post_home_init with invalid user selected person (lines 281-284)."""
         car = create_car()
-        car.user_selected_person_name_for_car = "NonExistentPerson"
+        car.set_user_originated("person_name", "NonExistentPerson")
         car_home.get_person_by_name = MagicMock(return_value=None)
 
         time = datetime.datetime.now(pytz.UTC)
         car.device_post_home_init(time)
 
-        assert car.user_selected_person_name_for_car is None
+        assert car.get_user_originated("person_name") is None
         assert car.current_forecasted_person is None
 
     def test_device_post_home_init_exception_handling(self, create_car, car_home):
@@ -559,7 +562,7 @@ class TestQSCarExtendedCoverage:
     def test_get_car_person_option_with_forecasted_person(self, create_car):
         """Test get_car_person_option returns forecasted person (lines 330-331)."""
         car = create_car()
-        car.user_selected_person_name_for_car = None
+        car.clear_user_originated("person_name")
 
         mock_person = MagicMock()
         mock_person.name = "John"
@@ -573,26 +576,26 @@ class TestQSCarExtendedCoverage:
         car._car_person_option.assert_called_with("John")
 
     @pytest.mark.asyncio
-    async def test_set_user_person_for_car_none(self, create_car):
-        """Test set_user_person_for_car with None (lines 346-348)."""
+    async def test_user_set_person_for_car_none(self, create_car):
+        """Test user_set_person_for_car with None (lines 346-348)."""
         from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
 
         car = create_car()
 
-        await car.set_user_person_for_car(None)
+        await car.user_set_person_for_car(None)
 
-        assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+        assert car.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
     @pytest.mark.asyncio
-    async def test_set_user_person_for_car_force_no_person(self, create_car):
-        """Test set_user_person_for_car with FORCE_CAR_NO_PERSON_ATTACHED (lines 349-351)."""
+    async def test_user_set_person_for_car_force_no_person(self, create_car):
+        """Test user_set_person_for_car with FORCE_CAR_NO_PERSON_ATTACHED (lines 349-351)."""
         from custom_components.quiet_solar.ha_model.car import FORCE_CAR_NO_PERSON_ATTACHED
 
         car = create_car()
 
-        await car.set_user_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+        await car.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
 
-        assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+        assert car.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
     def test_get_charge_power_per_phase_A_1p(self, create_car):
         """Test get_charge_power_per_phase_A method for 1-phase (lines 1491-1590)."""

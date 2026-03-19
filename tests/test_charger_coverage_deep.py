@@ -1406,7 +1406,7 @@ class TestDevicePostHomeInit:
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
-        ch.user_attached_car_name = "TestCar"
+        ch.set_user_originated("car_name", "TestCar")
         ch.device_post_home_init(datetime.now(pytz.UTC))
         assert ch._boot_car is not None and ch._boot_car.name == "TestCar"
 
@@ -1428,7 +1428,7 @@ class TestDevicePostHomeInit:
         home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
-        car.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
+        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
         _init_charger_states(ch)
         ct = MagicMock()
         ct.load_param = "TestCar"
@@ -2951,8 +2951,8 @@ class TestGetBestCarEdgeCases:
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
-        car.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
-        ch.user_attached_car_name = "TestCar"
+        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        ch.set_user_originated("car_name", "TestCar")
         result = ch.get_best_car(datetime.now(pytz.UTC))
         # car was set to None at line 2358 but code falls through to scoring
         # which returns the default generic car
@@ -2969,7 +2969,7 @@ class TestGetBestCarEdgeCases:
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
         _init_charger_states(ch2)
-        ch.user_attached_car_name = "TestCar"
+        ch.set_user_originated("car_name", "TestCar")
         # ch2 is disabled, shouldn't interfere
         result = ch.get_best_car(datetime.now(pytz.UTC))
         assert result is not None
@@ -2984,13 +2984,13 @@ class TestGetBestCarEdgeCases:
         _init_charger_states(ch1)
         _init_charger_states(ch2)
         # Both chargers claim the same car
-        ch1.user_attached_car_name = "TestCar"
-        ch2.user_attached_car_name = "TestCar"
+        ch1.set_user_originated("car_name", "TestCar")
+        ch2.set_user_originated("car_name", "TestCar")
         _plug_car(ch2, car, datetime.now(pytz.UTC))
         result = ch1.get_best_car(datetime.now(pytz.UTC))
         assert result is not None
         # ch2 should have been detached
-        assert ch2.user_attached_car_name is None
+        assert ch2.get_user_originated("car_name") is None
         assert ch2.car is None
 
 
@@ -4246,7 +4246,7 @@ class TestGetCarScore:
     def test_charger_no_car_connected_returns_neg(self):
         """Line 2435: disabled charger skipped in get_best_car."""
         hass, home, ch, car, now = self._setup()
-        ch.user_attached_car_name = CHARGER_NO_CAR_CONNECTED
+        ch.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
         result = ch.get_best_car(now)
         assert result is None
 
@@ -4286,7 +4286,7 @@ class TestGetCarScore:
         _init_charger_states(ch2)
         _plug_car(ch2, car2, now)
         ch.is_plugged = MagicMock(return_value=True)
-        ch.user_attached_car_name = None
+        ch.clear_user_originated("car_name")
         ch._boot_car = None
         result = ch.get_best_car(now)
         assert result is not None
@@ -4296,7 +4296,7 @@ class TestGetCarScore:
         hass, home, ch, car, now = self._setup()
         car2 = _make_real_car(hass, home, name="BootCar")
         ch._boot_car = car2
-        ch.user_attached_car_name = None
+        ch.clear_user_originated("car_name")
         ch.is_plugged = MagicMock(return_value=True)
         result = ch.get_best_car(now)
         assert result.name == "BootCar"
@@ -4305,8 +4305,8 @@ class TestGetCarScore:
         """Line 2502: empty chargers_scores[charger] -> continue."""
         hass, home, ch, car, now = self._setup()
         ch.detach_car()
-        car.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
-        ch.user_attached_car_name = None
+        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        ch.clear_user_originated("car_name")
         ch._boot_car = None
         ch.is_plugged = MagicMock(return_value=True)
         result = ch.get_best_car(now)
@@ -4823,9 +4823,9 @@ class TestGetBestCarBootCarOverride:
         _init_charger_states(ch)
         now = datetime.now(pytz.UTC)
 
-        ch.user_attached_car_name = None
+        ch.clear_user_originated("car_name")
         ch._boot_car = car_b
-        car_b.user_attached_charger_name = None
+        car_b.clear_user_originated("charger_name")
 
         def mock_score(car, time, cache):
             if car.name == "CarA":
@@ -4853,8 +4853,8 @@ class TestGetBestCarCleanupEmptyScores:
         _init_charger_states(ch1)
         _init_charger_states(ch2)
 
-        ch1.user_attached_car_name = None
-        ch2.user_attached_car_name = None
+        ch1.clear_user_originated("car_name")
+        ch2.clear_user_originated("car_name")
         ch1._boot_car = None
         ch2._boot_car = None
 
@@ -5101,7 +5101,7 @@ class TestAutoConstraintCleanedPreventsPersonReAdd:
             support_auto=True,
         )
         old_ct.load_info = {"person": "Alice"}
-        charger._auto_constraints_cleaned_at_user_reset = [old_ct]
+        car.set_user_originated("charge_time", "constraints_cleared")
 
         await charger.check_load_activity_and_constraints(now)
 
@@ -5675,7 +5675,7 @@ class TestPersonConstraintBlockedByAutoReset:
 
     @pytest.mark.asyncio
     async def test_auto_reset_blocks_person_constraint(self):
-        """A matching old_ct in _auto_constraints_cleaned_at_user_reset blocks person."""
+        """constraints_cleared override on car blocks person constraint re-add."""
         *_, charger, car, now = self._setup()
 
         car.do_force_next_charge = False
@@ -5691,20 +5691,7 @@ class TestPersonConstraintBlockedByAutoReset:
 
         car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, person_min_target, person_mock))
 
-        old_ct = MultiStepsPowerLoadConstraintChargePercent(
-            total_capacity_wh=60000,
-            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-            time=now - timedelta(hours=2),
-            load=charger,
-            load_param=car.name,
-            from_user=False,
-            end_of_constraint=next_usage_time,
-            initial_value=30.0,
-            target_value=person_min_target,
-            power_steps=charger._power_steps,
-            load_info={"person": "Alice"},
-        )
-        charger._auto_constraints_cleaned_at_user_reset = [old_ct]
+        car.set_user_originated("charge_time", "constraints_cleared")
 
         await charger.check_load_activity_and_constraints(now)
 
@@ -6644,3 +6631,76 @@ class TestUpdateValueCallbackLines3967_3971:
         # result should be result_calculus (50 + int(6) = 56), not sensor_result (52)
         assert result == 56
         assert keep is True
+
+
+# =============================================================================
+# Coverage: charge_time user_originated fallback (string and datetime branches)
+# =============================================================================
+
+
+class TestChargeTimeUserOriginatedFallback:
+    """Lines 3145-3153: charge_time from user_originated (string and datetime)."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        charger = _create_charger(hass, home)
+        car = _make_real_car(hass, home, default_charge=80.0, minimum_ok_charge=20.0)
+        now = datetime.now(pytz.UTC)
+
+        _init_charger_states(charger)
+        charger.is_charger_unavailable = MagicMock(return_value=False)
+        charger.probe_for_possible_needed_reboot = MagicMock(return_value=False)
+        charger.is_not_plugged = MagicMock(return_value=False)
+        charger.is_plugged = MagicMock(return_value=True)
+        charger.set_charging_num_phases = AsyncMock(return_value=False)
+        charger.set_max_charging_current = AsyncMock(return_value=True)
+        charger.reboot = AsyncMock()
+
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+        return hass, home, charger, car, now
+
+    @pytest.mark.asyncio
+    async def test_charge_time_from_user_originated_string(self):
+        """charge_time fallback reads ISO string from user_originated."""
+        *_, charger, car, now = self._setup()
+
+        car.do_force_next_charge = False
+        car.do_next_charge_time = None  # force the fallback path
+        car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        car.set_next_charge_target_percent = AsyncMock()
+        car.get_car_charge_percent = lambda time=None, *a, **kw: 40.0
+        car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+
+        # Set charge_time as ISO string directly (bypass auto-snapshot which would overwrite it)
+        target_time = now + timedelta(hours=6)
+        car._user_originated["charge_time"] = target_time.isoformat()
+
+        await charger.check_load_activity_and_constraints(now)
+
+        # A timed constraint should have been created
+        timed_cts = [c for c in charger._constraints if c is not None and c.from_user is True]
+        assert len(timed_cts) >= 1
+
+    @pytest.mark.asyncio
+    async def test_charge_time_from_user_originated_datetime(self):
+        """charge_time fallback reads datetime object from user_originated."""
+        *_, charger, car, now = self._setup()
+
+        car.do_force_next_charge = False
+        car.do_next_charge_time = None  # force the fallback path
+        car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        car.set_next_charge_target_percent = AsyncMock()
+        car.get_car_charge_percent = lambda time=None, *a, **kw: 40.0
+        car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+
+        # Set charge_time as datetime object directly in user_originated
+        target_time = now + timedelta(hours=6)
+        car._user_originated["charge_time"] = target_time  # direct, bypassing isoformat
+
+        await charger.check_load_activity_and_constraints(now)
+
+        # A timed constraint should have been created
+        timed_cts = [c for c in charger._constraints if c is not None and c.from_user is True]
+        assert len(timed_cts) >= 1

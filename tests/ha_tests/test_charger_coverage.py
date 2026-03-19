@@ -411,11 +411,11 @@ async def test_charger_get_current_selected_car_option(
     assert result is None or isinstance(result, str)
 
 
-async def test_charger_set_user_selected_car_by_name_none(
+async def test_charger_user_set_selected_car_by_name_none(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Test set_user_selected_car_by_name with None (lines 2504-2634)."""
+    """Test user_set_selected_car_by_name with None (lines 2504-2634)."""
     from .const import MOCK_CHARGER_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -434,7 +434,7 @@ async def test_charger_set_user_selected_car_by_name_none(
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
 
-    await charger_device.set_user_selected_car_by_name(None)
+    await charger_device.user_set_selected_car_by_name(None)
 
     assert charger_device.car is None
 

@@ -93,6 +93,8 @@ class AbstractDevice:
     def __init__(self, name: str, device_type: str | None = None, **kwargs):
         super().__init__()
         self._enabled = True
+        self._user_originated: dict[str, Any] = {}
+        self._in_user_originated_update: bool = False
         self._power_use_conf = kwargs.pop(CONF_POWER, None)
         self.efficiency = float(min(kwargs.pop(CONF_DEVICE_EFFICIENCY, 100.0), 100.0))
         self._device_is_3p_conf = kwargs.pop(CONF_IS_3P, False)
@@ -143,6 +145,30 @@ class AbstractDevice:
         self.father_device: QSDynamicGroup = self.home
 
         self._computed_dashboard_section = None
+
+    def set_user_originated(self, key: str, value: Any) -> None:
+        self._user_originated[key] = value
+        if not self._in_user_originated_update:
+            self._in_user_originated_update = True
+            try:
+                self._on_user_originated_changed(key, value)
+            finally:
+                self._in_user_originated_update = False
+
+    def _on_user_originated_changed(self, key: str, value: Any) -> None:
+        """Override in subclasses to react to user-originated state changes."""
+
+    def get_user_originated(self, key: str, default: Any = None) -> Any:
+        return self._user_originated.get(key, default)
+
+    def has_user_originated(self, key: str) -> bool:
+        return key in self._user_originated
+
+    def clear_user_originated(self, key: str) -> None:
+        self._user_originated.pop(key, None)
+
+    def clear_all_user_originated(self) -> None:
+        self._user_originated.clear()
 
     def is_device_light_on(self) -> bool:
         if self.current_command is None or self.current_command.is_off_or_idle():
@@ -278,6 +304,7 @@ class AbstractDevice:
 
     async def user_clean_and_reset(self):
         _LOGGER.info(f"user_clean_and_reset device {self.name}")
+        self.clear_all_user_originated()
         self.reset()
 
     async def user_clean_constraints(self):
@@ -391,8 +418,10 @@ class AbstractDevice:
         data_to_update["last_check_update"] = (
             self.last_check_update.isoformat() if self.last_check_update is not None else None
         )
+        data_to_update["_user_originated"] = self._user_originated
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
+        self._user_originated = stored_load_info.get("_user_originated", {})
         self.num_on_off = stored_load_info.get("num_on_off", 0)
 
         if self.num_on_off > 0 and self.num_on_off % 2 == 1:

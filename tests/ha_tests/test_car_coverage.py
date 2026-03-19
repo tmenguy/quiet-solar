@@ -49,14 +49,14 @@ async def test_car_device_post_home_init_no_person_match(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
 
     # Set an invalid person name that won't match any existing person
-    car_device.user_selected_person_name_for_car = "NonExistentPerson"
+    car_device.set_user_originated("person_name", "NonExistentPerson")
     car_device._current_forecasted_person_name_from_boot = None
 
     time = datetime.now(tz=pytz.UTC)
     car_device.device_post_home_init(time)
 
     # Should clear the invalid person selection
-    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.get_user_originated("person_name") is None
     assert car_device.current_forecasted_person is None
 
 
@@ -82,7 +82,7 @@ async def test_car_device_post_home_init_force_no_person(
     await hass.async_block_till_done()
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
-    car_device.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+    car_device.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
 
     time = datetime.now(tz=pytz.UTC)
     car_device.device_post_home_init(time)
@@ -614,7 +614,7 @@ async def test_car_update_to_be_saved_extra_device_info(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
 
     # Set some values to save
-    car_device.user_selected_person_name_for_car = "TestPerson"
+    car_device.set_user_originated("person_name", "TestPerson")
 
     mock_person = MagicMock()
     mock_person.name = "ForecastPerson"
@@ -623,8 +623,9 @@ async def test_car_update_to_be_saved_extra_device_info(
     data = {}
     car_device.update_to_be_saved_extra_device_info(data)
 
-    assert "user_selected_person_name_for_car" in data
-    assert data["user_selected_person_name_for_car"] == "TestPerson"
+    # person_name is now persisted via _user_originated, not as a separate key
+    assert "_user_originated" in data
+    assert data["_user_originated"]["person_name"] == "TestPerson"
     assert "current_forecasted_person_name_from_boot" in data
     assert data["current_forecasted_person_name_from_boot"] == "ForecastPerson"
 
@@ -653,11 +654,11 @@ async def test_car_use_saved_extra_device_info(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
 
     stored_data = {
-        "user_selected_person_name_for_car": "RestoredPerson",
+        "_user_originated": {"person_name": "RestoredPerson"},
         "current_forecasted_person_name_from_boot": "RestoredForecast",
     }
 
     car_device.use_saved_extra_device_info(stored_data)
 
-    assert car_device.user_selected_person_name_for_car == "RestoredPerson"
+    assert car_device.get_user_originated("person_name") == "RestoredPerson"
     assert car_device._current_forecasted_person_name_from_boot == "RestoredForecast"

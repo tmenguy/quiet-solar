@@ -617,14 +617,14 @@ class TestQSChargerGenericExtended(unittest.TestCase):
 
     def test_get_current_selected_car_option_user_attached(self):
         """Test get_current_selected_car_option with user attached car."""
-        self.charger.user_attached_car_name = "MyCar"
+        self.charger.set_user_originated("car_name", "MyCar")
 
         result = self.charger.get_current_selected_car_option()
         self.assertEqual(result, "MyCar")
 
     def test_get_current_selected_car_option_no_car(self):
         """Test get_current_selected_car_option with no car."""
-        self.charger.user_attached_car_name = None
+        self.charger.clear_user_originated("car_name")
         self.charger.car = None
 
         result = self.charger.get_current_selected_car_option()
@@ -632,7 +632,7 @@ class TestQSChargerGenericExtended(unittest.TestCase):
 
     def test_get_current_selected_car_option_attached_car(self):
         """Test get_current_selected_car_option with attached car."""
-        self.charger.user_attached_car_name = None
+        self.charger.clear_user_originated("car_name")
         mock_car = MagicMock()
         mock_car.name = "AttachedCar"
         self.charger.car = mock_car
@@ -902,10 +902,10 @@ class TestQSChargerGenericCarSelection(unittest.TestCase):
         """Test get_best_car with user attached car."""
         mock_car = MagicMock()
         mock_car.name = "UserCar"
-        mock_car.user_attached_charger_name = None
+        mock_car.get_user_originated = MagicMock(return_value=None)
 
         self.home.get_car_by_name = MagicMock(return_value=mock_car)
-        self.charger.user_attached_car_name = "UserCar"
+        self.charger.set_user_originated("car_name", "UserCar")
 
         time = datetime.now(pytz.UTC)
         result = self.charger.get_best_car(time)
@@ -914,7 +914,7 @@ class TestQSChargerGenericCarSelection(unittest.TestCase):
 
     def test_get_best_car_no_car_connected(self):
         """Test get_best_car when user set CHARGER_NO_CAR_CONNECTED."""
-        self.charger.user_attached_car_name = CHARGER_NO_CAR_CONNECTED
+        self.charger.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
 
         time = datetime.now(pytz.UTC)
         result = self.charger.get_best_car(time)
@@ -931,7 +931,7 @@ class TestQSChargerGenericCarSelection(unittest.TestCase):
         attached_car.name = "AttachedCar"
 
         self.home.get_car_by_name = MagicMock(return_value=attached_car)
-        self.charger.user_attached_car_name = "AttachedCar"
+        self.charger.set_user_originated("car_name", "AttachedCar")
 
         time = datetime.now(pytz.UTC)
         cache = {}

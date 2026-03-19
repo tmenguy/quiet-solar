@@ -18,7 +18,7 @@ Key targets:
  - Various other under-tested happy paths and corner cases
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, time as dt_time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -271,10 +271,14 @@ async def test_user_set_next_charge_target_energy_mode(
     car._use_percent_mode = False
     car.car_is_invited = True  # force energy mode
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
-    car.set_next_charge_target_energy = AsyncMock(return_value=True)
+    async def _mock_set_energy(value):
+        car._next_charge_target_energy = 30000
+        return True
+
+    car.set_next_charge_target_energy = _mock_set_energy
 
     await car.user_set_next_charge_target("30kWh")
-    car.set_next_charge_target_energy.assert_awaited_once_with("30kWh")
+    assert car.get_user_originated("charge_target_energy") == 30000
     car.charger.update_charger_for_user_change.assert_awaited_once()
 
 
@@ -290,7 +294,7 @@ async def test_user_set_next_charge_target_sets_person(
     car.current_forecasted_person = SimpleNamespace(name="MyPerson")
 
     await car.user_set_next_charge_target(80)
-    assert car.user_selected_person_name_for_car == "MyPerson"
+    assert car.get_user_originated("person_name") == "MyPerson"
 
 
 # ===========================================================================
@@ -1208,7 +1212,7 @@ async def test_get_car_person_option_with_user_selected(
 ) -> None:
     """Returns user selected person name when set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="popt_usr")
-    car.user_selected_person_name_for_car = "MyPerson"
+    car.set_user_originated("person_name", "MyPerson")
     result = car.get_car_person_option()
     assert result == "MyPerson"
 
@@ -1230,7 +1234,7 @@ async def test_get_car_person_option_none(
 ) -> None:
     """Returns None when no person is set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="popt_no")
-    car.user_selected_person_name_for_car = None
+    car.clear_user_originated("person_name")
     car.current_forecasted_person = None
     result = car.get_car_person_option()
     assert result is None
@@ -1322,7 +1326,7 @@ async def test_user_add_default_charge_at_datetime(
     result = await car.user_add_default_charge_at_datetime(end)
     assert result is True
     assert car.do_next_charge_time == end
-    assert car.user_selected_person_name_for_car == "P1"
+    assert car.get_user_originated("person_name") == "P1"
 
 
 async def test_user_add_default_charge_at_datetime_no_charger(
@@ -1522,11 +1526,11 @@ async def test_car_can_limit_soc(
 
 
 # ===========================================================================
-# set_user_person_for_car – None option
+# user_set_person_for_car – None option
 # ===========================================================================
 
 
-async def test_set_user_person_for_car_none(
+async def test_user_set_person_for_car_none(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
@@ -1534,11 +1538,11 @@ async def test_set_user_person_for_car_none(
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pers_none")
     car.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
-    await car.set_user_person_for_car(None)
-    assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+    await car.user_set_person_for_car(None)
+    assert car.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
 
-async def test_set_user_person_for_car_force_no(
+async def test_user_set_person_for_car_force_no(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
@@ -1546,8 +1550,8 @@ async def test_set_user_person_for_car_force_no(
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pers_fno")
     car.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
-    await car.set_user_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
-    assert car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+    await car.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+    assert car.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
 
 # ===========================================================================
@@ -1559,9 +1563,9 @@ async def test_get_current_selected_charger_user_name(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Returns user_attached_charger_name when set."""
+    """Returns get_user_originated('charger_name') when set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="selchg_usr")
-    car.user_attached_charger_name = "My Charger"
+    car.set_user_originated("charger_name", "My Charger")
     assert car.get_current_selected_charger_option() == "My Charger"
 
 
@@ -1666,7 +1670,7 @@ async def test_add_soc_odo_full_segment_lifecycle(
 
 
 # ===========================================================================
-# user_selected_person_name_for_car setter – clearing other cars
+# set_user_originated("person_name") – clearing other cars
 # ===========================================================================
 
 
@@ -1705,16 +1709,16 @@ async def test_user_selected_person_setter_clears_others(
     car1 = hass.data[DOMAIN].get(car1_entry.entry_id)
     car2 = hass.data[DOMAIN].get(car2_entry.entry_id)
 
-    car2.user_selected_person_name_for_car = "Alice"
+    car2.set_user_originated("person_name", "Alice")
 
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     data_handler.home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
 
-    car1.user_selected_person_name_for_car = "Alice"
-    assert car1.user_selected_person_name_for_car == "Alice"
-    # Plain attribute assignment no longer triggers cross-car clearing;
-    # that logic now lives exclusively in set_user_person_for_car.
-    assert car2.user_selected_person_name_for_car == "Alice"
+    car1.set_user_originated("person_name", "Alice")
+    assert car1.get_user_originated("person_name") == "Alice"
+    # Plain set_user_originated no longer triggers cross-car clearing;
+    # that logic now lives exclusively in user_set_person_for_car.
+    assert car2.get_user_originated("person_name") == "Alice"
 
 
 # ===========================================================================
@@ -2364,12 +2368,22 @@ async def test_user_add_default_charge_sets_person_name(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """user_add_default_charge copies current_forecasted_person to
-    user_selected_person_name_for_car (car.py line 1472)."""
+    """user_add_default_charge snapshots forecast person when charger is connected."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="defchg_pn")
-    car.charger = None
-    car.current_forecasted_person = SimpleNamespace(name="ForecastedUser")
+    # Attach a mock charger so can_add_default_charge() returns True
+    charger = MagicMock()
+    charger.update_charger_for_user_change = AsyncMock()
+    car.charger = charger
+    car.default_charge_time = dt_time(7, 0)
+
+    person = SimpleNamespace(name="ForecastedUser")
+    car.current_forecasted_person = person
+    # Make person authorized
+    person_obj = MagicMock()
+    person_obj.authorized_cars = [car.name]
+    car.home.get_person_by_name = MagicMock(return_value=person_obj)
+    car.home._persons = [person_obj]
 
     await car.user_add_default_charge()
 
-    assert car.user_selected_person_name_for_car == "ForecastedUser"
+    assert car.get_user_originated("person_name") == "ForecastedUser"

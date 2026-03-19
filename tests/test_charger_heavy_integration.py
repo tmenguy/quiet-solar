@@ -78,8 +78,11 @@ def create_mock_car(name="TestCar", charge_percent=50.0, battery_capacity=60000)
     car.do_force_next_charge = False
     car.do_next_charge_time = None
     car.calendar = None
-    car.user_selected_person_name_for_car = None
-    car.user_attached_charger_name = None
+    car._user_originated = {}
+    car.get_user_originated = lambda key, default=None: car._user_originated.get(key, default)
+    car.has_user_originated = lambda key: key in car._user_originated
+    car.set_user_originated = lambda key, value: car._user_originated.__setitem__(key, value)
+    car.clear_user_originated = lambda key: car._user_originated.pop(key, None)
     car.charger = None
 
     # Mock methods
@@ -245,9 +248,9 @@ class TestCheckLoadActivityAndConstraints:
         time = datetime.now(pytz.UTC)
 
         mock_car = create_mock_car()
-        mock_car.user_selected_person_name_for_car = "TestPerson"
+        mock_car._user_originated["person_name"] = "TestPerson"
         charger.car = mock_car
-        charger.user_attached_car_name = "TestCar"
+        charger.set_user_originated("car_name", "TestCar")
 
         with (
             patch.object(charger, "is_charger_unavailable", return_value=False),
@@ -263,7 +266,7 @@ class TestCheckLoadActivityAndConstraints:
 
         # Should reset the charger
         mock_reset.assert_called_once()
-        assert charger.user_attached_car_name is None
+        assert charger.get_user_originated("car_name") is None
         assert result is True  # Force solve triggered
 
     @pytest.mark.asyncio

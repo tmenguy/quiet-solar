@@ -2390,14 +2390,16 @@ class QSHome(QSDynamicGroup):
             for car in self._cars:
                 car.current_forecasted_person = None
 
-                if car.user_selected_person_name_for_car is None:
+                _person_name = car.get_user_originated("person_name")
+
+                if _person_name is None:
                     continue
 
-                if car.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED:
+                if _person_name == FORCE_CAR_NO_PERSON_ATTACHED:
                     covered_cars.add(car.name)
                     continue
 
-                p_per = self.get_person_by_name(car.user_selected_person_name_for_car)
+                p_per = self.get_person_by_name(_person_name)
                 if p_per is not None:
                     if car.name not in p_per.authorized_cars:
                         _LOGGER.warning(
@@ -2406,7 +2408,7 @@ class QSHome(QSDynamicGroup):
                             car.name,
                             p_per.name,
                         )
-                        car.user_selected_person_name_for_car = None
+                        car.clear_all_user_originated()
                         continue
                     self._last_persons_car_allocation[car.name] = p_per
                     covered_persons.add(p_per.name)

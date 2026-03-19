@@ -805,7 +805,7 @@ async def test_car_user_selected_person(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Test car user_selected_person_name_for_car property."""
+    """Test car get_user_originated('person_name') returns None initially."""
     from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -824,7 +824,7 @@ async def test_car_user_selected_person(
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     # Initially should be None
-    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.get_user_originated("person_name") is None
 
 
 async def test_car_is_invited(
@@ -912,7 +912,7 @@ async def test_car_person_options_filters_authorized_persons(
     assert FORCE_CAR_NO_PERSON_ATTACHED in options
 
 
-async def test_car_set_user_person_for_car_updates_other_cars(
+async def test_car_user_set_person_for_car_updates_other_cars(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
@@ -954,12 +954,12 @@ async def test_car_set_user_person_for_car_updates_other_cars(
     mock_person.name = "Person A"
     mock_person.authorized_cars = [car1_device.name, car2_device.name]
     data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
-    car2_device.user_selected_person_name_for_car = "Person A"
+    car2_device.set_user_originated("person_name", "Person A")
 
-    await car1_device.set_user_person_for_car("Person A")
+    await car1_device.user_set_person_for_car("Person A")
 
-    assert car1_device.user_selected_person_name_for_car == "Person A"
-    assert car2_device.user_selected_person_name_for_car is None
+    assert car1_device.get_user_originated("person_name") == "Person A"
+    assert car2_device.get_user_originated("person_name") is None
 
 
 async def test_car_device_post_home_init_restores_person(
@@ -997,7 +997,7 @@ async def test_car_device_post_home_init_restores_person(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     car_device.use_saved_extra_device_info(
         {
-            "user_selected_person_name_for_car": "Person Restore",
+            "_user_originated": {"person_name": "Person Restore"},
             "current_forecasted_person_name_from_boot": "Person Restore",
         }
     )
@@ -1078,7 +1078,10 @@ async def test_car_convert_auto_constraint_to_manual(
     result = await car_device.convert_auto_constraint_to_manual_if_needed()
 
     assert result is True
-    assert car_device.user_selected_person_name_for_car == MOCK_PERSON_CONFIG["name"]
+    # Person is now set via snapshot inside user_add_default_charge_at_datetime,
+    # but since we mocked that method, the snapshot didn't fire.
+    # Verify the mock was called (the real method would snapshot the person).
+    car_device.user_add_default_charge_at_datetime.assert_awaited_once()
 
 
 async def test_car_efficiency_from_soc_and_odometer(
@@ -1718,13 +1721,13 @@ async def test_car_user_selected_charger_by_name(
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
 
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()) as mock_update:
-        await car_device.set_user_selected_charger_by_name(charger_device.name)
-        assert charger_device.user_attached_car_name == car_device.name
-        assert car_device.user_attached_charger_name is None
+        await car_device.user_set_selected_charger_by_name(charger_device.name)
+        assert charger_device.get_user_originated("car_name") == car_device.name
+        assert car_device.get_user_originated("charger_name") == charger_device.name
         mock_update.assert_awaited()
 
-        await car_device.set_user_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
-        assert car_device.user_attached_charger_name == FORCE_CAR_NO_CHARGER_CONNECTED
+        await car_device.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
+        assert car_device.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED
         assert car_device.charger is None
         assert charger_device.car is None
 
@@ -1768,8 +1771,8 @@ async def test_car_user_clean_and_reset(
 
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device._constraints = [MagicMock()]
-    car_device.user_attached_charger_name = charger_device.name
-    car_device.user_selected_person_name_for_car = "Person A"
+    car_device.set_user_originated("charger_name", charger_device.name)
+    car_device.set_user_originated("person_name", "Person A")
     car_device._next_charge_target = 90
     car_device._next_charge_target_energy = 30000.0
     car_device.do_force_next_charge = True
@@ -1781,13 +1784,13 @@ async def test_car_user_clean_and_reset(
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
         await car_device.user_clean_and_reset()
 
-    assert car_device.user_attached_charger_name is None
-    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.get_user_originated("charger_name") is None
+    assert car_device.get_user_originated("person_name") is None
     assert car_device.charger is None
     assert car_device._constraints == []
     assert car_device._next_charge_target == car_device.car_default_charge
     assert car_device._next_charge_target_energy is None
-    assert charger_device.user_attached_car_name is None
+    assert charger_device.get_user_originated("car_name") is None
 
 
 async def test_car_user_clean_constraints(
@@ -1830,7 +1833,7 @@ async def test_car_user_clean_constraints(
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device._constraints = [MagicMock()]
     car_device._next_charge_target = 95
-    car_device.user_attached_charger_name = charger_device.name
+    car_device.set_user_originated("charger_name", charger_device.name)
 
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
         await car_device.user_clean_constraints()

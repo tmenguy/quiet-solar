@@ -1183,7 +1183,7 @@ async def test_home_persons_cars_no_person_attached(
     for car in home._cars:
         from custom_components.quiet_solar.const import FORCE_CAR_NO_PERSON_ATTACHED
 
-        car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+        car.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
 
     result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
@@ -1227,7 +1227,7 @@ async def test_home_persons_cars_user_selected_person(
     home = data_handler.home
 
     for car in home._cars:
-        car.user_selected_person_name_for_car = MOCK_PERSON_CONFIG["name"]
+        car.set_user_originated("person_name", MOCK_PERSON_CONFIG["name"])
 
     result = await home.compute_and_set_best_persons_cars_allocations()
     assert isinstance(result, dict)
@@ -2352,7 +2352,7 @@ async def test_topology_load_in_different_group(
 
 
 # ---------------------------------------------------------------------------
-# Cluster: user_selected_person_name_for_car (lines 2354-2367)
+# Cluster: get_user_originated("person_name") (lines 2354-2367)
 # ---------------------------------------------------------------------------
 
 
@@ -2393,7 +2393,7 @@ async def test_persons_cars_user_selected_person_not_covered(
 
     # Set car to have user-selected person; this person is not in covered_persons
     for car in home._cars:
-        car.user_selected_person_name_for_car = MOCK_PERSON_CONFIG["name"]
+        car.set_user_originated("person_name", MOCK_PERSON_CONFIG["name"])
         car.current_forecasted_person = None
 
     result = await home.compute_and_set_best_persons_cars_allocations()
@@ -3087,7 +3087,7 @@ async def test_allocation_energy_optimal_over_preferred(
         charger_mock.update_charger_for_user_change = AsyncMock()
         car.charger = charger_mock
         car.car_is_invited = False
-        car.user_selected_person_name_for_car = None
+        car.clear_user_originated("person_name")
         car.ha_entities = {}
 
     for person in home._persons:
@@ -3651,7 +3651,7 @@ async def test_car_allocation_no_forecasted_person_skip(
     for c in home._cars:
         c.charger = None
         c.current_forecasted_person = None
-        c.user_selected_person_name_for_car = None
+        c.clear_user_originated("person_name")
 
     car_inv.car_is_invited = True
     car_assigned.car_is_invited = False
@@ -4312,7 +4312,7 @@ async def test_allocation_force_no_person_fallback(
 ) -> None:
     """Cover lines 2356-2357: fallback loop hits FORCE_CAR_NO_PERSON_ATTACHED.
 
-    The car starts with user_selected_person_name_for_car=None so the first
+    The car starts with get_user_originated("person_name")=None so the first
     loop skips it.  A logger side-effect injects FORCE between the two loops,
     so the second loop sets current_forecasted_person = None and continues.
     """
@@ -4340,14 +4340,14 @@ async def test_allocation_force_no_person_fallback(
     home = data_handler.home
     car = home._cars[0]
 
-    assert car.user_selected_person_name_for_car is None
+    assert car.get_user_originated("person_name") is None
 
     logger = logging.getLogger("custom_components.quiet_solar.ha_model.home")
     original_info = logger.info
 
     def inject_force(msg, *args, **kwargs):
         if "No persons or cars to allocate" in str(msg):
-            car.user_selected_person_name_for_car = FORCE_CAR_NO_PERSON_ATTACHED
+            car.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
         return original_info(msg, *args, **kwargs)
 
     with patch.object(logger, "info", side_effect=inject_force):
@@ -4397,7 +4397,7 @@ async def test_allocation_user_selected_person_fallback(
     person = home._persons[0]
     car_a = next(c for c in home._cars if c.name == "Car A")
 
-    assert car_a.user_selected_person_name_for_car is None
+    assert car_a.get_user_originated("person_name") is None
 
     with patch.object(person, "update_person_forecast", return_value=(None, None)):
         result = await home.compute_and_set_best_persons_cars_allocations(force_update=True)

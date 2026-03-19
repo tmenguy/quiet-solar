@@ -754,22 +754,20 @@ class TestQSChargerGenericSavedInfo(unittest.TestCase):
 
     def test_update_to_be_saved_extra_device_info(self):
         """Test update_to_be_saved_extra_device_info method."""
-        self.charger.user_attached_car_name = "TestCar"
-        self.charger._auto_constraints_cleaned_at_user_reset = []
+        self.charger.set_user_originated("car_name", "TestCar")
 
         data = {}
         self.charger.update_to_be_saved_extra_device_info(data)
 
-        self.assertEqual(data["user_attached_car_name"], "TestCar")
-        self.assertEqual(data["auto_constraints_cleaned_at_user_reset"], [])
+        self.assertEqual(data["_user_originated"]["car_name"], "TestCar")
 
     def test_use_saved_extra_device_info(self):
         """Test use_saved_extra_device_info method."""
-        stored_info = {"user_attached_car_name": "SavedCar", "auto_constraints_cleaned_at_user_reset": []}
+        stored_info = {"_user_originated": {"car_name": "SavedCar"}}
 
         self.charger.use_saved_extra_device_info(stored_info)
 
-        self.assertEqual(self.charger.user_attached_car_name, "SavedCar")
+        self.assertEqual(self.charger.get_user_originated("car_name"), "SavedCar")
 
 
 if __name__ == "__main__":

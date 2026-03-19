@@ -687,10 +687,27 @@ class TestCarDouble:
         self.qs_bump_solar_charge_priority = qs_bump_solar_charge_priority
         self.charger = None
         self._current_charge_percent = kwargs.get("current_soc", 50.0)
+        self._user_originated: dict[str, Any] = {}
 
         # Apply any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    # Mirror AbstractDevice user_originated API
+    def set_user_originated(self, key: str, value: Any) -> None:
+        self._user_originated[key] = value
+
+    def get_user_originated(self, key: str, default: Any = None) -> Any:
+        return self._user_originated.get(key, default)
+
+    def has_user_originated(self, key: str) -> bool:
+        return key in self._user_originated
+
+    def clear_user_originated(self, key: str) -> None:
+        self._user_originated.pop(key, None)
+
+    def clear_all_user_originated(self) -> None:
+        self._user_originated.clear()
 
     def get_charge_power_per_phase_A(
         self,
