@@ -20,7 +20,7 @@ Covers:
  - update_dampening_value graph add fail for amperage (line 1335)
  - update_dampening_value 3p cross-update to 1p (line 1351)
  - user_add_default_charge_at_dt_time can_add=False (line 1509)
- - set_user_person_for_car with charger update (line 379)
+ - user_set_person_for_car with charger update (line 379)
 """
 
 from datetime import datetime, timedelta
@@ -909,7 +909,7 @@ async def test_user_add_default_charge_at_dt_time_cannot_add(
 
 
 # ===========================================================================
-# set_user_person_for_car with charger update (line 379)
+# user_set_person_for_car with charger update (line 379)
 # ===========================================================================
 
 
@@ -917,7 +917,7 @@ async def test_set_user_person_triggers_charger_update(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """set_user_person_for_car triggers charger update when car has charger (line 379)."""
+    """user_set_person_for_car triggers charger update when car has charger (line 379)."""
     from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -948,8 +948,8 @@ async def test_set_user_person_triggers_charger_update(
     data_handler.home._persons = [mock_person]
     data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
 
-    await car.set_user_person_for_car("NewPerson")
-    assert car.user_selected_person_name_for_car == "NewPerson"
+    await car.user_set_person_for_car("NewPerson")
+    assert car.get_user_originated("person_name") == "NewPerson"
     # Charger update now happens inside compute_and_set_best_persons_cars_allocations
     data_handler.home.compute_and_set_best_persons_cars_allocations.assert_awaited_once()
 
@@ -995,7 +995,7 @@ async def test_get_max_charge_limit_float_state(
 
 # ===========================================================================
 # Authorization check coverage: _is_person_authorized_for_car, _fix_user_selected_person_from_forecast,
-# device_post_home_init unauthorized branch, set_user_person_for_car unauthorized branch
+# device_post_home_init unauthorized branch, user_set_person_for_car unauthorized branch
 # ===========================================================================
 
 
@@ -1023,10 +1023,10 @@ async def test_fix_user_selected_person_from_forecast_unauthorized(
     data_handler.home._persons = [mock_person]
 
     car.current_forecasted_person = mock_person
-    car.user_selected_person_name_for_car = None
+    car.clear_user_originated("person_name")
 
     car._fix_user_selected_person_from_forecast()
-    assert car.user_selected_person_name_for_car is None
+    assert car.get_user_originated("person_name") is None
 
 
 async def test_device_post_home_init_clears_unauthorized_person(
@@ -1070,7 +1070,7 @@ async def test_device_post_home_init_clears_unauthorized_person(
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     car_device.use_saved_extra_device_info(
         {
-            "user_selected_person_name_for_car": "Unauthorized Person",
+            "_user_originated": {"person_name": "Unauthorized Person"},
             "current_forecasted_person_name_from_boot": "Unauthorized Person",
         }
     )
@@ -1078,15 +1078,15 @@ async def test_device_post_home_init_clears_unauthorized_person(
     car_device.device_post_home_init(datetime.now(tz=pytz.UTC))
 
     # Person exists but is not authorized for this car -> cleared
-    assert car_device.user_selected_person_name_for_car is None
+    assert car_device.get_user_originated("person_name") is None
     assert car_device.current_forecasted_person is None
 
 
-async def test_set_user_person_for_car_rejects_unauthorized(
+async def test_user_set_person_for_car_rejects_unauthorized(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """set_user_person_for_car rejects an unauthorized person (lines 347-351)."""
+    """user_set_person_for_car rejects an unauthorized person (lines 347-351)."""
     from .const import MOCK_CAR_CONFIG
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -1112,8 +1112,8 @@ async def test_set_user_person_for_car_rejects_unauthorized(
     mock_person.authorized_cars = []  # car not in authorized list
     data_handler.home.get_person_by_name = MagicMock(return_value=mock_person)
 
-    car.user_selected_person_name_for_car = None
-    await car.set_user_person_for_car("BadPerson")
+    car.clear_user_originated("person_name")
+    await car.user_set_person_for_car("BadPerson")
 
     # Should be rejected, value unchanged
-    assert car.user_selected_person_name_for_car is None
+    assert car.get_user_originated("person_name") is None

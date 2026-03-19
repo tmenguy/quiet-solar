@@ -1,7 +1,7 @@
 """End-to-end tests for the person-car allocation algorithm.
 
 These tests exercise the real allocation pipeline (Hungarian algorithm,
-pre-allocation of unplugged cars, manual overrides via set_user_person_for_car)
+pre-allocation of unplugged cars, manual overrides via user_set_person_for_car)
 with lightweight fakes instead of full HA integration.
 """
 
@@ -27,7 +27,7 @@ KWH_PER_KM = 0.15
 
 
 class _FakeCharger:
-    """Stub charger so car.charger is truthy and set_user_person_for_car works."""
+    """Stub charger so car.charger is truthy and user_set_person_for_car works."""
 
     async def update_charger_for_user_change(self):
         pass
@@ -41,10 +41,26 @@ class _FakeCar:
         self._remaining_km = remaining_km
         self.charger = _FakeCharger() if has_charger else None
         self.car_is_invited = is_invited
-        self.user_selected_person_name_for_car = None
+        self._user_originated: dict = {}
         self.current_forecasted_person = None
         self.home = None
         self.ha_entities = {}
+
+    # Mirror AbstractDevice user_originated API
+    def set_user_originated(self, key, value):
+        self._user_originated[key] = value
+
+    def get_user_originated(self, key, default=None):
+        return self._user_originated.get(key, default)
+
+    def has_user_originated(self, key):
+        return key in self._user_originated
+
+    def clear_user_originated(self, key):
+        self._user_originated.pop(key, None)
+
+    def clear_all_user_originated(self):
+        self._user_originated.clear()
 
     def get_adapt_target_percent_soc_to_reach_range_km(self, mileage, time):
         """Return (is_covered, current_soc, needed_soc, diff_energy)."""
@@ -57,7 +73,7 @@ class _FakeCar:
         return (False, 40.0, 80.0, deficit)
 
     # Bind real methods from QSCar so we exercise the actual logic.
-    set_user_person_for_car = QSCar.set_user_person_for_car
+    user_set_person_for_car = QSCar.user_set_person_for_car
     _is_person_authorized_for_car = QSCar._is_person_authorized_for_car
     _fix_user_selected_person_from_forecast = QSCar._fix_user_selected_person_from_forecast
 
@@ -187,7 +203,7 @@ def _build_scenario():
 
 
 class TestSetUserPersonEdgeCases:
-    """Cover edge-case branches in set_user_person_for_car."""
+    """Cover edge-case branches in user_set_person_for_car."""
 
     @pytest.mark.asyncio
     async def test_invalid_person_name_becomes_force_no_person(self):
@@ -196,23 +212,23 @@ class TestSetUserPersonEdgeCases:
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
-        await twingo.set_user_person_for_car("GhostPerson")
+        await twingo.user_set_person_for_car("GhostPerson")
 
-        assert twingo.user_selected_person_name_for_car == FORCE_CAR_NO_PERSON_ATTACHED
+        assert twingo.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
 
     @pytest.mark.asyncio
     async def test_same_value_noop(self):
-        """Calling set_user_person_for_car with the already-set value should
+        """Calling user_set_person_for_car with the already-set value should
         return immediately without touching the allocation (car.py line 322)."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
-        await twingo.set_user_person_for_car("Arthur")
-        assert twingo.user_selected_person_name_for_car == "Arthur"
+        await twingo.user_set_person_for_car("Arthur")
+        assert twingo.get_user_originated("person_name") == "Arthur"
 
         # Call again with the same value -- should be a no-op
-        await twingo.set_user_person_for_car("Arthur")
-        assert twingo.user_selected_person_name_for_car == "Arthur"
+        await twingo.user_set_person_for_car("Arthur")
+        assert twingo.get_user_originated("person_name") == "Arthur"
 
     @pytest.mark.asyncio
     async def test_forecasted_matches_skips_reallocation(self):
@@ -224,8 +240,8 @@ class TestSetUserPersonEdgeCases:
         # Arthur is auto-assigned to Twingo (his preferred car);
         # manually confirming should skip realloc
         assert _person_name(twingo) == "Arthur"
-        await twingo.set_user_person_for_car("Arthur")
-        assert twingo.user_selected_person_name_for_car == "Arthur"
+        await twingo.user_set_person_for_car("Arthur")
+        assert twingo.get_user_originated("person_name") == "Arthur"
         assert _person_name(twingo) == "Arthur"
 
 
@@ -357,10 +373,10 @@ class TestPersonCarAllocationScenario:
         await home.compute_and_set_best_persons_cars_allocations(force_update=True)
 
         # --- step 2: manually override Arthur → Twingo ---
-        await twingo.set_user_person_for_car("Arthur")
+        await twingo.user_set_person_for_car("Arthur")
 
         # --- verify the reassignment ---
-        assert twingo.user_selected_person_name_for_car == "Arthur"
+        assert twingo.get_user_originated("person_name") == "Arthur"
         assert _person_name(twingo) == "Arthur", f"Twingo should be Arthur (manual), got {_person_name(twingo)}"
         assert _person_name(zoe) == "Magali", f"Zoe should be Magali after reassignment, got {_person_name(zoe)}"
         assert _person_name(tesla) == "Thomas", f"Tesla should still be Thomas, got {_person_name(tesla)}"

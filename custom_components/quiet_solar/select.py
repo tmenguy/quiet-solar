@@ -44,7 +44,7 @@ def create_ha_select_for_QSCharger(device: QSChargerGeneric):
         translation_key="selected_car_for_charger",
         get_available_options_fn=lambda device, key: device.get_car_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_car_option(),
-        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_car_by_name(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_selected_car_by_name(option),
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the charger constraint load infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
@@ -59,7 +59,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_charger_for_car",
         get_available_options_fn=lambda device, key: device.get_charger_options(),
         get_current_option_fn=lambda device, key: device.get_current_selected_charger_option(),
-        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_selected_charger_by_name(
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_selected_charger_by_name(
             option
         ),
     )
@@ -84,7 +84,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_person_for_car",
         get_available_options_fn=lambda device, key: device.get_car_persons_options(),
         get_current_option_fn=lambda device, key: device.get_car_person_option(),
-        async_set_current_option_fn=lambda device, key, option, for_init: device.set_user_person_for_car(option),
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_person_for_car(option),
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the car device infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))

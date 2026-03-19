@@ -1156,9 +1156,9 @@ class TestQSChargerExtendedCoverage:
         assert result is None or isinstance(result, str)
 
     @pytest.mark.asyncio
-    async def test_set_user_selected_car_by_name_none(self, charger_generic):
-        """Test set_user_selected_car_by_name with None (lines 2504-2634)."""
-        await charger_generic.set_user_selected_car_by_name(None)
+    async def test_user_set_selected_car_by_name_none(self, charger_generic):
+        """Test user_set_selected_car_by_name with None (lines 2504-2634)."""
+        await charger_generic.user_set_selected_car_by_name(None)
 
         # Car should be None
         assert charger_generic.car is None

@@ -119,7 +119,7 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
 
         mock_car = MagicMock()
         mock_car.name = "TestCar"
-        mock_car.user_selected_person_name_for_car = "TestPerson"
+        mock_car.get_user_originated = MagicMock(return_value="TestPerson")
         self.charger.car = mock_car
 
         with (
@@ -182,7 +182,7 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
         mock_car.can_use_charge_percent_constraints.return_value = False
         mock_car.get_car_target_charge_energy.return_value = 45000.0
         mock_car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
-        mock_car.user_selected_person_name_for_car = None
+        mock_car.get_user_originated = MagicMock(return_value=None)
 
         self.charger.car = mock_car
         self.charger._power_steps = [LoadCommand(command="on", power_consign=7000.0)]
@@ -242,10 +242,10 @@ class TestDevicePostHomeInit(unittest.TestCase):
 
         mock_car = MagicMock()
         mock_car.name = "UserCar"
-        mock_car.user_attached_charger_name = None
+        mock_car.get_user_originated = MagicMock(return_value=None)
 
         self.home.get_car_by_name = MagicMock(return_value=mock_car)
-        self.charger.user_attached_car_name = "UserCar"
+        self.charger.set_user_originated("car_name", "UserCar")
 
         self.charger.device_post_home_init(time)
 
@@ -258,7 +258,7 @@ class TestDevicePostHomeInit(unittest.TestCase):
 
         mock_car = MagicMock()
         mock_car.name = "ConstraintCar"
-        mock_car.user_attached_charger_name = None
+        mock_car.get_user_originated = MagicMock(return_value=None)
 
         mock_constraint = MagicMock()
         mock_constraint.load_param = "ConstraintCar"
@@ -325,7 +325,7 @@ class TestGetBestCar(unittest.TestCase):
         """Test get_best_car when user attached the generic car."""
         time = datetime.now(pytz.UTC)
 
-        self.charger.user_attached_car_name = self.charger._default_generic_car.name
+        self.charger.set_user_originated("car_name", self.charger._default_generic_car.name)
 
         result = self.charger.get_best_car(time)
 
@@ -336,7 +336,7 @@ class TestGetBestCar(unittest.TestCase):
         time = datetime.now(pytz.UTC)
 
         # Set user attached car name to CHARGER_NO_CAR_CONNECTED
-        self.charger.user_attached_car_name = CHARGER_NO_CAR_CONNECTED
+        self.charger.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
 
         result = self.charger.get_best_car(time)
 
@@ -348,10 +348,10 @@ class TestGetBestCar(unittest.TestCase):
 
         mock_boot_car = MagicMock()
         mock_boot_car.name = "BootCar"
-        mock_boot_car.user_attached_charger_name = None
+        mock_boot_car.get_user_originated = MagicMock(return_value=None)
 
         self.charger._boot_car = mock_boot_car
-        self.charger.user_attached_car_name = None
+        self.charger.clear_user_originated("car_name")
         self.home._cars = []
 
         with patch.object(self.charger, "is_plugged", return_value=False):
@@ -542,7 +542,7 @@ class TestGetCarScore(unittest.TestCase):
         mock_car = MagicMock()
         mock_car.name = "InvitedCar"
         mock_car.car_is_invited = True
-        mock_car.user_attached_charger_name = None
+        mock_car.get_user_originated = MagicMock(return_value=None)
 
         cache = {}
         result = self.charger.get_car_score(mock_car, time, cache)
@@ -562,7 +562,7 @@ class TestGetCarScore(unittest.TestCase):
         attached_car.name = "AttachedCar"
 
         self.home.get_car_by_name = MagicMock(return_value=attached_car)
-        self.charger.user_attached_car_name = "AttachedCar"
+        self.charger.set_user_originated("car_name", "AttachedCar")
 
         cache = {}
         result = self.charger.get_car_score(mock_car, time, cache)

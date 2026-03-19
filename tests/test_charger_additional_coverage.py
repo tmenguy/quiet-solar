@@ -449,7 +449,7 @@ def test_get_car_score_plug_and_distance() -> None:
     car = MagicMock()
     car.name = "TestCar"
     car.car_is_invited = False
-    car.user_attached_charger_name = None
+    car.get_user_originated = MagicMock(return_value=None)
     car.is_car_plugged.return_value = True
     car.is_car_home.return_value = True
     car.get_continuous_plug_duration.return_value = 120.0
@@ -474,15 +474,15 @@ def test_get_best_car_user_selected_detaches_others() -> None:
 
     car = MagicMock()
     car.name = "PreferredCar"
-    car.user_attached_charger_name = None
+    car.get_user_originated = MagicMock(return_value=None)
 
-    charger.user_attached_car_name = car.name
+    charger.set_user_originated("car_name", car.name)
     home.get_car_by_name = MagicMock(return_value=car)
 
     other_charger = MagicMock()
     other_charger.qs_enable_device = True
     other_charger.car = car
-    other_charger.user_attached_car_name = None
+    other_charger.get_user_originated = MagicMock(return_value=None)
     other_charger.detach_car = MagicMock()
 
     home._chargers = [charger, other_charger]
@@ -501,7 +501,7 @@ def test_get_best_car_falls_back_to_default() -> None:
 
     car = MagicMock()
     car.name = "IgnoredCar"
-    car.user_attached_charger_name = FORCE_CAR_NO_CHARGER_CONNECTED
+    car.get_user_originated = MagicMock(return_value=FORCE_CAR_NO_CHARGER_CONNECTED)
     home._cars = [car]
     home._chargers = [charger]
 
@@ -525,7 +525,7 @@ def test_get_car_options_and_current_selection() -> None:
     assert car.name in options
     assert CHARGER_NO_CAR_CONNECTED in options
 
-    charger.user_attached_car_name = car.name
+    charger.set_user_originated("car_name", car.name)
     assert charger.get_current_selected_car_option() == car.name
 
     with patch.object(charger, "is_optimistic_plugged", return_value=False):
@@ -533,7 +533,7 @@ def test_get_car_options_and_current_selection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_user_selected_car_by_name_detaches() -> None:
+async def test_user_set_selected_car_by_name_detaches() -> None:
     """Cover user selection changing and detaching current car."""
     hass = create_mock_hass()
     home = create_mock_home(hass)
@@ -546,7 +546,7 @@ async def test_set_user_selected_car_by_name_detaches() -> None:
     charger.detach_car = MagicMock()
     charger.update_charger_for_user_change = AsyncMock()
 
-    await charger.set_user_selected_car_by_name("NewCar")
+    await charger.user_set_selected_car_by_name("NewCar")
 
     charger.detach_car.assert_called_once()
     charger.update_charger_for_user_change.assert_called_once()
@@ -562,7 +562,7 @@ def test_device_post_home_init_uses_user_attached_car() -> None:
     car.name = "StoredCar"
     home.get_car_by_name = MagicMock(return_value=car)
 
-    charger.user_attached_car_name = car.name
+    charger.set_user_originated("car_name", car.name)
     charger.device_post_home_init(datetime.now(pytz.UTC))
 
     assert charger._boot_car == car

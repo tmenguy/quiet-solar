@@ -704,13 +704,13 @@ class TestCarPersonAllocation:
         car2 = env.cars[1]
 
         # Set person on car1
-        car1.user_selected_person_name_for_car = "Person_1"
+        car1.set_user_originated("person_name", "Person_1")
 
         # Now set same person on car2 - should clear from car1
-        car2.user_selected_person_name_for_car = "Person_1"
+        car2.set_user_originated("person_name", "Person_1")
 
-        # Direct attribute assignment no longer triggers cross-car clearing
-        assert car1.user_selected_person_name_for_car == "Person_1"
+        # Direct set_user_originated no longer triggers cross-car clearing
+        assert car1.get_user_originated("person_name") == "Person_1"
 
     @pytest.mark.asyncio
     async def test_current_forecasted_person_assignment(
@@ -1116,13 +1116,14 @@ class TestCarResetInit:
         car = env.cars[0]
         person = env.persons[0]
 
-        car.user_selected_person_name_for_car = "Person_1"
+        car.set_user_originated("person_name", "Person_1")
         car.current_forecasted_person = person
 
         data = {}
         car.update_to_be_saved_extra_device_info(data)
 
-        assert "user_selected_person_name_for_car" in data
+        assert "_user_originated" in data
+        assert data["_user_originated"]["person_name"] == "Person_1"
         assert "current_forecasted_person_name_from_boot" in data
 
     @pytest.mark.asyncio
@@ -1134,13 +1135,13 @@ class TestCarResetInit:
         car = env.cars[0]
 
         stored_data = {
-            "user_selected_person_name_for_car": "SomePerson",
+            "_user_originated": {"person_name": "SomePerson"},
             "current_forecasted_person_name_from_boot": "AnotherPerson",
         }
 
         car.use_saved_extra_device_info(stored_data)
 
-        assert car.user_selected_person_name_for_car == "SomePerson"
+        assert car.get_user_originated("person_name") == "SomePerson"
         assert car._current_forecasted_person_name_from_boot == "AnotherPerson"
 
 

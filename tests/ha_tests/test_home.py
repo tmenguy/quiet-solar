@@ -697,21 +697,29 @@ async def test_home_best_persons_cars_allocations_basic(
     car_a = SimpleNamespace(
         name="Car A",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
+    car_a.get_user_originated = lambda key, default=None: car_a._user_originated.get(key, default)
+    car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
+    car_a.has_user_originated = lambda key: key in car_a._user_originated
+    car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
     car_b = SimpleNamespace(
         name="Car B",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(True, 90.0, 60.0, 0.0)),
     )
+    car_b.get_user_originated = lambda key, default=None: car_b._user_originated.get(key, default)
+    car_b.set_user_originated = lambda key, value: car_b._user_originated.__setitem__(key, value)
+    car_b.has_user_originated = lambda key: key in car_b._user_originated
+    car_b.clear_user_originated = lambda key: car_b._user_originated.pop(key, None)
 
     person_a = _HashableNS(
         name="Person A",
@@ -1612,35 +1620,51 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     car_selected = SimpleNamespace(
         name="Car Selected",
         current_forecasted_person=None,
-        user_selected_person_name_for_car="Person Selected",
+        _user_originated={"person_name": "Person Selected"},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car_selected.get_user_originated = lambda key, default=None: car_selected._user_originated.get(key, default)
+    car_selected.set_user_originated = lambda key, value: car_selected._user_originated.__setitem__(key, value)
+    car_selected.has_user_originated = lambda key: key in car_selected._user_originated
+    car_selected.clear_user_originated = lambda key: car_selected._user_originated.pop(key, None)
     car_force_none = SimpleNamespace(
         name="Car Force None",
         current_forecasted_person=person_preferred,
-        user_selected_person_name_for_car=FORCE_CAR_NO_PERSON_ATTACHED,
+        _user_originated={"person_name": FORCE_CAR_NO_PERSON_ATTACHED},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car_force_none.get_user_originated = lambda key, default=None: car_force_none._user_originated.get(key, default)
+    car_force_none.set_user_originated = lambda key, value: car_force_none._user_originated.__setitem__(key, value)
+    car_force_none.has_user_originated = lambda key: key in car_force_none._user_originated
+    car_force_none.clear_user_originated = lambda key: car_force_none._user_originated.pop(key, None)
     car_preferred = SimpleNamespace(
         name="Car Preferred",
         current_forecasted_person=person_selected,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car_preferred.get_user_originated = lambda key, default=None: car_preferred._user_originated.get(key, default)
+    car_preferred.set_user_originated = lambda key, value: car_preferred._user_originated.__setitem__(key, value)
+    car_preferred.has_user_originated = lambda key: key in car_preferred._user_originated
+    car_preferred.clear_user_originated = lambda key: car_preferred._user_originated.pop(key, None)
     car_authorized = SimpleNamespace(
         name="Car Authorized",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car_authorized.get_user_originated = lambda key, default=None: car_authorized._user_originated.get(key, default)
+    car_authorized.set_user_originated = lambda key, value: car_authorized._user_originated.__setitem__(key, value)
+    car_authorized.has_user_originated = lambda key: key in car_authorized._user_originated
+    car_authorized.clear_user_originated = lambda key: car_authorized._user_originated.pop(key, None)
 
     home._cars = [car_selected, car_force_none, car_preferred, car_authorized]
     home._persons = [person_selected, person_preferred, person_authorized]
@@ -1826,21 +1850,29 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
     car_main = SimpleNamespace(
         name="Car Main",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
+    car_main.get_user_originated = lambda key, default=None: car_main._user_originated.get(key, default)
+    car_main.set_user_originated = lambda key, value: car_main._user_originated.__setitem__(key, value)
+    car_main.has_user_originated = lambda key: key in car_main._user_originated
+    car_main.clear_user_originated = lambda key: car_main._user_originated.pop(key, None)
     car_unused = SimpleNamespace(
         name="Car Unused",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
         get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
     )
+    car_unused.get_user_originated = lambda key, default=None: car_unused._user_originated.get(key, default)
+    car_unused.set_user_originated = lambda key, value: car_unused._user_originated.__setitem__(key, value)
+    car_unused.has_user_originated = lambda key: key in car_unused._user_originated
+    car_unused.clear_user_originated = lambda key: car_unused._user_originated.pop(key, None)
 
     person = _HashableNS(
         name="Person A",
@@ -1944,19 +1976,27 @@ async def test_home_best_persons_cars_allocations_skip_cases(
     invited_car = SimpleNamespace(
         name="Invited",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=True,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    invited_car.get_user_originated = lambda key, default=None: invited_car._user_originated.get(key, default)
+    invited_car.set_user_originated = lambda key, value: invited_car._user_originated.__setitem__(key, value)
+    invited_car.has_user_originated = lambda key: key in invited_car._user_originated
+    invited_car.clear_user_originated = lambda key: invited_car._user_originated.pop(key, None)
     preset_car = SimpleNamespace(
         name="Preset",
         current_forecasted_person=SimpleNamespace(name="PresetPerson"),
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    preset_car.get_user_originated = lambda key, default=None: preset_car._user_originated.get(key, default)
+    preset_car.set_user_originated = lambda key, value: preset_car._user_originated.__setitem__(key, value)
+    preset_car.has_user_originated = lambda key: key in preset_car._user_originated
+    preset_car.clear_user_originated = lambda key: preset_car._user_originated.pop(key, None)
     home._cars = [invited_car, preset_car]
     home._persons = []
 
@@ -2124,11 +2164,16 @@ async def test_home_allocation_clears_stale_unauthorized_manual_assignment(
     car_stale = SimpleNamespace(
         name="Stale Car",
         current_forecasted_person=None,
-        user_selected_person_name_for_car="Stale Person",
+        _user_originated={"person_name": "Stale Person"},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car_stale.get_user_originated = lambda key, default=None: car_stale._user_originated.get(key, default)
+    car_stale.set_user_originated = lambda key, value: car_stale._user_originated.__setitem__(key, value)
+    car_stale.has_user_originated = lambda key: key in car_stale._user_originated
+    car_stale.clear_user_originated = lambda key: car_stale._user_originated.pop(key, None)
+    car_stale.clear_all_user_originated = lambda: car_stale._user_originated.clear()
 
     home._cars = [car_stale]
     home._persons = [person_stale]
@@ -2140,7 +2185,7 @@ async def test_home_allocation_clears_stale_unauthorized_manual_assignment(
     )
 
     # The stale manual assignment should have been cleared
-    assert car_stale.user_selected_person_name_for_car is None
+    assert car_stale._user_originated.get("person_name") is None
 
 
 async def test_home_allocation_rejects_unauthorized_hungarian_assignment(
@@ -2169,11 +2214,15 @@ async def test_home_allocation_rejects_unauthorized_hungarian_assignment(
     car = SimpleNamespace(
         name="Car X",
         current_forecasted_person=None,
-        user_selected_person_name_for_car=None,
+        _user_originated={},
         car_is_invited=False,
         charger=_FakeCharger(),
         ha_entities={},
     )
+    car.get_user_originated = lambda key, default=None: car._user_originated.get(key, default)
+    car.set_user_originated = lambda key, value: car._user_originated.__setitem__(key, value)
+    car.has_user_originated = lambda key: key in car._user_originated
+    car.clear_user_originated = lambda key: car._user_originated.pop(key, None)
 
     home._cars = [car]
     home._persons = [person]

@@ -559,7 +559,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charger.charger_max_charge, 32)
         self.assertEqual(charger.charger_consumption_W, 70)
         self.assertIsNone(charger.car)
-        self.assertIsNone(charger.user_attached_car_name)
+        self.assertIsNone(charger.get_user_originated("car_name"))
         self.assertIsNone(charger.car_attach_time)
         self.assertEqual(charger.charge_state, STATE_UNKNOWN)
 
@@ -620,7 +620,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
 
-        charger.user_attached_car_name = "ManualCar"
+        charger.set_user_originated("car_name", "ManualCar")
         result = charger.get_current_selected_car_option()
         self.assertEqual(result, "ManualCar")
 
@@ -645,7 +645,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "AttachedCar")
 
     @pytest.mark.asyncio
-    async def test_set_user_selected_car_by_name(self):
+    async def test_user_set_selected_car_by_name(self):
         """Test setting user selected car by name."""
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
@@ -659,14 +659,14 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
             patch.object(charger, "detach_car") as mock_detach,
             patch.object(charger, "update_charger_for_user_change", new_callable=AsyncMock) as mock_update,
         ):
-            await charger.set_user_selected_car_by_name("NewCar")
+            await charger.user_set_selected_car_by_name("NewCar")
 
-        self.assertEqual(charger.user_attached_car_name, "NewCar")
+        self.assertEqual(charger.get_user_originated("car_name"), "NewCar")
         mock_detach.assert_called_once()
         mock_update.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_user_selected_car_by_name_same_car(self):
+    async def test_user_set_selected_car_by_name_same_car(self):
         """Test setting user selected car to same car name."""
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
@@ -680,9 +680,9 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
             patch.object(charger, "detach_car") as mock_detach,
             patch.object(charger, "update_charger_for_user_change", new_callable=AsyncMock),
         ):
-            await charger.set_user_selected_car_by_name("SameCar")
+            await charger.user_set_selected_car_by_name("SameCar")
 
-        self.assertEqual(charger.user_attached_car_name, "SameCar")
+        self.assertEqual(charger.get_user_originated("car_name"), "SameCar")
         mock_detach.assert_not_called()  # Should not detach same car
 
     def test_attach_car(self):

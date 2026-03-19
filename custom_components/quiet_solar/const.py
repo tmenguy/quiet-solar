@@ -141,6 +141,7 @@ CONF_CHARGER_STATUS_SENSOR = "charger_status_sensor"
 CHARGER_NO_CAR_CONNECTED = "No car connected"
 FORCE_CAR_NO_CHARGER_CONNECTED = "Force Car not connected"
 FORCE_CAR_NO_PERSON_ATTACHED = "Force no person for car"
+CHARGE_TIME_CONSTRAINTS_CLEARED = "constraints_cleared"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"

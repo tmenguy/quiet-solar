@@ -306,7 +306,7 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         mock_car = MagicMock()
         mock_car.name = "UserSelectedCar"
         charger.home.get_car_by_name = MagicMock(return_value=mock_car)
-        charger.user_attached_car_name = "UserSelectedCar"
+        charger.set_user_originated("car_name", "UserSelectedCar")
         charger.home._chargers = [charger]
 
         time = datetime.now(pytz.UTC)
@@ -320,7 +320,7 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
 
-        charger.user_attached_car_name = CHARGER_NO_CAR_CONNECTED
+        charger.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
 
         time = datetime.now(pytz.UTC)
 
@@ -343,10 +343,10 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         mock_charger2 = MagicMock()
         mock_charger2.qs_enable_device = True
         mock_charger2.car = mock_car2
-        mock_charger2.user_attached_car_name = None
+        mock_charger2.get_user_originated = MagicMock(return_value=None)
         charger.home._chargers = [charger, mock_charger2]
 
-        charger.user_attached_car_name = None
+        charger.clear_user_originated("car_name")
 
         time = datetime.now(pytz.UTC)
 
