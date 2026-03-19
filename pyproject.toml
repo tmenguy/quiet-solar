@@ -1,0 +1,85 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "ASYNC",  # flake8-async
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E402",   # module-import-not-at-top-of-file (HA integration pattern)
+    "E722",   # bare-except (cleanup tracked separately)
+    "SIM102", # collapsible-if (readability preference)
+    "SIM103", # needless-bool (readability preference)
+    "SIM108", # use ternary operator (readability preference)
+    "SIM114", # if-with-same-arms (readability preference)
+    "SIM910", # dict-get-with-none-default (minor style)
+    "G004",   # logging-f-string (384 occurrences — dedicated cleanup needed)
+    "G201",   # logging-exc-info (52 occurrences — dedicated cleanup needed)
+    "B007",   # unused-loop-control-variable (minor)
+    "B905",   # zip-without-explicit-strict (minor)
+    "E721",   # type-comparison (cleanup tracked separately)
+    "E741",   # ambiguous-variable-name (cleanup tracked separately)
+    "F841",   # unused-variable (cleanup tracked separately)
+    "SIM105", # suppressible-exception (minor style)
+    "SIM109", # compare-with-tuple (minor style)
+    "SIM110", # reimplemented-builtin (minor style)
+    "SIM113", # enumerate-for-loop (minor style)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-exports are common in __init__.py
+"tests/**" = [
+    "SIM117",   # multiple-with-statements (test readability)
+    "ASYNC230", # blocking-open-call (test infrastructure uses sync patterns)
+    "ASYNC240", # blocking-path-method (test infrastructure uses sync patterns)
+    "F811",     # redefined-while-unused (pytest fixture overrides)
+    "E731",     # lambda-assignment (test helpers)
+    "B011",     # assert-false (test patterns)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.quiet_solar"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = false
+# Brownfield project: disable high-volume error codes initially
+# Tighten progressively as code quality improves
+disable_error_code = [
+    "union-attr",      # 249 errors — Optional access without None check
+    "operator",        # 143 errors — type mismatch in operators
+    "assignment",      # 89 errors — type mismatch in assignments
+    "no-any-return",   # 86 errors — returning Any
+    "attr-defined",    # 58 errors — attribute not found on type
+    "misc",            # 51 errors — miscellaneous
+    "arg-type",        # 48 errors — wrong argument type
+    "has-type",        # 26 errors — cannot determine type
+    "var-annotated",   # 38 errors — missing type annotation
+    "index",           # 24 errors — not indexable
+    "return-value",    # 8 errors — wrong return type
+    "import-untyped",  # 18 errors — untyped imports
+    "dict-item",       # config flow schema patterns
+    "typeddict-item",  # config flow schema patterns
+    "override",        # Liskov substitution in HA entity overrides
+    "type-var",        # type variable issues
+    "no-redef",        # redefinition issues
+    "call-overload",   # overload resolution
+    "list-item",       # list type mismatches
+    "abstract",        # abstract class issues
+    "name-match",      # name matching issues
+    "syntax",          # Python 3.14 syntax features
+]

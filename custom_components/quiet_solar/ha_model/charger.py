@@ -12,8 +12,33 @@ from haversine import Unit, haversine
 from homeassistant.components import homeassistant, number
 from homeassistant.components.button import SERVICE_PRESS
 
-# try:
-from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+try:
+    from homeassistant.components.wallbox.const import ChargerStatus as WallboxChargerStatus
+except ImportError, ModuleNotFoundError:
+
+    class WallboxChargerStatus(StrEnum):  # type: ignore[no-redef]
+        """Charger status description (fallback when wallbox package is not installed)."""
+
+        CHARGING = "Charging"
+        DISCHARGING = "Discharging"
+        PAUSED = "Paused"
+        SCHEDULED = "Scheduled"
+        WAITING_FOR_CAR = "Waiting for car demand"
+        WAITING = "Waiting"
+        DISCONNECTED = "Disconnected"
+        ERROR = "Error"
+        READY = "Ready"
+        LOCKED = "Locked"
+        LOCKED_CAR_CONNECTED = "Locked, car connected"
+        UPDATING = "Updating"
+        WAITING_IN_QUEUE_POWER_SHARING = "Waiting in queue by Power Sharing"
+        WAITING_IN_QUEUE_POWER_BOOST = "Waiting in queue by Power Boost"
+        WAITING_MID_FAILED = "Waiting MID failed"
+        WAITING_MID_SAFETY = "Waiting MID safety margin exceeded"
+        WAITING_IN_QUEUE_ECO_SMART = "Waiting in queue by Eco-Smart"
+        UNKNOWN = "Unknown"
+
+
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     SERVICE_TURN_OFF,
@@ -27,29 +52,6 @@ from homeassistant.helpers import device_registry, entity_registry
 from homeassistant.util import slugify
 
 from .dynamic_group import QSDynamicGroup
-
-# except:
-#     class WallboxChargerStatus(StrEnum):
-#         """Charger Status Description."""
-#
-#         CHARGING = "Charging"
-#         DISCHARGING = "Discharging"
-#         PAUSED = "Paused"
-#         SCHEDULED = "Scheduled"
-#         WAITING_FOR_CAR = "Waiting for car demand"
-#         WAITING = "Waiting"
-#         DISCONNECTED = "Disconnected"
-#         ERROR = "Error"
-#         READY = "Ready"
-#         LOCKED = "Locked"
-#         LOCKED_CAR_CONNECTED = "Locked, car connected"
-#         UPDATING = "Updating"
-#         WAITING_IN_QUEUE_POWER_SHARING = "Waiting in queue by Power Sharing"
-#         WAITING_IN_QUEUE_POWER_BOOST = "Waiting in queue by Power Boost"
-#         WAITING_MID_FAILED = "Waiting MID failed"
-#         WAITING_MID_SAFETY = "Waiting MID safety margin exceeded"
-#         WAITING_IN_QUEUE_ECO_SMART = "Waiting in queue by Eco-Smart"
-#         UNKNOWN = "Unknown"
 
 
 class QSOCPPv16v201ChargePointStatus(StrEnum):

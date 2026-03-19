@@ -32,7 +32,9 @@ jobs:
         run: mypy custom_components/quiet_solar/
 
       - name: Run tests with 100% coverage
-        run: pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing --cov-fail-under=100
+        env:
+          TZ: Europe/Paris
+        run: pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing --cov-fail-under=100 --snapshot-update
 
   hacs-validate:
     name: HACS Validation
