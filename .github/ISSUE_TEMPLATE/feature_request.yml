@@ -1,0 +1,46 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case
+      description: Describe the problem or need this feature addresses
+    validations:
+      required: true
+
+  - type: dropdown
+    id: persona
+    attributes:
+      label: Persona
+      description: Who benefits from this feature?
+      options:
+        - TheAdmin (system owner / power user)
+        - Magali (household member / non-technical)
+        - TheDev (developer / contributor)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope Tier
+      description: Is this part of the MVP or a future enhancement?
+      options:
+        - MVP
+        - Post-MVP
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How do you envision this working?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or references
