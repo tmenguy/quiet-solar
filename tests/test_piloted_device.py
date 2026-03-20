@@ -17,6 +17,7 @@ Key concepts tested:
 from datetime import datetime, timedelta
 from unittest import TestCase
 
+import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
@@ -1380,6 +1381,216 @@ class TestEdgeCases(TestCase):
         climate1.current_command = copy_command(CMD_OFF)
         climate2.current_command = copy_command(CMD_OFF)
         self.assertFalse(heat_pump.is_piloted_device_activated)
+
+
+@pytest.mark.integration
+class TestPilotedDeviceMultiClientStress(TestCase):
+    """Test piloted device coordination with 3+ client devices (AC #7).
+
+    Stress tests for multi-client scenarios: pilot ON/OFF logic,
+    client addition/removal, and power delta accuracy.
+    """
+
+    def setUp(self):
+        self.dt = datetime(year=2024, month=6, day=1, hour=6, minute=0, second=0, tzinfo=pytz.UTC)
+
+    def test_pilot_on_when_any_of_four_clients_active(self):
+        """Pilot activates when any one of 4 clients is ON."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=3000)
+        clients = [MockClimateLoad(name=f"climate_{i}", power=1000) for i in range(4)]
+        for c in clients:
+            heat_pump.clients.append(c)
+            c.current_command = copy_command(CMD_OFF)
+            c.qs_enable_device = True
+
+        # All off -> pump inactive
+        self.assertFalse(heat_pump.is_piloted_device_activated)
+
+        # One client on -> pump active
+        clients[2].current_command = copy_command(CMD_ON)
+        self.assertTrue(heat_pump.is_piloted_device_activated)
+
+    def test_pilot_off_only_when_all_clients_off(self):
+        """Pilot turns OFF only when ALL clients are OFF."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=3000)
+        clients = [MockClimateLoad(name=f"climate_{i}", power=1000) for i in range(3)]
+        for c in clients:
+            heat_pump.clients.append(c)
+            c.current_command = copy_command(CMD_ON)
+            c.qs_enable_device = True
+
+        # All on -> pump active
+        self.assertTrue(heat_pump.is_piloted_device_activated)
+
+        # Turn off one -> still active
+        clients[0].current_command = copy_command(CMD_OFF)
+        self.assertTrue(heat_pump.is_piloted_device_activated)
+
+        # Turn off second -> still active (third still on)
+        clients[1].current_command = copy_command(CMD_OFF)
+        self.assertTrue(heat_pump.is_piloted_device_activated)
+
+        # Turn off last -> pump inactive
+        clients[2].current_command = copy_command(CMD_OFF)
+        self.assertFalse(heat_pump.is_piloted_device_activated)
+
+    def test_power_delta_first_and_subsequent_clients(self):
+        """First client adds pilot power, subsequent add zero."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=3000)
+        clients = [MockClimateLoad(name=f"c_{i}", power=1000) for i in range(4)]
+        for c in clients:
+            heat_pump.clients.append(c)
+
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
+
+        # First client -> pilot power
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        self.assertEqual(delta, 3000)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 1)
+
+        # Second client -> no additional pilot power
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        self.assertEqual(delta, 0)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 2)
+
+        # Third client -> still no additional
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        self.assertEqual(delta, 0)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 3)
+
+    def test_power_delta_last_client_removal_returns_pilot_power(self):
+        """Only the last client removal returns pilot power delta."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=3000)
+        clients = [MockClimateLoad(name=f"c_{i}", power=1000) for i in range(3)]
+        for c in clients:
+            heat_pump.clients.append(c)
+
+        heat_pump.prepare_slots_for_piloted_device_budget(10)
+
+        # Add 3 clients
+        for _ in range(3):
+            heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 3)
+
+        # Remove first -> no pilot power change
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=False)
+        self.assertEqual(delta, 0)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 2)
+
+        # Remove second -> no pilot power change
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=False)
+        self.assertEqual(delta, 0)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 1)
+
+        # Remove last -> pilot power returned
+        delta = heat_pump.update_num_demanding_clients_for_slot(0, add=False)
+        self.assertEqual(delta, 3000)
+        self.assertEqual(heat_pump.num_demanding_clients[0], 0)
+
+    def test_concurrent_slots_with_multiple_clients(self):
+        """Multiple slots track clients independently across many clients."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=2500)
+        clients = [MockClimateLoad(name=f"c_{i}", power=800) for i in range(5)]
+        for c in clients:
+            heat_pump.clients.append(c)
+
+        heat_pump.prepare_slots_for_piloted_device_budget(8)
+
+        # Add to different slots
+        heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        heat_pump.update_num_demanding_clients_for_slot(0, add=True)
+        heat_pump.update_num_demanding_clients_for_slot(3, add=True)
+        heat_pump.update_num_demanding_clients_for_slot(7, add=True)
+        heat_pump.update_num_demanding_clients_for_slot(7, add=True)
+        heat_pump.update_num_demanding_clients_for_slot(7, add=True)
+
+        self.assertEqual(heat_pump.num_demanding_clients[0], 2)
+        self.assertEqual(heat_pump.num_demanding_clients[1], 0)
+        self.assertEqual(heat_pump.num_demanding_clients[3], 1)
+        self.assertEqual(heat_pump.num_demanding_clients[7], 3)
+
+    def test_solver_four_climates_one_heat_pump(self):
+        """Solver handles 4 climates connected to one heat pump."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=3000)
+        climates = []
+        for i in range(4):
+            c = MockClimateLoad(name=f"climate_{i}", power=800, piloted_device_name="heat_pump")
+            climates.append(c)
+
+        home = MockHome()
+        home.add_piloted_device(heat_pump)
+        for c in climates:
+            home.add_load(c)
+        home.setup_topology()
+
+        self.assertEqual(len(heat_pump.clients), 4)
+
+        # Add mandatory constraints for all 4
+        for c in climates:
+            ct = TimeBasedSimplePowerLoadConstraint(
+                time=self.dt,
+                load=c,
+                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                end_of_constraint=self.dt + timedelta(hours=16),
+                initial_value=0,
+                target_value=8 * 3600,
+                power=c.min_p,
+            )
+            c.push_live_constraint(self.dt, ct)
+
+        from tests.utils.scenario_builders import build_realistic_solar_forecast, create_test_battery
+
+        battery = create_test_battery(
+            capacity_wh=10000.0,
+            initial_soc_percent=50.0,
+            min_soc_percent=10.0,
+            max_discharge_power=5000.0,
+        )
+
+        forecast = build_realistic_solar_forecast(self.dt, num_hours=18, peak_power=8000.0)
+        consumption = [(self.dt + timedelta(hours=h), 500.0) for h in range(18)]
+
+        solver = PeriodSolver(
+            start_time=self.dt,
+            end_time=self.dt + timedelta(hours=18),
+            tariffs=0.20 / 1000.0,
+            actionable_loads=climates,
+            battery=battery,
+            pv_forecast=forecast,
+            unavoidable_consumption_forecast=consumption,
+        )
+
+        result, _ = solver.solve(with_self_test=True)
+        assert result is not None
+
+        # At least some climates should get commands
+        clients_with_cmds = [r for r in result if r[0] in climates]
+        assert len(clients_with_cmds) > 0, "Some climates should get commands"
+
+    def test_disabled_client_does_not_activate_pilot(self):
+        """Disabled clients don't count for pilot activation."""
+        heat_pump = MockPilotedDevice(name="heat_pump", power=2000)
+        c1 = MockClimateLoad(name="c1", power=1000)
+        c2 = MockClimateLoad(name="c2", power=1000)
+        c3 = MockClimateLoad(name="c3", power=1000)
+
+        heat_pump.clients.extend([c1, c2, c3])
+
+        # Disable first, then set commands (setter calls reset() which clears command)
+        c1.qs_enable_device = False
+        c1.current_command = copy_command(CMD_ON)
+        c2.qs_enable_device = False
+        c2.current_command = copy_command(CMD_ON)
+        c3.current_command = copy_command(CMD_OFF)
+        c3.qs_enable_device = True
+
+        # Even though c1 and c2 have ON commands, they're disabled
+        self.assertFalse(heat_pump.is_piloted_device_activated)
+
+        # Enable c2 (reset() clears command), then set ON again
+        c2.qs_enable_device = True
+        c2.current_command = copy_command(CMD_ON)
+        self.assertTrue(heat_pump.is_piloted_device_activated)
 
 
 if __name__ == "__main__":
