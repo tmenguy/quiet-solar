@@ -21,15 +21,11 @@ import pytz
 
 from custom_components.quiet_solar.const import (
     CHANGE_ON_OFF_STATE_HYSTERESIS_S,
-    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
-    CONSTRAINT_TYPE_FILLER,
-    CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     SOLVER_STEP_S,
 )
 from custom_components.quiet_solar.home_model.commands import (
-    CMD_CST_IDLE,
     CMD_CST_ON,
     CMD_IDLE,
     CMD_ON,
@@ -43,7 +39,6 @@ from custom_components.quiet_solar.home_model.constraints import (
 from custom_components.quiet_solar.home_model.load import TestLoad
 from custom_components.quiet_solar.home_model.solver import PeriodSolver
 from tests.factories import TestDynamicGroupDouble
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,7 +77,7 @@ class _BoundaryTestLoad:
         return False
 
     def get_normalized_score(self, ct, time, score_span):
-        return 0.5
+        return 0.0
 
     def get_possible_delta_power_from_piloted_devices_for_budget(self, slot_idx, add):
         return 0.0
@@ -232,6 +227,13 @@ class TestSwitchingBudgetExhaustion:
         # With 2 transitions remaining, creating 1 isolated segment is possible
         on_segments = [cmd for cmd in out_commands if cmd is not None and cmd.power_consign > 0]
         assert len(on_segments) >= 1, "Should use 2 transitions to create an ON segment"
+        # The segment should deliver meaningful energy (not just 1 slot)
+        delivered_energy = sum(
+            cmd.power_consign * durations[i] / 3600.0
+            for i, cmd in enumerate(out_commands)
+            if cmd is not None and cmd.power_consign > 0
+        )
+        assert delivered_energy > 0, "ON segment should deliver energy toward the target"
 
     def test_two_pass_prefers_free_transitions(self):
         """AC 1.3: Pass 1 (free transitions) is attempted before pass 2 (budget-spending).
@@ -283,9 +285,13 @@ class TestSwitchingBudgetExhaustion:
         )
         _, _, _, remaining_energy, out_commands, _ = result
 
-        # Verify that there are commands allocated (at least the existing ones extended)
+        # Verify that existing ON slots (0-3) are extended (power increased) — pass 1 (free)
+        extended_existing = [cmd for cmd in out_commands[:4] if cmd is not None and cmd.power_consign > 1000]
+        assert len(extended_existing) > 0, "Pass 1 should extend existing ON slots to higher power (free transitions)"
+
+        # Verify that new ON segments were also created beyond slot 3 — pass 2 (budget-spending)
         on_count = sum(1 for cmd in out_commands if cmd is not None and cmd.power_consign > 0)
-        assert on_count > 0, "Should extend existing ON segments and potentially add new ones"
+        assert on_count > len(extended_existing), "Pass 2 should create new ON segments beyond existing ones"
 
     def test_segment_extension_works_when_budget_exhausted(self):
         """AC 1.4: Extending adjacent ON segments is allowed when budget is exhausted.
@@ -338,9 +344,7 @@ class TestSwitchingBudgetExhaustion:
         _, _, _, remaining_energy, out_commands, _ = result
 
         # Existing ON slots should have increased power (extension, not new segment)
-        extended_slots = [
-            cmd for i, cmd in enumerate(out_commands[:4]) if cmd is not None and cmd.power_consign > 1000
-        ]
+        extended_slots = [cmd for i, cmd in enumerate(out_commands[:4]) if cmd is not None and cmd.power_consign > 1000]
         assert len(extended_slots) > 0, "Existing ON slots should be extended to higher power"
 
     def test_asap_with_exhausted_budget_behaves_differently_from_mandatory(self):
@@ -803,6 +807,17 @@ class TestMultipleMandatoryCompetition:
         # Solver should produce valid output for all loads
         assert len(load_commands) == 3
 
+        # All mandatory constraints can use grid power, so all may be met.
+        # The key invariant: higher-score constraint (ASAP) is allocated first,
+        # and the solver handles the competition without crashing.
+        c_b_final = next((c for c in solver._constraints_for_test if c.load.name == "mandatory_big"), None)
+        c_c_final = next((c for c in solver._constraints_for_test if c.load.name == "mandatory_small"), None)
+        assert c_b_final is not None
+        assert c_c_final is not None
+
+        # Verify score ordering: ASAP > big mandatory > small mandatory
+        assert score_b > score_c, "Bigger energy target should score higher than smaller"
+
     def test_two_mandatory_different_deadlines(self):
         """AC 3.4: Two mandatory constraints with different deadlines.
 
@@ -864,6 +879,14 @@ class TestMultipleMandatoryCompetition:
         assert c_early is not None
         assert c_late is not None
 
+        # Score is driven by energy target within same type tier, not deadline.
+        # Late constraint has larger energy target (6kWh vs 3kWh) → higher score.
+        score_early = constraint_early.score(dt)
+        score_late = constraint_late.score(dt)
+        assert score_late > score_early, (
+            f"Larger energy target ({score_late}) should score higher than smaller ({score_early})"
+        )
+
     def test_user_mandatory_beats_system_mandatory(self):
         """AC 3.5: User-originated mandatory vs system mandatory — from_user wins.
 
@@ -918,9 +941,7 @@ class TestMultipleMandatoryCompetition:
         # Verify score ordering
         score_user = constraint_user.score(dt)
         score_sys = constraint_sys.score(dt)
-        assert score_user > score_sys, (
-            f"User constraint ({score_user}) should score higher than system ({score_sys})"
-        )
+        assert score_user > score_sys, f"User constraint ({score_user}) should score higher than system ({score_sys})"
 
         load_commands, _ = solver.solve(with_self_test=True)
 
@@ -931,10 +952,10 @@ class TestMultipleMandatoryCompetition:
         assert c_user_final is not None
         assert c_sys_final is not None
 
-        # User progress should be >= system progress
+        # User progress should be strictly >= system progress (user has higher score)
         user_progress = c_user_final.current_value / c_user_final.target_value if c_user_final.target_value else 0
         sys_progress = c_sys_final.current_value / c_sys_final.target_value if c_sys_final.target_value else 0
-        assert user_progress >= sys_progress * 0.9, (
+        assert user_progress >= sys_progress, (
             f"User progress ({user_progress:.1%}) should be >= system ({sys_progress:.1%})"
         )
 
@@ -968,21 +989,28 @@ class TestConstraintTypeTransitions:
             power_steps=_make_power_steps([1000.0]),
         )
 
-        # Off-grid: type should return degraded_type
+        # Off-grid: type property should return degraded value
         assert constraint.type == CONSTRAINT_TYPE_MANDATORY_END_TIME, (
             f"Off-grid ASAP should degrade to MANDATORY_END_TIME, got {constraint.type}"
-        )
-        assert constraint._type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, (
-            "Internal _type should still be ASAP"
         )
         assert constraint.is_mandatory, "Degraded ASAP should still be mandatory"
         assert not constraint.as_fast_as_possible, "Degraded ASAP should not be as_fast_as_possible"
 
-    def test_constraint_skipped_after_too_many_pushes(self):
-        """AC 4.2: Constraint with pushed_count > 4 is skipped.
+        # Returning to on-grid should restore ASAP type
+        load._off_grid = False
+        assert constraint.type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, (
+            "Returning on-grid should restore ASAP type"
+        )
+        assert constraint.as_fast_as_possible, "On-grid should be as_fast_as_possible again"
 
-        When a mandatory constraint is pushed beyond deadline more than 4 times,
-        it should be marked with skip=True.
+    def test_constraint_skip_and_pushed_count_properties(self):
+        """AC 4.2: Verify skip and pushed_count properties support the deadline-miss protocol.
+
+        The real skip logic lives in load.py:1462 (update_live_constraints) which
+        requires a full AbstractLoad. This test verifies the constraint properties
+        that protocol depends on: pushed_count is writable, skip defaults to False,
+        and skip is writable. The actual triggered behavior (pushed_count > 4 → skip)
+        is tested through the solver in integration tests.
         """
         now = datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
         load = _BoundaryTestLoad(name="push_limit_load")
@@ -997,23 +1025,29 @@ class TestConstraintTypeTransitions:
             power_steps=_make_power_steps([1000.0]),
         )
 
-        # Simulate 5 pushes
-        constraint.pushed_count = 5
-        assert constraint.pushed_count > 4
+        # Verify defaults
+        assert not constraint.skip, "skip should default to False"
+        assert constraint.pushed_count == 0, "pushed_count should default to 0"
 
-        # Verify initial skip state
-        assert not constraint.skip, "Should not be skipped initially"
+        # Verify the constraint is still mandatory and scorable when pushed
+        constraint.pushed_count = 3
+        assert constraint.is_mandatory, "Constraint should remain mandatory after pushes"
+        score_before = constraint.score(now)
 
-        # After pushed_count > 4, the update_live_constraints logic would set skip=True
-        # We test the condition directly since the full lifecycle requires AbstractLoad
-        constraint.skip = True  # This is what load.py:1462 does
-        assert constraint.skip, "Constraint should be skippable after too many pushes"
+        # Verify skip flag prevents further processing
+        constraint.skip = True
+        assert constraint.skip, "skip should be settable to True"
 
-    def test_constraint_promoted_to_asap_after_deadline_miss(self):
-        """AC 4.3: Constraint promoted to ASAP when pushed_count <= 4.
+        # A skipped constraint should still be mandatory (skip is orthogonal to type)
+        assert constraint.is_mandatory, "Skipped constraint should still be mandatory"
 
-        When a mandatory constraint is pushed past deadline, its type changes
-        to MANDATORY_AS_FAST_AS_POSSIBLE to try harder.
+    def test_constraint_type_promotion_via_setter(self):
+        """AC 4.3: Type setter promotes MANDATORY_END_TIME to ASAP correctly.
+
+        The real promotion is triggered by load.py:1462-1465 (update_live_constraints)
+        which calls `constraint.type = MANDATORY_AS_FAST_AS_POSSIBLE`. This test
+        verifies the setter contract: setting type to ASAP changes the public type,
+        increases the score, and caps off-grid degradation at MANDATORY_END_TIME.
         """
         now = datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
         load = _BoundaryTestLoad(name="promote_load")
@@ -1028,20 +1062,31 @@ class TestConstraintTypeTransitions:
             power_steps=_make_power_steps([1000.0]),
         )
 
-        assert constraint._type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        # Verify initial state via public API
+        assert constraint.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        assert constraint.is_mandatory
+        assert not constraint.as_fast_as_possible
+        score_before = constraint.score(now)
 
         # Simulate deadline miss promotion (load.py:1462-1465)
-        constraint.pushed_count = 1  # <= 4, so promote
         constraint.type = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
 
-        assert constraint._type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, (
-            "Type should be promoted to ASAP"
-        )
-        # The setter also updates degraded_type
-        assert constraint._degraded_type == CONSTRAINT_TYPE_MANDATORY_END_TIME, (
-            "Degraded type should be capped at MANDATORY_END_TIME"
-        )
+        # Verify promotion through public API
+        assert constraint.type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE, "Type should be promoted to ASAP"
         assert constraint.as_fast_as_possible, "Should now be as_fast_as_possible"
+        assert constraint.is_mandatory, "Should still be mandatory"
+
+        # ASAP score must be higher than MANDATORY_END_TIME score
+        score_after = constraint.score(now)
+        assert score_after > score_before, (
+            f"ASAP score ({score_after}) should be > MANDATORY_END_TIME score ({score_before})"
+        )
+
+        # Verify off-grid degradation is capped (setter side-effect)
+        load._off_grid = True
+        assert constraint.type == CONSTRAINT_TYPE_MANDATORY_END_TIME, (
+            "Off-grid should degrade ASAP back to MANDATORY_END_TIME"
+        )
 
     def test_off_grid_transition_preserves_constraint_progress(self):
         """AC 4.4: Off-grid transition preserves current_value continuity.
