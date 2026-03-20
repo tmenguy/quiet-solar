@@ -1,5 +1,13 @@
 # Quiet Solar — Project Rules
 
+## Process Authority
+
+All project rules, workflows, and process decisions live in `_qsprocess/` — this is the single source of truth. This folder is tool-agnostic: it works identically whether the agent is Claude Code, Cursor, or any other tool.
+
+- **Never** store project process rules exclusively in tool-specific locations (`.claude/`, `.cursor/`, etc.)
+- Tool-specific config files (`CLAUDE.md`, `.cursorrules`) must reference `_qsprocess/`, not duplicate its content
+- When a new process rule is established, add it here — not only in agent memory
+
 ## Project Overview
 
 Quiet Solar is a Home Assistant custom component that optimizes solar energy self-consumption through a constraint-based solver.

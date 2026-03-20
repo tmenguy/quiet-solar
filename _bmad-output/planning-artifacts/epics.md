@@ -173,12 +173,13 @@ No UX Design document exists. UX requirements are captured through User Journeys
 
 ## Epic List
 
-### Epic 1: Automated Development Pipeline
+### Epic 1: Automated Development Pipeline [DONE]
 TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug (with targeted regression tests using existing patterns) as the first real PR.
 **FRs:** FR43, FR44, FR45, FR50
 **ARs:** AR1, AR2, AR4, AR8, AR9
 **NFRs:** NFR16, NFR19, NFR23
 **Scope:** MVP | **Dependencies:** None (foundation)
+**Status:** All stories complete. Pipeline validated by bug fix PR (Story 1.6).
 
 ### Epic 2: Test Scenarios & Failure Catalog
 The system provides expressive scenario infrastructure AND a significant volume of implemented trust-critical test scenarios. TheDev can define charger budgeting, constraint interaction, and failure mode scenarios through rich builders — and can return after extended absence understanding the codebase through test names and the failure catalog. Two internal phases: (A) infrastructure (scenario framework, catalog template, builder APIs), then (B) implemented scenarios using that infrastructure.
@@ -219,7 +220,7 @@ Epic 1 (pipeline) → Epic 2 (confidence) → Epic 3 (resilience) → Epic 4 (op
 
 TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug as the first real PR through the system.
 
-### Story 1.1: Agentic Development Workflow
+### Story 1.1: Agentic Development Workflow [DONE]
 
 As TheDev,
 I want to say "fix this bug" and have the system create a GitHub issue, create a branch, assist me through the fix (with tests added/updated for every change), run the test suite and linters locally, iterate until 100% coverage is maintained, and only then create the PR — all from within Cursor or Claude Code,
@@ -246,7 +247,7 @@ So that the entire bug-fix workflow requires zero manual GitHub operations and z
 **Then** a PR is created linking to the issue, with proper template filled
 **And** the PR is only created after local quality checks pass (tests, lint, type check, coverage)
 
-### Story 1.2: PR Quality Gate Pipeline
+### Story 1.2: PR Quality Gate Pipeline [DONE]
 
 As TheDev,
 I want CI to automatically run Ruff linting, MyPy type checking, the full test suite with 100% coverage gate, and HACS validation on every PR push,
@@ -263,7 +264,7 @@ So that code quality is enforced on the remote as a safety net mirroring the loc
 **And** Python version matches HA's production version
 **And** numpy and scipy are pinned to HA's bundled versions (AR2)
 
-### Story 1.3: Release Pipeline & Version Migration
+### Story 1.3: Release Pipeline & Version Migration [DONE]
 
 As TheDev,
 I want merging to main with a version tag to automatically create a GitHub Release with auto-generated changelog, and version consistency validated between tag and manifest,
@@ -279,7 +280,7 @@ So that shipping a release requires zero manual steps.
 **And** a GitHub Release is created with auto-generated changelog
 **And** configuration migration support (FR50) is validated as part of the release checklist
 
-### Story 1.4: PR Templates & Developer Workflow
+### Story 1.4: PR Templates & Developer Workflow [DONE]
 
 As TheDev,
 I want PR templates with quality checklists and risk assessment categories, issue templates for bugs and features, and CODEOWNERS for auto-assignment,
@@ -299,22 +300,15 @@ So that every contribution follows consistent quality standards with minimal fri
 **Then** bug reports have structured fields (steps to reproduce, expected behavior, device type)
 **And** feature requests have structured fields (use case, persona, scope tier)
 
-### Story 1.5: Test Infrastructure Smoke Tests
+### Story 1.5: Test Infrastructure Smoke Tests [DISMISSED]
 
-As TheDev,
+Dismissed — scope deferred to Epic 2 where FakeHass validation will be addressed as part of the scenario builder framework (Story 2.1).
+
+~~As TheDev,
 I want the CI pipeline to include smoke tests verifying FakeHass behaves like real HA for critical operations,
-So that I can trust the test infrastructure itself isn't giving false confidence.
+So that I can trust the test infrastructure itself isn't giving false confidence.~~
 
-**Acceptance Criteria:**
-
-**Given** the test suite runs in CI
-**When** test infrastructure smoke tests execute
-**Then** FakeHass state tracking matches real HA behavior for entity state changes
-**And** FakeHass service calls match real HA service call patterns
-**And** factory-built domain objects match production constructor signatures
-**And** smoke test failures are reported distinctly from regular test failures
-
-### Story 1.6: Person-Car Assignment Bug Fix (Pipeline Validation)
+### Story 1.6: Person-Car Assignment Bug Fix (Pipeline Validation) [DONE]
 
 As TheAdmin,
 I want the person-car assignment notification and override flow to work correctly,
@@ -330,6 +324,29 @@ So that household members are properly notified when car assignments change and 
 **And** targeted regression tests cover the fix using existing test patterns
 **And** the PR passes through the full CI quality gate from Story 1.2
 **And** this is the first real code change delivered through the agentic workflow from Story 1.1
+
+### Story 1.7: Parallel Story Development with Git Worktrees [DONE]
+
+As TheDev,
+I want every story and bugfix to automatically use a git worktree (with shared venv and HA runtime config via symlinks) by default, with the option to opt out by saying "no worktree",
+So that I can work on multiple stories in parallel without branch switching, stashing, or duplicating large dependencies.
+
+**Acceptance Criteria:**
+
+**Given** TheDev starts any story or bugfix
+**When** Phase 1b (branch creation) executes
+**Then** a worktree is created by default with its own branch
+**And** venv, config/, and non-git custom_components are symlinked from the main worktree
+**And** the main worktree stays on main, untouched
+
+**Given** TheDev says "no worktree"
+**When** Phase 1b executes
+**Then** the old behavior is used: `git checkout -b QS_<N>` in the main directory
+
+**Given** a story in a worktree is merged
+**When** TheDev cleans up
+**Then** the worktree is removed (symlinks go with it, originals untouched)
+**And** the main worktree's main branch is updated
 
 ## Epic 2: Trust-Critical Test Scenarios
 
@@ -406,7 +423,7 @@ So that existing behavior is verified comprehensively before any improvements be
 
 TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. The failure mode catalog drives the work: document what can fail, implement how the system responds, test every failure path, and surface human-readable explanations.
 
-### Story 3.1: Failure Mode Catalog & Resilience Plan
+### Story 3.1: Failure Mode Catalog & Resilience Plan [DONE]
 
 As TheDev,
 I want a structured failure mode catalog documenting every external dependency weakness with its failure signature, planned system response, recovery path, and test coverage status,

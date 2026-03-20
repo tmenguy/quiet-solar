@@ -219,6 +219,19 @@ Skip this step if the story used "no worktree" mode.
 
 ---
 
+## Phase 3g: Update Epics Document
+
+After a story is merged, update `_bmad-output/planning-artifacts/epics.md` to reflect the new state:
+
+- Mark completed stories with `[DONE]` in the heading (e.g., `### Story 1.1: Title [DONE]`)
+- Mark dismissed stories with `[DISMISSED]` in the heading, with a brief reason
+- When a new story is added mid-sprint, add it to the epics document in the correct epic
+- When all stories in an epic are complete, mark the epic heading with `[DONE]`
+
+This applies to ALL completions — code stories, documentation stories, and process stories.
+
+---
+
 ## Phase 4: Release
 
 Releases are **manually triggered** by the user — never auto-release.
