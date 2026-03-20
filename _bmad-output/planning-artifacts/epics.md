@@ -424,7 +424,7 @@ So that the entire development lifecycle from idea to release can be driven from
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
 
-### Story 2.2: Charger Budgeting Scenario Tests
+### Story 2.2: Charger Budgeting Scenario Tests — **DONE** (PR #QS_19)
 
 As TheDev,
 I want implemented test scenarios covering multi-charger rebalancing sequences with intermediate state verification,
