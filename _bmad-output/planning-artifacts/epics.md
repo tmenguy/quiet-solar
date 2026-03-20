@@ -182,13 +182,13 @@ TheDev can push code through a fully automated CI/CD pipeline with quality gates
 **Status:** Core pipeline stories (1.1–1.7) complete. Stories 1.8–1.9 added for PR review automation and mobile-first autonomous flow.
 
 ### Epic 2: Test Scenarios & Failure Catalog
-The system provides expressive scenario infrastructure AND a significant volume of implemented trust-critical test scenarios. TheDev can define charger budgeting, constraint interaction, and failure mode scenarios through rich builders — and can return after extended absence understanding the codebase through test names and the failure catalog. Two internal phases: (A) infrastructure (scenario framework, catalog template, builder APIs), then (B) implemented scenarios using that infrastructure.
+The system provides a significant volume of implemented trust-critical test scenarios. TheDev can define charger budgeting, constraint interaction, and failure mode scenarios — and can return after extended absence understanding the codebase through test names and the failure catalog.
 **FRs:** FR46, FR47, FR48, FR49
 **ARs:** AR3
 **NFRs:** NFR18, NFR20
 **Also verifies:** FR6-FR12, FR19-FR20, NFR14, NFR22
 **Scope:** MVP | **Dependencies:** Builds on Epic 1
-**Note:** Defines a "done threshold" — minimum scenario set that unlocks Epic 3. Full catalog continues growing.
+**Note:** Defines a "done threshold" — minimum scenario set that unlocks Epic 3. Full catalog continues growing. Story 2.1 (Scenario Builder Framework) removed — test infrastructure emerges from implementing the scenarios directly.
 
 ### Epic 3: Failure Resilience & Transparency
 TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. Every external dependency has a documented failure path with fallback and recovery. Fed directly by Epic 2's failure catalog — Epic 2 documents what can fail, Epic 3 implements how the system responds.
@@ -421,22 +421,7 @@ So that the entire development lifecycle from idea to release can be driven from
 
 ## Epic 2: Trust-Critical Test Scenarios
 
-The system provides expressive scenario infrastructure and a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
-
-### Story 2.1: Scenario Builder Framework
-
-As TheDev,
-I want a scenario builder API that lets me define realistic multi-device household configurations (chargers, cars, persons, solar, battery) in a few expressive lines,
-So that writing trust-critical test scenarios is fast, readable, and enjoyable.
-
-**Acceptance Criteria:**
-
-**Given** TheDev wants to test a multi-charger rebalancing scenario
-**When** using the scenario builder API
-**Then** a complete household (home, solar, battery, chargers, cars, persons) can be configured in under 10 lines
-**And** scenario definitions read like documentation (NFR18)
-**And** the builder produces real domain objects via existing factories (not mocks)
-**And** time progression can be simulated (solar curve changes, car plugs in, constraint arrives)
+The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
 
 ### Story 2.2: Charger Budgeting Scenario Tests
 
@@ -446,8 +431,7 @@ So that the trust-critical charger budgeting system is proven safe at every inte
 
 **Acceptance Criteria:**
 
-**Given** the scenario builder from Story 2.1 is available
-**When** charger budgeting scenarios are executed
+**Given** charger budgeting scenarios are executed
 **Then** multi-charger rebalancing verifies no phase is exceeded at any intermediate state
 **And** staged transition recovery is tested (crash between Phase 1 reduce and Phase 2 increase)
 **And** phase switching under load is tested (1P→3P with concurrent chargers)
@@ -463,8 +447,7 @@ So that the system's behavior at constraint boundaries is explicit and tested.
 
 **Acceptance Criteria:**
 
-**Given** the scenario builder from Story 2.1 is available
-**When** constraint interaction scenarios are executed
+**Given** constraint interaction scenarios are executed
 **Then** MANDATORY_END_TIME vs exhausted `num_max_on_off` switching budget is tested
 **And** mandatory constraint vs exhausted charger amp budget is tested
 **And** multiple MANDATORY constraints competing for insufficient power is tested
@@ -479,8 +462,7 @@ So that existing behavior is verified comprehensively before any improvements be
 
 **Acceptance Criteria:**
 
-**Given** the scenario builder from Story 2.1 is available
-**When** solver and device orchestration scenarios are executed
+**Given** solver and device orchestration scenarios are executed
 **Then** solver behavior under rapid forecast changes (cloudy day) is tested
 **And** off-grid mode edge cases are tested (FR19-FR20: load shedding, battery depletion thresholds)
 **And** external control detection and adaptation is tested (FR10)
@@ -556,7 +538,7 @@ So that every resilience implementation from Story 3.2 is verified.
 
 **Acceptance Criteria:**
 
-**Given** the scenario builder from Epic 2 and the failure catalog from Story 3.1
+**Given** the failure catalog from Story 3.1
 **When** failure scenarios are executed
 **Then** each catalog entry has at least one test scenario exercising its failure signature
 **And** fallback behavior is verified (correct degraded operation)
