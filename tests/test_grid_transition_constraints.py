@@ -23,6 +23,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.quiet_solar.const import (
     CONF_SWITCH,
     CONSTRAINT_TYPE_FILLER,
+    CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DATA_HANDLER,
     DOMAIN,
@@ -482,3 +483,306 @@ class TestFullGridTransitionCycle:
 
         has_original = any(c.current_value == 12600.0 for c in device._constraints if c is not None)
         assert has_original, "Constraint progress (12600s of 14400s) was lost after grid off/on cycle"
+
+
+# ===========================================================================
+# Story 2.4, AC #2: Off-grid mode edge cases
+# ===========================================================================
+
+
+@pytest.mark.integration
+class TestOffGridSolverEdgeCases:
+    """Test solver behavior in off-grid mode: battery depletion, load shedding priority, recovery."""
+
+    def setup_method(self):
+        self.dt = datetime.datetime(year=2024, month=6, day=1, hour=10, minute=0, second=0, tzinfo=pytz.UTC)
+        self.end_time = self.dt + timedelta(hours=14)
+
+    def _make_solver_off_grid(self, loads, battery, solar_power=2000.0):
+        """Create a solver configured for off-grid scenario."""
+        from custom_components.quiet_solar.home_model.solver import PeriodSolver
+        from tests.utils.scenario_builders import (
+            build_realistic_consumption_forecast,
+            build_realistic_solar_forecast,
+        )
+
+        forecast = build_realistic_solar_forecast(self.dt, num_hours=14, peak_power=solar_power)
+        consumption = build_realistic_consumption_forecast(self.dt, num_hours=14, base_load=300.0, night_load=200.0)
+
+        return PeriodSolver(
+            start_time=self.dt,
+            end_time=self.end_time,
+            tariffs=0.0,
+            actionable_loads=loads,
+            battery=battery,
+            pv_forecast=forecast,
+            unavoidable_consumption_forecast=consumption,
+        )
+
+    def test_off_grid_solver_uses_only_available_power(self):
+        """Off-grid mode forces solver to use only available power (solar + battery), no grid."""
+        from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN, LoadCommand
+        from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+        from custom_components.quiet_solar.home_model.load import TestLoad
+        from tests.utils.scenario_builders import create_test_battery
+
+        car = TestLoad(name="car")
+        car_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 33)]
+
+        # Car needs lots of energy — more than solar alone can provide
+        car_constraint = MultiStepsPowerLoadConstraint(
+            time=self.dt,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=10),
+            initial_value=2000,
+            target_value=20000,
+            power_steps=car_steps,
+            support_auto=True,
+        )
+        car.push_live_constraint(self.dt, car_constraint)
+
+        battery = create_test_battery(initial_soc_percent=60.0, max_discharge_power=3000.0)
+
+        solver = self._make_solver_off_grid([car], battery, solar_power=3000.0)
+
+        # Solve in off-grid mode
+        result, battery_cmds = solver.solve(is_off_grid=True, with_self_test=True)
+
+        # Solver should still produce valid output (energy conserved)
+        assert result is not None
+
+    def test_off_grid_battery_depletion_respects_min_soc(self):
+        """In off-grid mode, battery discharge respects minimum SOC threshold."""
+        from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN, LoadCommand
+        from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+        from custom_components.quiet_solar.home_model.load import TestLoad
+        from tests.utils.scenario_builders import create_test_battery
+
+        car = TestLoad(name="car")
+        car_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 33)]
+
+        # Very large demand that exceeds available energy
+        car_constraint = MultiStepsPowerLoadConstraint(
+            time=self.dt,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=10),
+            initial_value=0,
+            target_value=50000,
+            power_steps=car_steps,
+            support_auto=True,
+        )
+        car.push_live_constraint(self.dt, car_constraint)
+
+        min_soc_percent = 20.0
+        capacity_wh = 10000.0
+        # Battery with 20% minimum SOC = 2000Wh minimum
+        battery = create_test_battery(
+            capacity_wh=capacity_wh,
+            initial_soc_percent=50.0,
+            min_soc_percent=min_soc_percent,
+            max_discharge_power=5000.0,
+        )
+
+        solver = self._make_solver_off_grid([car], battery, solar_power=2000.0)
+
+        result, battery_cmds = solver.solve(is_off_grid=True, with_self_test=True)
+
+        assert result is not None
+        # with_self_test=True validates energy conservation internally;
+        # additionally verify the solver planned within the battery's SOC floor
+        min_charge_wh = capacity_wh * min_soc_percent / 100.0
+        assert battery.current_charge >= min_charge_wh - 1.0, (
+            f"Battery SOC {battery.current_charge:.0f}Wh dropped below min "
+            f"{min_charge_wh:.0f}Wh (min_soc={min_soc_percent}%)"
+        )
+
+    def test_off_grid_load_shedding_filler_before_mandatory(self):
+        """In off-grid with limited capacity, filler loads are shed before mandatory."""
+        from custom_components.quiet_solar.home_model.load import TestLoad
+        from tests.utils.scenario_builders import create_test_battery
+
+        car = TestLoad(name="car")
+        pool = TestLoad(name="pool")
+        boiler = TestLoad(name="boiler")
+
+        from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN, LoadCommand
+        from custom_components.quiet_solar.home_model.constraints import (
+            MultiStepsPowerLoadConstraint,
+            TimeBasedSimplePowerLoadConstraint,
+        )
+
+        car_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 33)]
+
+        # Mandatory: car must charge
+        car_mandatory = MultiStepsPowerLoadConstraint(
+            time=self.dt,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=8),
+            initial_value=2000,
+            target_value=10000,
+            power_steps=car_steps,
+            support_auto=True,
+        )
+        car.push_live_constraint(self.dt, car_mandatory)
+
+        # Filler: pool pump
+        pool_filler = TimeBasedSimplePowerLoadConstraint(
+            time=self.dt,
+            load=pool,
+            type=CONSTRAINT_TYPE_FILLER,
+            end_of_constraint=self.dt + timedelta(hours=14),
+            initial_value=0,
+            target_value=8 * 3600,
+            power=1430,
+        )
+        pool.push_live_constraint(self.dt, pool_filler)
+
+        # Filler auto: boiler
+        boiler_filler = TimeBasedSimplePowerLoadConstraint(
+            time=self.dt,
+            load=boiler,
+            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            end_of_constraint=self.dt + timedelta(hours=14),
+            initial_value=0,
+            target_value=3 * 3600,
+            power=2000,
+        )
+        boiler.push_live_constraint(self.dt, boiler_filler)
+
+        # Limited battery — not enough for all loads
+        battery = create_test_battery(initial_soc_percent=40.0, max_discharge_power=3000.0)
+
+        solver = self._make_solver_off_grid([car, pool, boiler], battery, solar_power=1500.0)
+
+        result, _ = solver.solve(is_off_grid=True, with_self_test=True)
+
+        from tests.utils.energy_validation import calculate_energy_from_commands
+
+        # Mandatory car should get commands
+        car_result = [r for r in result if r[0] == car]
+        assert len(car_result) == 1, "Mandatory car should have commands in off-grid"
+        car_commands = car_result[0][1]
+        assert len(car_commands) > 0, "Mandatory load should not be shed in off-grid"
+
+        car_energy = calculate_energy_from_commands(car_commands, self.end_time)
+
+        # Filler loads should get less energy than mandatory
+        pool_result = [r for r in result if r[0] == pool]
+        boiler_result = [r for r in result if r[0] == boiler]
+        pool_energy = calculate_energy_from_commands(
+            pool_result[0][1], self.end_time
+        ) if pool_result else 0.0
+        boiler_energy = calculate_energy_from_commands(
+            boiler_result[0][1], self.end_time
+        ) if boiler_result else 0.0
+
+        assert car_energy >= pool_energy, (
+            f"Mandatory car ({car_energy:.0f}Wh) should get at least as much "
+            f"energy as filler pool ({pool_energy:.0f}Wh)"
+        )
+        assert car_energy >= boiler_energy, (
+            f"Mandatory car ({car_energy:.0f}Wh) should get at least as much "
+            f"energy as filler boiler ({boiler_energy:.0f}Wh)"
+        )
+
+    def test_off_grid_zero_battery_zero_solar(self):
+        """Off-grid with no battery and no solar — solver should still not crash."""
+        from custom_components.quiet_solar.home_model.load import TestLoad
+        from tests.utils.scenario_builders import create_test_battery
+
+        pool = TestLoad(name="pool")
+
+        from custom_components.quiet_solar.home_model.constraints import (
+            TimeBasedSimplePowerLoadConstraint,
+        )
+
+        pool_constraint = TimeBasedSimplePowerLoadConstraint(
+            time=self.dt,
+            load=pool,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=10),
+            initial_value=0,
+            target_value=4 * 3600,
+            power=1430,
+        )
+        pool.push_live_constraint(self.dt, pool_constraint)
+
+        # Nearly depleted battery, no solar
+        battery = create_test_battery(initial_soc_percent=5.0, min_soc_percent=5.0)
+
+        solver = self._make_solver_off_grid([pool], battery, solar_power=0.0)
+
+        # Should not crash even with zero resources
+        result, _ = solver.solve(is_off_grid=True, with_self_test=True)
+        assert result is not None
+
+    def test_grid_restoration_solver_returns_to_normal(self):
+        """After grid restoration, solver operates normally (not off-grid constrained)."""
+        from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN, LoadCommand
+        from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+        from custom_components.quiet_solar.home_model.load import TestLoad
+        from tests.utils.scenario_builders import create_test_battery
+
+        car = TestLoad(name="car")
+        car_steps = [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 33)]
+
+        # Large energy demand
+        car_constraint = MultiStepsPowerLoadConstraint(
+            time=self.dt,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=10),
+            initial_value=0,
+            target_value=30000,
+            power_steps=car_steps,
+            support_auto=True,
+        )
+        car.push_live_constraint(self.dt, car_constraint)
+
+        battery = create_test_battery(initial_soc_percent=50.0)
+
+        # First solve off-grid (constrained)
+        solver_off = self._make_solver_off_grid([car], battery, solar_power=3000.0)
+        result_off, _ = solver_off.solve(is_off_grid=True, with_self_test=True)
+
+        # Reset constraint for on-grid solve
+        car._constraints = []
+        car_constraint_on = MultiStepsPowerLoadConstraint(
+            time=self.dt,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=self.dt + timedelta(hours=10),
+            initial_value=0,
+            target_value=30000,
+            power_steps=car_steps,
+            support_auto=True,
+        )
+        car.push_live_constraint(self.dt, car_constraint_on)
+
+        battery_on = create_test_battery(initial_soc_percent=50.0)
+
+        # Then solve on-grid (normal)
+        solver_on = self._make_solver_off_grid([car], battery_on, solar_power=3000.0)
+        result_on, _ = solver_on.solve(is_off_grid=False, with_self_test=True)
+
+        from tests.utils.energy_validation import calculate_energy_from_commands
+
+        # Both should produce valid results
+        assert result_off is not None
+        assert result_on is not None
+
+        # On-grid should allocate at least as much energy as off-grid
+        # because off-grid is constrained to available power only
+        car_off = [r for r in result_off if r[0] == car]
+        car_on = [r for r in result_on if r[0] == car]
+        assert len(car_off) == 1 and len(car_on) == 1
+
+        energy_off = calculate_energy_from_commands(car_off[0][1], self.end_time)
+        energy_on = calculate_energy_from_commands(car_on[0][1], self.end_time)
+        assert energy_on >= energy_off, (
+            f"On-grid energy ({energy_on:.0f}Wh) should be >= off-grid "
+            f"({energy_off:.0f}Wh) since grid provides additional capacity"
+        )

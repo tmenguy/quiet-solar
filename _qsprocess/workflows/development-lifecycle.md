@@ -183,39 +183,44 @@ The agent MUST propose this step to the user after every dev-story completion.
 
 ---
 
-## Phase 3e: Merge PR
+## Phase 3e: Merge & Cleanup
 
-Merging is **manually triggered** by the user — never auto-merge.
+Merging is **manually triggered** by the user — never auto-merge. But once the user asks to merge, the **entire sequence below is mandatory** — merge, cleanup, and main update are a single atomic phase, not separate optional steps.
 
-When the user asks to merge a PR:
+Do NOT merge unless the user explicitly asks. Do NOT merge until code review (Phase 3d) has been offered/completed.
+
+### Step 1: Merge the PR
 
 ```bash
 gh pr merge {{pr_number}} --merge --delete-branch
 ```
 
 - Uses merge commit (no squash, no rebase)
-- Deletes the remote branch after merge
-- Do NOT merge unless the user explicitly asks
-- Do NOT merge until code review (Phase 3d) has been offered/completed
+- `--delete-branch` removes the remote branch automatically
 
-### 3f. Worktree Cleanup (after merge)
+### Step 2: Clean up worktree and local branch
 
-If a worktree was used for this story, clean it up after merge:
+If a worktree was used (the default), run the cleanup script from the **main worktree**:
 
 ```bash
+cd {{main_worktree_path}}
 bash scripts/worktree-cleanup.sh {{github_issue_number}}
 ```
 
-This removes the worktree directory and its symlinks. The targets (main venv, config, other custom_components) are NOT affected.
+This removes the worktree directory, its symlinks, and the local branch. The targets (main venv, config, other custom_components) are NOT affected.
 
-Then update main in the main worktree:
+Skip this step only if the story used "no worktree" mode. For "no worktree" mode, delete the local branch manually: `git branch -d QS_{{github_issue_number}}`.
+
+### Step 3: Update main
 
 ```bash
 cd {{main_worktree_path}}
 git checkout main && git pull
 ```
 
-Skip this step if the story used "no worktree" mode.
+This brings the main worktree up to date with the merged changes.
+
+**All three steps are mandatory.** The agent must not stop after Step 1 — the user should never need to remember cleanup manually.
 
 ---
 
