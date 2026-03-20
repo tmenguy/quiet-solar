@@ -152,7 +152,19 @@ PR title should be under 70 characters.
 
 ---
 
-## Phase 3d: Merge PR
+## Phase 3d: Code Review
+
+After the PR is created, run `/bmad-code-review` on the story before considering it done.
+
+- For best results, use a **different LLM** than the one that implemented the story (e.g., if Opus implemented, review with Sonnet or vice versa)
+- The review catches blind spots the implementing agent missed
+- This applies to **all** stories — even config-only or documentation stories
+
+The agent MUST propose this step to the user after every dev-story completion.
+
+---
+
+## Phase 3e: Merge PR
 
 Merging is **manually triggered** by the user — never auto-merge.
 
@@ -165,6 +177,7 @@ gh pr merge {{pr_number}} --merge --delete-branch
 - Uses merge commit (no squash, no rebase)
 - Deletes the remote branch after merge
 - Do NOT merge unless the user explicitly asks
+- Do NOT merge until code review (Phase 3d) has been offered/completed
 
 ---
 

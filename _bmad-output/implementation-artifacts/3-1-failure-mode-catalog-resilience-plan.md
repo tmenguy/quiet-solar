@@ -1,6 +1,6 @@
 # Story 3.1: Failure Mode Catalog & Resilience Plan
 
-Status: review
+Status: done
 
 ## Story
 

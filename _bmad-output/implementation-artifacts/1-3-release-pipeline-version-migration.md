@@ -1,6 +1,6 @@
 # Story 1.3: Release Pipeline & Version Migration
 
-Status: review
+Status: done
 
 ## Story
 

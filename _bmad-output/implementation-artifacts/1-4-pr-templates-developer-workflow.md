@@ -1,6 +1,6 @@
 # Story 1.4: PR Templates & Developer Workflow
 
-Status: review
+Status: done
 
 ## Story
 

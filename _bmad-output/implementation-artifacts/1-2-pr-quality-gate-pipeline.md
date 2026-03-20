@@ -1,6 +1,6 @@
 # Story 1.2: PR Quality Gate Pipeline
 
-Status: review
+Status: done
 
 ## Story
 

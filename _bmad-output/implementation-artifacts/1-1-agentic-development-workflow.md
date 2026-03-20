@@ -1,6 +1,6 @@
 # Story 1.1: Agentic Development Workflow
 
-Status: in-progress
+Status: done
 
 ## Story
 
