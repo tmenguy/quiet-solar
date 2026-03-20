@@ -12,11 +12,28 @@ Before starting any development work:
 
 ---
 
-## Phase 1: Story Setup (augments `bmad-create-story`)
+## Phase 1: Development Setup
 
-After `bmad-create-story` produces the story file, and BEFORE starting `bmad-dev-story`:
+These steps apply to ALL development workflows (feature via create-story → dev-story, bug fix via quick-dev, issue-driven). Execute them BEFORE any implementation begins — including before `bmad-dev-story` or `bmad-quick-dev-new-preview` starts its own steps.
 
-### 1a. Create GitHub Issue
+### 1a. Commit Story Artifacts to Main
+
+**When:** After `bmad-create-story` has written a story file or modified planning artifacts.
+**Skip:** For bug fixes (quick-dev) or when no new story file was created.
+
+`bmad-create-story` writes new files (story file, possibly epics updates) to the main worktree. These MUST be committed to main before creating a worktree, otherwise the worktree (a fresh checkout) won't have them.
+
+```bash
+git add _bmad-output/
+git commit -m "story: create {{story_key}}"
+```
+
+This is a process commit, not a code change — no quality gates needed.
+
+### 1b. Create GitHub Issue
+
+**When:** Starting new work that doesn't have a GitHub issue yet.
+**Skip:** When working from an existing GitHub issue ("work on issue #N").
 
 ```bash
 gh issue create --title "{{story_title}}" --body "$(cat <<'EOF'
@@ -32,7 +49,10 @@ EOF
 
 Extract the issue number from the output.
 
-### 1b. Create Branch (Worktree by Default)
+### 1c. Create Branch (Worktree by Default)
+
+**When:** Always — every development workflow starts with a dedicated branch in a worktree.
+**Skip worktree only if:** The user explicitly says "no worktree."
 
 Branch naming convention: `QS_{{github_issue_number}}`
 
@@ -65,11 +85,11 @@ Examples:
 
 ---
 
-## Phase 2: Development (augments `bmad-dev-story` steps 5-8)
+## Phase 2: Development
+
+These quality gates apply to ALL development workflows (dev-story, quick-dev, bug fixes). They define the project-specific commands that BMad skills refer to generically as "run linting and code quality checks."
 
 ### Quality Gates — Mandatory After Every Task
-
-The BMad `dev-story` step 7 says "run linting and code quality checks if configured." For this project, the specific commands are:
 
 ```bash
 source venv/bin/activate
@@ -107,9 +127,9 @@ Follow the red-green-refactor cycle from `bmad-dev-story` step 5:
 
 ---
 
-## Phase 3: Completion (augments `bmad-dev-story` step 9)
+## Phase 3: Completion
 
-After all tasks are complete and `bmad-dev-story` marks the story as "review":
+After all tasks are complete and the implementation is ready (whether from dev-story, quick-dev, or any other workflow):
 
 ### 3a. Final Quality Gate
 

@@ -14,6 +14,16 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ---
 
+## Development Lifecycle (MANDATORY — read before any work)
+
+Before starting any development work, read and follow ALL rules in these files:
+- **`_qsprocess/rules/project-rules.md`** — workflow routing, quality gates, architecture constraints
+- **`_qsprocess/workflows/development-lifecycle.md`** — GitHub issues, worktree setup, commit story artifacts, PR creation, merge and worktree cleanup
+
+These project-specific lifecycle rules augment BMad skill workflows. They define what happens BEFORE, BETWEEN, and AFTER skill execution (e.g., committing story files to main before creating a worktree, creating GitHub issues before implementation, worktree cleanup after merge). Where they conflict with BMad defaults, these rules take precedence.
+
+---
+
 ## Technology Stack & Versions
 
 - **Python**: 3.14+

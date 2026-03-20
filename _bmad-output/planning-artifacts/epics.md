@@ -181,7 +181,7 @@ TheDev can push code through a fully automated CI/CD pipeline with quality gates
 **Scope:** MVP | **Dependencies:** None (foundation)
 **Status:** Core pipeline stories (1.1–1.7) complete. Stories 1.8–1.9 added for PR review automation and mobile-first autonomous flow.
 
-### Epic 2: Test Scenarios & Failure Catalog
+### Epic 2: Test Scenarios & Failure Catalog [DONE]
 The system provides a significant volume of implemented trust-critical test scenarios. TheDev can define charger budgeting, constraint interaction, and failure mode scenarios — and can return after extended absence understanding the codebase through test names and the failure catalog.
 **FRs:** FR46, FR47, FR48, FR49
 **ARs:** AR3
@@ -189,7 +189,7 @@ The system provides a significant volume of implemented trust-critical test scen
 **Also verifies:** FR6-FR12, FR19-FR20, NFR14, NFR22
 **Scope:** MVP | **Dependencies:** Builds on Epic 1
 **Note:** Defines a "done threshold" — minimum scenario set that unlocks Epic 3. Full catalog continues growing. Story 2.1 (Scenario Builder Framework) removed — test infrastructure emerges from implementing the scenarios directly.
-**Status:** Story 2.3 (Constraint Interaction Boundary Tests) done. Story 2.4 (Solver & Device Orchestration Scenario Tests) done.
+**Status:** All stories complete. Story 2.2 (Charger Budgeting Scenario Tests), Story 2.3 (Constraint Interaction Boundary Tests), and Story 2.4 (Solver & Device Orchestration Scenario Tests) done.
 
 ### Epic 3: Failure Resilience & Transparency
 TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. Every external dependency has a documented failure path with fallback and recovery. Fed directly by Epic 2's failure catalog — Epic 2 documents what can fail, Epic 3 implements how the system responds.
@@ -440,7 +440,7 @@ So that the trust-critical charger budgeting system is proven safe at every inte
 **And** dampening accuracy over non-linear EV charging curves is tested
 **And** all scenarios use `@pytest.mark.integration` marker
 
-### Story 2.3: Constraint Interaction Boundary Tests
+### Story 2.3: Constraint Interaction Boundary Tests [DONE]
 
 As TheDev,
 I want implemented test scenarios covering constraint type interactions under resource exhaustion,
@@ -455,7 +455,7 @@ So that the system's behavior at constraint boundaries is explicit and tested.
 **And** constraint type transitions under resource pressure are verified
 **And** all scenarios use `@pytest.mark.integration` marker
 
-### Story 2.4: Solver & Device Orchestration Scenario Tests
+### Story 2.4: Solver & Device Orchestration Scenario Tests [DONE]
 
 As TheDev,
 I want implemented test scenarios covering solver edge cases and device orchestration gaps identified in the architecture,

@@ -1,5 +1,3 @@
-# CLAUDE.md
-
 Read and follow all rules in these files before doing any work:
 - `_qsprocess/rules/project-rules.md` — workflow routing, commands, architecture constraints
 - `_qsprocess/workflows/development-lifecycle.md` — full lifecycle: story setup, worktrees, PRs, merge cleanup
