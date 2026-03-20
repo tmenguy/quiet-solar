@@ -189,6 +189,7 @@ The system provides a significant volume of implemented trust-critical test scen
 **Also verifies:** FR6-FR12, FR19-FR20, NFR14, NFR22
 **Scope:** MVP | **Dependencies:** Builds on Epic 1
 **Note:** Defines a "done threshold" — minimum scenario set that unlocks Epic 3. Full catalog continues growing. Story 2.1 (Scenario Builder Framework) removed — test infrastructure emerges from implementing the scenarios directly.
+**Status:** Story 2.3 (Constraint Interaction Boundary Tests) done. Story 2.4 (Solver & Device Orchestration Scenario Tests) done.
 
 ### Epic 3: Failure Resilience & Transparency
 TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. Every external dependency has a documented failure path with fallback and recovery. Fed directly by Epic 2's failure catalog — Epic 2 documents what can fail, Epic 3 implements how the system responds.
