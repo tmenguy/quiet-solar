@@ -713,3 +713,180 @@ class TestQSDynamicGroupCoverageExtensions:
 
         assert device.available_amps_production_for_group[0] == [15.0, 15.0, 15.0]
         father.update_available_amps_for_group.assert_called_once_with(0, [5.0, 5.0, 5.0], True)
+
+
+@pytest.mark.integration
+class TestDynamicGroupNestedCapacity:
+    """Test 3-level nested group hierarchy budget propagation (AC #6).
+
+    Hierarchy: home > group > subgroup > charger
+    Tests cascading budget validation and per-phase enforcement.
+    """
+
+    def test_three_level_prepare_budget_propagation(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Budget preparation cascades from root > group > subgroup correctly."""
+        time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
+
+        # Root group: 64A per phase
+        root = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Root", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
+        )
+
+        # Mid group: 32A per phase
+        mid = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Mid", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
+        )
+
+        # Leaf group: 16A per phase
+        leaf = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Leaf", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
+        )
+
+        # Build tree: root > mid > leaf
+        root._childrens = [mid]
+        mid.father_device = root
+        mid._childrens = [leaf]
+        leaf.father_device = mid
+
+        root.prepare_slots_for_amps_budget(time, num_slots=4)
+
+        # Root: 64A budget
+        assert root.available_amps_for_group is not None
+        assert root.available_amps_for_group[0] == [64, 64, 64]
+
+        # Mid: min(64, 32) = 32A
+        assert mid.available_amps_for_group is not None
+        assert mid.available_amps_for_group[0] == [32, 32, 32]
+
+        # Leaf: min(32, 16) = 16A
+        assert leaf.available_amps_for_group is not None
+        assert leaf.available_amps_for_group[0] == [16, 16, 16]
+
+    def test_child_cannot_exceed_parent_limit(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Child group budget is capped by parent, not its own configured max."""
+        time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
+
+        # Parent: 20A
+        parent = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 20},
+        )
+
+        # Child: configured 50A but parent only allows 20A
+        child = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Child", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 50},
+        )
+
+        parent._childrens = [child]
+        child.father_device = parent
+
+        parent.prepare_slots_for_amps_budget(time, num_slots=2)
+
+        # Child should be capped at parent's 20A, not its own 50A
+        assert child.available_amps_for_group[0] == [20, 20, 20]
+
+    def test_update_amps_propagates_up_tree(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """update_available_amps_for_group propagates from leaf to root."""
+        time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
+
+        root = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Root", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
+        )
+        mid = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Mid", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
+        )
+        leaf = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Leaf", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
+        )
+
+        root._childrens = [mid]
+        mid.father_device = root
+        mid._childrens = [leaf]
+        leaf.father_device = mid
+
+        root.prepare_slots_for_amps_budget(time, num_slots=2)
+
+        # Add 5A on all phases at slot 0 from leaf
+        leaf.update_available_amps_for_group(0, [5.0, 5.0, 5.0], add=True)
+
+        # Leaf should be 16 + 5 = 21
+        assert leaf.available_amps_for_group[0] == [21.0, 21.0, 21.0]
+        # Mid should be 32 + 5 = 37
+        assert mid.available_amps_for_group[0] == [37.0, 37.0, 37.0]
+        # Root should be 64 + 5 = 69
+        assert root.available_amps_for_group[0] == [69.0, 69.0, 69.0]
+
+    def test_per_phase_enforcement_mono_phase_child(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Single-phase child gets budget only on its phase, zero on others."""
+        time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
+
+        parent = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
+        )
+
+        # Single-phase child on phase 0
+        child = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Child Mono", CONF_IS_3P: False, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
+        )
+
+        parent._childrens = [child]
+        child.father_device = parent
+
+        parent.prepare_slots_for_amps_budget(time, num_slots=2)
+
+        # Child budget: min(parent per-phase, child per-phase)
+        # Child is mono-phase (random phase index): exactly one phase gets 16A, others 0
+        child_budget = child.available_amps_for_group[0]
+        nonzero_phases = [v for v in child_budget if v > 0]
+        zero_phases = [v for v in child_budget if v == 0]
+        assert len(nonzero_phases) == 1, f"Mono-phase child should have exactly one active phase, got {child_budget}"
+        assert nonzero_phases[0] == 16, f"Active phase should be 16A, got {child_budget}"
+        assert len(zero_phases) == 2, f"Two phases should be zero, got {child_budget}"
+
+    def test_multiple_children_independent_budgets(
+        self, hass, dyn_group_config_entry, dyn_group_home, dyn_group_data_handler, dyn_group_hass_data
+    ):
+        """Multiple children under one parent each get their own budget allocation."""
+        time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
+
+        parent = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
+        )
+
+        child_a = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Child A", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
+        )
+
+        child_b = QSDynamicGroup(
+            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            **{CONF_NAME: "Child B", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 20},
+        )
+
+        parent._childrens = [child_a, child_b]
+        child_a.father_device = parent
+        child_b.father_device = parent
+
+        parent.prepare_slots_for_amps_budget(time, num_slots=2)
+
+        # Each child gets min(parent, own)
+        assert child_a.available_amps_for_group[0] == [32, 32, 32]
+        assert child_b.available_amps_for_group[0] == [20, 20, 20]
