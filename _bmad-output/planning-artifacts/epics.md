@@ -173,13 +173,13 @@ No UX Design document exists. UX requirements are captured through User Journeys
 
 ## Epic List
 
-### Epic 1: Automated Development Pipeline [DONE]
-TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug (with targeted regression tests using existing patterns) as the first real PR.
+### Epic 1: Automated Development Pipeline [IN PROGRESS]
+TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug (with targeted regression tests using existing patterns) as the first real PR. Extended with AI-assisted PR review and fully autonomous mobile-driven GitHub flow.
 **FRs:** FR43, FR44, FR45, FR50
 **ARs:** AR1, AR2, AR4, AR8, AR9
 **NFRs:** NFR16, NFR19, NFR23
 **Scope:** MVP | **Dependencies:** None (foundation)
-**Status:** All stories complete. Pipeline validated by bug fix PR (Story 1.6).
+**Status:** Core pipeline stories (1.1–1.7) complete. Stories 1.8–1.9 added for PR review automation and mobile-first autonomous flow.
 
 ### Epic 2: Test Scenarios & Failure Catalog
 The system provides expressive scenario infrastructure AND a significant volume of implemented trust-critical test scenarios. TheDev can define charger budgeting, constraint interaction, and failure mode scenarios through rich builders — and can return after extended absence understanding the codebase through test names and the failure catalog. Two internal phases: (A) infrastructure (scenario framework, catalog template, builder APIs), then (B) implemented scenarios using that infrastructure.
@@ -218,7 +218,7 @@ Epic 1 (pipeline) → Epic 2 (confidence) → Epic 3 (resilience) → Epic 4 (op
 
 ## Epic 1: Automated Development Pipeline
 
-TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug as the first real PR through the system.
+TheDev can push code through a fully automated CI/CD pipeline with quality gates, automated releases, and HACS validation — and proves it works by fixing the person-car assignment bug as the first real PR through the system. Extended with AI-assisted PR review and a fully autonomous mobile-driven GitHub flow.
 
 ### Story 1.1: Agentic Development Workflow [DONE]
 
@@ -347,6 +347,77 @@ So that I can work on multiple stories in parallel without branch switching, sta
 **When** TheDev cleans up
 **Then** the worktree is removed (symlinks go with it, originals untouched)
 **And** the main worktree's main branch is updated
+
+### Story 1.8: AI-Assisted PR Review with Interactive Feedback Loop
+
+As TheDev,
+I want PRs to be reviewed by an AI reviewer (or human) on GitHub, with the system pulling review comments back into the local workflow so I can discuss, fix, or reject feedback interactively — a true PR back-and-forth,
+So that code review is integrated into the agentic workflow without requiring manual GitHub context-switching.
+
+**Acceptance Criteria:**
+
+**Given** a PR is open on GitHub
+**When** TheDev initiates a review cycle
+**Then** an AI reviewer (configuration TBD) or human posts review comments on the PR
+
+**Given** review comments exist on the PR
+**When** TheDev asks to process review feedback
+**Then** the system pulls all unresolved PR comments from GitHub into the local workflow
+**And** each comment is presented with its diff context
+**And** TheDev can choose per comment: fix (implement the suggestion), discuss (reply on the PR), or reject (dismiss with rationale)
+
+**Given** TheDev chooses to fix a comment
+**When** the fix is implemented
+**Then** the fix is committed, pushed, and a reply is posted on the PR resolving the comment
+
+**Given** TheDev chooses to discuss a comment
+**When** TheDev provides a response
+**Then** the response is posted as a PR reply and the comment remains open for further discussion
+
+**Given** TheDev chooses to reject a comment
+**When** TheDev provides a rationale
+**Then** the rationale is posted as a PR reply and the comment is resolved
+
+**Given** all comments are processed
+**When** the review cycle completes
+**Then** the system reports a summary of fixes, discussions, and rejections
+**And** quality gates are re-run if any fixes were made
+
+**Open questions:**
+- Which AI reviewer to use (GitHub Copilot review, custom GitHub Action with Claude, third-party)?
+- How to configure reviewer selection per-PR or per-repo?
+
+### Story 1.9: Mobile-First Autonomous GitHub Flow
+
+As TheDev,
+I want to create a tagged GitHub issue from my phone, have a cloud-based automation pick it up, run the full BMad workflow autonomously (YOLO mode), and present the result as a PR for review — which I can review, approve, and merge from my phone, triggering the full release pipeline,
+So that the entire development lifecycle from idea to release can be driven from a mobile device with zero local setup.
+
+**Acceptance Criteria:**
+
+**Given** TheDev creates a GitHub issue from mobile and applies a trigger tag (e.g., `auto-bmad`)
+**When** the cloud automation detects the tagged issue
+**Then** it picks up the issue and starts the full BMad workflow autonomously
+**And** it creates a branch, implements the fix or feature following all project rules
+**And** it runs quality gates (tests, lint, type check, coverage) and iterates until passing
+**And** it creates a PR linking to the issue with full template and risk assessment
+
+**Given** the autonomous PR is ready
+**When** TheDev reviews from mobile
+**Then** the PR includes a clear summary of what was done and why
+**And** TheDev can approve or request changes from the GitHub mobile app
+
+**Given** TheDev approves and merges the PR from mobile
+**When** the merge completes
+**Then** the release pipeline triggers automatically (per Story 1.3)
+**And** a GitHub Release is created with changelog
+**And** the full flow from issue creation to release completes without any local terminal access
+
+**Open questions:**
+- Cloud execution environment (GitHub Actions self-hosted runner, GitHub Codespace, dedicated CI runner)?
+- How to provide Claude/agent access securely in CI context?
+- Cost and rate-limit implications of autonomous YOLO runs?
+- Guardrails for autonomous mode (scope limits, cost caps, human-in-the-loop checkpoints)?
 
 ## Epic 2: Trust-Critical Test Scenarios
 
