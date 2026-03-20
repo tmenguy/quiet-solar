@@ -32,17 +32,36 @@ EOF
 
 Extract the issue number from the output.
 
-### 1b. Create Branch
+### 1b. Create Branch (Worktree by Default)
 
 Branch naming convention: `QS_{{github_issue_number}}`
+
+**Default — worktree** (used unless the user says "no worktree"):
+
+```bash
+git checkout main && git pull
+bash scripts/worktree-setup.sh {{github_issue_number}}
+```
+
+This creates a worktree at `../<repo>-worktrees/QS_{{github_issue_number}}/` with:
+- Branch `QS_{{github_issue_number}}`
+- Symlinked `venv/` (shared with main — avoids ~GB duplicate)
+- Symlinked `config/` (shared HA runtime config)
+- Symlinked non-git `custom_components/*` (hacs, netatmo, etc.)
+
+After setup, the agent works entirely inside the worktree directory. The main worktree stays on `main`.
+
+**Opt-out — "no worktree"** (when the user explicitly asks):
 
 ```bash
 git checkout main && git pull && git checkout -b QS_{{github_issue_number}}
 ```
 
+The agent works in the main directory as before.
+
 Examples:
-- Issue #10 → branch `QS_10`
-- Issue #42 → branch `QS_42`
+- Issue #10 → worktree at `../quiet-solar-worktrees/QS_10/` (default)
+- Issue #42, user says "no worktree" → branch `QS_42` in main dir
 
 ---
 
@@ -179,6 +198,25 @@ gh pr merge {{pr_number}} --merge --delete-branch
 - Do NOT merge unless the user explicitly asks
 - Do NOT merge until code review (Phase 3d) has been offered/completed
 
+### 3f. Worktree Cleanup (after merge)
+
+If a worktree was used for this story, clean it up after merge:
+
+```bash
+bash scripts/worktree-cleanup.sh {{github_issue_number}}
+```
+
+This removes the worktree directory and its symlinks. The targets (main venv, config, other custom_components) are NOT affected.
+
+Then update main in the main worktree:
+
+```bash
+cd {{main_worktree_path}}
+git checkout main && git pull
+```
+
+Skip this step if the story used "no worktree" mode.
+
 ---
 
 ## Phase 4: Release
@@ -249,3 +287,46 @@ Determine from changed files:
 | HIGH | `load.py`, `const.py`, `ha_model/home.py`, `ha_model/device.py` |
 | MEDIUM | `ha_model/person.py`, `ha_model/car.py`, `ha_model/battery.py`, `ha_model/solar.py`, `config_flow.py` |
 | LOW | `sensor.py`, `switch.py`, `number.py`, `select.py`, `button.py`, `ui/` |
+
+---
+
+## Appendix: Worktree Reference
+
+### Directory Layout
+
+```
+~/Developer/homeassistant/
+  <repo>/                               # main worktree (always on main)
+    venv/                               # real venv (~GB, installed once)
+    config/                             # real HA config (runtime state, not in git)
+    scripts/                            # worktree helper scripts
+    custom_components/
+      quiet_solar/                      # IN GIT — the project code
+      hacs/                             # NOT in git — installed separately
+      netatmo/                          # NOT in git
+      ...
+  <repo>-worktrees/                     # auto-created by worktree-setup.sh
+    QS_42/                              # worktree for issue #42
+      venv -> ../../<repo>/venv
+      config -> ../../<repo>/config
+      custom_components/
+        quiet_solar/                    # IN GIT — this branch's version
+        hacs -> ../../../<repo>/custom_components/hacs
+        ...
+```
+
+The scripts derive `<repo>` from the main worktree's directory name automatically — no hardcoded paths.
+
+### What Gets Symlinked and Why
+
+| Item | Why | Needed for tests? | Needed for HA run? |
+|------|-----|-------------------|---------------------|
+| `venv/` | Avoid ~GB duplicate install | YES | YES |
+| `config/` | Share HA runtime config | NO (tests use FakeHass) | YES |
+| Non-git `custom_components/*` | Other integrations HA loads | NO | YES |
+
+### Caveats
+
+1. **No simultaneous HA runs**: Two HA instances cannot share the same `config/` (database locks). Run HA from one worktree at a time.
+2. **Shared venv = shared deps**: `pip install` in one worktree affects all. Fine for normal dev; only matters if experimenting with different dep versions. If a branch needs different deps, create a real venv: `python3.14 -m venv venv && source venv/bin/activate && pip install -r requirements.txt -r requirements_test.txt`
+3. **Quality gates work unchanged**: `source venv/bin/activate` resolves the symlink. pytest, ruff, mypy all run against the worktree's code, not the main worktree's.

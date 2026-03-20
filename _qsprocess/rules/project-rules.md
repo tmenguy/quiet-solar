@@ -53,7 +53,7 @@ Before any PR or completion claim, ALL of these must pass:
 | "Fix this bug where..." | Creates issue, branch `QS_N`, implements, quality gates, PR |
 | "I want to add a feature that..." | Full story planning, issue, branch `QS_N`, implements, quality gates, PR |
 | "Work on issue #N" | Fetches issue — bug label → bug flow, otherwise → feature flow. Skips issue creation. |
-| "Merge PR #N" | Merge commit + delete branch |
+| "Merge PR #N" | Merge commit + delete branch + worktree cleanup |
 | "Create a release" | Tag `vYYYY.MM.DD.XX`, release notes from merged PRs |
 
 ## Workflow Routing
@@ -65,17 +65,21 @@ When the user describes work to do, automatically select the right workflow:
 | **Bug fix / small fix** — the user describes a bug, defect, or small correction | Use `/bmad-quick-dev-new-preview`. It will pick up the development lifecycle rules below. |
 | **Feature / enhancement** — the user describes new functionality or a significant change | Use `/bmad-create-story` to plan, then `/bmad-dev-story` to implement. |
 | **From GitHub issue** — the user says "work on issue #N" or similar | Fetch the issue with `gh issue view N`. If it has the `bug` label, route to the bug flow (`/bmad-quick-dev-new-preview`). Otherwise route to the feature flow (`/bmad-create-story` → `/bmad-dev-story`). In both cases, **skip GitHub issue creation** (Phase 1a) — the issue already exists. Still create the branch `QS_N` (Phase 1b) and follow the rest of the lifecycle. Use the issue title and body as the initial intent/context for the selected workflow. |
-| **Merge PR** — the user asks to merge a PR | Follow Phase 3d (Merge PR) in `_qsprocess/workflows/development-lifecycle.md`. |
+| **Merge PR** — the user asks to merge a PR | Follow Phase 3e (Merge PR) in `_qsprocess/workflows/development-lifecycle.md`. |
 | **Release** — the user asks to create a release, cut a release, or ship a version | Follow Phase 4 (Release) in `_qsprocess/workflows/development-lifecycle.md`. |
 
 Do NOT ask which workflow to use — infer from the user's description. When in doubt (ambiguous scope), default to `/bmad-quick-dev-new-preview`.
+
+**Worktree mode**: All workflows create a git worktree by default (Phase 1b). If the user says "no worktree" (or similar), fall back to `git checkout -b` in the main directory. See the Appendix in `development-lifecycle.md` for details.
 
 ## Development Lifecycle
 
 When developing stories or fixes, follow the full lifecycle in `_qsprocess/workflows/development-lifecycle.md`. This covers:
 - GitHub issue and branch creation (branch naming: `QS_{{issue_number}}`)
+- Worktree setup by default (symlinks venv, config, non-git custom_components)
 - Quality gate commands and 100% coverage enforcement
 - PR creation with risk assessment
+- Worktree cleanup after merge
 
 ## Full Documentation
 
