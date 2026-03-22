@@ -73,7 +73,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
     async def user_set_bistate_mode(self, option: str, for_init: bool = False):
         if option not in self.get_bistate_modes():
-            _LOGGER.error(f"bistate_mode: {option} is not a valid bistate_mode")
+            _LOGGER.error("bistate_mode: %s is not a valid bistate_mode", option)
             return
         self.bistate_mode = option
         if for_init is False:
@@ -213,7 +213,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         agenda_push=False,
                     )
                     constraints.append(ct)
-                _LOGGER.debug(f"_build_mode_constraint_items: bistate bistate_mode_default for load {self.name} {ct}")
+                _LOGGER.debug(
+                    "_build_mode_constraint_items: bistate bistate_mode_default for load %s %s", self.name, ct
+                )
         else:
             events = await self.get_next_scheduled_events(time=time, give_currently_running_event=True)
 

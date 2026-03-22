@@ -189,7 +189,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         if predicted_mileage_today is None and predicted_mileage_tomorrow is None:
             if len(self.historical_mileage_data) > 0:
-                _LOGGER.warning(f"_compute_person_next_need: EMPTY PREDICTED_TIME for {self.name}")
+                _LOGGER.warning("_compute_person_next_need: EMPTY PREDICTED_TIME for %s", self.name)
         else:
             if predicted_leave_time_today is not None:
                 today_leave_time = (
@@ -274,7 +274,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                     leave_time_str = e.get("leave_time", None)
 
                     if day_str is None or mileage is None or leave_time_str is None:
-                        _LOGGER.warning(f"device_post_home_init: QSPerson {self.name} error in saved data {e}")
+                        _LOGGER.warning("device_post_home_init: QSPerson %s error in saved data %s", self.name, e)
                         continue
 
                     day = datetime.fromisoformat(day_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
@@ -316,7 +316,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                 self.has_been_initialized = True
 
             if self.has_been_initialized is False:
-                _LOGGER.warning(f"device_post_home_init: QSPerson {self.name}: no initialization need compute")
+                _LOGGER.warning("device_post_home_init: QSPerson %s: no initialization need compute", self.name)
 
     def update_person_forecast(
         self, time: datetime | None = None, force_update: bool = False

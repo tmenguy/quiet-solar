@@ -279,7 +279,7 @@ class AbstractDevice:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
-        _LOGGER.info(f"Constraint Reset device {self.name}")
+        _LOGGER.info("Constraint Reset device %s", self.name)
         self._constraints: list[LoadConstraint | None] = []
         if keep_commands is False:
             self.current_command: LoadCommand | None = None
@@ -297,18 +297,18 @@ class AbstractDevice:
 
     # for class overcharging reset
     def reset(self, keep_commands=False):
-        _LOGGER.info(f"Reset device {self.name}")
+        _LOGGER.info("Reset device %s", self.name)
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         self.reset_daily_load_datas()
         self._dampen_start_transition = None
 
     async def user_clean_and_reset(self):
-        _LOGGER.info(f"user_clean_and_reset device {self.name}")
+        _LOGGER.info("user_clean_and_reset device %s", self.name)
         self.clear_all_user_originated()
         self.reset()
 
     async def user_clean_constraints(self):
-        _LOGGER.info(f"user_clean_constraints device {self.name}")
+        _LOGGER.info("user_clean_constraints device %s", self.name)
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
 
     @property
@@ -324,11 +324,11 @@ class AbstractDevice:
                 if enabled is False:
                     self.home.remove_device(self)
                     self.home.add_disabled_device(self)
-                    _LOGGER.info(f"qs_enable_device: {self.name} DISABLE AND REMOVE")
+                    _LOGGER.info("qs_enable_device: %s DISABLE AND REMOVE", self.name)
                 else:
                     self.home.add_device(self)
                     self.home.remove_disabled_device(self)
-                    _LOGGER.info(f"qs_enable_device: {self.name} ENABLE AND ADD")
+                    _LOGGER.info("qs_enable_device: %s ENABLE AND ADD", self.name)
 
             if hasattr(self, "_exposed_entities"):
                 time = datetime.now(pytz.utc)
@@ -343,7 +343,7 @@ class AbstractDevice:
         from_father_production_budget: list[float | int] | None = None,
     ):
 
-        _LOGGER.debug(f"prepare_slots_for_amps_budget for load {self.name} from_father_budget {from_father_budget}")
+        _LOGGER.debug("prepare_slots_for_amps_budget for load %s from_father_budget %s", self.name, from_father_budget)
 
     @property
     def device_type(self):
@@ -503,9 +503,9 @@ class AbstractDevice:
     def _ack_command(self, time: datetime | None, command: LoadCommand | None):
 
         if command is not None:
-            _LOGGER.info(f"ack command {command.command} for load {self.name}")
+            _LOGGER.info("ack command %s for load %s", command.command, self.name)
         else:
-            _LOGGER.info(f"ack command None for load {self.name}")
+            _LOGGER.info("ack command None for load %s", self.name)
 
         self.prev_command = self.current_command
         self.current_command = command
@@ -577,11 +577,11 @@ class AbstractDevice:
         self.running_command_first_launch = time
         self.running_command_last_launch = time
 
-        _LOGGER.info(f"launch_command: {command} for this load {self.name}), ctxt: {ctxt}")
+        _LOGGER.info("launch_command: %s for this load %s), ctxt: %s", command, self.name, ctxt)
 
         is_command_set = await self.probe_if_command_set(time, self.running_command)
         if is_command_set is True:
-            _LOGGER.info(f"launch_command: Command already set {command} for this load {self.name}, ctxt: {ctxt}")
+            _LOGGER.info("launch_command: Command already set %s for this load %s, ctxt: %s", command, self.name, ctxt)
         else:
             try:
                 is_command_set = await self.execute_command(time, command)
@@ -599,7 +599,7 @@ class AbstractDevice:
                 f"launch_command: Impossible to launch this command {command.command} on this load {self.name}, ctxt: {ctxt}"
             )
         elif is_command_set is True:
-            _LOGGER.info(f"launch_command: ack command {command} for this load {self.name}), ctxt: {ctxt}")
+            _LOGGER.info("launch_command: ack command %s for this load %s), ctxt: %s", command, self.name, ctxt)
             self._ack_command(time, self.running_command)
 
         return
@@ -670,14 +670,16 @@ class AbstractDevice:
                 is_command_set = None
             self.running_command_last_launch = time
             if is_command_set is None:
-                _LOGGER.info(f"impossible to force command {self.running_command.command} for this load {self.name})")
+                _LOGGER.info(
+                    "impossible to force command %s for this load %s)", self.running_command.command, self.name
+                )
             elif is_command_set is True:
                 self._ack_command(time, self.running_command)
             else:
                 await self.check_commands(time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
-        _LOGGER.info(f"Executing command unimplemented {command}")
+        _LOGGER.info("Executing command unimplemented %s", command)
         return False
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
@@ -703,7 +705,7 @@ class PilotedDevice(AbstractDevice):
 
     def prepare_slots_for_piloted_device_budget(self, num_slots: int):
         self.num_demanding_clients = [0] * num_slots
-        _LOGGER.debug(f"prepare_slots_for_piloted_device_budget for a piloted device: {self.name}")
+        _LOGGER.debug("prepare_slots_for_piloted_device_budget for a piloted device: %s", self.name)
 
     def possible_delta_power_for_slot(self, slot_idx: int | None, add: bool = True) -> float:
         if self.num_demanding_clients is None or len(self.num_demanding_clients) == 0:
@@ -1008,7 +1010,7 @@ class AbstractLoad(AbstractDevice):
         if new_hash is not None:
             # do not notify just after a reset (self._last_hash_state None)
             if self._last_hash_state is not None and self._last_hash_state != new_hash:
-                _LOGGER.info(f"Hash state change for load {self.name} from {self._last_hash_state} to {new_hash}")
+                _LOGGER.info("Hash state change for load %s from %s to %s", self.name, self._last_hash_state, new_hash)
                 await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT)
 
             self._last_hash_state = new_hash
@@ -1078,7 +1080,9 @@ class AbstractLoad(AbstractDevice):
 
         if found_one_bad is False and for_full_reset is False:
             # no need to reset, we have all the constraints we need
-            _LOGGER.info(f"clean_constraints_for_load_param: No bad constraint found for {load_param}, no reset needed")
+            _LOGGER.info(
+                "clean_constraints_for_load_param: No bad constraint found for %s, no reset needed", load_param
+            )
             return False
 
         if for_full_reset:
@@ -1097,7 +1101,7 @@ class AbstractLoad(AbstractDevice):
         return True
 
     def reset(self, keep_commands=False):
-        _LOGGER.info(f"Reset load {self.name}")
+        _LOGGER.info("Reset load %s", self.name)
         super().reset(keep_commands=keep_commands)
 
     async def ack_completed_constraint(self, time: datetime, constraint: LoadConstraint | None):
@@ -1389,9 +1393,9 @@ class AbstractLoad(AbstractDevice):
                     c.skip = True
                     force_solving = True
                     await self.ack_completed_constraint(time, c)
-                    _LOGGER.info(f"{c.name} skipped because met")
+                    _LOGGER.info("%s skipped because met", c.name)
                 elif c.end_of_constraint <= time and c.is_mandatory is False:
-                    _LOGGER.info(f"{c.name} skipped because not mandatory")
+                    _LOGGER.info("%s skipped because not mandatory", c.name)
                     c.skip = True
                     force_solving = True
                 elif (
@@ -1444,7 +1448,7 @@ class AbstractLoad(AbstractDevice):
                             # TODO: we should send a push notification to the one attached to the constraint!
                             # As it is not met and pushed too many times
                             c.skip = True
-                            _LOGGER.info(f"{c.name} not met and pushed too many times")
+                            _LOGGER.info("%s not met and pushed too many times", c.name)
                         else:
                             # unskip the current one
                             c.skip = False
@@ -1471,9 +1475,9 @@ class AbstractLoad(AbstractDevice):
                     if do_continue_ct is False:
                         if c.is_constraint_met(time=time):
                             await self.ack_completed_constraint(time, c)
-                            _LOGGER.info(f"{c.name} skipped because met (just after update)")
+                            _LOGGER.info("%s skipped because met (just after update)", c.name)
                         else:
-                            _LOGGER.info(f"{c.name} stopped by callback (just after update)")
+                            _LOGGER.info("%s stopped by callback (just after update)", c.name)
                         c.skip = True
                     break
 
@@ -1534,7 +1538,7 @@ class AbstractLoad(AbstractDevice):
     async def user_clean_and_reset(self):
         await super().user_clean_and_reset()
         time = datetime.now(tz=pytz.UTC)
-        _LOGGER.info(f"user_clean_and_reset: {self.name}")
+        _LOGGER.info("user_clean_and_reset: %s", self.name)
         await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"user_clean_and_reset: {self.name}")
 
     async def async_reset_override_state(self):

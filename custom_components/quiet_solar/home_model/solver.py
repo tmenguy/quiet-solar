@@ -637,7 +637,7 @@ class PeriodSolver:
                 )
 
                 if first_slot is None or last_slot is None:
-                    _LOGGER.warning(f"_constraints_delta: constraint {ci} has no bounds, skipping")
+                    _LOGGER.warning("_constraints_delta: constraint %s has no bounds, skipping", ci)
                     continue
 
                 out_commands = actions.get(ci.load, None)

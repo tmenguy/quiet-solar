@@ -139,6 +139,8 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
             try:
                 setattr(self.device, self.entity_description.key, value)
             except Exception as e:
-                _LOGGER.info(f"can't set number {value} on {self.device.name} for {self.entity_description.key}: {e}")
+                _LOGGER.info(
+                    "can't set number %s on %s for %s: %s", value, self.device.name, self.entity_description.key, e
+                )
         self._set_availabiltiy()
         self.async_write_ha_state()

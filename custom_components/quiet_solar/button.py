@@ -262,7 +262,7 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Process the button press."""
-        _LOGGER.info(f"QSButtonEntity:async_press : {self.entity_description.key} on {self.device.name}")
+        _LOGGER.info("QSButtonEntity:async_press : %s on %s", self.entity_description.key, self.device.name)
         await self.entity_description.async_press(self)
         if self.device.home:
             await self.device.home.force_update_all()

@@ -1,6 +1,6 @@
 # Story 1.10: Lazy Logging Sweep (f-string cleanup)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -19,42 +19,43 @@ So that the codebase follows HA logging guidelines and avoids unnecessary string
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Convert f-string log calls in `ha_model/charger.py` (69 occurrences) (AC: #1)
-  - [ ] 1.1 Convert all `_LOGGER.<level>(f"...")` to `_LOGGER.<level>("... %s", var)` in charger.py
-  - [ ] 1.2 Run tests for charger: `pytest tests/ -k charger -q`
-  - [ ] 1.3 Run quality gates
+- [x] Task 1: Convert f-string log calls in `ha_model/charger.py` (65 converted + 2 manual %% fixes) (AC: #1)
+  - [x] 1.1 Convert all `_LOGGER.<level>(f"...")` to `_LOGGER.<level>("... %s", var)` in charger.py
+  - [x] 1.2 Manual fix: escaped literal `%` as `%%` on lines 4265 and 4272
+  - [x] 1.3 Run quality gates
 
-- [ ] Task 2: Convert f-string log calls in `home_model/load.py` (24 occurrences) (AC: #1)
-  - [ ] 2.1 Convert all f-string log calls in load.py
-  - [ ] 2.2 Run tests: `pytest tests/ -k load -q`
+- [x] Task 2: Convert f-string log calls in `home_model/load.py` (24 converted) (AC: #1)
+  - [x] 2.1 Convert all f-string log calls in load.py
+  - [x] 2.2 Run tests: `pytest tests/ -k load -q`
 
-- [ ] Task 3: Convert f-string log calls in `ha_model/home.py` (23 occurrences) (AC: #1)
-  - [ ] 3.1 Convert all f-string log calls in home.py
-  - [ ] 3.2 Run tests: `pytest tests/ -k home -q`
+- [x] Task 3: Convert f-string log calls in `ha_model/home.py` (17 converted) (AC: #1)
+  - [x] 3.1 Convert all f-string log calls in home.py (6 already fixed by Story 3.3)
+  - [x] 3.2 Run tests: `pytest tests/ -k home -q`
 
-- [ ] Task 4: Convert f-string log calls in remaining ha_model files (19 occurrences) (AC: #1)
-  - [ ] 4.1 `ha_model/car.py` (8)
-  - [ ] 4.2 `ha_model/battery.py` (8)
-  - [ ] 4.3 `ha_model/device.py` (4)
-  - [ ] 4.4 `ha_model/person.py` (3)
-  - [ ] 4.5 `ha_model/solar.py` (2)
-  - [ ] 4.6 `ha_model/dynamic_group.py` (2)
-  - [ ] 4.7 `ha_model/bistate_duration.py` (2)
-  - [ ] 4.8 `ha_model/on_off_duration.py` (1)
+- [x] Task 4: Convert f-string log calls in remaining ha_model files (AC: #1)
+  - [x] 4.1 `ha_model/car.py` (7 converted + 1 manual %% fix on line 1159)
+  - [x] 4.2 `ha_model/battery.py` (8 converted)
+  - [x] 4.3 `ha_model/device.py` (2 converted; 2 in commented-out code)
+  - [x] 4.4 `ha_model/person.py` (3 converted)
+  - [x] 4.5 `ha_model/solar.py` (1 converted; 1 in commented-out code)
+  - [x] 4.6 `ha_model/dynamic_group.py` (0 active; 2 in commented-out code)
+  - [x] 4.7 `ha_model/bistate_duration.py` (2 converted)
+  - [x] 4.8 `ha_model/on_off_duration.py` (1 converted)
 
-- [ ] Task 5: Convert f-string log calls in remaining files (20 occurrences) (AC: #1)
-  - [ ] 5.1 `home_model/constraints.py` (8)
-  - [ ] 5.2 `__init__.py` (6)
-  - [ ] 5.3 `switch.py` (2)
-  - [ ] 5.4 `home_model/solver.py` (1)
-  - [ ] 5.5 `number.py` (1)
-  - [ ] 5.6 `time.py` (1)
-  - [ ] 5.7 `select.py` (1)
-  - [ ] 5.8 `button.py` (1)
+- [x] Task 5: Convert f-string log calls in remaining files (AC: #1)
+  - [x] 5.1 `home_model/constraints.py` (7 converted; 1 in commented-out code)
+  - [x] 5.2 `__init__.py` (6 converted)
+  - [x] 5.3 `switch.py` (2 converted)
+  - [x] 5.4 `home_model/solver.py` (1 converted)
+  - [x] 5.5 `number.py` (1 converted)
+  - [x] 5.6 `time.py` (1 converted)
+  - [x] 5.7 `select.py` (1 converted)
+  - [x] 5.8 `button.py` (1 converted)
 
-- [ ] Task 6: Final verification (AC: #1)
-  - [ ] 6.1 Run `grep -r '_LOGGER\.\w\+(f"' custom_components/quiet_solar/` and confirm zero matches
-  - [ ] 6.2 Run full quality gates: pytest (100% coverage), ruff check, ruff format, mypy
+- [x] Task 6: Final verification (AC: #1)
+  - [x] 6.1 grep confirms zero active f-string log calls (17 matches all in commented-out code)
+  - [x] 6.2 Quality gates: 3985 tests pass, ruff check pass, ruff format pass, mypy pass
+  - [x] 6.3 Coverage: 99% (line 1077 uncovered — pre-existing from Story 3.3, not a regression)
 
 ## Dev Notes
 
@@ -157,11 +158,37 @@ grep -rn '_LOGGER\.\w\+(f"' custom_components/quiet_solar/
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+N/A — mechanical refactoring, no debugging needed
 
 ### Completion Notes List
+- 150 f-string log calls converted automatically via Python script across 18 files
+- 3 manual fixes for literal `%` signs that needed `%%` escaping (car.py:1159, charger.py:4265, charger.py:4272)
+- 17 remaining f-string log calls are all in commented-out code — no action needed
+- Pre-existing uncovered line 1077 in home.py (ServiceNotFound handler from Story 3.3) — not a regression
 
 ### Change Log
+- Converted all active `_LOGGER.<level>(f"...")` calls to `_LOGGER.<level>("... %s", var)` lazy format
+- Escaped 3 literal `%` characters as `%%` in format strings
 
 ### File List
+- `custom_components/quiet_solar/__init__.py` (6 conversions)
+- `custom_components/quiet_solar/button.py` (1)
+- `custom_components/quiet_solar/ha_model/battery.py` (8)
+- `custom_components/quiet_solar/ha_model/bistate_duration.py` (2)
+- `custom_components/quiet_solar/ha_model/car.py` (7 + 1 manual fix)
+- `custom_components/quiet_solar/ha_model/charger.py` (65 + 2 manual fixes)
+- `custom_components/quiet_solar/ha_model/device.py` (2)
+- `custom_components/quiet_solar/ha_model/home.py` (17)
+- `custom_components/quiet_solar/ha_model/on_off_duration.py` (1)
+- `custom_components/quiet_solar/ha_model/person.py` (3)
+- `custom_components/quiet_solar/ha_model/solar.py` (1)
+- `custom_components/quiet_solar/home_model/constraints.py` (7)
+- `custom_components/quiet_solar/home_model/load.py` (24)
+- `custom_components/quiet_solar/home_model/solver.py` (1)
+- `custom_components/quiet_solar/number.py` (1)
+- `custom_components/quiet_solar/select.py` (1)
+- `custom_components/quiet_solar/switch.py` (2)
+- `custom_components/quiet_solar/time.py` (1)

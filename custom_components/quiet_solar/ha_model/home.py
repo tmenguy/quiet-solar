@@ -427,7 +427,7 @@ class QSHome(QSDynamicGroup):
             self.radius = float(home_zone.attributes.get("radius", 100.0))
 
         except Exception as err:
-            _LOGGER.error(f"Home: Error getting home coordinates: {err}")
+            _LOGGER.error("Home: Error getting home coordinates: %s", err)
             self.latitude = None
             self.longitude = None
             self.radius = None
@@ -1809,7 +1809,7 @@ class QSHome(QSDynamicGroup):
             father = self._name_to_groups.get(load.dynamic_group_name, self)
             if load.father_device == father:
                 # already in the group
-                _LOGGER.warning(f"_set_topology Load {load.name} already in its froup {father.name}")
+                _LOGGER.warning("_set_topology Load %s already in its froup %s", load.name, father.name)
                 continue
             if load.father_device is not None:
                 _LOGGER.warning(
@@ -1972,7 +1972,7 @@ class QSHome(QSDynamicGroup):
             try:
                 self._all_devices.remove(device)
             except Exception:
-                _LOGGER.warning(f"Attempted to remove device {device.name} that was not in the list of devices")
+                _LOGGER.warning("Attempted to remove device %s that was not in the list of devices", device.name)
 
         # will redo the whole topology each time
         self._set_topology()
@@ -2203,7 +2203,7 @@ class QSHome(QSDynamicGroup):
                 has_person_to_recompute = False
                 for person in self._persons:
                     if person.should_recompute_history(time):
-                        _LOGGER.warning(f"update_forecast_probers: {person.name} not initialized")
+                        _LOGGER.warning("update_forecast_probers: %s not initialized", person.name)
                         has_person_to_recompute = True
 
                 if has_person_to_recompute:
@@ -2539,7 +2539,7 @@ class QSHome(QSDynamicGroup):
             if len(str_p_c) == 0:
                 str_p_c = "No allocations"
 
-            _LOGGER.info(f"get_best_persons_cars_allocations: {str_p_c}")
+            _LOGGER.info("get_best_persons_cars_allocations: %s", str_p_c)
 
         else:
             # Cache hit: re-apply allocation to car objects in case something
@@ -2616,7 +2616,7 @@ class QSHome(QSDynamicGroup):
             try:
                 await self.solar_plant.update_forecast(time)
             except Exception as err:
-                _LOGGER.error(f"Error updating solar forecast {err}", exc_info=True, stack_info=True)
+                _LOGGER.error("Error updating solar forecast %s", err, exc_info=True, stack_info=True)
 
         for device in self._all_devices:
             try:
@@ -2730,7 +2730,7 @@ class QSHome(QSDynamicGroup):
             try:
                 await self.update_loads_constraints(time)
             except Exception as err:
-                _LOGGER.error(f"Error updating loads constraints {err}", exc_info=True, stack_info=True)
+                _LOGGER.error("Error updating loads constraints %s", err, exc_info=True, stack_info=True)
 
             await self.check_loads_commands(time)
 
@@ -3006,7 +3006,7 @@ class QSHomeConsumptionHistoryAndForecast:
             values_for_debug = {}
 
             inverter_output_power = None
-            _LOGGER.info(f"Resetting home consumption 1: is_one_bad {is_one_bad}")
+            _LOGGER.info("Resetting home consumption 1: is_one_bad %s", is_one_bad)
             if is_one_bad is False:
                 if self.home.solar_plant is not None:
                     if self.home.solar_plant.solar_inverter_active_power:
@@ -3049,7 +3049,7 @@ class QSHomeConsumptionHistoryAndForecast:
                 values_for_debug["inverter_output_power"] = np.copy(inverter_output_power.values)
 
             home_consumption = None
-            _LOGGER.info(f"Resetting home consumption 2: is_one_bad {is_one_bad}")
+            _LOGGER.info("Resetting home consumption 2: is_one_bad %s", is_one_bad)
             if is_one_bad is False:
                 if self.home.grid_active_power_sensor:
                     home_consumption = QSSolarHistoryVals(entity_id=self.home.grid_active_power_sensor, forecast=self)
@@ -3080,7 +3080,7 @@ class QSHomeConsumptionHistoryAndForecast:
                                 do_add=self.home.grid_active_power_sensor_inverted,
                             )
 
-            _LOGGER.info(f"Resetting home consumption 3: is_one_bad {is_one_bad}")
+            _LOGGER.info("Resetting home consumption 3: is_one_bad %s", is_one_bad)
             if is_one_bad is False and home_consumption is not None:
                 # ok we do have the computed home consumption ... now time for the controlled loads
 
@@ -3172,7 +3172,7 @@ class QSHomeConsumptionHistoryAndForecast:
                     )
 
             if is_one_bad is False and home_consumption is not None:
-                _LOGGER.info(f"Resetting home consumption 7: is_one_bad {is_one_bad}")
+                _LOGGER.info("Resetting home consumption 7: is_one_bad %s", is_one_bad)
                 # ok we do have now a pretty good idea of the non-controllable house consumption:
                 # let's first clean it with the proper start and end
                 strt_idx, strt_days = home_consumption.get_index_from_time(strt)
@@ -3192,7 +3192,9 @@ class QSHomeConsumptionHistoryAndForecast:
                             break
 
                     if delta_reset is not None:
-                        _LOGGER.info(f"Resetting home consumption 7: start {strt.astimezone()} end {end.astimezone()}")
+                        _LOGGER.info(
+                            "Resetting home consumption 7: start %s end %s", strt.astimezone(), end.astimezone()
+                        )
                         _LOGGER.info(
                             f"Resetting home consumption 7: RESET: found last good idx {last_good_reset} ({delta_reset} from {end_idx}) for time {home_consumption.get_utc_time_from_index(last_good_reset, home_consumption.values[1][last_good_reset]).astimezone()} "
                         )
@@ -3222,7 +3224,7 @@ class QSHomeConsumptionHistoryAndForecast:
                                 debug_values += f" {k}={v[0][idx]} "
                             _LOGGER.debug(debug_values)
 
-            _LOGGER.info(f"Resetting home consumption 8: is_one_bad {is_one_bad}")
+            _LOGGER.info("Resetting home consumption 8: is_one_bad %s", is_one_bad)
             if is_one_bad is False:
                 # now we do have something to save!
                 home_non_controlled_consumption = QSSolarHistoryVals(
@@ -3230,7 +3232,7 @@ class QSHomeConsumptionHistoryAndForecast:
                 )
                 home_non_controlled_consumption.values = home_consumption.values
                 await home_non_controlled_consumption.save_values(for_reset=True)
-                _LOGGER.info(f"Resetting home consumption 9: is_one_bad {is_one_bad}")
+                _LOGGER.info("Resetting home consumption 9: is_one_bad %s", is_one_bad)
                 self.home_non_controlled_consumption = None
 
         else:
@@ -3345,7 +3347,7 @@ class QSSolarHistoryVals:
                     scores.append(score)
 
         if not scores:
-            _LOGGER.info(f"_get_possible_past_consumption_for_forecast (hist: {history_in_hours}) no scores !!!")
+            _LOGGER.info("_get_possible_past_consumption_for_forecast (hist: %s) no scores !!!", history_in_hours)
             return []
 
         scores = sorted(scores, key=itemgetter(1))
@@ -3681,7 +3683,9 @@ class QSSolarHistoryVals:
             time_now_from_idx = self.get_utc_time_from_index(now_idx, now_days)
 
             if time_now_from_idx > time_now:
-                _LOGGER.warning(f"compute_now_forecast: time_now_from_idx > time_now {time_now_from_idx} > {time_now}")
+                _LOGGER.warning(
+                    "compute_now_forecast: time_now_from_idx > time_now %s > %s", time_now_from_idx, time_now
+                )
 
             prev_val = None
 
@@ -3735,7 +3739,7 @@ class QSSolarHistoryVals:
             if forecast[-1][0] < time_now + timedelta(hours=future_needed_in_hours):
                 forecast.append((time_now + timedelta(hours=future_needed_in_hours), forecast[-1][1]))
 
-            _LOGGER.debug(f"compute_now_forecast A GOOD ONE  {past_days.shape[0]}")
+            _LOGGER.debug("compute_now_forecast A GOOD ONE  %s", past_days.shape[0])
 
             if set_as_current:
                 self._current_forecast = forecast
