@@ -197,7 +197,7 @@ TheAdmin can trust the system to handle failures gracefully and understand exact
 **ARs:** AR5
 **NFRs:** NFR8, NFR9, NFR10, NFR11, NFR12, NFR13, NFR21
 **Scope:** MVP | **Dependencies:** Builds on Epic 1, 2
-**Status:** Story 3.1 complete. Stories 3.2–3.12 defined (8 FM stories + dashboard + tests + transparency).
+**Status:** Stories 3.1–3.2 complete. Stories 3.3–3.12 defined (7 FM stories + dashboard + tests + transparency).
 
 ### Epic 4: Solver Edge Case Improvements *(stories deferred — detail when Epics 1-3 complete)*
 **FRs:** FR1-FR5b | **ARs:** AR6 | **NFRs:** NFR1-NFR4 | **Scope:** MVP | **Depends on:** Epic 1, 2
@@ -494,7 +494,7 @@ So that resilience implementation is systematic and no dependency weakness is le
 **And** entries are prioritized by user impact (missed commitment > degraded optimization > reduced visibility)
 **And** the catalog is a living document updated whenever a new failure mode is discovered (NFR20)
 
-### Story 3.2: FM-006 — Numpy Persistence Hardening
+### Story 3.2: FM-006 — Numpy Persistence Hardening [DONE]
 
 As TheDev,
 I want numpy persistence failures to be caught with specific exception types and logged as warnings,
