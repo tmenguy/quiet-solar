@@ -4,6 +4,7 @@ Focuses on exercising untested code paths with real QS objects,
 minimal mocking, and meaningful assertions.
 """
 
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1591,8 +1592,8 @@ class TestQSSolarHistoryValsSaveRead:
         loaded = np.load(str(tmp_path / "test.npy"))
         assert loaded.shape == hv.values.shape
 
-    def test_read_value_missing_file(self, tmp_path):
-        """read_value with missing file returns None. Covers lines 3220-3227."""
+    def test_read_value_missing_file(self, tmp_path, caplog):
+        """read_value with missing file returns None and logs warning."""
         forecast = MagicMock()
         forecast.home = None
         forecast.storage_path = str(tmp_path)
@@ -1600,8 +1601,76 @@ class TestQSSolarHistoryValsSaveRead:
         hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
         hv.file_path = str(tmp_path / "nonexistent.npy")
 
+        with caplog.at_level(logging.WARNING):
+            result = hv.read_value()
+        assert result is None
+        assert "Read numpy failed for" in caplog.text
+
+    def test_read_value_missing_file_sets_persistence_health(self, tmp_path):
+        """read_value failure sets persistence_healthy=False on home."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = True
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.home.hass = None
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.file_path = str(tmp_path / "nonexistent.npy")
+
         result = hv.read_value()
         assert result is None
+        assert home_mock.qs_home_persistence_health is False
+
+    def test_read_value_corrupted_file(self, tmp_path, caplog):
+        """read_value with corrupted .npy file returns None and logs warning."""
+        forecast = MagicMock()
+        forecast.home = None
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        corrupted_path = tmp_path / "corrupted.npy"
+        corrupted_path.write_bytes(b"not a valid numpy file at all")
+        hv.file_path = str(corrupted_path)
+
+        with caplog.at_level(logging.WARNING):
+            result = hv.read_value()
+        assert result is None
+        assert "Read numpy failed for" in caplog.text
+
+    def test_read_value_truncated_file(self, tmp_path, caplog):
+        """read_value with truncated .npy file (EOFError) returns None and logs warning."""
+        forecast = MagicMock()
+        forecast.home = None
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        truncated_path = tmp_path / "truncated.npy"
+        # Write a valid numpy magic header but truncate the data
+        truncated_path.write_bytes(b"\x93NUMPY\x01\x00")
+        hv.file_path = str(truncated_path)
+
+        with caplog.at_level(logging.WARNING):
+            result = hv.read_value()
+        assert result is None
+        assert "Read numpy failed for" in caplog.text
+
+    def test_read_value_success_restores_persistence_health(self, tmp_path):
+        """Successful read_value restores persistence_healthy=True on home."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = False
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.home.hass = None
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.file_path = str(tmp_path / "test.npy")
+        np.save(hv.file_path, np.ones((2, 10), dtype=np.int32))
+
+        result = hv.read_value()
+        assert result is not None
+        assert home_mock.qs_home_persistence_health is True
 
     def test_read_value_existing_file(self, tmp_path):
         """read_value with existing file returns the data."""
@@ -2323,7 +2392,7 @@ class TestQSSolarHistoryValsCornerCases:
         assert loaded.shape == (2, 10)
 
     @pytest.mark.asyncio
-    async def test_read_values_async_no_hass(self, tmp_path):
+    async def test_read_values_async_no_hass(self, tmp_path, caplog):
         """read_values_async without hass reads synchronously. Covers lines 3241-3242."""
         forecast = MagicMock()
         forecast.home = None
@@ -2332,16 +2401,90 @@ class TestQSSolarHistoryValsCornerCases:
         hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
         hv.file_path = str(tmp_path / "test_async.npy")
 
-        # No file yet
-        result = await hv.read_values_async()
+        # No file yet — should log warning
+        with caplog.at_level(logging.WARNING):
+            result = await hv.read_values_async()
         assert result is None
+        assert "Read numpy failed for" in caplog.text
 
         # Save and read
+        caplog.clear()
         data = np.ones((2, 10), dtype=np.int32)
         np.save(hv.file_path, data)
         result = await hv.read_values_async()
         assert result is not None
         assert result.shape == (2, 10)
+
+    @pytest.mark.asyncio
+    async def test_read_values_async_corrupted_sets_persistence_health(self, tmp_path):
+        """read_values_async failure sets persistence_healthy=False on home."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = True
+        home_mock.hass = None
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.file_path = str(tmp_path / "nonexistent.npy")
+
+        result = await hv.read_values_async()
+        assert result is None
+        assert home_mock.qs_home_persistence_health is False
+
+    @pytest.mark.asyncio
+    async def test_read_values_async_success_restores_persistence_health(self, tmp_path):
+        """Successful async read restores persistence_healthy=True on home."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = False
+        home_mock.hass = None
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.file_path = str(tmp_path / "test.npy")
+        np.save(hv.file_path, np.ones((2, 10), dtype=np.int32))
+
+        result = await hv.read_values_async()
+        assert result is not None
+        assert home_mock.qs_home_persistence_health is True
+
+    @pytest.mark.asyncio
+    async def test_save_values_success_sets_persistence_health(self, tmp_path):
+        """Successful save sets persistence_healthy=True on home."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = False
+        home_mock.hass = None
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.values = np.ones((2, 10), dtype=np.int32)
+        hv.file_path = str(tmp_path / "test.npy")
+
+        await hv.save_values()
+        assert home_mock.qs_home_persistence_health is True
+
+    @pytest.mark.asyncio
+    async def test_save_values_failure_sets_persistence_health(self, tmp_path, caplog):
+        """Failed save sets persistence_healthy=False and logs warning."""
+        home_mock = MagicMock()
+        home_mock.qs_home_persistence_health = True
+        home_mock.hass = None
+        forecast = MagicMock()
+        forecast.home = home_mock
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test")
+        hv.values = np.ones((2, 10), dtype=np.int32)
+        hv.file_path = "/nonexistent_dir/test.npy"
+
+        with caplog.at_level(logging.WARNING):
+            await hv.save_values()
+        assert home_mock.qs_home_persistence_health is False
+        assert "Write numpy failed for" in caplog.text
 
 
 # ========================================================================

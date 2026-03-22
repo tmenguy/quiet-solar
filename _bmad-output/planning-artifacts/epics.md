@@ -191,12 +191,13 @@ The system provides a significant volume of implemented trust-critical test scen
 **Note:** Defines a "done threshold" — minimum scenario set that unlocks Epic 3. Full catalog continues growing. Story 2.1 (Scenario Builder Framework) removed — test infrastructure emerges from implementing the scenarios directly.
 **Status:** All stories complete. Story 2.2 (Charger Budgeting Scenario Tests), Story 2.3 (Constraint Interaction Boundary Tests), and Story 2.4 (Solver & Device Orchestration Scenario Tests) done.
 
-### Epic 3: Failure Resilience & Transparency
-TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. Every external dependency has a documented failure path with fallback and recovery. Fed directly by Epic 2's failure catalog — Epic 2 documents what can fail, Epic 3 implements how the system responds.
+### Epic 3: Failure Resilience & Transparency [IN PROGRESS]
+TheAdmin can trust the system to handle failures gracefully and understand exactly what happened when things go wrong. Every external dependency has a documented failure path with fallback and recovery. Fed directly by Epic 2's failure catalog — Epic 2 documents what can fail, Epic 3 implements how the system responds. Story 3.2 broken into per-FM stories (one per failure mode) with CC-001/CC-002/CC-003 addressed per FM.
 **FRs:** FR21, FR22, FR23, FR24, FR25a, FR25b
 **ARs:** AR5
 **NFRs:** NFR8, NFR9, NFR10, NFR11, NFR12, NFR13, NFR21
 **Scope:** MVP | **Dependencies:** Builds on Epic 1, 2
+**Status:** Story 3.1 complete. Stories 3.2–3.12 defined (8 FM stories + dashboard + tests + transparency).
 
 ### Epic 4: Solver Edge Case Improvements *(stories deferred — detail when Epics 1-3 complete)*
 **FRs:** FR1-FR5b | **ARs:** AR6 | **NFRs:** NFR1-NFR4 | **Scope:** MVP | **Depends on:** Epic 1, 2
@@ -493,49 +494,295 @@ So that resilience implementation is systematic and no dependency weakness is le
 **And** entries are prioritized by user impact (missed commitment > degraded optimization > reduced visibility)
 **And** the catalog is a living document updated whenever a new failure mode is discovered (NFR20)
 
-### Story 3.2: Resilience Implementation
+### Story 3.2: FM-006 — Numpy Persistence Hardening
 
-As TheAdmin,
-I want the system to detect every cataloged failure mode and execute the planned fallback and recovery behavior,
-So that failures are handled gracefully without manual intervention.
+As TheDev,
+I want numpy persistence failures to be caught with specific exception types and logged as warnings,
+So that silent data loss is eliminated and persistence health is observable.
+
+**Priority:** P3 — reduced visibility | **Size:** XS
+**Gaps addressed:** G7
+**CC Impact:**
+- CC-003: `binary_sensor.qs_persistence_health`
 
 **Acceptance Criteria:**
 
-**Given** a solar forecast API failure (timeout or HTTP error)
-**When** the system detects the failure
-**Then** it uses the last successful forecast, falling back to historical patterns if stale > 6h (NFR13)
-**And** it auto-retries on the next forecast cycle and recovers automatically (FR23)
+**Given** a corrupted `.npy` file (partial write, disk full, permission error)
+**When** the system attempts to load it
+**Then** specific exceptions are caught (`OSError`, `ValueError`, `pickle.UnpicklingError`) instead of bare `except:`
+**And** a warning is logged identifying the corrupted file and exception type
+**And** the system continues without historical data using conservative estimates
 
-**Given** a charger communication failure (command not ACKed)
+**Given** numpy persistence health is queried
+**When** TheAdmin checks the dashboard
+**Then** `binary_sensor.qs_persistence_health` reflects current persistence state
+**And** the sensor turns off when a load/save failure is detected
+
+### Story 3.3: FM-005 — Grid Outage Verification
+
+As TheAdmin,
+I want grid outage handling to be fully verified — emergency broadcasts reach Magali and load shedding prioritizes essential loads,
+So that the household is protected during power outages.
+
+**Priority:** P1 — missed commitment | **Size:** S (verification of existing implementation)
+**Gaps addressed:** G6
+**CC Impact:**
+- CC-001: Verify emergency broadcast reaches Magali with plain-language message
+- CC-002: Already exists (`SELECT_OFF_GRID_MODE`)
+- CC-003: Already exists (off-grid binary sensors)
+
+**Acceptance Criteria:**
+
+**Given** a grid outage is detected
+**When** the system switches to off-grid mode
+**Then** Magali receives a plain-language notification ("Grid power is out — the house is running on solar and battery")
+**And** essential loads are prioritized over non-critical loads
+**And** non-critical loads are shed when solar + battery capacity is insufficient
+
+**Given** the grid is restored
+**When** the system detects grid recovery
+**Then** a recovery notification is sent to Magali and TheAdmin
+**And** normal operation resumes automatically
+
+### Story 3.4: FM-003 — HA Device Communication Resilience
+
+**Foundation story** — establishes generic device resilience patterns that FM-002 (charger) and FM-008 (car API) specialize.
+
+As TheAdmin,
+I want the system to verify that devices actually respond to commands, detect stale state, reject garbage values, and alert me when a device needs manual intervention,
+So that silent failures don't lead to missed commitments.
+
+**Priority:** P1 (command failure) / P3 (stale state) | **Size:** L
+**Gaps addressed:** G15, G16, G17, G18, G19
+**CC Impact:**
+- CC-001: Human alert when command not applied ("The pool pump didn't turn on — please check the breaker or switch it manually")
+- CC-002: Force load ON/OFF switch entities per controllable load
+- CC-003: `binary_sensor.qs_<device>_communication_ok` per device
+
+**Acceptance Criteria:**
+
+**Given** the system sends a command to a device (service call)
+**When** the device state doesn't change within the expected window
+**Then** the system retries once
+**And** if still not applied, alerts TheAdmin/Magali with a plain-language message identifying the device and suggested manual action (CC-001)
+**And** the device is marked as command-failed
+
+**Given** a device entity's `last_updated` timestamp exceeds a configurable staleness threshold
+**When** the system detects the stale state
+**Then** the device is marked as stale and conservative decisions are made (FR24)
+**And** `binary_sensor.qs_<device>_communication_ok` turns off (CC-003)
+
+**Given** a device reports obviously wrong values (negative power, SOC > 100%, temperature outside physical range)
+**When** the system receives the value
+**Then** the value is rejected and last-known-good is used instead
+**And** a warning is logged identifying the device and rejected value
+
+**Given** TheAdmin wants to force a load ON or OFF
+**When** TheAdmin uses the force switch entity (CC-002)
+**Then** the device command is sent bypassing the solver
+**And** the solver excludes that device from the current planning cycle
+
+### Story 3.5: FM-002 — Charger Communication Resilience
+
+As TheAdmin,
+I want charger commands to retry with exponential backoff, chargers to be marked unavailable after persistent failure, and Magali to be notified when her car's charger loses connection,
+So that transient charger issues self-heal and persistent failures are escalated.
+
+**Priority:** P1 — missed commitment | **Size:** M
+**Dependencies:** Builds on Story 3.4 (FM-003 generic device resilience)
+**Gaps addressed:** G3, G4
+**CC Impact:**
+- CC-001: Magali notification ("Your car isn't charging because the charger lost connection — you can plug into the other charger")
+- CC-002: Force-start/force-stop charge button entities per charger
+- CC-003: `binary_sensor.qs_<charger>_communication_ok`
+
+**Acceptance Criteria:**
+
+**Given** a charger command is not ACKed within `CHARGER_STATE_REFRESH_INTERVAL_S` (14s)
 **When** the system detects the failure
 **Then** it retries with configurable count and exponential backoff (NFR12)
-**And** after max retries, marks charger unavailable and notifies TheAdmin (FR29)
-**And** it auto-recovers when the charger responds and re-includes it in the next solver cycle
+**And** after max retries, the charger is marked unavailable with an explicit state transition
+**And** the solver excludes the unavailable charger from planning
+**And** TheAdmin is notified (FR29)
+**And** if a car was actively charging, Magali is notified with plain-language explanation and suggested action (CC-001)
 
-**Given** solver infeasibility (no valid plan)
-**When** the system detects infeasibility
-**Then** mandatory constraints get priority, filler constraints are dropped, battery held at current SOC (NFR11)
-**And** it re-solves on the next triggered evaluation
+**Given** a charger was marked unavailable
+**When** the charger responds again
+**Then** the system auto-recovers and re-includes the charger in the next solver cycle (FR23)
+**And** TheAdmin is notified of recovery
 
-**Given** an HA restart (power failure, update, crash)
-**When** HA becomes ready
-**Then** the system recovers previous state from persisted sensor data (NFR8, NFR9)
-**And** optimization resumes within one solver evaluation cycle without manual intervention
+**Given** TheAdmin or Magali wants to force-start or force-stop a charge
+**When** they press the button entity (CC-002)
+**Then** the command is sent directly, bypassing the solver
+**And** the solver adjusts its plan in the next evaluation cycle
 
-**Given** numpy persistence corruption (partial write, disk full)
-**When** the system detects corrupted data
-**Then** it operates without historical data using conservative estimates
-**And** the ring buffer rebuilds over time as new data accumulates
+### Story 3.6: FM-004 — Solver Infeasibility Handling
 
-**Given** stale device state (communication stall)
-**When** the system detects staleness (FR24)
-**Then** it makes conservative decisions rather than acting on outdated information
+As TheAdmin,
+I want the solver to detect when no valid plan exists, fail safe with mandatory constraints prioritized, and notify Magali when a commitment may be missed,
+So that the system never silently fails to act and household members know when to intervene.
 
-### Story 3.3: Failure Mode Scenario Tests
+**Priority:** P1 — missed commitment | **Size:** M
+**Gaps addressed:** G5
+**CC Impact:**
+- CC-001: Magali notification ("Your car may not reach 80% by 7 AM — there isn't enough capacity for all requests")
+- CC-002: Force-start charge / force load ON buttons (reuse from 3.4/3.5)
+- CC-003: `binary_sensor.qs_solver_health`
+
+**Acceptance Criteria:**
+
+**Given** the solver cannot satisfy all active constraints
+**When** infeasibility is detected
+**Then** mandatory constraints get priority (mandatory urgent > mandatory deadline)
+**And** filler constraints are dropped first, then green constraints
+**And** battery is held at current SOC as a safe default (NFR11)
+**And** the infeasibility cause is logged (which constraints conflicted, what resource was exhausted)
+
+**Given** a mandatory constraint will be missed due to infeasibility
+**When** the solver determines which commitments are affected
+**Then** Magali is notified with plain-language explanation of what's affected and why (CC-001)
+**And** TheAdmin is notified with technical details (constraint IDs, resource state)
+
+**Given** the solver was infeasible
+**When** the next evaluation triggers (state change or periodic fallback)
+**Then** the solver re-attempts with updated state
+**And** if feasibility is restored, normal operation resumes
+
+### Story 3.7: FM-001 — Solar Forecast API Resilience
+
+As TheAdmin,
+I want the system to detect stale solar forecasts, fall back to historical patterns, monitor providers at runtime, and expose forecast freshness,
+So that optimization continues with the best available data even when forecast APIs fail.
+
+**Priority:** P2 — degraded optimization | **Size:** M
+**Gaps addressed:** G1, G2
+**CC Impact:**
+- CC-003: `sensor.qs_solar_forecast_age` (hours since last successful forecast), `binary_sensor.qs_solar_forecast_ok`
+
+**Acceptance Criteria:**
+
+**Given** a solar forecast API fails (timeout, HTTP error, invalid data)
+**When** the system detects the failure
+**Then** it uses the last successful forecast
+**And** if the forecast is stale >6h, it falls back to historical consumption patterns from the numpy ring buffer (AR5)
+**And** it auto-retries on the next forecast polling cycle
+**And** TheAdmin is notified when forecast becomes stale
+
+**Given** multiple forecast providers are configured
+**When** one provider fails
+**Then** the system continues with remaining valid providers
+**And** failed providers are re-probed periodically
+**And** runtime monitoring tracks provider health (not just one-time init validation)
+
+**Given** forecast freshness is queried
+**When** TheAdmin checks the dashboard
+**Then** `sensor.qs_solar_forecast_age` shows hours since last successful update
+**And** `binary_sensor.qs_solar_forecast_ok` reflects whether the forecast is fresh (<6h)
+
+### Story 3.8: FM-007 — Prediction Confidence Resilience
+
+As TheAdmin,
+I want the system to calculate prediction confidence, adjust behavior when confidence is low, and expose confidence metrics,
+So that the system charges more conservatively when it's uncertain rather than risking a missed trip.
+
+**Priority:** P2 — degraded optimization | **Size:** M
+**Gaps addressed:** G8
+**CC Impact:**
+- CC-003: `sensor.qs_<person>_prediction_confidence` per person
+
+**Acceptance Criteria:**
+
+**Given** a person's trip prediction has insufficient mileage history (sparse data, holiday period, new commute)
+**When** the prediction engine calculates confidence
+**Then** an explicit confidence score (0-100%) is computed based on data quality and pattern match
+**And** when confidence < configurable threshold, the system falls back to conservative defaults (charge to higher SOC, e.g., use max observed mileage)
+**And** the confidence score is logged for observability
+
+**Given** prediction confidence is queried
+**When** TheAdmin checks the dashboard
+**Then** `sensor.qs_<person>_prediction_confidence` shows current confidence percentage
+**And** low confidence is visually distinguishable (sensor attributes include data quality indicators)
+
+### Story 3.9: FM-008 — Car/EV Vendor API Resilience
+
+As TheAdmin,
+I want the system to detect stale car API data, offer a manual car mode when the API is unreliable for days, and handle the cascading impact across charging, prediction, and person tracking,
+So that an unreliable car vendor API doesn't silently degrade the entire household optimization.
+
+**Priority:** P1 — missed commitment (cascading) | **Size:** XL
+**Dependencies:** Builds on Story 3.4 (FM-003 generic device resilience)
+**Gaps addressed:** G9, G10, G11, G12
+**CC Impact:**
+- CC-001: Magali notification ("Your Twingo's data is stale — charging will use conservative estimates. You can enter the current battery level manually.")
+- CC-002: `switch.qs_<car>_manual_mode`, `number.qs_<car>_manual_soc`, `button.qs_<car>_remove_from_planning`
+- CC-003: `binary_sensor.qs_<car>_api_ok`
+
+**Acceptance Criteria:**
+
+**Given** a car entity's data stops updating (API returns stale timestamps)
+**When** the system detects staleness (configurable threshold per entity type)
+**Then** the car is flagged as stale across all subsystems
+**And** TheAdmin is notified with the specific stale data points
+**And** Magali is notified if her car is affected, with plain-language explanation and available actions (CC-001)
+**And** `binary_sensor.qs_<car>_api_ok` turns off (CC-003)
+
+**Given** the car API has been stale for an extended period
+**When** TheAdmin toggles `switch.qs_<car>_manual_mode` (CC-002)
+**Then** the system bypasses the vendor API entirely
+**And** TheAdmin can enter current SOC via `number.qs_<car>_manual_soc`
+**And** the system tracks SOC by accumulating charger energy delivery (kWh to % using battery capacity)
+**And** car presence is inferred from charger state (plugged = home, unplugged = away)
+**And** person forecast for this car uses conservative defaults (always assume full charge needed)
+
+**Given** the car API was stale and recovers (fresh timestamps detected)
+**When** the system detects recovery
+**Then** it suggests exiting manual mode (notification to TheAdmin)
+**And** if manual mode is turned off, normal API-based operation resumes
+**And** stale subsystem data is refreshed
+
+**Given** TheAdmin wants to remove a car from planning entirely
+**When** they press `button.qs_<car>_remove_from_planning` (CC-002)
+**Then** the car is excluded from solver constraints and charger assignments
+**And** the solver replans without that car
+
+### Story 3.10: CC-003 — Admin Resilience Dashboard
+
+As TheAdmin,
+I want a single dashboard view showing all active failures, their severity, and available recovery actions,
+So that I can see system health at a glance and take action when needed.
+
+**Size:** M
+**Dependencies:** Stories 3.2–3.9 (provide the per-FM sensor entities)
+**Gaps addressed:** G20, G21, G22, G23
+
+**Acceptance Criteria:**
+
+**Given** per-FM health sensors exist from Stories 3.2–3.9
+**When** TheAdmin opens the resilience dashboard
+**Then** Active Alerts section shows current P1/P2/P3 failures with timestamp, affected device, plain-language description
+**And** P1 Actions section shows one-click manual overrides (force charge, force load, manual SOC)
+**And** P2 Status section shows solar forecast freshness, prediction confidence per person
+**And** P3 Status section shows persistence health, entity availability
+**And** Recovery Log section shows recent auto-recovered failures with duration and impact
+
+**Given** a failure is detected
+**When** notification routing runs
+**Then** P1 failures notify Magali + TheAdmin
+**And** P2/P3 failures notify TheAdmin only
+**And** notification preferences per household member are respected (FR32)
+
+**Given** a centralized failure registry exists
+**When** a failure mode is detected or recovers
+**Then** the registry tracks: FM-ID, severity, start timestamp, affected devices, current state (active/recovered)
+**And** the registry is queryable for dashboard rendering and notification decisions
+
+### Story 3.11: Failure Mode Scenario Tests
 
 As TheDev,
 I want implemented test scenarios simulating every failure mode in the catalog under degraded and crisis conditions,
-So that every resilience implementation from Story 3.2 is verified.
+So that every resilience implementation from Stories 3.2–3.9 is verified, including cascading failures.
+
+**Dependencies:** Stories 3.2–3.9
 
 **Acceptance Criteria:**
 
@@ -544,11 +791,11 @@ So that every resilience implementation from Story 3.2 is verified.
 **Then** each catalog entry has at least one test scenario exercising its failure signature
 **And** fallback behavior is verified (correct degraded operation)
 **And** recovery behavior is verified (automatic return to normal)
-**And** cascading failures are tested (multiple dependencies failing simultaneously)
+**And** cascading failures are tested (multiple dependencies failing simultaneously, e.g., car API stale + charger offline)
 **And** all scenarios use `@pytest.mark.integration` marker
 **And** 100% coverage is maintained
 
-### Story 3.4: Troubleshooting Transparency
+### Story 3.12: Troubleshooting Transparency
 
 As TheAdmin,
 I want human-readable explanations when commitments are missed and a decision log showing what the solver decided and why,

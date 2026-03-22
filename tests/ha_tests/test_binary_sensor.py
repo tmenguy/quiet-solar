@@ -8,6 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
+    BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
     DOMAIN,
 )
@@ -99,15 +100,22 @@ async def test_home_binary_sensor_entities(
     home_config_entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    """Test home device may create binary sensor entities."""
+    """Test home device creates binary sensor entities including persistence health."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
     binary_sensor_entries = [e for e in entity_entries if e.domain == "binary_sensor"]
 
-    # Home may have binary sensors
+    # Home should have binary sensors
     assert isinstance(binary_sensor_entries, list)
+
+    # Persistence health binary sensor should exist
+    persistence_sensors = [
+        e for e in binary_sensor_entries
+        if e.unique_id and BINARY_SENSOR_HOME_PERSISTENCE_HEALTH in e.unique_id
+    ]
+    assert len(persistence_sensors) >= 1
 
 
 # =============================================================================
