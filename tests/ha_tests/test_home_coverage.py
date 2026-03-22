@@ -2510,8 +2510,9 @@ def test_store_and_flush_extend_ring_buffer():
     done = vals.store_and_flush_current_vals(extend_but_not_cover_idx=2)
 
 
-async def test_save_values_exception_handling():
-    """Cover lines 3544-3546: save_values numpy write failure."""
+async def test_save_values_exception_handling(caplog):
+    """Cover save_values numpy write failure with warning log."""
+    import logging
     import tempfile
 
     from custom_components.quiet_solar.ha_model.home import (
@@ -2527,7 +2528,9 @@ async def test_save_values_exception_handling():
     vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.int32)
 
     vals.file_path = "/nonexistent_dir/test.npy"
-    await vals.save_values()
+    with caplog.at_level(logging.WARNING):
+        await vals.save_values()
+    assert "Write numpy failed for" in caplog.text
 
 
 async def test_compute_non_controlled_forecast_intl(

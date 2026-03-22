@@ -3,7 +3,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorEntityDescription
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+    BinarySensorEntityDescription,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -11,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
     BINARY_SENSOR_HOME_IS_OFF_GRID,
+    BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
     BINARY_SENSOR_HOME_REAL_OFF_GRID,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
     DOMAIN,
@@ -51,6 +56,13 @@ def create_ha_binary_sensor_for_QSHome(device: QSHome):
         translation_key=BINARY_SENSOR_HOME_REAL_OFF_GRID,
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=real_off_grid))
+
+    persistence_health = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
+        translation_key=BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=persistence_health))
 
     return entities
 

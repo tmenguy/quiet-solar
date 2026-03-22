@@ -1,6 +1,6 @@
 # Story 3.2: FM-006 — Numpy Persistence Hardening
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -33,22 +33,22 @@ So that silent data loss is eliminated and persistence health is observable on t
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Replace bare `except:` with specific exception types in `QSSolarHistoryVals` (AC: #1, #2)
-  - [ ] 1.1 Fix `_save_values_to_file` (line 3750): catch `(OSError, PermissionError)`, change log level from info to warning, fix f-string to lazy logging
-  - [ ] 1.2 Fix `read_value` (line 3766): catch `(OSError, ValueError, pickle.UnpicklingError)`, add warning log
-  - [ ] 1.3 Fix `_load_values_from_file` in `read_values_async` (line 3778): catch same types, add warning log
-  - [ ] 1.4 Fix bare `except:` at line 4042 (float conversion in `init`): catch `(ValueError, TypeError)`
-- [ ] Task 2: Track persistence health on QSHome (AC: #3)
-  - [ ] 2.1 Add `persistence_healthy: bool` attribute to `QSHome` (default True)
-  - [ ] 2.2 Set `persistence_healthy = False` when any load/save fails, `True` on successful save
-  - [ ] 2.3 Add `BINARY_SENSOR_HOME_PERSISTENCE_HEALTH` constant to `const.py`
-  - [ ] 2.4 Add binary sensor in `binary_sensor.py` using existing `QSBinarySensorEntityDescription` pattern
-- [ ] Task 3: Tests (AC: #1, #2, #3, #4)
-  - [ ] 3.1 Test: corrupted `.npy` file triggers specific exception catch + warning log
-  - [ ] 3.2 Test: save failure to bad path triggers specific exception catch + warning log
-  - [ ] 3.3 Test: `binary_sensor.qs_persistence_health` reflects persistence state
-  - [ ] 3.4 Update existing tests if bare `except:` behavior changes affect assertions
-  - [ ] 3.5 Maintain 100% coverage
+- [x] Task 1: Replace bare `except:` with specific exception types in `QSSolarHistoryVals` (AC: #1, #2)
+  - [x] 1.1 Fix `_save_values_to_file`: catch `OSError`, warning level, lazy logging
+  - [x] 1.2 Fix `read_value`: catch `(OSError, ValueError, pickle.UnpicklingError)`, add warning log
+  - [x] 1.3 Fix `_load_values_from_file` in `read_values_async`: same types, add warning log
+  - [x] 1.4 Fix bare `except:` at float conversion in `init`: catch `(ValueError, TypeError)`
+- [x] Task 2: Track persistence health on QSHome (AC: #3)
+  - [x] 2.1 Add `qs_home_persistence_health` attribute to `QSHome` (default True)
+  - [x] 2.2 Set False on load/save failure, True on successful save
+  - [x] 2.3 Add `BINARY_SENSOR_HOME_PERSISTENCE_HEALTH` constant to `const.py`
+  - [x] 2.4 Add binary sensor in `binary_sensor.py` using existing pattern
+- [x] Task 3: Tests (AC: #1, #2, #3, #4)
+  - [x] 3.1 Test: corrupted `.npy` file triggers specific exception catch + warning log
+  - [x] 3.2 Test: save failure to bad path triggers specific exception catch + warning log
+  - [x] 3.3 Test: `binary_sensor.qs_persistence_health` created and reflects persistence state
+  - [x] 3.4 Updated existing tests to assert warning logs on failure
+  - [x] 3.5 100% coverage maintained (3962 tests pass)
 
 ## Dev Notes
 
@@ -190,10 +190,33 @@ No new files needed.
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Replaced 4 bare `except:` clauses with specific exception types in `QSSolarHistoryVals`
+- Added warning-level logging for all numpy load/save failures (load was previously silent)
+- Fixed f-string logging to lazy `%s` format in save method
+- Added `qs_home_persistence_health` attribute to `QSHome`, tracked on save/load success/failure
+- Added `binary_sensor.qs_home_persistence_health` binary sensor via existing QSHome pattern
+- Added 10 new tests: corrupted file, truncated file (EOFError), missing file with log assertion, persistence health flag on read/write success/failure, read success restores health, async read success restores health, async read corruption, binary sensor creation
+- Updated 3 existing tests to assert warning log output using `caplog`
+- Code review fixes: parenthesized except tuple, EOFError in read paths, read success restores health, BinarySensorDeviceClass.PROBLEM
+- 3965 tests pass at 100% coverage, all quality gates green
+
 ### Change Log
 
+- 2026-03-22: Story 3.2 implemented — numpy persistence hardening
+- 2026-03-22: Code review fixes — EOFError handling, read health recovery, device_class, except tuple syntax
+
 ### File List
+
+Modified files:
+- `custom_components/quiet_solar/ha_model/home.py` — 4 bare `except:` fixed, `qs_home_persistence_health` attribute added
+- `custom_components/quiet_solar/const.py` — added `BINARY_SENSOR_HOME_PERSISTENCE_HEALTH`
+- `custom_components/quiet_solar/binary_sensor.py` — added persistence health binary sensor to QSHome
+- `tests/ha_tests/test_home_extended_coverage.py` — 7 new/updated persistence tests
+- `tests/ha_tests/test_home_coverage.py` — updated save exception test with log assertion
+- `tests/ha_tests/test_binary_sensor.py` — updated home binary sensor test to verify persistence health

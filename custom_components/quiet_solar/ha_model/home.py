@@ -294,6 +294,7 @@ class QSHome(QSDynamicGroup):
 
         self.qs_home_is_off_grid = False
         self.qs_home_real_off_grid = False
+        self.qs_home_persistence_health = True
         self.off_grid_mode: str = OFF_GRID_MODE_AUTO
         self._off_grid_unsub = None
 
@@ -3746,10 +3747,13 @@ class QSSolarHistoryVals:
             """Write numpy."""
             try:
                 np.save(path, values)
-                _LOGGER.info(f"Write numpy SUCCESS for {path} for reset {for_reset}")
-            except:
-                _LOGGER.info(f"Write numpy FAILED for {path} for reset {for_reset}")
-                pass
+                _LOGGER.info("Write numpy success for %s (reset=%s)", path, for_reset)
+                if self.home is not None:
+                    self.home.qs_home_persistence_health = True
+            except OSError as e:
+                _LOGGER.warning("Write numpy failed for %s (reset=%s): %s", path, for_reset, e)
+                if self.home is not None:
+                    self.home.qs_home_persistence_health = False
 
         if file_path is None:
             file_path = self.file_path
@@ -3760,24 +3764,31 @@ class QSSolarHistoryVals:
             await self.hass.async_add_executor_job(_save_values_to_file, file_path, self.values)
 
     def read_value(self):
-
         try:
             ret = np.load(self.file_path)
-        except:
+        except (OSError, ValueError, EOFError, pickle.UnpicklingError) as e:
+            _LOGGER.warning("Read numpy failed for %s: %s", self.file_path, e)
+            if self.home is not None:
+                self.home.qs_home_persistence_health = False
             ret = None
-
+        else:
+            if self.home is not None:
+                self.home.qs_home_persistence_health = True
         return ret
 
     async def read_values_async(self):
-
         def _load_values_from_file(path: str) -> Any | None:
             """Read numpy."""
-            ret = None
             try:
                 ret = np.load(path)
-            except:
+            except (OSError, ValueError, EOFError, pickle.UnpicklingError) as e:
+                _LOGGER.warning("Read numpy failed for %s: %s", path, e)
+                if self.home is not None:
+                    self.home.qs_home_persistence_health = False
                 ret = None
-
+            else:
+                if self.home is not None:
+                    self.home.qs_home_persistence_health = True
             return ret
 
         if self.hass is None:
@@ -4039,7 +4050,7 @@ class QSSolarHistoryVals:
                             value = float(s.state)
                         else:
                             value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
-                    except:
+                    except ValueError, TypeError:
                         value = None
                         _LOGGER.warning("Error loading lazy safe value for %s state %s", self.entity_id, s.state)
                         # is it the same as a bad state above?

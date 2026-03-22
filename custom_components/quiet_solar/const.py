@@ -212,6 +212,7 @@ BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED = "qs_piloted_device_activated"
 BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_constraints"
 BINARY_SENSOR_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 BINARY_SENSOR_HOME_REAL_OFF_GRID = "qs_home_real_off_grid"
+BINARY_SENSOR_HOME_PERSISTENCE_HEALTH = "qs_home_persistence_health"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
