@@ -421,7 +421,7 @@ So that the entire development lifecycle from idea to release can be driven from
 - Cost and rate-limit implications of autonomous YOLO runs?
 - Guardrails for autonomous mode (scope limits, cost caps, human-in-the-loop checkpoints)?
 
-### Story 1.10: Lazy Logging Sweep (f-string cleanup)
+### Story 1.10: Lazy Logging Sweep (f-string cleanup) [DONE]
 
 As TheAdmin,
 I want all logging calls to use lazy formatting (`%s` style) instead of f-strings,
