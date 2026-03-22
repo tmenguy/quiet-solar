@@ -16,6 +16,7 @@ from haversine import Unit, haversine
 from homeassistant.components.recorder.models import LazyState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import Event
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers.event import EventStateChangedData, async_track_state_change_event
 
 from ..const import (
@@ -957,7 +958,7 @@ class QSHome(QSDynamicGroup):
         if do_reset and for_init is False:
             time = datetime.now(pytz.UTC)
 
-            _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
+            _LOGGER.warning("async_set_off_grid_mode: %s", off_grid)
 
             if self.is_off_grid():
                 for load in self._all_loads:
@@ -1070,9 +1071,14 @@ class QSHome(QSDynamicGroup):
                     domain=Platform.NOTIFY,
                     service=app,
                     service_data=data,
+                    blocking=True,
                 )
-            except Exception:
+            except ServiceNotFound:
+                _LOGGER.warning("Notification service %s not found, skipping", app)
+            except HomeAssistantError:
                 _LOGGER.error("Failed to send off-grid alert to %s", app, exc_info=True)
+            except Exception:  # noqa: BLE001 — safety net for unforeseen errors
+                _LOGGER.error("Unexpected error sending off-grid alert to %s", app, exc_info=True)
 
     def _register_off_grid_entity_listener(self) -> None:
         """Register a state change listener for the external off-grid entity."""
@@ -1089,17 +1095,29 @@ class QSHome(QSDynamicGroup):
                 new_state.state, self._off_grid_entity
             )
 
-            # Notify all devices only on the on-grid -> off-grid transition
+            # Notify all devices only on real on-grid <-> off-grid transitions
             if self.qs_home_real_off_grid and not previous_real_off_grid:
-                await self.async_notify_all_mobile_apps(
-                    title="\u26a0\ufe0f URGENT: Power grid lost!",
-                    message="Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
-                )
+                if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
+                    await self.async_notify_all_mobile_apps(
+                        title="\U0001f6a8 Grid outage detected (override active)",
+                        message="The power grid appears to be down, but Quiet Solar is forced to on-grid mode. The system will NOT switch to off-grid. Check your installation if this is a real outage.",
+                    )
+                else:
+                    await self.async_notify_all_mobile_apps(
+                        title="\u26a0\ufe0f URGENT: Power grid lost!",
+                        message="Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
+                    )
             elif not self.qs_home_real_off_grid and previous_real_off_grid:
-                await self.async_notify_all_mobile_apps(
-                    title="\u2705 Power grid restored",
-                    message="Your home is back on-grid. Quiet Solar is switching back to normal mode.",
-                )
+                if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
+                    await self.async_notify_all_mobile_apps(
+                        title="\u2705 Grid outage resolved (override was active)",
+                        message="The power grid is back. The on-grid override is still active.",
+                    )
+                else:
+                    await self.async_notify_all_mobile_apps(
+                        title="\u2705 Power grid restored",
+                        message="Your home is back on-grid. Quiet Solar is switching back to normal mode.",
+                    )
 
             await self._compute_and_apply_off_grid_state(for_init=False)
 

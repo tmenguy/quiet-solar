@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime
 from datetime import time as dt_time
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 import pytz
@@ -1550,6 +1550,174 @@ class TestOffGridAutoDetection:
         assert call_data["data"]["priority"] == "high"
         assert call_data["data"]["push"]["interruption-level"] == "critical"
         assert call_data["data"]["push"]["sound"]["critical"] == 1
+
+    # -- Story 3.3 verification tests --
+
+    JARGON_BLOCKLIST = ["solver", "CMD_IDLE", "constraint", "entity", "binary_sensor", "async", "hass"]
+
+    @pytest.mark.asyncio
+    async def test_off_grid_notification_message_is_plain_language(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#1/#4: Notification messages use plain language understandable by Magali."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Trigger off-grid
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count >= 1, "Expected at least 1 notification call for off-grid transition"
+            off_grid_call = mock_notify.call_args_list[0]
+            title = off_grid_call.kwargs["title"]
+            message = off_grid_call.kwargs["message"]
+
+            # Off-grid message: must mention off-grid and non-essential loads
+            assert "off-grid" in message.lower(), f"Off-grid message missing 'off-grid': {message}"
+            assert "non-essential" in message.lower(), f"Off-grid message missing 'non-essential': {message}"
+            for jargon in self.JARGON_BLOCKLIST:
+                assert jargon not in message, f"Off-grid message contains technical jargon '{jargon}': {message}"
+                assert jargon not in title, f"Off-grid title contains technical jargon '{jargon}': {title}"
+
+            # Trigger on-grid recovery
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count >= 2, "Expected at least 2 notification calls (off-grid + recovery)"
+            recovery_call = mock_notify.call_args_list[1]
+            r_title = recovery_call.kwargs["title"]
+            r_message = recovery_call.kwargs["message"]
+
+            # Recovery message: must mention restoration and normal mode
+            assert "restored" in r_title.lower(), f"Recovery title missing 'restored': {r_title}"
+            assert "on-grid" in r_message.lower() or "normal" in r_message.lower(), (
+                f"Recovery message missing 'on-grid' or 'normal': {r_message}"
+            )
+            for jargon in self.JARGON_BLOCKLIST:
+                assert jargon not in r_message, f"Recovery message contains technical jargon '{jargon}': {r_message}"
+                assert jargon not in r_title, f"Recovery title contains technical jargon '{jargon}': {r_title}"
+
+    @pytest.mark.asyncio
+    async def test_broadcast_failure_on_one_app_does_not_block_others(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#4: Failure delivering to one app does not prevent delivery to others.
+
+        With blocking=True, handler exceptions propagate to the production try/except.
+        """
+        home = home_with_binary_sensor_off_grid
+        from homeassistant.exceptions import HomeAssistantError
+
+        calls_good_app = []
+
+        async def handler_failing(call_obj):
+            raise HomeAssistantError("Push service unavailable")
+
+        async def handler_good(call_obj):
+            calls_good_app.append(call_obj)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_failing_phone", handler_failing)
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_good_phone", handler_good)
+
+        await home.async_notify_all_mobile_apps(
+            title="Test alert",
+            message="Test message",
+        )
+        await hass.async_block_till_done()
+
+        # The good app must still receive the notification despite the failing app
+        assert len(calls_good_app) == 1, (
+            f"Good app should receive exactly 1 notification, got {len(calls_good_app)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_recovery_notification_reaches_all_mobile_apps(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#2: Recovery notification is sent to all mobile apps (Magali and TheAdmin)."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Go off-grid
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count == 1, f"Expected 1 off-grid notification, got {mock_notify.call_count}"
+
+            # Restore grid
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count == 2, f"Expected 2 total notifications, got {mock_notify.call_count}"
+            recovery_call = mock_notify.call_args_list[1]
+            assert "restored" in recovery_call.kwargs["title"].lower(), (
+                f"Recovery title missing 'restored': {recovery_call.kwargs['title']}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_notification_on_same_state(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#1/#2 idempotency: setting the same state twice fires no extra notification."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Go off-grid
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+            assert mock_notify.call_count == 1, "First off-grid transition should fire 1 notification"
+
+            # Set same state again — should NOT fire again
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+            assert mock_notify.call_count == 1, "Same state repeated should not fire additional notification"
+
+            # Restore
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+            assert mock_notify.call_count == 2, "Recovery should fire 1 more notification"
+
+            # Set same on-grid state again — should NOT fire again
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+            assert mock_notify.call_count == 2, "Same on-grid state repeated should not fire additional notification"
+
+    @pytest.mark.asyncio
+    async def test_force_on_grid_sends_different_notification(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """Intent gap: FORCE_ON_GRID mode sends a different notification with override context."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Trigger off-grid sensor
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count == 1, "Off-grid detection should still fire a notification"
+            off_grid_call = mock_notify.call_args_list[0]
+            title = off_grid_call.kwargs["title"]
+            message = off_grid_call.kwargs["message"]
+
+            # Must indicate override is active, NOT the standard urgent message
+            assert "override" in title.lower(), f"Force-on-grid title should mention 'override': {title}"
+            assert "URGENT" not in title, f"Force-on-grid should NOT use URGENT title: {title}"
+            assert "will not switch" in message.lower() or "forced" in message.lower(), (
+                f"Force-on-grid message should explain system won't switch: {message}"
+            )
+
+            # Restore grid
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            assert mock_notify.call_count == 2, "Recovery should fire 1 more notification"
+            recovery_call = mock_notify.call_args_list[1]
+            r_title = recovery_call.kwargs["title"]
+            assert "override" in r_title.lower(), f"Force-on-grid recovery title should mention 'override': {r_title}"
 
     # -- Cleanup tests --
 
