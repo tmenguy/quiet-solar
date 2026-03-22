@@ -956,7 +956,7 @@ class QSHome(QSDynamicGroup):
         if do_reset and for_init is False:
             time = datetime.now(pytz.UTC)
 
-            _LOGGER.warning(f"async_set_off_grid_mode: {off_grid}")
+            _LOGGER.warning("async_set_off_grid_mode: %s", off_grid)
 
             if self.is_off_grid():
                 for load in self._all_loads:

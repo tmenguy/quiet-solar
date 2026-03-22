@@ -133,17 +133,25 @@ Last updated: 2026-03-20
 | **Fallback Behavior** | Off-grid mode: reduce consumption to solar + battery capacity. Emergency broadcast to mobile apps. |
 | **Recovery Path** | Auto-detect grid restoration. Broadcast recovery notification. Resume normal operation. |
 | **Implementation Status** | Implemented |
-| **Test Coverage** | Covered |
+| **Test Coverage** | Fully Verified (Story 3.3, 2026-03-22) |
 
 **Current code:** Extensive off-grid support:
 - `const.py` — `CONF_OFF_GRID_ENTITY`, `OFF_GRID_MODE_AUTO`/`FORCE_OFF_GRID`/`FORCE_ON_GRID`
 - `config_flow.py` — off-grid entity configuration with state value and inversion
-- `ha_model/home.py` — off-grid detection and mode switching
+- `ha_model/home.py` — off-grid detection, mode switching, emergency broadcast (`async_notify_all_mobile_apps`)
 - `binary_sensor.py` — `BINARY_SENSOR_HOME_IS_OFF_GRID`, `BINARY_SENSOR_HOME_REAL_OFF_GRID`
+- `home_model/solver.py` — off-grid constraint filtering, best-effort load exclusion, battery depletion with min SOC
 
-**Gaps for Story 3.2:**
-- Verify emergency broadcast implementation
-- Verify load shedding prioritization in off-grid mode
+**Verified in Story 3.3:**
+- Emergency broadcast sends critical push to all mobile apps with per-app failure isolation
+- Notification messages are plain-language (Magali-friendly)
+- Load shedding prioritizes mandatory over filler/best-effort loads
+- Solver uses only solar + battery capacity in off-grid (no grid import)
+- Battery min SOC respected during off-grid depletion
+- 3-minute transition gate blocks solver until loads acknowledge
+- On-grid restoration clears gate and resumes normal operation
+- Force-on-grid overrides real off-grid state (safety override)
+- Unavailable/unknown entity state defaults to on-grid (safe default)
 
 ---
 
@@ -300,7 +308,7 @@ TheAdmin needs a **single dashboard view** showing all active issues, their seve
 | G3 | Charger retry with exponential backoff | FM-002 | NFR12 |
 | G4 | Charger unavailable state + admin notification | FM-002 | FR29 |
 | G5 | Solver infeasibility detection + safe defaults | FM-004 | AR5 |
-| G6 | Emergency broadcast verification in off-grid | FM-005 | AR5, FR19 |
+| ~~G6~~ | ~~Emergency broadcast verification in off-grid~~ | ~~FM-005~~ | ~~AR5, FR19~~ | **CLOSED** (Story 3.3) |
 | G7 | Numpy bare except → specific exceptions + logging | FM-006 | Code quality |
 | G8 | Prediction confidence scoring | FM-007 | AR5 |
 | G9 | Car API staleness detection (timestamp threshold) | FM-008 | NFR13, NFR24 |

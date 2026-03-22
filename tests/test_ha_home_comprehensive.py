@@ -1551,6 +1551,108 @@ class TestOffGridAutoDetection:
         assert call_data["data"]["push"]["interruption-level"] == "critical"
         assert call_data["data"]["push"]["sound"]["critical"] == 1
 
+    # -- Story 3.3 verification tests --
+
+    @pytest.mark.asyncio
+    async def test_off_grid_notification_message_is_plain_language(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#1/#4: Notification messages use plain language understandable by Magali."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        with patch.object(home, "async_notify_all_mobile_apps", new_callable=AsyncMock) as mock_notify:
+            # Trigger off-grid
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+            off_grid_call = mock_notify.call_args_list[0]
+            title = off_grid_call.kwargs.get("title", off_grid_call.args[0] if off_grid_call.args else "")
+            message = off_grid_call.kwargs.get("message", off_grid_call.args[1] if len(off_grid_call.args) > 1 else "")
+
+            # Must be plain language: no code references, no technical jargon
+            assert "off-grid" in message.lower()
+            assert "non-essential" in message.lower() or "loads" in message.lower()
+            # Should NOT contain code-level terms
+            for jargon in ["solver", "CMD_IDLE", "constraint", "entity", "binary_sensor"]:
+                assert jargon not in message, f"Message contains technical jargon: {jargon}"
+
+            # Trigger on-grid recovery
+            hass.states.async_set("binary_sensor.grid_relay", "off")
+            await hass.async_block_till_done()
+
+            recovery_call = mock_notify.call_args_list[1]
+            r_title = recovery_call.kwargs.get("title", recovery_call.args[0] if recovery_call.args else "")
+            r_message = recovery_call.kwargs.get("message", recovery_call.args[1] if len(recovery_call.args) > 1 else "")
+
+            assert "restored" in r_title.lower() or "back" in r_message.lower()
+            assert "normal" in r_message.lower() or "on-grid" in r_message.lower()
+
+    @pytest.mark.asyncio
+    async def test_broadcast_failure_on_one_app_does_not_block_others(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#4: Failure delivering to one app does not prevent delivery to others."""
+        home = home_with_binary_sensor_off_grid
+
+        calls_good_app = []
+
+        async def handler_failing(call):
+            raise Exception("Push service unavailable")
+
+        async def handler_good(call):
+            calls_good_app.append(call)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_failing_phone", handler_failing)
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_good_phone", handler_good)
+
+        await home.async_notify_all_mobile_apps(
+            title="Test alert",
+            message="Test message",
+        )
+        await hass.async_block_till_done()
+
+        # The good app must still receive the notification despite the failing app
+        assert len(calls_good_app) == 1
+
+    @pytest.mark.asyncio
+    async def test_recovery_notification_reaches_all_mobile_apps(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC#2: Recovery notification is sent to all mobile apps (Magali and TheAdmin)."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        calls_magali = []
+        calls_admin = []
+
+        async def handler_magali(call):
+            calls_magali.append(call)
+
+        async def handler_admin(call):
+            calls_admin.append(call)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_magali", handler_magali)
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_admin", handler_admin)
+
+        # Go off-grid
+        hass.states.async_set("binary_sensor.grid_relay", "on")
+        await hass.async_block_till_done()
+
+        # Clear off-grid notification calls
+        calls_magali.clear()
+        calls_admin.clear()
+
+        # Restore grid
+        hass.states.async_set("binary_sensor.grid_relay", "off")
+        await hass.async_block_till_done()
+
+        # Both apps must receive the recovery notification
+        assert len(calls_magali) == 1
+        assert len(calls_admin) == 1
+        assert "restored" in calls_magali[0].data["title"].lower()
+        assert "restored" in calls_admin[0].data["title"].lower()
+
     # -- Cleanup tests --
 
     def test_unregister_cleans_up(self, home_with_binary_sensor_off_grid):
