@@ -421,6 +421,22 @@ So that the entire development lifecycle from idea to release can be driven from
 - Cost and rate-limit implications of autonomous YOLO runs?
 - Guardrails for autonomous mode (scope limits, cost caps, human-in-the-loop checkpoints)?
 
+### Story 1.8: Lazy Logging Sweep (f-string cleanup)
+
+As TheAdmin,
+I want all logging calls to use lazy formatting (`%s` style) instead of f-strings,
+So that the codebase follows HA logging guidelines and avoids unnecessary string interpolation when log levels are disabled.
+
+**Scope:** 169 f-string log calls across 19 files in `custom_components/quiet_solar/`. Heaviest files: `ha_model/charger.py` (69), `ha_model/home.py` (25), `home_model/load.py` (24).
+
+**Acceptance Criteria:**
+
+**Given** the codebase contains `_LOGGER.<level>(f"...")` calls
+**When** the sweep is complete
+**Then** all logging calls use `_LOGGER.<level>("... %s", var)` lazy formatting
+**And** no f-string log calls remain in `custom_components/quiet_solar/`
+**And** all existing tests still pass
+
 ## Epic 2: Trust-Critical Test Scenarios
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
@@ -815,18 +831,3 @@ So that I can understand and trust the system even when things go wrong.
 **And** decisions are presented with context (available solar, active constraints, tariff window, device states)
 **And** the log is queryable by time range and device
 
-### Story 3.13: Lazy Logging Sweep (f-string cleanup)
-
-As TheAdmin,
-I want all logging calls to use lazy formatting (`%s` style) instead of f-strings,
-So that the codebase follows HA logging guidelines and avoids unnecessary string interpolation when log levels are disabled.
-
-**Scope:** 169 f-string log calls across 19 files in `custom_components/quiet_solar/`. Heaviest files: `ha_model/charger.py` (69), `ha_model/home.py` (25), `home_model/load.py` (24).
-
-**Acceptance Criteria:**
-
-**Given** the codebase contains `_LOGGER.<level>(f"...")` calls
-**When** the sweep is complete
-**Then** all logging calls use `_LOGGER.<level>("... %s", var)` lazy formatting
-**And** no f-string log calls remain in `custom_components/quiet_solar/`
-**And** all existing tests still pass
