@@ -215,22 +215,32 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
-- Task 1: Emergency broadcast verified. Fixed f-string log bug at home.py:959. Broadcast code correctly sends critical push to all mobile apps with per-app failure isolation. Added 3 new tests: plain-language message verification, multi-app failure resilience, recovery notification to all apps.
-- Task 2: Load shedding fully verified via existing comprehensive test suite (70+ off-grid tests). Solver correctly uses only available power in off-grid, filters best-effort loads, respects battery min SOC. No new tests needed — existing coverage is thorough.
-- Task 3: Transition lifecycle verified. finish_off_grid_switch() correctly implements 3-minute timeout gate. update_loads() blocks solver until switch completes. All paths covered by existing tests.
+- Task 1: Emergency broadcast verified. Fixed f-string log bug at home.py:959. Hardened bare `except Exception` to catch `ServiceNotFound` and `HomeAssistantError` specifically (bare Exception kept as safety net). Added `blocking=True` to notification calls. Added 5 new tests: plain-language message verification, multi-app failure resilience (tests actual exception path), recovery notification, idempotency (same-state no duplicate), force-on-grid differentiated notification.
+- Task 2: Load shedding fully verified via existing test suite. Traceability:
+  - 2.5 (zero grid import): `test_grid_transition_constraints.py::TestOffGridSolverEdgeCases::test_off_grid_solver_uses_only_available_power`
+  - 2.6 (filler shed before mandatory): `test_grid_transition_constraints.py::TestOffGridSolverEdgeCases::test_off_grid_load_shedding_filler_before_mandatory`
+  - 2.7 (battery min SOC): `test_solver.py::TestSolver::test_off_grid_battery_depletion_respects_min_soc`, `test_grid_transition_constraints.py::TestOffGridSolverEdgeCases::test_off_grid_battery_depletion_respects_min_soc`
+- Task 3: Transition lifecycle verified. Traceability:
+  - 3.3 (blocks solver until acknowledge/timeout): `ha_tests/test_home_extended_coverage.py::TestHomeOffGridMode::test_finish_off_grid_switch_loads_not_ready`, `test_finish_off_grid_switch_timeout`, `test_finish_off_grid_switch_all_loads_ok`
+  - 3.4 (restoration clears gate): `test_grid_transition_constraints.py::TestSwitchToOffGridLaunchedClear::test_cleared_on_back_to_on_grid`
 - Task 4: Detection and mode control verified. All entity types (binary_sensor, sensor, switch) with inversion support tested. Force modes override real state. Unavailable/unknown defaults to on-grid. All paths covered by existing tests.
-- Task 5: FM-005 catalog updated to "Fully Verified". Gap G6 marked closed. 100% test coverage maintained (3960 tests).
+- Task 5: FM-005 catalog updated to "Fully Verified". Gap G6 marked closed.
 
 ### Change Log
 
 - Fixed f-string in log call at ha_model/home.py:959 (lazy logging rule compliance)
-- Added 3 verification tests for emergency broadcast in test_ha_home_comprehensive.py
+- Hardened bare `except Exception` in `async_notify_all_mobile_apps` to catch `ServiceNotFound`/`HomeAssistantError` specifically; bare Exception kept as safety net with `noqa: BLE001`
+- Added `blocking=True` to notification `async_call` so exceptions propagate to the try/except
+- Added differentiated notification messages when `FORCE_ON_GRID` mode is active
+- Added 5 verification tests in test_ha_home_comprehensive.py (plain-language, broadcast failure, recovery, idempotency, force-on-grid)
+- Tightened all test assertions: call count guards, strict string matching, jargon blocklist on both messages
 - Updated FM-005 entry in failure-mode-catalog.md (test coverage: Fully Verified)
-- Closed gap G6 in gap analysis summary
+- Closed gap G6 in gap analysis summary (fixed markdown table column count)
+- Added traceability mapping for Tasks 2.5-2.7, 3.3-3.4 to existing tests
 
 ### File List
 
-- custom_components/quiet_solar/ha_model/home.py (modified: fix f-string log)
-- tests/test_ha_home_comprehensive.py (modified: 3 new verification tests)
-- docs/failure-mode-catalog.md (modified: FM-005 verified, G6 closed)
-- _bmad-output/implementation-artifacts/3-3-fm-005-grid-outage-verification.md (modified: task completion)
+- custom_components/quiet_solar/ha_model/home.py (modified: fix f-string log, harden exception handling, add blocking=True, differentiated force-mode notifications)
+- tests/test_ha_home_comprehensive.py (modified: 5 new verification tests, tightened assertions)
+- docs/failure-mode-catalog.md (modified: FM-005 verified, G6 closed, fixed markdown table)
+- _bmad-output/implementation-artifacts/3-3-fm-005-grid-outage-verification.md (modified: task completion, traceability mapping)

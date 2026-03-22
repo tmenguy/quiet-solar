@@ -814,3 +814,19 @@ So that I can understand and trust the system even when things go wrong.
 **Then** the log shows what the solver decided and why for each solver cycle in the period
 **And** decisions are presented with context (available solar, active constraints, tariff window, device states)
 **And** the log is queryable by time range and device
+
+### Story 3.13: Lazy Logging Sweep (f-string cleanup)
+
+As TheAdmin,
+I want all logging calls to use lazy formatting (`%s` style) instead of f-strings,
+So that the codebase follows HA logging guidelines and avoids unnecessary string interpolation when log levels are disabled.
+
+**Scope:** 169 f-string log calls across 19 files in `custom_components/quiet_solar/`. Heaviest files: `ha_model/charger.py` (69), `ha_model/home.py` (25), `home_model/load.py` (24).
+
+**Acceptance Criteria:**
+
+**Given** the codebase contains `_LOGGER.<level>(f"...")` calls
+**When** the sweep is complete
+**Then** all logging calls use `_LOGGER.<level>("... %s", var)` lazy formatting
+**And** no f-string log calls remain in `custom_components/quiet_solar/`
+**And** all existing tests still pass

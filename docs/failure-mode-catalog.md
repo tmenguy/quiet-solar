@@ -308,7 +308,7 @@ TheAdmin needs a **single dashboard view** showing all active issues, their seve
 | G3 | Charger retry with exponential backoff | FM-002 | NFR12 |
 | G4 | Charger unavailable state + admin notification | FM-002 | FR29 |
 | G5 | Solver infeasibility detection + safe defaults | FM-004 | AR5 |
-| ~~G6~~ | ~~Emergency broadcast verification in off-grid~~ | ~~FM-005~~ | ~~AR5, FR19~~ | **CLOSED** (Story 3.3) |
+| ~~G6~~ | ~~Emergency broadcast verification in off-grid — CLOSED (Story 3.3)~~ | ~~FM-005~~ | ~~AR5, FR19~~ |
 | G7 | Numpy bare except → specific exceptions + logging | FM-006 | Code quality |
 | G8 | Prediction confidence scoring | FM-007 | AR5 |
 | G9 | Car API staleness detection (timestamp threshold) | FM-008 | NFR13, NFR24 |
