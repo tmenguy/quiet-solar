@@ -205,7 +205,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
 
-        _LOGGER.info(f"QSSwitchEntity:async_turn_on : {self.entity_description.key} on {self.device.name}")
+        _LOGGER.info("QSSwitchEntity:async_turn_on : %s on %s", self.entity_description.key, self.device.name)
 
         for_init = kwargs.pop("for_init", False)
 
@@ -222,7 +222,7 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
 
-        _LOGGER.info(f"QSSwitchEntity:async_turn_off : {self.entity_description.key} on {self.device.name}")
+        _LOGGER.info("QSSwitchEntity:async_turn_off : %s on %s", self.entity_description.key, self.device.name)
 
         for_init = kwargs.pop("for_init", False)
 

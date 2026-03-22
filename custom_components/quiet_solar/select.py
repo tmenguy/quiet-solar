@@ -273,7 +273,9 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
     async def async_select_option(self, option: str | None, for_init=False) -> None:
         """Select an option."""
-        _LOGGER.info(f"QSBaseSelect:async_select_option: {option} {self.entity_description.key} on {self.device.name}")
+        _LOGGER.info(
+            "QSBaseSelect:async_select_option: %s %s on %s", option, self.entity_description.key, self.device.name
+        )
 
         self._attr_current_option = option
         await self.set_current_option(option, for_init=for_init)

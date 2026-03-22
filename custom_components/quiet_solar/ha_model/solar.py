@@ -78,7 +78,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self.attach_power_to_probe(self.solar_inverter_input_active_power)
 
         if self.solar_forecast_provider is not None:
-            _LOGGER.info(f"Creating solar forecast provider handler for {self.solar_forecast_provider}")
+            _LOGGER.info("Creating solar forecast provider handler for %s", self.solar_forecast_provider)
             if self.solar_forecast_provider == SOLCAST_SOLAR_DOMAIN:
                 self.solar_forecast_provider_handler = QSSolarProviderSolcast(self)
             elif self.solar_forecast_provider == OPEN_METEO_SOLAR_DOMAIN:

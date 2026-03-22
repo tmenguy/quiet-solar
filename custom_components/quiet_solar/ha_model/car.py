@@ -124,7 +124,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     if v >= 0 and v <= 100:
                         self.car_charge_percent_max_number_steps.append(v)
                 except ValueError:
-                    _LOGGER.error(f"Invalid value {val} for car charge percent max number steps, must be an integer")
+                    _LOGGER.error("Invalid value %s for car charge percent max number steps, must be an integer", val)
                     self.car_charge_percent_max_number_steps = []
                     break
 
@@ -384,7 +384,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if option != FORCE_CAR_NO_PERSON_ATTACHED and self.home:
             p_per = self.home.get_person_by_name(option)
             if p_per is None:
-                _LOGGER.error(f"user_set_person_for_car: WRONG PERSON OPTION PASSED {option}")
+                _LOGGER.error("user_set_person_for_car: WRONG PERSON OPTION PASSED %s", option)
                 option = FORCE_CAR_NO_PERSON_ATTACHED
             elif not self._is_person_authorized_for_car(option):
                 _LOGGER.warning(
@@ -856,12 +856,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._qs_bump_solar_priority = False
 
     def attach_charger(self, charger):
-        _LOGGER.info(f"Car {self.name} attaching charger {charger.name}")
+        _LOGGER.info("Car %s attaching charger %s", self.name, charger.name)
         charger.attach_car(self, datetime.now(tz=pytz.UTC))
 
     def detach_charger(self):
         if self.charger is not None:
-            _LOGGER.info(f"Car {self.name} detached charger {self.charger.name}")
+            _LOGGER.info("Car %s detached charger %s", self.name, self.charger.name)
             self.charger.detach_car()
 
     def get_continuous_plug_duration(self, time: datetime) -> float | None:
@@ -1056,7 +1056,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self._km_per_kwh is not None:
             return (self._km_per_kwh * (float(self.car_battery_capacity) / 1000.0)) / 100.0
 
-        _LOGGER.warning(f"get_computed_range_efficiency_km_per_percent: {self.name} no efficiency data available")
+        _LOGGER.warning("get_computed_range_efficiency_km_per_percent: %s no efficiency data available", self.name)
 
         return None
 
@@ -1156,7 +1156,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         current_charge_limit = self.get_max_charge_limit()
         if current_charge_limit != percent:
-            _LOGGER.info(f"Car {self.name} set max charge limit from {current_charge_limit}% to {percent}%")
+            _LOGGER.info("Car %s set max charge limit from %s%% to %s%%", self.name, current_charge_limit, percent)
 
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.car_charge_percent_max_number}
             service = number.SERVICE_SET_VALUE
@@ -1607,7 +1607,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
 
         if default_charge_time is None:
-            _LOGGER.error(f"Car {self.name} cannot add default charge at None time")
+            _LOGGER.error("Car %s cannot add default charge at None time", self.name)
             return False
 
         # compute the next occurrence of the default charge time

@@ -45,7 +45,7 @@ class QSOnOffDuration(QSBiStateDuration):
             else:
                 raise ValueError("Invalid command")
 
-        _LOGGER.info(f"Executing on/off command {action} on {self.bistate_entity}")
+        _LOGGER.info("Executing on/off command %s on %s", action, self.bistate_entity)
 
         # exception catched above execute_command
         await self.hass.services.async_call(

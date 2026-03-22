@@ -725,7 +725,7 @@ class HADeviceMixin:
         if title is None:
             title = f"What will happen for {load_name}?"
 
-        _LOGGER.info(f"Sending notification for load {load_name} app: {mobile_app} with: {message}")
+        _LOGGER.info("Sending notification for load %s app: %s with: %s", load_name, mobile_app, message)
 
         if mobile_app is not None and message is not None:
             data = {
@@ -737,7 +737,7 @@ class HADeviceMixin:
                 data["data"]["url"] = mobile_app_url
                 data["data"]["clickAction"] = mobile_app_url
 
-            _LOGGER.info(f"Full Sending notification for load {load_name} app: {mobile_app} with: {data}")
+            _LOGGER.info("Full Sending notification for load %s app: %s with: %s", load_name, mobile_app, data)
 
             try:
                 await self.hass.services.async_call(

@@ -66,7 +66,7 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
             await hass.config_entries.async_unload(entry.entry_id)
         except Exception as e:
             # Log the error but continue with the next entry
-            _LOGGER.error(f"Error unloading entry {entry.entry_id}: {e}", exc_info=True, stack_info=True)
+            _LOGGER.error("Error unloading entry %s: %s", entry.entry_id, e, exc_info=True, stack_info=True)
 
     hass.data[DOMAIN] = {}
 
@@ -77,7 +77,7 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
             await hass.config_entries.async_reload(entry.entry_id)
         except Exception as e:
             # Log the error but continue with the next entry
-            _LOGGER.error(f"Error reloading entry {entry.entry_id}: {e}", exc_info=True, stack_info=True)
+            _LOGGER.error("Error reloading entry %s: %s", entry.entry_id, e, exc_info=True, stack_info=True)
 
 
 @callback
@@ -106,7 +106,7 @@ def register_ocpp_notification_listener(hass: HomeAssistant) -> None:
         try:
             # Check if this is a persistent_notification.create service call
             if event.data.get("domain") == PN_DOMAIN and event.data.get("service") == "create":
-                _LOGGER.info(f"Received OCPP notification event: {event.data}")
+                _LOGGER.info("Received OCPP notification event: %s", event.data)
 
                 service_data = event.data.get("service_data", {})
                 title = service_data.get("title", "")
@@ -114,7 +114,7 @@ def register_ocpp_notification_listener(hass: HomeAssistant) -> None:
 
                 # Check if this is a notification from OCPP integration
                 if "ocpp" in title.lower() or "charger" in message.lower():
-                    _LOGGER.info(f"Intercepted OCPP notification: {title} - {message}")
+                    _LOGGER.info("Intercepted OCPP notification: %s - %s", title, message)
 
                     # Get the QSDataHandler to access chargers
                     data_handler = hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
@@ -145,7 +145,7 @@ def register_ocpp_notification_listener(hass: HomeAssistant) -> None:
                                 await qs_charger.handle_ocpp_notification(message, title)
 
         except Exception as e:
-            _LOGGER.error(f"Error in OCPP notification listener: {e}", exc_info=True, stack_info=True)
+            _LOGGER.error("Error in OCPP notification listener: %s", e, exc_info=True, stack_info=True)
 
     # Listen for service call events
     hass.bus.async_listen("call_service", ocpp_notification_listener)
@@ -186,7 +186,7 @@ async def _is_notification_for_charger(hass: HomeAssistant, message: str, qs_cha
         return False
 
     except Exception as e:
-        _LOGGER.debug(f"Error matching notification to charger: {e}", exc_info=True, stack_info=True)
+        _LOGGER.debug("Error matching notification to charger: %s", e, exc_info=True, stack_info=True)
         return False
 
 

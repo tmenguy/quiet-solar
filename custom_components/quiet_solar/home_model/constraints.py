@@ -327,12 +327,12 @@ class LoadConstraint:
                 module = None
 
         if module is None:
-            _LOGGER.error(f"Cannot import the module to load constraint {__name__} {data}")
+            _LOGGER.error("Cannot import the module to load constraint %s %s", __name__, data)
             return None
 
         class_name: str | None = data.get("qs_class_type", None)
         if class_name is None:
-            _LOGGER.error(f"Cannot import the load constraint: no class {data}")
+            _LOGGER.error("Cannot import the load constraint: no class %s", data)
             return None
         my_class = getattr(module, class_name)
         kwargs = my_class.from_dict_to_kwargs(data)
@@ -550,7 +550,7 @@ class LoadConstraint:
             if self._update_value_callback is not None:
                 value, do_continue_constraint = await self._update_value_callback(self, time)
                 if do_continue_constraint is False:
-                    _LOGGER.info(f"{self.name} update callback asked for stop")
+                    _LOGGER.info("%s update callback asked for stop", self.name)
             else:
                 value = self.compute_value(time)
 
@@ -1288,14 +1288,14 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         use_production_limits = False
 
         if energy_delta >= 0.0:
-            _LOGGER.info(f"adapt_repartition: for {self.name} consume more energy {energy_delta}Wh for {log_msg}")
+            _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
             # start from the end as future is more uncertain, so take actions far from now, and we will see later if it was worth it
             # sorted_available_power = range(last_slot, first_slot - 1, -1)
 
             # well not sure of the statement above as the solver will assess stuff differently depending on what we consumed
             sorted_available_power = range(first_slot, last_slot + 1)
         else:
-            _LOGGER.info(f"adapt_repartition: for {self.name} reclaim energy {energy_delta}Wh from {log_msg}")
+            _LOGGER.info("adapt_repartition: for %s reclaim energy %sWh from %s", self.name, energy_delta, log_msg)
             # try to reclaim energy to fill the battery as requested by the energy delta
             # start as soon as possible to get a chance to fill the battery as needed
             sorted_available_power = range(first_slot, last_slot + 1)
@@ -1660,7 +1660,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             out_constraint = self.shallow_copy_for_budget_delta_quantity(delta_budget_quantity)
 
             if num_non_zero_existing_commands == 0:
-                _LOGGER.info(f"adapt_repartition: for {self.name} THERE WERE NO NON ZERO EXISTING COMMANDS")
+                _LOGGER.info("adapt_repartition: for %s THERE WERE NO NON ZERO EXISTING COMMANDS", self.name)
 
             if self.support_auto and num_changes > 0:
                 # CAP the modified segment to what has been computed ...or force some consumption
@@ -2052,7 +2052,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     quantity_to_be_added = local_quantity_to_be_added
 
             if has_a_cmd is False:
-                _LOGGER.error(f"compute_best_period_repartition: no power sorted commands for green energy {self.name}")
+                _LOGGER.error(
+                    "compute_best_period_repartition: no power sorted commands for green energy %s", self.name
+                )
                 final_ret = False
             elif quantity_to_be_added <= 0.0 or do_use_available_power_only:
                 final_ret = quantity_to_be_added <= 0.0

@@ -248,7 +248,7 @@ class QSStateCmd:
             self.last_change_asked = None
 
         if self.value != value:
-            _LOGGER.info(f"QSStateCmd set with change from {self.value} to {value} at {time}")
+            _LOGGER.info("QSStateCmd set with change from %s to %s at %s", self.value, value, time)
             num_set = self._num_set
             self.reset()
             self.value = value
@@ -824,7 +824,9 @@ class QSChargerGroup:
                     )
                     dampened_chargers[charger] = a_charging_cs
                 else:
-                    _LOGGER.info(f"dyn_handle: can't dampen simple case {num_true_charging_cs} {charging} {reason}")
+                    _LOGGER.info(
+                        "dyn_handle: can't dampen simple case %s %s %s", num_true_charging_cs, charging, reason
+                    )
 
                 # check the current state of the chargers to see if we can try to map the delta power properly
                 if (
@@ -1380,7 +1382,7 @@ class QSChargerGroup:
                                     next_num_phases_budget = next_budgeted_num_phases
 
                     if smallest_power_increment is not None:
-                        _LOGGER.info(f"dyn_handle: auto-price extended charge {smallest_power_increment}")
+                        _LOGGER.info("dyn_handle: auto-price extended charge %s", smallest_power_increment)
                         additional_added_energy = (smallest_power_increment * durations_eval_s) / 3600.0
                         cost = (
                             (
@@ -1699,7 +1701,7 @@ class QSChargerGroup:
             cs_to_apply = decreasing_cs
             self.remaining_budget_to_apply = increasing_cs
 
-            _LOGGER.info(f"apply_budget_strategy: need to split updates {len(decreasing_cs)}/{len(increasing_cs)}")
+            _LOGGER.info("apply_budget_strategy: need to split updates %s/%s", len(decreasing_cs), len(increasing_cs))
         else:
             cs_to_apply = actionable_chargers
             self.remaining_budget_to_apply = []
@@ -1770,7 +1772,7 @@ class QSChargerGroup:
                 _LOGGER.info(
                     f"{cs.name} new_amp {new_amp} / init_amp {init_amp} new_state {new_state} / init_state {init_state} new_num_phases {new_num_phases} / init_phase_num {init_phase_num}"
                 )
-                _LOGGER.info(f"{cs.name} min charge {cs.charger.min_charge} max charge {cs.charger.max_charge}")
+                _LOGGER.info("%s min charge %s max charge %s", cs.name, cs.charger.min_charge, cs.charger.max_charge)
 
             if init_state != new_state:
                 # normally the state change has been checked already to allow or not a change of state in the
@@ -1781,7 +1783,7 @@ class QSChargerGroup:
                 cs.charger.last_state_change_time = time
 
                 if cs.charger._expected_charge_state.last_change_asked is None:
-                    _LOGGER.info(f"Change State: new_state {new_state} delta None")
+                    _LOGGER.info("Change State: new_state %s delta None", new_state)
                 else:
                     _LOGGER.info(
                         f"Change State: new_state {new_state} delta {(time - cs.charger._expected_charge_state.last_change_asked).total_seconds()}s"
@@ -1882,7 +1884,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             self._internal_fake_is_plugged_id, is_numerical=False, non_ha_entity_get_state=self.is_plugged_state_getter
         )
 
-        _LOGGER.info(f"Creating Charger: {self.name}")
+        _LOGGER.info("Creating Charger: %s", self.name)
 
         self._power_steps = []
 
@@ -2083,15 +2085,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def get_stable_dynamic_charge_status(self, time: datetime) -> QSChargerStatus | None:
 
         if self.qs_enable_device is False:
-            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} not enabled in qs")
+            _LOGGER.info("get_stable_dynamic_charge_status: %s not enabled in qs", self.name)
             return None
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
-            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} no car or no plugged {self.car}")
+            _LOGGER.info("get_stable_dynamic_charge_status: %s no car or no plugged %s", self.name, self.car)
             return None
 
         if self.is_charger_unavailable(time=time):
-            _LOGGER.info(f"get_stable_dynamic_charge_status: {self.name} unavailable")
+            _LOGGER.info("get_stable_dynamic_charge_status: %s unavailable", self.name)
             return None
 
         handled = self._probe_and_enforce_stopped_charge_command_state(
@@ -2395,7 +2397,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_last_completed_constraint = None
 
     def reset(self, keep_commands=False):
-        _LOGGER.info(f"Charger reset {self.name}")
+        _LOGGER.info("Charger reset %s", self.name)
         super().reset(keep_commands=keep_commands)
         self.detach_car()
         self._reset_state_machine()
@@ -2405,7 +2407,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self.possible_charge_error_start_time = None
 
     def _reset_state_machine(self):
-        _LOGGER.info(f"_reset_state_machine: {self.name}")
+        _LOGGER.info("_reset_state_machine: %s", self.name)
         self._verified_correct_state_time = None
         self._inner_expected_charge_state = None
         self._inner_amperage = None
@@ -2599,7 +2601,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     car = None
 
                 if car is not None:
-                    _LOGGER.info(f"get_best_car: Best Car from user selection: {car.name} for charger {self.name}")
+                    _LOGGER.info("get_best_car: Best Car from user selection: %s for charger %s", car.name, self.name)
 
                     for charger in self.home._chargers:
                         if charger.qs_enable_device is False:
@@ -2648,7 +2650,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             for car in self.home._cars:
                 if car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED:
-                    _LOGGER.info(f"get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: {car.name}")
+                    _LOGGER.info("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
                     continue
 
                 score = charger.get_car_score(car, time, cache)
@@ -2707,11 +2709,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 and self._boot_car.get_user_originated("charger_name") != FORCE_CAR_NO_CHARGER_CONNECTED
             ):
                 best_car = self._boot_car
-                _LOGGER.info(f"get_best_car: Best Car from boot data: {best_car.name} for charger {self.name}")
+                _LOGGER.info("get_best_car: Best Car from boot data: %s for charger %s", best_car.name, self.name)
             else:
                 # there is no good car for this charger: get teh charger invited one
                 best_car = self._default_generic_car
-                _LOGGER.info(f"get_best_car: Default car used: {best_car.name}")
+                _LOGGER.info("get_best_car: Default car used: %s", best_car.name)
         else:
             if (
                 self._boot_car is not None
@@ -3556,7 +3558,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             power_steps = sorted(s)
 
-            _LOGGER.info(f"update_power_steps: {self.car.name} {power_steps} {min_charge}/{max_charge}")
+            _LOGGER.info("update_power_steps: %s %s %s/%s", self.car.name, power_steps, min_charge, max_charge)
             steps = []
 
             for power in power_steps:
@@ -3584,7 +3586,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             try:
                 await self.low_level_stop_charge(time)
             except Exception as e:
-                _LOGGER.warning(f"stop_charge EXCEPTION {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning("stop_charge EXCEPTION %s", e, exc_info=True, stack_info=True)
 
     async def start_charge(self, time: datetime):
         self._expected_charge_state.register_launch(value=True, time=time)
@@ -3594,7 +3596,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             try:
                 await self.low_level_start_charge(time)
             except Exception as e:
-                _LOGGER.warning(f"start_charge EXCEPTION {e}", exc_info=True, stack_info=True)
+                _LOGGER.warning("start_charge EXCEPTION %s", e, exc_info=True, stack_info=True)
 
     def _check_charger_status(
         self, status_vals: list[str], time: datetime, for_duration: float | None = None, invert_prob=False
@@ -3898,7 +3900,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def reboot(self, time: datetime):
         if self.can_reboot():
             self._asked_for_reboot_at_time = time
-            _LOGGER.warning(f"reboot: {self.name}")
+            _LOGGER.warning("reboot: %s", self.name)
             await self.low_level_reboot(time)
 
     def probe_for_possible_needed_reboot(self, time):
@@ -4014,22 +4016,22 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         await self._do_update_charger_state(time)
 
         if self.is_charger_unavailable(time=time):
-            _LOGGER.info(f"ensure_correct_state: {self.name} not available")
+            _LOGGER.info("ensure_correct_state: %s not available", self.name)
             # return None in ths particular case as nothing frm this charger will be actionable
             return None, False, None
 
         if self.car is None or self.is_not_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             # if we reset here it will remove the current constraint list from the load!!!!
-            _LOGGER.info(f"ensure_correct_state: {self.name} no car or not plugged")
+            _LOGGER.info("ensure_correct_state: %s no car or not plugged", self.name)
             return True, False, None
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
-            _LOGGER.info(f"ensure_correct_state:{self.name} short unplug")
+            _LOGGER.info("ensure_correct_state:%s short unplug", self.name)
             return False, False, None  # we don't know if final
 
         if self.running_command is not None:
-            _LOGGER.info(f"ensure_correct_state:{self.name} running command {self.running_command}")
+            _LOGGER.info("ensure_correct_state:%s running command %s", self.name, self.running_command)
             return False, False, None
 
         handled = self._probe_and_enforce_stopped_charge_command_state(
@@ -4042,17 +4044,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         one_bad = False
 
         if self.is_in_state_reset():
-            _LOGGER.info(f"Ensure State:{self.name} no correct expected state")
+            _LOGGER.info("Ensure State:%s no correct expected state", self.name)
             one_bad = True
 
         if one_bad is False:
             if self._asked_for_reboot_at_time is not None:
                 is_reboot_done = self.check_if_reboot_happened(from_time=self._asked_for_reboot_at_time, to_time=time)
                 if is_reboot_done:
-                    _LOGGER.info(f"Ensure State:{self.name} reboot asked and now restart happened")
+                    _LOGGER.info("Ensure State:%s reboot asked and now restart happened", self.name)
                     self._asked_for_reboot_at_time = None
                 else:
-                    _LOGGER.info(f"Ensure State:{self.name} reboot asked but still not happened")
+                    _LOGGER.info("Ensure State:%s reboot asked but still not happened", self.name)
                     one_bad = True
 
         if one_bad is False:
@@ -4082,9 +4084,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_charge_disabled = self.is_charge_disabled(time)
 
             if is_charge_enabled is None:
-                _LOGGER.info(f"Ensure State:{self.name} is_charge_enabled state unknown")
+                _LOGGER.info("Ensure State:%s is_charge_enabled state unknown", self.name)
             if is_charge_disabled is None:
-                _LOGGER.info(f"Ensure State:{self.name} is_charge_disabled state unknown")
+                _LOGGER.info("Ensure State:%s is_charge_disabled state unknown", self.name)
 
             charging_current_amp = self.get_charging_current()
             want_charge = self._expected_charge_state.value is True
@@ -4109,10 +4111,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     f"({charging_current_amp}A vs {self._expected_amperage.value}A) "
                                     f"after {self._expected_amperage._num_launched} retries"
                                 )
-                            _LOGGER.info(f"Ensure State:{self.name} stop_charge")
+                            _LOGGER.info("Ensure State:%s stop_charge", self.name)
                             await self.stop_charge(time=time)
                         else:
-                            _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH stop")
+                            _LOGGER.debug("Ensure State:%s NOT OK TO LAUNCH stop", self.name)
 
                 else:
                     # amps not yet at target: send amps command, delay stop
@@ -4133,13 +4135,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # === TRANSITION: not charging -> want to start ===
                 # Just start charge, amps will be set once charge is confirmed
                 one_bad = True  # because of the charge state
-                _LOGGER.info(f"Ensure State:{self.name} expected charge=True, is_charge_enabled={is_charge_enabled}")
+                _LOGGER.info("Ensure State:%s expected charge=True, is_charge_enabled=%s", self.name, is_charge_enabled)
                 if probe_only is False:
                     if self._expected_charge_state.is_ok_to_launch(value=True, time=time):
-                        _LOGGER.info(f"Ensure State:{self.name} start_charge")
+                        _LOGGER.info("Ensure State:%s start_charge", self.name)
                         await self.start_charge(time=time)
                     else:
-                        _LOGGER.debug(f"Ensure State:{self.name} NOT OK TO LAUNCH start")
+                        _LOGGER.debug("Ensure State:%s NOT OK TO LAUNCH start", self.name)
 
                 await self.update_data_request(time=time)
 
@@ -4260,14 +4262,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         if self.is_not_plugged(time=time):
             # could be a "short" unplug
-            _LOGGER.info(f"update_value_callback (is %:{is_target_percent}): {self.name} short unplug")
+            _LOGGER.info("update_value_callback (is %%:%s): %s short unplug", is_target_percent, self.name)
             return (None, True)
 
         result_calculus = None
         sensor_result = None
 
         if self.current_command is None or self.current_command.is_off_or_idle():
-            _LOGGER.info(f"update_value_callback (is %:{is_target_percent}): {self.name} no command or idle/off")
+            _LOGGER.info("update_value_callback (is %%:%s): %s no command or idle/off", is_target_percent, self.name)
             result = None
         else:
             probe_charge_window = 30 * 60
@@ -4473,7 +4475,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         result = ct.target_value
 
         if current_charge is None:
-            _LOGGER.info(f"is_car_charged: {self.name} current charge unknown")
+            _LOGGER.info("is_car_charged: %s current charge unknown", self.name)
             return False, result
 
         return result == target_charge, result
@@ -4511,7 +4513,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     ) -> bool:
 
         if self.car is None:
-            _LOGGER.info(f"_probe_and_enforce_stopped_charge_command_state: {self.name} NONE car, do nothing")
+            _LOGGER.info("_probe_and_enforce_stopped_charge_command_state: %s NONE car, do nothing", self.name)
             return True
 
         handled = False
@@ -4591,7 +4593,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         result = None
         if is_plugged and self.car is not None:
-            _LOGGER.info(f"probe_if_command_set: command {command} for {self.car.name}")
+            _LOGGER.info("probe_if_command_set: command %s for %s", command, self.car.name)
             self._probe_and_enforce_stopped_charge_command_state(time, command=command, probe_only=True)
             result = await self._ensure_correct_state(time, probe_only=True)
         else:
@@ -4599,9 +4601,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 result = True
             else:
                 if self.car is None:
-                    _LOGGER.info(f"Bad prob command set: plugged {is_plugged} NO CAR")
+                    _LOGGER.info("Bad prob command set: plugged %s NO CAR", is_plugged)
                 else:
-                    _LOGGER.info(f"Bad prob command set: plugged {is_plugged} Car: {self.car.name}")
+                    _LOGGER.info("Bad prob command set: plugged %s Car: %s", is_plugged, self.car.name)
 
         return result
 
@@ -4637,7 +4639,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     )
                     self._last_charger_state_prob_time = time
                 except Exception as e:
-                    _LOGGER.error(f"_do_update_charger_state: Error {e}", exc_info=True, stack_info=True)
+                    _LOGGER.error("_do_update_charger_state: Error %s", e, exc_info=True, stack_info=True)
 
     def _find_charger_entity_id(self, device, entries, prefix, suffix):
 
@@ -4675,7 +4677,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 found = computed
 
         if found is None:
-            _LOGGER.warning(f"_find_charger_entity_id: Entity ID not found with prefix {prefix} and suffix {suffix}")
+            _LOGGER.warning("_find_charger_entity_id: Entity ID not found with prefix %s and suffix %s", prefix, suffix)
 
         return found
 
@@ -4797,9 +4799,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     target={ATTR_ENTITY_ID: self.charger_reboot_button},
                     blocking=False,
                 )
-                _LOGGER.info(f"Rebooting charger {self.name} at {time}")
+                _LOGGER.info("Rebooting charger %s at %s", self.name, time)
             except Exception as e:
-                _LOGGER.error(f"low_level_reboot: Error {e}", exc_info=True, stack_info=True)
+                _LOGGER.error("low_level_reboot: Error %s", e, exc_info=True, stack_info=True)
 
     async def low_level_set_charging_num_phases(self, num_phases: int, time: datetime) -> bool:
         if num_phases == 1:
@@ -4827,7 +4829,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return await self.low_level_set_charging_current(current, time, blocking)
 
         try:
-            _LOGGER.info(f"low_level_set_max_charging_current: {current}A")
+            _LOGGER.info("low_level_set_max_charging_current: %sA", current)
             data: dict[str, Any] = {ATTR_ENTITY_ID: self.charger_max_charging_current_number}
             range_value = float(current)
             service = number.SERVICE_SET_VALUE
@@ -4839,7 +4841,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             await self.hass.services.async_call(domain, service, data, blocking=blocking)
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_set_max_charging_current: Error {e}", exc_info=True, stack_info=True)
+            _LOGGER.warning("low_level_set_max_charging_current: Error %s", e, exc_info=True, stack_info=True)
             done = False
         return done
 
@@ -4847,7 +4849,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.charger_max_charging_current_number is not None:
             return await self.low_level_set_max_charging_current(current=current, time=time, blocking=blocking)
 
-        _LOGGER.error(f"low_level_set_charging_current: No way to set current {current}A")
+        _LOGGER.error("low_level_set_charging_current: No way to set current %sA", current)
         raise NotImplementedError("No way to set charging current")
 
     async def low_level_stop_charge(self, time: datetime) -> bool:
@@ -4861,7 +4863,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             return True
         except Exception as e:
-            _LOGGER.warning(f"low_level_stop_charge: Error {e}", exc_info=True, stack_info=True)
+            _LOGGER.warning("low_level_stop_charge: Error %s", e, exc_info=True, stack_info=True)
 
         return False
 
@@ -4876,7 +4878,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             return True
         except Exception as e:
-            _LOGGER.warning(f"low_level_start_charge: Error {e}", exc_info=True, stack_info=True)
+            _LOGGER.warning("low_level_start_charge: Error %s", e, exc_info=True, stack_info=True)
 
         return False
 
@@ -4976,12 +4978,12 @@ class QSChargerOCPP(QSChargerGeneric):
 
     async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
         """Handle notifications from the OCPP integration and take automated actions."""
-        _LOGGER.info(f"Received OCPP notification for charger {self.name}: {title} - {message}")
+        _LOGGER.info("Received OCPP notification for charger %s: %s - %s", self.name, title, message)
         # check message: Warning: Start transaction failed with response
         return
 
         try:
-            _LOGGER.info(f"Received OCPP notification for charger {self.name}: {title} - {message}")
+            _LOGGER.info("Received OCPP notification for charger %s: %s - %s", self.name, title, message)
 
             # Analyze the notification content and take appropriate actions
             message_lower = message.lower()
@@ -5002,7 +5004,7 @@ class QSChargerOCPP(QSChargerGeneric):
             for trigger in reboot_triggers:
                 if trigger in message_lower:
                     should_reboot = True
-                    _LOGGER.info(f"OCPP notification indicates reboot needed: {trigger}")
+                    _LOGGER.info("OCPP notification indicates reboot needed: %s", trigger)
                     break
 
             # Check for error conditions that might need attention
@@ -5012,54 +5014,54 @@ class QSChargerOCPP(QSChargerGeneric):
             for error_trigger in error_triggers:
                 if error_trigger in message_lower:
                     is_error = True
-                    _LOGGER.warning(f"OCPP notification indicates error condition: {error_trigger}")
+                    _LOGGER.warning("OCPP notification indicates error condition: %s", error_trigger)
                     break
 
             # Take automated actions based on notification content
             current_time = datetime.now(pytz.UTC)
 
             if should_reboot and self.can_reboot():
-                _LOGGER.info(f"Automatically rebooting charger {self.name} due to OCPP notification: {message}")
+                _LOGGER.info("Automatically rebooting charger %s due to OCPP notification: %s", self.name, message)
                 await self.reboot(current_time)
 
             elif is_error:
                 # For error conditions, we might want to reset the charger state or take other actions
-                _LOGGER.info(f"Handling error condition for charger {self.name}: {message}")
+                _LOGGER.info("Handling error condition for charger %s: %s", self.name, message)
 
                 # Reset the charger's internal state if it's having issues
                 if "connection" in message_lower or "communication" in message_lower:
                     self._reset_state_machine()
-                    _LOGGER.info(f"Reset state machine for charger {self.name} due to communication issues")
+                    _LOGGER.info("Reset state machine for charger %s due to communication issues", self.name)
 
                 # If the charger reports being unavailable, mark it as such
                 if "unavailable" in message_lower or "offline" in message_lower:
                     self.status = "unavailable"
-                    _LOGGER.info(f"Marked charger {self.name} as unavailable due to OCPP notification")
+                    _LOGGER.info("Marked charger %s as unavailable due to OCPP notification", self.name)
 
             # Log successful operations
             elif any(keyword in message_lower for keyword in ["success", "completed", "ready", "available"]):
-                _LOGGER.info(f"OCPP operation successful for charger {self.name}: {message}")
+                _LOGGER.info("OCPP operation successful for charger %s: %s", self.name, message)
 
                 # If charger is back online, ensure it's marked as available
                 if "available" in message_lower or "ready" in message_lower:
                     self.status = "ok"
-                    _LOGGER.info(f"Marked charger {self.name} as available due to OCPP notification")
+                    _LOGGER.info("Marked charger %s as available due to OCPP notification", self.name)
 
             # Handle firmware update notifications
             elif "firmware" in message_lower:
-                _LOGGER.info(f"Firmware-related notification for charger {self.name}: {message}")
+                _LOGGER.info("Firmware-related notification for charger %s: %s", self.name, message)
 
                 if "upload status" in message_lower and ("completed" in message_lower or "success" in message_lower):
-                    _LOGGER.info(f"Firmware upload completed for charger {self.name}, scheduling reboot")
+                    _LOGGER.info("Firmware upload completed for charger %s, scheduling reboot", self.name)
                     await self.reboot(current_time)
 
             # Handle diagnostic upload notifications
             elif "diagnostic" in message_lower:
-                _LOGGER.info(f"Diagnostic-related notification for charger {self.name}: {message}")
+                _LOGGER.info("Diagnostic-related notification for charger %s: %s", self.name, message)
 
             # General notification logging
             else:
-                _LOGGER.info(f"General OCPP notification for charger {self.name}: {message}")
+                _LOGGER.info("General OCPP notification for charger %s: %s", self.name, message)
         except Exception as e:
             _LOGGER.error(
                 f"Error handling OCPP notification for charger {self.name}: {e}", exc_info=True, stack_info=True
@@ -5089,7 +5091,7 @@ class QSChargerOCPP(QSChargerGeneric):
             await self.hass.services.async_call(domain, service, data, blocking=False)
             done = True
         except Exception as e:
-            _LOGGER.warning(f"low_level_update_data OCPP: Error {e}", exc_info=True, stack_info=True)
+            _LOGGER.warning("low_level_update_data OCPP: Error %s", e, exc_info=True, stack_info=True)
             done = False
 
         return done
