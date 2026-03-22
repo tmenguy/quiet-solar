@@ -518,7 +518,7 @@ So that silent data loss is eliminated and persistence health is observable.
 **Then** `binary_sensor.qs_persistence_health` reflects current persistence state
 **And** the sensor turns off when a load/save failure is detected
 
-### Story 3.3: FM-005 — Grid Outage Verification
+### Story 3.3: FM-005 — Grid Outage Verification [DONE]
 
 As TheAdmin,
 I want grid outage handling to be fully verified — emergency broadcasts reach Magali and load shedding prioritizes essential loads,
