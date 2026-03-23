@@ -1632,6 +1632,33 @@ class TestOffGridAutoDetection:
         )
 
     @pytest.mark.asyncio
+    async def test_broadcast_service_not_found_does_not_block_others(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """ServiceNotFound on one app does not prevent delivery to others."""
+        home = home_with_binary_sensor_off_grid
+        from homeassistant.exceptions import ServiceNotFound
+
+        calls_good_app = []
+
+        async def handler_raises_snf(call_obj):
+            raise ServiceNotFound(Platform.NOTIFY, "mobile_app_vanished")
+
+        async def handler_good(call_obj):
+            calls_good_app.append(call_obj)
+
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_vanished", handler_raises_snf)
+        hass.services.async_register(Platform.NOTIFY, "mobile_app_good", handler_good)
+
+        await home.async_notify_all_mobile_apps(
+            title="Test alert",
+            message="Test message",
+        )
+        await hass.async_block_till_done()
+
+        assert len(calls_good_app) == 1
+
+    @pytest.mark.asyncio
     async def test_recovery_notification_reaches_all_mobile_apps(
         self, hass: HomeAssistant, home_with_binary_sensor_off_grid
     ):
