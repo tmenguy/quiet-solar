@@ -199,8 +199,9 @@ TheAdmin can trust the system to handle failures gracefully and understand exact
 **Scope:** MVP | **Dependencies:** Builds on Epic 1, 2
 **Status:** Stories 3.1–3.2 complete. Stories 3.3–3.12 defined (7 FM stories + dashboard + tests + transparency).
 
-### Epic 4: Solver Edge Case Improvements *(stories deferred — detail when Epics 1-3 complete)*
-**FRs:** FR1-FR5b | **ARs:** AR6 | **NFRs:** NFR1-NFR4 | **Scope:** MVP | **Depends on:** Epic 1, 2
+### Epic 4: Solver Edge Case Improvements [IN PROGRESS]
+**FRs:** FR1-FR5b, FR14 | **ARs:** AR6 | **NFRs:** NFR1-NFR4 | **Scope:** MVP | **Depends on:** Epic 1, 2
+**Status:** Story 4.1 added from GitHub Issue #30 (car default charge when no person assigned).
 
 ### Epic 5: Household Experience Enhancement *(stories deferred — post-MVP)*
 **FRs:** FR13-FR18, FR26-FR32, FR39-FR42 | **NFRs:** NFR5-NFR7 | **Scope:** Product Enhancement
@@ -830,4 +831,34 @@ So that I can understand and trust the system even when things go wrong.
 **Then** the log shows what the solver decided and why for each solver cycle in the period
 **And** decisions are presented with context (available solar, active constraints, tariff window, device states)
 **And** the log is queryable by time range and device
+
+## Epic 4: Solver Edge Case Improvements
+
+Improvements to how the system handles edge cases in solver planning, person-car allocation, and device orchestration.
+
+### Story 4.1: Default Charge When No Person Assigned (GitHub Issue #30)
+
+As Magali,
+I want my car to automatically charge to its default target when plugged in but no person is assigned,
+so that the car is always usefully charged even when the system has no trip forecast to plan against.
+
+**Acceptance Criteria:**
+
+**Given** a car is plugged in **and** the system assigns no person to it (no forecast match)
+**When** the person-car allocation completes
+**Then** the car's target charge is set to `car_default_charge`
+**And** no departure time constraint is created
+
+**Given** a car is plugged in **and** the user selects "Force no person for car"
+**When** the person-car allocation completes
+**Then** the car's target charge is set to `car_default_charge`
+**And** no departure time constraint is created
+
+**Given** a car has a user-originated charge target or charge time
+**When** the system would apply the default charge for no-person
+**Then** the user-originated setting is preserved — the system MUST NOT overwrite it
+
+**Given** a car is NOT plugged in and has no person assigned
+**When** the person-car allocation completes
+**Then** no default charge target is set
 
