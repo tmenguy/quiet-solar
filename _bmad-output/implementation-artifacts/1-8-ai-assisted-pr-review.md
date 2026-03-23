@@ -1,6 +1,6 @@
 # Story 1.8: AI-Assisted PR Review with Interactive Feedback Loop
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -39,24 +39,24 @@ So that code review is integrated into the agentic workflow without requiring ma
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `/bmad-pr-review-feedback` skill for interactive PR comment processing (AC: #2, #3, #4, #5, #6)
-  - [ ] 1.1 Create skill directory at `.claude/skills/bmad-pr-review-feedback/` with `workflow.md`
-  - [ ] 1.2 Implement Step 1 — detect open PR for current branch (use `gh pr view --json number,url,reviewDecision`)
-  - [ ] 1.3 Implement Step 2 — pull unresolved review comments via `gh api` (REST endpoint: `repos/{owner}/{repo}/pulls/{pr}/comments`)
-  - [ ] 1.4 Implement Step 3 — present each comment with file path, line, diff hunk context; prompt TheDev for action (fix / discuss / reject)
-  - [ ] 1.5 Implement Step 4 — handle "fix" action: implement change, run quality gates, commit, push, post reply resolving comment
-  - [ ] 1.6 Implement Step 5 — handle "discuss" action: compose reply, post via `gh api`, leave comment open
-  - [ ] 1.7 Implement Step 6 — handle "reject" action: compose rationale, post via `gh api`, resolve comment thread
-  - [ ] 1.8 Implement Step 7 — summary report: count of fixes/discussions/rejections, quality gate re-run if any fixes made
-- [ ] Task 2: Mirror skill to Cursor (AC: all)
-  - [ ] 2.1 Copy skill to `.cursor/skills/bmad-pr-review-feedback/` and `_bmad/bmm/workflows/*/bmad-pr-review-feedback/`
-- [ ] Task 3: Update development lifecycle Phase 3d to reference the new skill (AC: #1, #2)
-  - [ ] 3.1 Update `_qsprocess/workflows/development-lifecycle.md` Phase 3d to mention `/bmad-pr-review-feedback` as the tool for processing review comments after `/bmad-code-review` generates them
-  - [ ] 3.2 Update `_qsprocess/rules/project-rules.md` workflow routing table to add "Process PR feedback" intent
-- [ ] Task 4: Document the AI reviewer strategy decision (AC: #1)
-  - [ ] 4.1 Document in the skill workflow that the initial review source is the existing `/bmad-code-review` skill — it already runs 3 parallel adversarial review agents locally
-  - [ ] 4.2 The skill should support BOTH local `/bmad-code-review` findings AND GitHub PR review comments from any source (human, Copilot, future CI-based reviewer)
-  - [ ] 4.3 Add a "post review findings to PR" step that takes `/bmad-code-review` output and posts it as PR review comments via `gh api`
+- [x] Task 1: Create `/bmad-pr-review-feedback` skill for interactive PR comment processing (AC: #2, #3, #4, #5, #6)
+  - [x] 1.1 Create skill directory at `.claude/skills/bmad-pr-review-feedback/` with `workflow.md`
+  - [x] 1.2 Implement Step 1 — detect open PR for current branch (use `gh pr view --json number,url,reviewDecision`)
+  - [x] 1.3 Implement Step 2 — pull unresolved review comments via `gh api` (GraphQL for thread resolution status)
+  - [x] 1.4 Implement Step 3 — present each comment with file path, line, diff hunk context; prompt TheDev for action (fix / discuss / reject / skip)
+  - [x] 1.5 Implement Step 4 — handle "fix" action: implement change, run quality gates, commit, push, post reply resolving comment
+  - [x] 1.6 Implement Step 5 — handle "discuss" action: compose reply, post via `gh api`, leave comment open
+  - [x] 1.7 Implement Step 6 — handle "reject" action: compose rationale, post via `gh api`, resolve comment thread
+  - [x] 1.8 Implement Step 7 — summary report: count of fixes/discussions/rejections, quality gate re-run if any fixes made
+- [x] Task 2: Mirror skill to Cursor (AC: all)
+  - [x] 2.1 Copy skill to `.cursor/skills/bmad-pr-review-feedback/` and `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/`
+- [x] Task 3: Update development lifecycle Phase 3d to reference the new skill (AC: #1, #2)
+  - [x] 3.1 Update `_qsprocess/workflows/development-lifecycle.md` Phase 3d to mention `/bmad-pr-review-feedback` as the tool for processing review comments after `/bmad-code-review` generates them
+  - [x] 3.2 Update `_qsprocess/rules/project-rules.md` workflow routing table to add "Process PR feedback" intent
+- [x] Task 4: Document the AI reviewer strategy decision (AC: #1)
+  - [x] 4.1 Document in the skill workflow that the initial review source is the existing `/bmad-code-review` skill — it already runs 3 parallel adversarial review agents locally
+  - [x] 4.2 The skill should support BOTH local `/bmad-code-review` findings AND GitHub PR review comments from any source (human, Copilot, future CI-based reviewer)
+  - [x] 4.3 Added Phase A option in workflow Step 2 that bridges `/bmad-code-review` output to GitHub PR comments
 
 ## Dev Notes
 
@@ -186,8 +186,36 @@ _qsprocess/rules/project-rules.md               (modified — routing table upda
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Created `/bmad-pr-review-feedback` skill with 5-step workflow: detect PR, offer Phase A/B choice, pull unresolved threads via GraphQL, interactive per-comment processing (fix/discuss/reject/skip), summary with quality gate re-run
+- Used GraphQL API for thread operations (resolution status, posting replies, resolving threads) — REST API lacks thread resolution support
+- Mirrored skill to `.cursor/skills/` and `_bmad/bmm/workflows/4-implementation/`
+- Updated Phase 3d in development-lifecycle.md with "Processing Review Feedback" subsection
+- Added "Process PR feedback" intent to both quick reference table and routing table in project-rules.md
+- Skill works with any review source (local /bmad-code-review, human, Copilot, future CI reviewers)
+
+### Change Log
+
+- 2026-03-24: Story 1.8 implemented — PR review feedback skill, lifecycle docs, routing updates
+
 ### File List
+
+New files:
+- `.claude/skills/bmad-pr-review-feedback/SKILL.md`
+- `.claude/skills/bmad-pr-review-feedback/bmad-skill-manifest.yaml`
+- `.claude/skills/bmad-pr-review-feedback/workflow.md`
+- `.cursor/skills/bmad-pr-review-feedback/SKILL.md`
+- `.cursor/skills/bmad-pr-review-feedback/bmad-skill-manifest.yaml`
+- `.cursor/skills/bmad-pr-review-feedback/workflow.md`
+- `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/bmad-skill-manifest.yaml`
+- `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/workflow.md`
+
+Modified files:
+- `_qsprocess/workflows/development-lifecycle.md` (Phase 3d expanded with feedback loop)
+- `_qsprocess/rules/project-rules.md` (routing table + quick reference)
+- `_bmad-output/implementation-artifacts/1-8-ai-assisted-pr-review.md` (status + tasks + record)
