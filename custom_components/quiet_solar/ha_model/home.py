@@ -2555,6 +2555,38 @@ class QSHome(QSDynamicGroup):
                     )
                     car.current_forecasted_person = person
 
+        # Apply default charge target for plugged cars with no person assigned
+        # (Issue #30 / Story 4.1). Only sets the target when no person is
+        # forecasted and no charge target already exists (user-originated or
+        # otherwise).  When a person IS assigned the system-set default is
+        # cleared so the person's forecast drives charging.
+        for car in self._cars:
+            default_charge = getattr(car, "car_default_charge", None)
+            if default_charge is None:
+                continue
+            if car.current_forecasted_person is not None:
+                # Person assigned → clear any system-set default so forecast
+                # constraints drive charging instead.
+                if (
+                    car._next_charge_target is not None
+                    and car._next_charge_target == default_charge
+                    and not car.has_user_originated("charge_target_percent")
+                    and not car.has_user_originated("charge_target_energy")
+                ):
+                    car._next_charge_target = None
+                continue
+            # No person assigned — set default charge if plugged and no target
+            if car._next_charge_target is not None:
+                continue
+            is_plugged = car.is_car_plugged(time)
+            if is_plugged is not False:
+                car._next_charge_target = default_charge
+                _LOGGER.info(
+                    "get_best_persons_cars_allocations: no person for Car:%s, setting default charge target %s%%",
+                    car.name,
+                    default_charge,
+                )
+
         # now check stuff to do on changed person / chargers, etc
 
         changed_person_names: set[str] = set()

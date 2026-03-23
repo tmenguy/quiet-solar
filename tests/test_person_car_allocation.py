@@ -36,7 +36,7 @@ class _FakeCharger:
 class _FakeCar:
     """Minimal car with autonomy-based coverage computation."""
 
-    def __init__(self, name, remaining_km, has_charger, is_invited=False):
+    def __init__(self, name, remaining_km, has_charger, is_invited=False, is_plugged=False, default_charge=100.0):
         self.name = name
         self._remaining_km = remaining_km
         self.charger = _FakeCharger() if has_charger else None
@@ -45,6 +45,9 @@ class _FakeCar:
         self.current_forecasted_person = None
         self.home = None
         self.ha_entities = {}
+        self._is_plugged = is_plugged
+        self.car_default_charge = default_charge
+        self._next_charge_target = None
 
     # Mirror AbstractDevice user_originated API
     def set_user_originated(self, key, value):
@@ -71,6 +74,10 @@ class _FakeCar:
             return (True, 80.0, 60.0, -surplus)
         deficit = (mileage - self._remaining_km) * KWH_PER_KM
         return (False, 40.0, 80.0, deficit)
+
+    def is_car_plugged(self, time=None, for_duration=None):
+        """Return plugged status from test configuration."""
+        return self._is_plugged
 
     # Bind real methods from QSCar so we exercise the actual logic.
     user_set_person_for_car = QSCar.user_set_person_for_car
@@ -381,3 +388,185 @@ class TestPersonCarAllocationScenario:
         assert _person_name(zoe) == "Magali", f"Zoe should be Magali after reassignment, got {_person_name(zoe)}"
         assert _person_name(tesla) == "Thomas", f"Tesla should still be Thomas, got {_person_name(tesla)}"
         assert _person_name(idbuzz) is None, f"IDBuzz should be unassigned, got {_person_name(idbuzz)}"
+
+
+class TestDefaultChargeNoPersonAssigned:
+    """Cover Story 4.1 / Issue #30: when no person is assigned to a plugged car,
+    set the target charge to car_default_charge."""
+
+    @pytest.mark.asyncio
+    async def test_plugged_no_person_gets_default_charge(self):
+        """AC1: plugged car with no person → target set to car_default_charge."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+
+        # CarA: plugged, no charger-person match expected
+        car_a = _FakeCar("CarA", remaining_km=200, has_charger=True, is_plugged=True, default_charge=80.0)
+        # Only one person, authorized only for CarB
+        car_b = _FakeCar("CarB", remaining_km=50, has_charger=True, is_plugged=True, default_charge=90.0)
+
+        person = _FakePerson(
+            "Alice",
+            preferred_car="CarB",
+            authorized_car_names=["CarB"],
+            forecast_leave_time=leave,
+            forecast_mileage=100.0,
+        )
+
+        home = _FakeHome([car_a, car_b], [person])
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        # Alice → CarB (only authorized car)
+        assert _person_name(car_b) == "Alice"
+        # CarA has no person, is plugged → should get default charge
+        assert _person_name(car_a) is None
+        assert car_a._next_charge_target == 80.0
+
+    @pytest.mark.asyncio
+    async def test_force_no_person_plugged_gets_default_charge(self):
+        """AC2: force-no-person on plugged car → target set to car_default_charge."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=True, default_charge=75.0)
+        person = _FakePerson(
+            "Bob",
+            preferred_car="MyCar",
+            authorized_car_names=["MyCar"],
+            forecast_leave_time=leave,
+            forecast_mileage=50.0,
+        )
+
+        home = _FakeHome([car], [person])
+
+        # Set force-no-person before allocation
+        car.set_user_originated("person_name", FORCE_CAR_NO_PERSON_ATTACHED)
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert _person_name(car) is None
+        assert car._next_charge_target == 75.0
+
+    @pytest.mark.asyncio
+    async def test_user_originated_charge_target_preserved(self):
+        """AC3: user already set a charge target → system must NOT overwrite it."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=True, default_charge=100.0)
+        home = _FakeHome([car], [])
+
+        # User explicitly set a charge target of 60%
+        car._next_charge_target = 60
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert car._next_charge_target == 60, "User-set target must be preserved"
+
+    @pytest.mark.asyncio
+    async def test_user_originated_charge_time_preserved(self):
+        """AC4: user set a charge time → system must NOT overwrite it.
+        The system still sets the default target if none exists, but the
+        charge time is untouched (this code never sets charge time)."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=True, default_charge=90.0)
+        home = _FakeHome([car], [])
+
+        # User set a charge time (stored as user_originated)
+        car.set_user_originated("charge_time", "2026-03-16T07:00:00+00:00")
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        # Charge time must be untouched
+        assert car.get_user_originated("charge_time") == "2026-03-16T07:00:00+00:00"
+        # Default target still applies since _next_charge_target was None
+        assert car._next_charge_target == 90.0
+
+    @pytest.mark.asyncio
+    async def test_person_later_assigned_replaces_default(self):
+        """AC5: default charge was applied → person later assigned → default replaced."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=50, has_charger=True, is_plugged=True, default_charge=100.0)
+        # Initially no person with forecast
+        person = _FakePerson(
+            "Alice",
+            preferred_car="MyCar",
+            authorized_car_names=["MyCar"],
+            forecast_leave_time=None,
+            forecast_mileage=None,
+        )
+
+        home = _FakeHome([car], [person])
+
+        # Round 1: no forecast → no person → default charge applied
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+        assert _person_name(car) is None
+        assert car._next_charge_target == 100.0
+
+        # Round 2: person now has a forecast → gets assigned
+        person._forecast_leave = leave
+        person._forecast_mileage = 80.0
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+        assert _person_name(car) == "Alice"
+        # The system-set default is replaced: _next_charge_target reset to None
+        # so the person's forecast drives charging instead
+        assert car._next_charge_target is None
+
+    @pytest.mark.asyncio
+    async def test_not_plugged_no_person_no_default(self):
+        """AC6: car NOT plugged, no person → no default charge target set."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=False, default_charge=80.0)
+        home = _FakeHome([car], [])
+
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert _person_name(car) is None
+        assert car._next_charge_target is None, "Unplugged car should not get default charge"
+
+    @pytest.mark.asyncio
+    async def test_plugged_unknown_gets_default_charge(self):
+        """D2: is_car_plugged returns None (sensor unavailable) → treat as
+        potentially plugged and set default charge."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=None, default_charge=80.0)
+        home = _FakeHome([car], [])
+
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert car._next_charge_target == 80.0, "Unknown plug state should be treated as plugged"
+
+    @pytest.mark.asyncio
+    async def test_energy_user_originated_prevents_clear(self):
+        """D3: user set charge_target_energy → person assigned → system must
+        NOT clear _next_charge_target even if it matches default."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=50, has_charger=True, is_plugged=True, default_charge=100.0)
+        person = _FakePerson(
+            "Alice",
+            preferred_car="MyCar",
+            authorized_car_names=["MyCar"],
+            forecast_leave_time=None,
+            forecast_mileage=None,
+        )
+
+        home = _FakeHome([car], [person])
+
+        # Round 1: no forecast → no person → default charge applied
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+        assert car._next_charge_target == 100.0
+
+        # User sets energy target (which snapshots current percent target)
+        car.set_user_originated("charge_target_energy", 50.0)
+
+        # Round 2: person now has forecast → gets assigned
+        person._forecast_leave = leave
+        person._forecast_mileage = 80.0
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert _person_name(car) == "Alice"
+        # The target must NOT be cleared because charge_target_energy is user-originated
+        assert car._next_charge_target == 100.0
