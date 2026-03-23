@@ -1,6 +1,6 @@
 # Story 4.1: Default Charge When No Person Assigned
 
-Status: review
+Status: done
 
 ## Story
 

@@ -836,7 +836,7 @@ So that I can understand and trust the system even when things go wrong.
 
 Improvements to how the system handles edge cases in solver planning, person-car allocation, and device orchestration.
 
-### Story 4.1: Default Charge When No Person Assigned (GitHub Issue #30)
+### Story 4.1: Default Charge When No Person Assigned (GitHub Issue #30) [DONE]
 
 As Magali,
 I want my car to automatically charge to its default target when plugged in but no person is assigned,
