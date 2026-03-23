@@ -668,33 +668,69 @@ So that the system never silently fails to act and household members know when t
 ### Story 3.7: FM-001 — Solar Forecast API Resilience
 
 As TheAdmin,
-I want the system to detect stale solar forecasts, fall back to historical patterns, monitor providers at runtime, and expose forecast freshness,
-So that optimization continues with the best available data even when forecast APIs fail.
+I want the system to support multiple solar forecast providers, detect stale forecasts, fall back to historical patterns, score providers against actual production, apply dampening corrections, and let me choose the active provider or let the system auto-select the best one,
+So that optimization always uses the most accurate forecast available, even when APIs fail.
 
-**Priority:** P2 — degraded optimization | **Size:** M
+**Priority:** P2 — degraded optimization | **Size:** L
 **Gaps addressed:** G1, G2
 **CC Impact:**
-- CC-003: `sensor.qs_solar_forecast_age` (hours since last successful forecast), `binary_sensor.qs_solar_forecast_ok`
+- CC-002: `select.qs_solar_provider_mode` (auto / provider name), `switch.qs_solar_dampening_<provider>` per provider
+- CC-003: `sensor.qs_solar_forecast_age`, `binary_sensor.qs_solar_forecast_ok`, `sensor.qs_solar_forecast_score_<provider>`, `sensor.qs_solar_forecast_score_raw_<provider>`, `sensor.qs_solar_forecast_score_dampened_<provider>`
 
 **Acceptance Criteria:**
 
 **Given** a solar forecast API fails (timeout, HTTP error, invalid data)
 **When** the system detects the failure
 **Then** it uses the last successful forecast
-**And** if the forecast is stale >6h, it falls back to historical consumption patterns from the numpy ring buffer (AR5)
+**And** if the forecast is stale >6h, it falls back to historical solar patterns from the numpy ring buffer (AR5)
 **And** it auto-retries on the next forecast polling cycle
 **And** TheAdmin is notified when forecast becomes stale
 
-**Given** multiple forecast providers are configured
-**When** one provider fails
-**Then** the system continues with remaining valid providers
-**And** failed providers are re-probed periodically
-**And** runtime monitoring tracks provider health (not just one-time init validation)
+**Given** TheAdmin configures solar forecast providers
+**When** setting up or reconfiguring the solar device in config flow
+**Then** multiple providers can be selected simultaneously (e.g., Solcast + Open-Meteo)
+**And** each provider is named for identification
+**And** `select.qs_solar_provider_mode` allows choosing: "auto", or any individual provider by name
+**And** in "auto" mode, the system uses the provider with the best 7-day accuracy score
+**And** failed providers are re-probed periodically (not permanently removed)
 
-**Given** forecast freshness is queried
+**Given** forecast quality is queried
 **When** TheAdmin checks the dashboard
-**Then** `sensor.qs_solar_forecast_age` shows hours since last successful update
-**And** `binary_sensor.qs_solar_forecast_ok` reflects whether the forecast is fresh (<6h)
+**Then** `sensor.qs_solar_forecast_age` shows hours since last successful update from the active provider
+**And** `binary_sensor.qs_solar_forecast_ok` reflects whether the active forecast is fresh (<6h)
+**And** `sensor.qs_solar_forecast_score_<provider>` shows per-provider 7-day accuracy (MAE of forecast vs actual solar production)
+
+**Given** automatic dampening is enabled for a provider (via `switch.qs_solar_dampening_<provider>`)
+**When** the system recomputes dampening at midnight
+**Then** for each time step k in the provider's native temporal resolution, it computes (a_k, b_k) via MOS linear regression on 7 days of (forecast_k, actual_k) data
+**And** dampened forecast = `max(0, a_k * raw_forecast_k + b_k)` (clamped to non-negative)
+**And** physical guards are enforced: nighttime steps use identity, a_k bounded to [0.1, 3.0], minimum 3 data points required per step
+**And** `sensor.qs_solar_forecast_score_raw_<provider>` shows accuracy without dampening
+**And** `sensor.qs_solar_forecast_score_dampened_<provider>` shows accuracy with dampening
+**And** if dampening is disabled, the raw forecast is used directly
+
+### Story 3.13: Add Forecast.Solar Provider Support
+
+As TheAdmin,
+I want Forecast.Solar to be available as a solar forecast provider alongside Solcast and Open-Meteo,
+So that I have a third provider option and can compare its accuracy against others using the multi-provider infrastructure from Story 3.7.
+
+**Priority:** P3 — additional provider | **Size:** S
+**Dependencies:** Story 3.7 (multi-provider infrastructure must be in place)
+
+**Acceptance Criteria:**
+
+**Given** the Forecast.Solar HA integration is installed and configured
+**When** TheAdmin configures a solar device in Quiet Solar
+**Then** "Forecast.Solar" appears as an available provider in the config flow
+**And** it can be selected alongside other providers (Solcast, Open-Meteo)
+**And** it participates in provider scoring, dampening, and auto-selection like any other provider
+
+**Given** the Forecast.Solar provider is active
+**When** it delivers forecast data
+**Then** the forecast is extracted from the coordinator's `Estimate.watts` dict (same `dict[datetime, int]` structure as Open-Meteo)
+**And** the provider's native temporal resolution is detected from the data (hourly for free accounts, higher for paid)
+**And** all existing resilience features (staleness detection, health monitoring, re-probing) apply
 
 ### Story 3.8: FM-007 — Prediction Confidence Resilience
 
