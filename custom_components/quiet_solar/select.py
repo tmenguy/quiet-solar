@@ -16,6 +16,8 @@ from .const import (
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
     SELECT_OFF_GRID_MODE,
+    SELECT_SOLAR_PROVIDER_MODE,
+    SOLAR_PROVIDER_MODE_AUTO,
 )
 from .entity import QSDeviceEntity
 from .ha_model.bistate_duration import QSBiStateDuration
@@ -23,6 +25,7 @@ from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.home import QSHome, QSHomeMode
+from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,6 +169,27 @@ def create_ha_select_for_QSHome(device: QSHome):
     return entities
 
 
+def create_ha_select_for_QSSolar(device: QSSolar):
+    entities = []
+    if not device.solar_forecast_providers:
+        return entities
+
+    provider_mode_description = QSSelectEntityDescription(
+        key=SELECT_SOLAR_PROVIDER_MODE,
+        translation_key=SELECT_SOLAR_PROVIDER_MODE,
+        get_available_options_fn=lambda device, key: [SOLAR_PROVIDER_MODE_AUTO] + device.get_provider_names(),
+        get_current_option_fn=lambda device, key: device.provider_mode,
+        async_set_current_option_fn=lambda device, key, option, for_init: device.set_provider_mode(option),
+        qs_default_option=SOLAR_PROVIDER_MODE_AUTO,
+    )
+    entities.append(
+        QSUserOverrideSelectRestore(
+            data_handler=device.data_handler, device=device, description=provider_mode_description
+        )
+    )
+    return entities
+
+
 def create_ha_select(device: AbstractDevice):
     ret = []
     if isinstance(device, QSCar):
@@ -182,6 +206,9 @@ def create_ha_select(device: AbstractDevice):
 
     if isinstance(device, QSHome):
         ret.extend(create_ha_select_for_QSHome(device))
+
+    if isinstance(device, QSSolar):
+        ret.extend(create_ha_select_for_QSSolar(device))
 
     return ret
 

@@ -2961,6 +2961,7 @@ class QSHomeConsumptionHistoryAndForecast:
             self.hass = home.hass
 
         self.home_non_controlled_consumption: QSSolarHistoryVals | None = None
+        self.solar_production_history: QSSolarHistoryVals | None = None
         self._in_reset = False
         if storage_path is None:
             if self.hass is None:
@@ -2984,6 +2985,18 @@ class QSHomeConsumptionHistoryAndForecast:
                 entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=self
             )
             await self.home_non_controlled_consumption.init(time)
+
+        if (
+            self._in_reset is False
+            and self.solar_production_history is None
+            and self.home is not None
+            and self.home.solar_plant is not None
+            and self.home.solar_plant.solar_inverter_active_power is not None
+        ):
+            self.solar_production_history = QSSolarHistoryVals(
+                entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self
+            )
+            await self.solar_production_history.init(time)
 
         return not self._in_reset
 
@@ -3307,6 +3320,42 @@ class QSSolarHistoryVals:
         self._init_done = False
         self._current_forecast = None
         self._last_forecast_update_time = None
+
+    def get_historical_solar_pattern(self, time: datetime, future_hours: int = 24) -> list[tuple[datetime, float]]:
+        """Return historical solar production as a fallback forecast.
+
+        Searches 1 to 7 days prior for a day with valid data and returns
+        that day's power values shifted to start at ``time``.
+        """
+        if self.values is None:
+            return []
+
+        now_idx, _now_days = self.get_index_from_time(time)
+        num_intervals = future_hours * NUM_INTERVAL_PER_HOUR
+
+        for probe_days in range(1, 8):
+            past_start_idx = _sanitize_idx(now_idx - probe_days * NUM_INTERVALS_PER_DAY)
+            past_end_idx = _sanitize_idx(past_start_idx + num_intervals - 1)
+
+            power_vals, day_vals = self._get_values(past_start_idx, past_end_idx)
+
+            if power_vals is None or day_vals is None:
+                continue
+
+            # Need at least 60% valid entries
+            valid_count = int(np.sum(day_vals != 0))
+            if valid_count < 0.6 * num_intervals:
+                continue
+
+            # Build time series shifted to current time
+            result: list[tuple[datetime, float]] = []
+            for i in range(len(power_vals)):
+                ts = time + timedelta(minutes=i * INTERVALS_MN)
+                val = float(power_vals[i]) if day_vals[i] != 0 else 0.0
+                result.append((ts, val))
+            return result
+
+        return []
 
     def update_current_forecast_if_needed(self, time: datetime) -> bool:
         if self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(

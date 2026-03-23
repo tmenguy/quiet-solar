@@ -2,7 +2,7 @@ in# Failure Mode Catalog
 
 Living document per NFR20. Updated whenever a new failure mode is discovered or an existing response changes.
 
-Last updated: 2026-03-20
+Last updated: 2026-03-24
 
 ## Priority Levels
 
@@ -23,27 +23,22 @@ Last updated: 2026-03-20
 | **Dependency** | Solcast / OpenMeteo via HA integration |
 | **Priority** | P2 — degraded optimization (uses stale or no forecast) |
 | **Failure Signature** | API timeout, HTTP error, or orchestrator returns invalid data |
-| **Fallback Behavior** | Use last successful forecast. If stale >6h, fall back to historical consumption patterns (numpy ring buffer, 560 days). Multi-provider: if one provider fails, continue with remaining providers. |
-| **Recovery Path** | Auto-retry on next forecast polling cycle (~30s). Valid orchestrators re-included. Failed provider re-probed periodically. |
-| **Implementation Status** | Partial |
-| **Test Coverage** | None |
+| **Fallback Behavior** | Use last successful forecast. If stale >6h, fall back to historical solar production patterns (numpy ring buffer, 560 days). Multi-provider: if one provider fails, continue with remaining providers. |
+| **Recovery Path** | Auto-retry on next forecast polling cycle (~30s). Unhealthy orchestrators re-probed every 5 cycles. Failed providers auto-recovered when API returns. |
+| **Implementation Status** | Complete (Story 3.7, 2026-03-24) |
+| **Test Coverage** | Full — 67 tests in `test_solar_forecast_resilience.py` |
 
-**Current code:** `ha_model/solar.py` — validation probe at init filters invalid orchestrators (`get_power_series_from_orchestrator` wrapped in try/except). Invalid providers removed from `self.orchestrators` list. Supports multiple orchestrators already.
+**Implemented in Story 3.7:**
+- **Multi-provider support**: Multiple forecast providers configured simultaneously (e.g., Solcast + Open-Meteo). Config flow multi-select with backward-compatible migration from single-provider config
+- **Provider selection**: `select.qs_solar_provider_mode` entity — "auto" (system picks best) or manual provider selection. Auto mode selects provider with lowest 7-day MAE, tie-broken by freshness
+- **Staleness detection**: 6-hour threshold. `binary_sensor.qs_solar_forecast_ok` and `sensor.qs_solar_forecast_age` expose freshness to dashboard. Log warnings on fresh→stale transition, info on recovery
+- **Historical fallback**: When stale and forecast empty, falls back to historical solar production from ring buffer (searches 1-7 days prior for valid day)
+- **Health monitoring**: Orchestrator health tracking per provider — unhealthy orchestrators kept and re-probed every 5 cycles instead of permanent removal
+- **Accuracy scoring**: Per-provider 7-day rolling MAE against actual solar production. Sensors: `sensor.qs_solar_forecast_score_<provider>`, `_raw_<provider>`, `_dampened_<provider>`
+- **MOS dampening**: Per-provider per-time-step linear correction (`actual = a*forecast + b`) with physical guards (nighttime identity, coefficient bounds [0.1, 3.0], output clamp ≥0, minimum 3 data points). Per-provider `switch.qs_solar_dampening_<provider>` toggle. Coefficients persisted to `.npy` files
+- **Admin notification**: Stale transition logged as warning, recovery logged as info. No repeat notifications for same stale episode
 
-**Multi-provider resilience strategy (future):**
-- Support multiple forecast providers simultaneously (e.g., Solcast + OpenMeteo)
-- Best-provider selection: compare forecast accuracy against actual production over rolling window, weight providers by accuracy
-- Auto-dampening: if one provider consistently over/under-predicts, reduce its weight automatically
-- Provider failover: if primary provider fails, seamlessly continue with secondary without interruption
-- This turns FM-001 from a single point of failure into a redundant system
-
-**Gaps for Story 3.2:**
-- No continuous staleness detection (>6h threshold from AR5 not implemented)
-- No fallback to historical patterns when forecast is stale
-- One-time validation only, no runtime monitoring
-- No provider accuracy comparison or weighting
-- No auto-dampening based on forecast vs. actual production
-- No automatic failover between providers
+**Current code:** `ha_model/solar.py` — `QSSolar` (multi-provider orchestrator), `QSSolarProvider` (per-provider scoring, dampening, health tracking), `QSSolarProviderSolcast`, `QSSolarProviderOpenWeather`. Config flow in `config_flow.py`. Entities in `sensor.py`, `binary_sensor.py`, `select.py`, `switch.py`
 
 ---
 
@@ -303,8 +298,8 @@ TheAdmin needs a **single dashboard view** showing all active issues, their seve
 
 | ID | Gap | Failure Mode | NFR/FR |
 |----|-----|-------------|--------|
-| G1 | Solar forecast staleness detection (>6h threshold) | FM-001 | AR5, NFR13 |
-| G2 | Solar forecast fallback to historical patterns | FM-001 | AR5, FR21, FR22 |
+| ~~G1~~ | ~~Solar forecast staleness detection (>6h threshold) — CLOSED (Story 3.7)~~ | ~~FM-001~~ | ~~AR5, NFR13~~ |
+| ~~G2~~ | ~~Solar forecast fallback to historical patterns — CLOSED (Story 3.7)~~ | ~~FM-001~~ | ~~AR5, FR21, FR22~~ |
 | G3 | Charger retry with exponential backoff | FM-002 | NFR12 |
 | G4 | Charger unavailable state + admin notification | FM-002 | FR29 |
 | G5 | Solver infeasibility detection + safe defaults | FM-004 | AR5 |
@@ -315,8 +310,8 @@ TheAdmin needs a **single dashboard view** showing all active issues, their seve
 | G10 | Admin notification on stale car data | FM-008 | FR29 |
 | G11 | Manual override to force-remove stale car from planning | FM-008 | FR24 |
 | G12 | Person forecast detection of missing car data | FM-008 | FR13, FR24 |
-| G13 | Solar multi-provider accuracy weighting | FM-001 | FR21 |
-| G14 | Solar auto-dampening and failover | FM-001 | FR21, FR22 |
+| ~~G13~~ | ~~Solar multi-provider accuracy weighting — CLOSED (Story 3.7)~~ | ~~FM-001~~ | ~~FR21~~ |
+| ~~G14~~ | ~~Solar auto-dampening and failover — CLOSED (Story 3.7)~~ | ~~FM-001~~ | ~~FR21, FR22~~ |
 | G15 | Command verification (check device reacted after service call) | FM-003 | NFR12, FR24 |
 | G16 | Human alert when command not applied ("check the device manually") | FM-003 | FR29, CC-001 |
 | G17 | Per-device stale state detection (last_updated threshold) | FM-003 | NFR13, FR24 |

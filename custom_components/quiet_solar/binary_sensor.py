@@ -18,11 +18,13 @@ from .const import (
     BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
     BINARY_SENSOR_HOME_REAL_OFF_GRID,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
+    BINARY_SENSOR_SOLAR_FORECAST_OK,
     DOMAIN,
 )
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.home import QSHome
+from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice, PilotedDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,6 +83,22 @@ def create_ha_binary_sensor_for_QSCar(device: QSCar):
     return entities
 
 
+def create_ha_binary_sensor_for_QSSolar(device: QSSolar):
+    """Create binary sensors for a QSSolar."""
+    entities = []
+    if not device.solar_forecast_providers:
+        return entities
+
+    forecast_ok = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_SOLAR_FORECAST_OK,
+        translation_key=BINARY_SENSOR_SOLAR_FORECAST_OK,
+        value_fn=lambda d, key: d.is_forecast_ok(),
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=forecast_ok))
+
+    return entities
+
+
 def create_ha_binary_sensor(device: AbstractDevice):
     """Create binary sensors for a device."""
     ret = []
@@ -93,6 +111,9 @@ def create_ha_binary_sensor(device: AbstractDevice):
 
     if isinstance(device, QSHome):
         ret.extend(create_ha_binary_sensor_for_QSHome(device))
+
+    if isinstance(device, QSSolar):
+        ret.extend(create_ha_binary_sensor_for_QSSolar(device))
 
     return ret
 
