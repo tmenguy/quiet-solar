@@ -2571,6 +2571,7 @@ class QSHome(QSDynamicGroup):
                     car._next_charge_target is not None
                     and car._next_charge_target == default_charge
                     and not car.has_user_originated("charge_target_percent")
+                    and not car.has_user_originated("charge_target_energy")
                 ):
                     car._next_charge_target = None
                 continue
@@ -2578,7 +2579,7 @@ class QSHome(QSDynamicGroup):
             if car._next_charge_target is not None:
                 continue
             is_plugged = car.is_car_plugged(time)
-            if is_plugged:
+            if is_plugged is not False:
                 car._next_charge_target = default_charge
                 _LOGGER.info(
                     "get_best_persons_cars_allocations: no person for Car:%s, setting default charge target %s%%",

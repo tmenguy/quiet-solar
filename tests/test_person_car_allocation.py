@@ -523,3 +523,50 @@ class TestDefaultChargeNoPersonAssigned:
 
         assert _person_name(car) is None
         assert car._next_charge_target is None, "Unplugged car should not get default charge"
+
+    @pytest.mark.asyncio
+    async def test_plugged_unknown_gets_default_charge(self):
+        """D2: is_car_plugged returns None (sensor unavailable) → treat as
+        potentially plugged and set default charge."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=100, has_charger=True, is_plugged=None, default_charge=80.0)
+        home = _FakeHome([car], [])
+
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert car._next_charge_target == 80.0, "Unknown plug state should be treated as plugged"
+
+    @pytest.mark.asyncio
+    async def test_energy_user_originated_prevents_clear(self):
+        """D3: user set charge_target_energy → person assigned → system must
+        NOT clear _next_charge_target even if it matches default."""
+        time_now = datetime(2026, 3, 15, 23, 0, tzinfo=pytz.UTC)
+        leave = datetime(2026, 3, 16, 7, 30, tzinfo=pytz.UTC)
+
+        car = _FakeCar("MyCar", remaining_km=50, has_charger=True, is_plugged=True, default_charge=100.0)
+        person = _FakePerson(
+            "Alice",
+            preferred_car="MyCar",
+            authorized_car_names=["MyCar"],
+            forecast_leave_time=None,
+            forecast_mileage=None,
+        )
+
+        home = _FakeHome([car], [person])
+
+        # Round 1: no forecast → no person → default charge applied
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+        assert car._next_charge_target == 100.0
+
+        # User sets energy target (which snapshots current percent target)
+        car.set_user_originated("charge_target_energy", 50.0)
+
+        # Round 2: person now has forecast → gets assigned
+        person._forecast_leave = leave
+        person._forecast_mileage = 80.0
+        await home.compute_and_set_best_persons_cars_allocations(time=time_now, force_update=True)
+
+        assert _person_name(car) == "Alice"
+        # The target must NOT be cleared because charge_target_energy is user-originated
+        assert car._next_charge_target == 100.0
