@@ -730,6 +730,9 @@
       },
       "qs_solar_forecast_ok": {
         "name": "Solar Forecast OK"
+      },
+      "qs_home_persistence_health": {
+        "name": "Persistence Health"
       }
     },
 
