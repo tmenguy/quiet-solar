@@ -299,7 +299,16 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
                 self.device, self.entity_description.key, option, for_init
             )
         if self.device.home:
-            await self.device.home.force_update_all()
+            try:
+                await self.device.home.force_update_all()
+            except Exception as e:
+                _LOGGER.error(
+                    "_async_do_set_option: force_update_all failed for %s on %s: %s",
+                    self.entity_description.key,
+                    self.device.name,
+                    e,
+                    exc_info=True,
+                )
 
     async def async_select_option(self, option: str | None, for_init=False) -> None:
         """Select an option."""

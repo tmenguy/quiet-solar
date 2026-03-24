@@ -407,7 +407,9 @@ class QSChargerStatus:
         if from_amp > 0:
             if self.possible_amps[0] == 0:
                 if len(self.possible_amps) > 1:
-                    try_amps = max(try_amps, self.possible_amps[1] + delta_for_borders)  # will be decreased/increased later
+                    try_amps = max(
+                        try_amps, self.possible_amps[1] + delta_for_borders
+                    )  # will be decreased/increased later
                 # else: only [0] available, keep try_amps as-is (charger can only stay off)
             else:
                 try_amps = max(try_amps, self.possible_amps[0] + delta_for_borders)  # will be decreased/increased later
@@ -968,7 +970,9 @@ class QSChargerGroup:
             # the best one is not charging
             # if actionable_chargers[0].possible_amps[0] is not 0: ... it will be started by nature right after in the normal _do_prepare_budgets_for_algo
             if actionable_chargers[0].current_real_max_charging_amp == 0 and (
-                actionable_chargers[0].possible_amps and actionable_chargers[0].possible_amps[0] == 0 and len(actionable_chargers[0].possible_amps) > 1
+                actionable_chargers[0].possible_amps
+                and actionable_chargers[0].possible_amps[0] == 0
+                and len(actionable_chargers[0].possible_amps) > 1
             ):
                 do_try_to_stop_other_chargers = True
                 _LOGGER.debug(
@@ -1436,7 +1440,13 @@ class QSChargerGroup:
         has_phase_changes = False
         for cs in actionable_chargers:
             if not cs.possible_amps or not cs.possible_num_phases:
-                _LOGGER.warning("_do_prepare_budgets_for_algo: %s has empty possible_amps or possible_num_phases, skipping", cs.name)
+                _LOGGER.warning(
+                    "_do_prepare_budgets_for_algo: %s has empty possible_amps or possible_num_phases, defaulting to off",
+                    cs.name,
+                )
+                default_num_phases = 3 if cs.charger.physical_3p else 1
+                cs.budgeted_amp = 0
+                cs.budgeted_num_phases = default_num_phases
                 continue
 
             if do_reset_allocation:
@@ -1559,7 +1569,9 @@ class QSChargerGroup:
                 for cs in actionable_chargers
                 if (cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_PRICE]))
             ]
-            shave_only_amps_cs = [cs for cs in actionable_chargers if cs.possible_amps and cs.possible_amps[0] > cs.charger.min_charge]
+            shave_only_amps_cs = [
+                cs for cs in actionable_chargers if cs.possible_amps and cs.possible_amps[0] > cs.charger.min_charge
+            ]
 
             for cs_s in [really_stoppable_shave_cs, first_stoppable_shave_cs, shave_only_amps_cs, actionable_chargers]:
                 if possible_allotment_reached:
@@ -2262,7 +2274,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             _LOGGER.warning("get_stable_dynamic_charge_status: %s empty possible_amps, defaulting to [0]", self.name)
             possible_amps = [0]
         if not possible_num_phases:
-            _LOGGER.warning("get_stable_dynamic_charge_status: %s empty possible_num_phases, defaulting to [%s]", self.name, cs.current_active_phase_number)
+            _LOGGER.warning(
+                "get_stable_dynamic_charge_status: %s empty possible_num_phases, defaulting to [%s]",
+                self.name,
+                cs.current_active_phase_number,
+            )
             possible_num_phases = [cs.current_active_phase_number]
 
         cs.possible_amps = possible_amps
