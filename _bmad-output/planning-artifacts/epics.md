@@ -665,7 +665,7 @@ So that the system never silently fails to act and household members know when t
 **Then** the solver re-attempts with updated state
 **And** if feasibility is restored, normal operation resumes
 
-### Story 3.7: FM-001 — Solar Forecast API Resilience
+### Story 3.7: FM-001 — Solar Forecast API Resilience [DONE]
 
 As TheAdmin,
 I want the system to support multiple solar forecast providers, detect stale forecasts, fall back to historical patterns, score providers against actual production, apply dampening corrections, and let me choose the active provider or let the system auto-select the best one,
