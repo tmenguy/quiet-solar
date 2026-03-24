@@ -351,7 +351,7 @@ So that I can work on multiple stories in parallel without branch switching, sta
 **Then** the worktree is removed (symlinks go with it, originals untouched)
 **And** the main worktree's main branch is updated
 
-### Story 1.8: AI-Assisted PR Review with Interactive Feedback Loop
+### Story 1.8: AI-Assisted PR Review with Interactive Feedback Loop [DONE]
 
 As TheDev,
 I want PRs to be reviewed by an AI reviewer (or human) on GitHub, with the system pulling review comments back into the local workflow so I can discuss, fix, or reject feedback interactively — a true PR back-and-forth,
