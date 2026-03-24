@@ -53,6 +53,7 @@ Before any PR or completion claim, ALL of these must pass:
 - **All config keys in `const.py`** — never hardcode strings.
 - **Async rules**: no blocking calls in async code, use `hass.async_add_executor_job()` for blocking operations.
 - **Logging**: lazy logging with `%s`, no f-strings in log calls, no periods at end.
+- **Translations**: `translations/en.json` is GENERATED — **NEVER edit it directly**. Edit `strings.json` instead, then run `bash scripts/generate-translations.sh`. This applies to both human and AI agents.
 
 ## Workflow Quick Reference
 

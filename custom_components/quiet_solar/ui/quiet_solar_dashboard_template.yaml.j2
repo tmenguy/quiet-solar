@@ -215,6 +215,12 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+              {%- for entity_key, ha_entity in device.ha_entities.items() %}
+              {%-   if entity_key.startswith("qs_no_control_forecast_") or entity_key.startswith("qs_solar_forecast_") %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%-   endif %}
+              {%- endfor %}
             {% elif device.device_type == "battery" -%}
               {%- set ha_entity = device.ha_entities.get("load_current_command") %}
               {%- if ha_entity != None %}

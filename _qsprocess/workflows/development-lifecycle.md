@@ -105,9 +105,14 @@ ruff format --check custom_components/quiet_solar/
 
 # 4. MyPy type check (no issues)
 mypy custom_components/quiet_solar/
+
+# 5. Regenerate translations (if strings.json was modified)
+bash scripts/generate-translations.sh
 ```
 
-ALL FOUR must pass before marking any task complete.
+ALL FIVE must pass before marking any task complete.
+
+**Translation rule**: NEVER edit `translations/en.json` directly. If translation strings need updating, edit `strings.json` and run step 5. If `en.json` has uncommitted direct edits, discard them and regenerate.
 
 ### 100% Coverage Enforcement
 
@@ -141,6 +146,7 @@ pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing
 ruff check custom_components/quiet_solar/
 ruff format --check custom_components/quiet_solar/
 mypy custom_components/quiet_solar/
+bash scripts/generate-translations.sh
 ```
 
 ALL must pass. If any fail, fix before proceeding.

@@ -727,6 +727,9 @@
       },
       "qs_home_real_off_grid": {
         "name": "Real off-grid state"
+      },
+      "qs_solar_forecast_ok": {
+        "name": "Solar Forecast OK"
       }
     },
 
@@ -808,6 +811,9 @@
       },
       "qs_next_or_current_constraint_end_time": {
         "name": "Next/Current End Time"
+      },
+      "qs_solar_forecast_age": {
+        "name": "Solar Forecast Age"
       }
     },
     "button": {
@@ -860,6 +866,9 @@
       }
     },
     "select": {
+      "qs_solar_provider_mode": {
+        "name": "Solar Provider Mode"
+      },
       "off_grid_mode": {
         "name": "Off-grid mode",
         "state": {
