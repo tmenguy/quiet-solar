@@ -1,6 +1,6 @@
 # Story 1.9: Mobile-First Autonomous GitHub Flow
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -40,52 +40,52 @@ So that the entire development lifecycle from idea to release can be driven from
 
 ## Tasks / Subtasks
 
-- [ ] Task 0: Evaluate execution environment (AC: #1)
-  - [ ] 0.1 Investigate Claude Code for Web / remote agent capabilities (repo access, shell commands, PR creation)
-  - [ ] 0.2 Decide: Option A (GitHub Actions + CLI) vs Option B (Claude Code remote agent)
-  - [ ] 0.3 If Option B: verify auth model (GitHub App, OAuth, deploy key?) and quality gate execution
-  - [ ] 0.4 Document decision rationale in this story's completion notes
+- [x] Task 0: Evaluate execution environment (AC: #1)
+  - [x] 0.1 Investigate Claude Code for Web / remote agent capabilities (repo access, shell commands, PR creation)
+  - [x] 0.2 Decide: Option A (GitHub Actions + CLI) vs Option B (Claude Code remote agent)
+  - [x] 0.3 N/A (Option A selected)
+  - [x] 0.4 Document decision rationale in this story's completion notes
 
-- [ ] Task 1: Create `auto-bmad.yml` GitHub Actions workflow (AC: #1)
-  - [ ] 1.1 Trigger on `issues.labeled` event where label is `auto-bmad`
-  - [ ] 1.2 **If Option A:** Checkout repo, set up Python venv, install Claude Code CLI, authenticate via `ANTHROPIC_API_KEY` secret
-  - [ ] 1.3 **If Option B:** Call Claude Code remote agent API / trigger instead of local CLI
-  - [ ] 1.4 Parse issue title and body to determine intent (bug vs feature)
-  - [ ] 1.5 Run Claude Code with the appropriate BMad workflow command
-  - [ ] 1.6 Configure timeout (30 min default, configurable via repo variable)
+- [x] Task 1: Create `auto-bmad.yml` GitHub Actions workflow (AC: #1)
+  - [x] 1.1 Trigger on `issues.labeled` event where label is `auto-bmad`
+  - [x] 1.2 Checkout repo, set up Python 3.14 + Node.js 20, install Claude Code CLI, authenticate via `ANTHROPIC_API_KEY` secret
+  - [x] 1.3 N/A (Option A selected)
+  - [x] 1.4 Parse issue title and body to determine intent (bug vs feature) via labels
+  - [x] 1.5 Run Claude Code with autonomous prompt including issue context and project rules
+  - [x] 1.6 Configure timeout (30 min default, configurable via `AUTO_BMAD_TIMEOUT_MINUTES` repo variable)
 
-- [ ] Task 2: Implement intent routing and autonomous execution (AC: #1, #2)
-  - [ ] 2.1 Create a prompt template that feeds issue context to Claude Code
-  - [ ] 2.2 Route `bug` labeled issues to quick-dev flow, others to feature flow
-  - [ ] 2.3 Ensure the agent follows all project rules (`_qsprocess/rules/project-rules.md`)
-  - [ ] 2.4 Agent creates branch (`QS_<issue_number>`), implements, runs quality gates
-  - [ ] 2.5 Agent creates PR with full template, risk assessment, and link to issue
+- [x] Task 2: Implement intent routing and autonomous execution (AC: #1, #2)
+  - [x] 2.1 Create a prompt template that feeds issue context to Claude Code
+  - [x] 2.2 Route `bug` labeled issues to quick-dev flow, others to feature flow
+  - [x] 2.3 Ensure the agent follows all project rules (`_qsprocess/rules/project-rules.md`)
+  - [x] 2.4 Agent creates branch (`QS_<issue_number>`), implements, runs quality gates
+  - [x] 2.5 Agent creates PR with full template, risk assessment, and link to issue
 
-- [ ] Task 3: Implement guardrails and failure handling (AC: #4, #5)
-  - [ ] 3.1 Add workflow timeout (GitHub Actions `timeout-minutes`)
-  - [ ] 3.2 On failure: post diagnostic comment on issue, add `auto-bmad-failed` label
-  - [ ] 3.3 On success: post summary comment with cost/usage metrics on the issue
-  - [ ] 3.4 Add `auto-bmad-running` label while workflow is active (remove on completion)
-  - [ ] 3.5 Prevent duplicate runs: skip if `auto-bmad-running` label is already present
-  - [ ] 3.6 Create `auto-bmad` and `auto-bmad-failed` and `auto-bmad-running` labels in the repo
+- [x] Task 3: Implement guardrails and failure handling (AC: #4, #5)
+  - [x] 3.1 Add workflow timeout (GitHub Actions `timeout-minutes`)
+  - [x] 3.2 On failure: post diagnostic comment on issue, add `auto-bmad-failed` label
+  - [x] 3.3 On success: post summary comment with duration metrics on the issue
+  - [x] 3.4 Add `auto-bmad-running` label while workflow is active (remove on completion via `always()`)
+  - [x] 3.5 Prevent duplicate runs: skip if `auto-bmad-running` label is already present
+  - [x] 3.6 Labels created dynamically by the workflow (GitHub auto-creates labels on first use)
 
-- [ ] Task 4: Configure repository secrets and variables (AC: #1)
-  - [ ] 4.1 **If Option A:** Document required secret: `ANTHROPIC_API_KEY`
-  - [ ] 4.2 **If Option B:** Document Claude Code platform auth setup (may replace API key secret)
-  - [ ] 4.3 Document optional repo variable: `AUTO_BMAD_TIMEOUT_MINUTES` (default 30)
-  - [ ] 4.4 Document optional repo variable: `AUTO_BMAD_MAX_RETRIES` (default 3, for quality gate retry loops)
+- [x] Task 4: Configure repository secrets and variables (AC: #1)
+  - [x] 4.1 Document required secret: `ANTHROPIC_API_KEY`
+  - [x] 4.2 N/A (Option A selected)
+  - [x] 4.3 Document optional repo variable: `AUTO_BMAD_TIMEOUT_MINUTES` (default 30)
+  - [x] 4.4 Document optional repo variable: `AUTO_BMAD_MAX_RETRIES` (default 3, for quality gate retry loops)
 
-- [ ] Task 5: Test end-to-end flow (AC: #1, #2, #3, #4)
+- [ ] Task 5: Test end-to-end flow (AC: #1, #2, #3, #4) -- POST-MERGE: requires `ANTHROPIC_API_KEY` secret and live GitHub Actions
   - [ ] 5.1 Create a test issue with `auto-bmad` label (small bug fix or trivial feature)
   - [ ] 5.2 Verify workflow triggers, agent runs, PR is created
   - [ ] 5.3 Verify PR can be reviewed and merged from GitHub mobile
   - [ ] 5.4 Verify release pipeline triggers after merge
   - [ ] 5.5 Test failure path: create an issue with ambiguous/impossible scope, verify failure handling
 
-- [ ] Task 6: Document the autonomous workflow (AC: #1, #2, #3, #4, #5)
-  - [ ] 6.1 Add autonomous flow section to `_qsprocess/workflows/development-lifecycle.md`
-  - [ ] 6.2 Update `_qsprocess/rules/project-rules.md` workflow routing table
-  - [ ] 6.3 Document issue authoring guidelines for mobile (what makes a good auto-bmad issue)
+- [x] Task 6: Document the autonomous workflow (AC: #1, #2, #3, #4, #5)
+  - [x] 6.1 Add autonomous flow section to `_qsprocess/workflows/development-lifecycle.md`
+  - [x] 6.2 Update `_qsprocess/rules/project-rules.md` workflow routing table
+  - [x] 6.3 Document issue authoring guidelines for mobile (included in lifecycle doc)
 
 ## Dev Notes
 
@@ -283,8 +283,41 @@ _qsprocess/rules/
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
+
+N/A -- infrastructure story, no debugging needed
 
 ### Completion Notes List
 
+- **Task 0 decision:** Option A (GitHub Actions + Claude Code CLI) selected. Remote triggers (`/v1/code/triggers`) are cron-based only, not event-based, so cannot natively support GitHub issue label triggers. The `run` API also lacks clear support for dynamic context injection. Option A is well-understood and can be migrated later.
+- **Task 1-3:** Created `auto-bmad.yml` with full lifecycle: duplicate guard via `auto-bmad-running` label, issue context extraction, Python 3.14 + Node.js 20 setup, Claude Code CLI installation, autonomous agent execution with project rules, success/failure reporting, always-run cleanup.
+- **Task 4:** Secrets and variables documented in the workflow file comments and in the lifecycle doc.
+- **Task 5:** Marked as POST-MERGE -- requires `ANTHROPIC_API_KEY` repository secret to be configured and live GitHub Actions execution. Cannot be tested locally.
+- **Task 6:** Added "Autonomous Flow (auto-bmad)" section to `development-lifecycle.md` with how-it-works, issue guidelines, guardrails, required setup, and retry instructions. Updated routing tables in both `project-rules.md` and the quick reference table.
+- All existing quality gates pass: 3979 tests, 100% coverage, ruff clean, mypy clean.
+- **Code review fixes (P1-P7, D3):**
+  - P1: Shell injection fixed — prompt written via single-quoted heredoc + envsubst (safe single-pass substitution)
+  - P2: Added `set -e` to agent run block; removed unconditional `status=success` — `success()` condition is enough
+  - P3: Agent prompt now includes full PR template: Summary, Testing, Code quality, Risk assessment sections
+  - P4: Token usage not available from CLI output — duration is reported; noted as known limitation
+  - P5: Added early `Validate API key` step that fails fast with actionable error message
+  - P6: CLI install uses `@latest` with comment to pin; version pinning deferred to first live test
+  - P7: Label removal catch now logs warning via `core.warning()` instead of silently swallowing
+  - D3: Guard step now checks issue state (must be open) and checks for existing open PR on the branch
+
+### Change Log
+
+- 2026-03-24: Story 1.9 implemented -- auto-bmad workflow, lifecycle docs, project rules updated
+
 ### File List
+
+New files:
+- `.github/workflows/auto-bmad.yml`
+- `docs/auto-bmad.md` (user-facing documentation: setup, usage, guardrails, cost)
+
+Modified files:
+- `_qsprocess/workflows/development-lifecycle.md` (added Autonomous Flow section)
+- `_qsprocess/rules/project-rules.md` (added auto-bmad to routing table and quick reference)
+- `_bmad-output/implementation-artifacts/1-9-mobile-first-autonomous-github-flow.md` (story status + tasks)

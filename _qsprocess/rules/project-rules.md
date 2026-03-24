@@ -65,6 +65,7 @@ Before any PR or completion claim, ALL of these must pass:
 | "Work on issue #N" | Fetches issue → bug label = quick-dev, otherwise = feature flow. Skips issue creation. |
 | "Merge PR #N" | Merge commit + delete branch + worktree cleanup |
 | "Create a release" | Tag `vYYYY.MM.DD.XX`, release notes from merged PRs |
+| Apply `auto-bmad` label on issue | Autonomous agent: branch → implement → quality gates → PR (cloud, no local setup) |
 
 ## Workflow Routing
 
@@ -79,6 +80,7 @@ When the user describes work to do, automatically select the right workflow. **E
 | **From GitHub issue** — the user says "work on issue #N" or similar | Fetch the issue with `gh issue view N` and use the issue title and body as the initial intent/context. If it has the `bug` label, route to the bug flow. Otherwise route to the feature flow. In both cases, **skip Phase 1b** (issue already exists) and use issue number N for branch naming (`QS_N`). |
 | **Merge PR** — the user asks to merge a PR | Follow Phase 3e (Merge & Cleanup) in `development-lifecycle.md`. |
 | **Release** — the user asks to create a release, cut a release, or ship a version | Follow Phase 4 (Release) in `development-lifecycle.md`. |
+| **Autonomous (auto-bmad)** — triggered by applying `auto-bmad` label to a GitHub issue | Runs entirely in CI via `.github/workflows/auto-bmad.yml`. See "Autonomous Flow" section in `development-lifecycle.md`. No local action needed — the agent handles everything cloud-side. |
 
 Do NOT ask which workflow to use — infer from the user's description. When in doubt (ambiguous scope), default to the bug fix flow.
 

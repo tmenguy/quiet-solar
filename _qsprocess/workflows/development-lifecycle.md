@@ -257,6 +257,50 @@ This applies to ALL completions — code stories, documentation stories, and pro
 
 ---
 
+## Autonomous Flow (auto-bmad)
+
+For mobile-first development: create a GitHub issue, apply the `auto-bmad` label, and a cloud-based agent handles everything autonomously.
+
+### How It Works
+
+1. **Trigger:** TheDev creates an issue on GitHub (e.g., from phone) and applies the `auto-bmad` label
+2. **Detection:** `.github/workflows/auto-bmad.yml` triggers on `issues.labeled`
+3. **Execution:** GitHub Actions runner installs Claude Code CLI, feeds issue context to the agent
+4. **Agent work:** The agent reads project rules, creates a branch, implements, runs quality gates, creates a PR
+5. **Review:** TheDev reviews and merges the PR from the GitHub mobile app
+6. **Release:** Merge triggers the existing release pipeline (Phase 4)
+
+### Issue Authoring Guidelines
+
+Good `auto-bmad` issues:
+- Clear, specific title (e.g., "Bug: solver ignores off-peak constraints after midnight")
+- Steps to reproduce (bugs) or clear scope description (features)
+- Self-contained — the agent only has the issue and codebase as context
+- Appropriately scoped — single bug fix or small feature, not multi-story epics
+
+### Guardrails
+
+- **Timeout:** 30 minutes default (configurable via `AUTO_BMAD_TIMEOUT_MINUTES` repo variable)
+- **Duplicate prevention:** `auto-bmad-running` label prevents concurrent runs on the same issue
+- **Failure reporting:** On failure, a diagnostic comment is posted and `auto-bmad-failed` label is added
+- **No auto-merge:** TheDev must always approve and merge manually
+- **Quality gates:** Same gates as local development (tests, ruff, mypy, 100% coverage)
+
+### Required Setup
+
+- Repository secret: `ANTHROPIC_API_KEY` — Anthropic API key for Claude Code CLI
+- Optional repo variable: `AUTO_BMAD_TIMEOUT_MINUTES` — timeout in minutes (default: 30)
+- Optional repo variable: `AUTO_BMAD_MAX_RETRIES` — quality gate retry budget (default: 3)
+
+### Retry After Failure
+
+If the agent fails, TheDev can:
+1. Narrow the issue scope or add clarifying details
+2. Remove the `auto-bmad-failed` label
+3. Re-apply the `auto-bmad` label to trigger another run
+
+---
+
 ## Phase 4: Release
 
 Releases are **manually triggered** by the user — never auto-release.
