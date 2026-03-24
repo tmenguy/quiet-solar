@@ -25,6 +25,7 @@ from ..const import (
     CONF_SOLAR_PROVIDER_NAME,
     DOMAIN,
     FLOATING_PERIOD_S,
+    FORECAST_SOLAR_DOMAIN,
     MAX_AMP_INFINITE,
     MAX_POWER_INFINITE,
     OPEN_METEO_SOLAR_DOMAIN,
@@ -60,7 +61,12 @@ def _migrate_solar_providers_config(config_data: dict) -> list[dict]:
     if old_provider is None:
         return []
 
-    label = "Solcast" if old_provider == SOLCAST_SOLAR_DOMAIN else "Open-Meteo"
+    if old_provider == SOLCAST_SOLAR_DOMAIN:
+        label = "Solcast"
+    elif old_provider == FORECAST_SOLAR_DOMAIN:
+        label = "Forecast.Solar"
+    else:
+        label = "Open-Meteo"
     return [{CONF_SOLAR_PROVIDER_DOMAIN: old_provider, CONF_SOLAR_PROVIDER_NAME: label}]
 
 
@@ -70,6 +76,8 @@ def _create_provider_for_domain(domain: str, solar: QSSolar, name: str) -> QSSol
         return QSSolarProviderSolcast(solar=solar, provider_name=name)
     if domain == OPEN_METEO_SOLAR_DOMAIN:
         return QSSolarProviderOpenWeather(solar=solar, provider_name=name)
+    if domain == FORECAST_SOLAR_DOMAIN:
+        return QSSolarProviderForecastSolar(solar=solar, provider_name=name)
     _LOGGER.warning("Unknown solar forecast domain %s, skipping", domain)
     return None
 
@@ -275,10 +283,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 provider.compute_dampening(self.solar_max_output_power_value)
             # Advance to next day slot
             provider.advance_history_day()
-            _LOGGER.debug("Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
-                          name,
-                          provider.score_raw if provider.score_raw is not None else float("nan"),
-                          provider.score_dampened)
+            _LOGGER.debug(
+                "Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
+                name,
+                provider.score_raw if provider.score_raw is not None else float("nan"),
+                provider.score_dampened,
+            )
 
     def get_forecast(
         self, start_time: datetime, end_time: datetime | None
@@ -452,7 +462,11 @@ class QSSolarProvider:
                 self.forecast_step_seconds = step_s
                 self._steps_per_day = 86400 // step_s
                 # Invalidate dampening coefficients if step size changed
-                if old_steps is not None and old_steps != self._steps_per_day and self._dampening_coefficients is not None:
+                if (
+                    old_steps is not None
+                    and old_steps != self._steps_per_day
+                    and self._dampening_coefficients is not None
+                ):
                     _LOGGER.info(
                         "Step size changed for %s (%s -> %s steps/day), invalidating dampening coefficients",
                         self.provider_name,
@@ -857,6 +871,50 @@ class QSSolarProviderSolcast(QSSolarProvider):
 class QSSolarProviderOpenWeather(QSSolarProvider):
     def __init__(self, solar: QSSolar, provider_name: str = "", **kwargs) -> None:
         super().__init__(solar=solar, domain=OPEN_METEO_SOLAR_DOMAIN, provider_name=provider_name, **kwargs)
+
+    async def get_power_series_from_orchestrator(
+        self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
+    ) -> list[tuple[datetime | None, str | float | None]]:
+        data = orchestrator.data.watts
+        if start_time is None or end_time is None:
+            return []
+        if data is None:
+            return []
+
+        data = [(t, p) for t, p in data.items()]
+        data.sort(key=itemgetter(0))
+
+        start_idx = bisect_left(data, start_time, key=itemgetter(0))
+        if start_idx >= len(data):
+            return []
+
+        if start_idx > 0:
+            if data[start_idx][0] != start_time:
+                start_idx -= 1
+
+        end_idx = bisect_left(data, end_time, key=itemgetter(0))
+        if end_idx >= len(data):
+            end_idx = len(data) - 1
+
+        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1]]
+
+
+class QSSolarProviderForecastSolar(QSSolarProvider):
+    def __init__(self, solar: QSSolar, provider_name: str = "", **kwargs) -> None:
+        super().__init__(solar=solar, domain=FORECAST_SOLAR_DOMAIN, provider_name=provider_name, **kwargs)
+
+    async def fill_orchestrators(self):
+        """Return the orchestrators for the domain."""
+        self.orchestrators = []
+        self._orchestrator_health = {}
+        entries = self.hass.config_entries.async_entries(self.domain)
+        for entry in entries:
+            try:
+                orch = entry.runtime_data
+                self.orchestrators.append(orch)
+                self._orchestrator_health[id(orch)] = True
+            except AttributeError, TypeError:
+                pass
 
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None

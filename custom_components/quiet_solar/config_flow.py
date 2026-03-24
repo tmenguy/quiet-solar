@@ -130,6 +130,7 @@ from .const import (
     DATA_HANDLER,
     DEVICE_TYPE,
     DOMAIN,
+    FORECAST_SOLAR_DOMAIN,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
     OPEN_METEO_SOLAR_DOMAIN,
     POOL_TEMP_STEPS,
@@ -847,6 +848,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 domain_labels = {
                     SOLCAST_SOLAR_DOMAIN: "Solcast",
                     OPEN_METEO_SOLAR_DOMAIN: "Open-Meteo",
+                    FORECAST_SOLAR_DOMAIN: "Forecast.Solar",
                 }
                 providers = []
                 for domain in domain_list:
@@ -877,14 +879,16 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if open_solar_entries:
             options.append(SelectOptionDict(value=OPEN_METEO_SOLAR_DOMAIN, label="Open Meteo Forecast"))
 
+        forecast_solar_entries = self.hass.config_entries.async_entries(FORECAST_SOLAR_DOMAIN)
+        if forecast_solar_entries:
+            options.append(SelectOptionDict(value=FORECAST_SOLAR_DOMAIN, label="Forecast.Solar"))
+
         if options:
             # Multi-select: store as list of selected domains
             raw_providers = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDERS)
             if raw_providers is not None:
                 # New format is list of dicts; extract domain strings for the selector
-                default = [
-                    p[CONF_SOLAR_PROVIDER_DOMAIN] if isinstance(p, dict) else p for p in raw_providers
-                ]
+                default = [p[CONF_SOLAR_PROVIDER_DOMAIN] if isinstance(p, dict) else p for p in raw_providers]
             else:
                 # Migration: convert old single-provider to list
                 old_single = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
