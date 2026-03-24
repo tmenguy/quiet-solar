@@ -198,10 +198,12 @@ Claude Opus 4.6
 - Updated Phase 3d in development-lifecycle.md with "Processing Review Feedback" subsection
 - Added "Process PR feedback" intent to both quick reference table and routing table in project-rules.md
 - Skill works with any review source (local /bmad-code-review, human, Copilot, future CI reviewers)
+- Code review findings addressed (15 items): fixed wrong GraphQL mutation (P1), added skip_count tracking (P2), removed auto-commit in favor of user confirmation (P3), scoped git add to changed files (P4), simplified Phase A to honest 2-option menu (P5/P6), added error handling on all GraphQL calls (P7), added 3-attempt escape hatch for fix loops (P8), added missing SKILL.md to BMad mirror (P9), documented heredoc approach for shell metacharacters (P10), added active branch check (P11), added null-line and deleted-file handling (P12), added pagination support (D1), added top-level review body fetching (D2), added branch protection resolve warning (D3)
 
 ### Change Log
 
 - 2026-03-24: Story 1.8 implemented — PR review feedback skill, lifecycle docs, routing updates
+- 2026-03-24: Addressed 15 code review findings (P1-P12, D1-D3) — see completion notes
 
 ### File List
 
@@ -212,6 +214,7 @@ New files:
 - `.cursor/skills/bmad-pr-review-feedback/SKILL.md`
 - `.cursor/skills/bmad-pr-review-feedback/bmad-skill-manifest.yaml`
 - `.cursor/skills/bmad-pr-review-feedback/workflow.md`
+- `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/SKILL.md`
 - `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/bmad-skill-manifest.yaml`
 - `_bmad/bmm/workflows/4-implementation/bmad-pr-review-feedback/workflow.md`
 
