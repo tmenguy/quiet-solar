@@ -275,10 +275,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 provider.compute_dampening(self.solar_max_output_power_value)
             # Advance to next day slot
             provider.advance_history_day()
-            _LOGGER.debug("Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
-                          name,
-                          provider.score_raw if provider.score_raw is not None else float("nan"),
-                          provider.score_dampened)
+            _LOGGER.debug(
+                "Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
+                name,
+                provider.score_raw if provider.score_raw is not None else float("nan"),
+                provider.score_dampened,
+            )
 
     def get_forecast(
         self, start_time: datetime, end_time: datetime | None
@@ -452,7 +454,11 @@ class QSSolarProvider:
                 self.forecast_step_seconds = step_s
                 self._steps_per_day = 86400 // step_s
                 # Invalidate dampening coefficients if step size changed
-                if old_steps is not None and old_steps != self._steps_per_day and self._dampening_coefficients is not None:
+                if (
+                    old_steps is not None
+                    and old_steps != self._steps_per_day
+                    and self._dampening_coefficients is not None
+                ):
                     _LOGGER.info(
                         "Step size changed for %s (%s -> %s steps/day), invalidating dampening coefficients",
                         self.provider_name,

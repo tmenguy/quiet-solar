@@ -17,11 +17,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-COMPONENT = "quiet_solar"
+COMPONENT = "renault"
 COMPONENT_DIR = Path("custom_components") / COMPONENT
 STRINGS_PATH = COMPONENT_DIR / "strings.json"
 EN_JSON_PATH = COMPONENT_DIR / "translations" / "en.json"
-
+HA_STRINGS_PATH = Path("custom_components") / ".." / "scripts"  / "strings_from_homeassistant.json"
 
 # ---------------------------------------------------------------------------
 # Reference substitution (extracted from HA core script/translations/util.py)
@@ -94,10 +94,12 @@ def main() -> int:
         return 1
 
     strings = json.loads(STRINGS_PATH.read_text(encoding="utf-8"))
+    wrapped = json.loads(HA_STRINGS_PATH.read_text(encoding="utf-8"))
 
     # Wrap in the same structure HA core uses so that
     # [%key:component::quiet_solar::...%] references resolve correctly.
-    wrapped = {"component": {COMPONENT: strings}}
+    wrapped["component"] = {COMPONENT: strings}
+
     flat = flatten_translations(wrapped)
 
     resolved = substitute_references(strings, flat)
