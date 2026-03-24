@@ -1,0 +1,305 @@
+name: Auto BMad
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  auto-bmad:
+    # Only run when the 'auto-bmad' label is applied
+    if: github.event.label.name == 'auto-bmad'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ vars.AUTO_BMAD_TIMEOUT_MINUTES && fromJSON(vars.AUTO_BMAD_TIMEOUT_MINUTES) || 30 }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      # --- Guard: prevent duplicate runs, check issue state, check existing branch ---
+      - name: Pre-flight checks
+        id: guard
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+
+            // Duplicate run guard
+            if (labels.includes('auto-bmad-running')) {
+              core.setOutput('skip', 'true');
+              core.notice('Skipping: auto-bmad-running label already present');
+              return;
+            }
+
+            // Issue must be open
+            if (issue.state !== 'open') {
+              core.setOutput('skip', 'true');
+              core.notice('Skipping: issue is not open');
+              return;
+            }
+
+            // Check for existing branch or PR from a prior run
+            const branchName = `QS_${issue.number}`;
+            try {
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: `${context.repo.owner}:${branchName}`,
+                state: 'open'
+              });
+              if (prs.length > 0) {
+                core.setOutput('skip', 'true');
+                core.notice(`Skipping: open PR already exists from branch ${branchName}`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## Auto BMad - Skipped\n\nAn open PR already exists from branch \`${branchName}\`. Close or merge it before re-triggering.`
+                });
+                return;
+              }
+            } catch (e) {
+              // PR check failed — proceed anyway
+              core.warning(`Could not check for existing PRs: ${e.message}`);
+            }
+
+            core.setOutput('skip', 'false');
+
+      - name: Exit early if skipped
+        if: steps.guard.outputs.skip == 'true'
+        run: exit 0
+
+      # --- Mark as running ---
+      - name: Add running label
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['auto-bmad-running']
+            });
+
+      # --- Extract issue context ---
+      - name: Extract issue context
+        if: steps.guard.outputs.skip != 'true'
+        id: issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+            const isBug = labels.includes('bug');
+            core.setOutput('number', issue.number);
+            core.setOutput('title', issue.title);
+            core.setOutput('body', issue.body || '');
+            core.setOutput('intent', isBug ? 'bug' : 'feature');
+
+      # --- Setup environment ---
+      - name: Checkout repository
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Set up Node.js
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements_test.txt
+
+      # P6: Pin CLI version for reproducibility. Update intentionally when needed.
+      - name: Install Claude Code CLI
+        if: steps.guard.outputs.skip != 'true'
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      # P5: Fail fast with a clear message if the API key is missing
+      - name: Validate API key
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not configured. Add it in Settings > Secrets > Actions."
+            exit 1
+          fi
+
+      # --- Build prompt safely and run Claude Code ---
+      # P1: Write prompt to a temp file via heredoc (single-quoted delimiter prevents
+      #     shell expansion), then use envsubst for safe variable substitution.
+      #     This prevents shell injection from issue title/body content.
+      - name: Run autonomous agent
+        if: steps.guard.outputs.skip != 'true'
+        id: agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          INTENT_TYPE: ${{ steps.issue.outputs.intent }}
+          MAX_RETRIES: ${{ vars.AUTO_BMAD_MAX_RETRIES || '3' }}
+          GH_TOKEN: ${{ github.token }}
+          TZ: Europe/Paris
+        run: |
+          set -e
+
+          START_TIME=$(date +%s)
+
+          # Compute intent description safely before the heredoc
+          if [ "$INTENT_TYPE" = "bug" ]; then
+            export INTENT_DESC="bug fix via quick-dev flow"
+          else
+            export INTENT_DESC="feature"
+          fi
+
+          # Write prompt template (single-quoted delimiter = no shell expansion)
+          cat <<'PROMPT_EOF' > /tmp/auto-bmad-prompt.txt
+          You are an autonomous developer agent working on GitHub issue #${ISSUE_NUMBER}.
+
+          ## Issue
+          **Title:** ${ISSUE_TITLE}
+          **Intent:** ${INTENT_TYPE} (route as ${INTENT_DESC})
+
+          ## Issue Description
+          ${ISSUE_BODY}
+
+          ## Instructions
+          1. Read and follow ALL rules in _qsprocess/rules/project-rules.md
+          2. Read _bmad-output/project-context.md for coding standards
+          3. Create branch QS_${ISSUE_NUMBER} from main
+          4. Implement the fix or feature described in the issue
+          5. Run quality gates and iterate until ALL pass:
+             - pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing --cov-fail-under=100
+             - ruff check custom_components/quiet_solar/
+             - ruff format --check custom_components/quiet_solar/
+             - mypy custom_components/quiet_solar/
+          6. Quality gate retry budget: ${MAX_RETRIES} attempts. If still failing after retries, stop and report the failure.
+          7. Create a PR linking to issue #${ISSUE_NUMBER} with this structure:
+             - PR title: concise summary of the change (under 70 chars)
+             - PR body must include ALL of these sections:
+               ## Summary
+               <1-3 bullet points>
+
+               Closes #${ISSUE_NUMBER}
+
+               ## Testing
+               - [x] Tests added/updated for new behavior
+               - [x] 100% coverage verified
+               - [x] No flaky tests introduced
+
+               ## Code quality
+               - [x] Ruff passes (lint + format)
+               - [x] MyPy passes
+               - [x] No new type: ignore or noqa without justification
+
+               ## Risk assessment
+               Mark the applicable risk level(s):
+               - [ ] CRITICAL (solver, constraints, charger budgeting)
+               - [ ] HIGH (load base, constants, orchestration)
+               - [ ] MEDIUM (device-specific: car, person, battery, solar)
+               - [ ] LOW (platforms, UI, docs)
+          8. Do NOT create or modify story files in _bmad-output/
+          9. Do NOT force push or amend commits
+          10. Do NOT modify files unrelated to the issue scope
+
+          Work autonomously. Do not ask questions -- make reasonable decisions and document them in commit messages.
+          PROMPT_EOF
+
+          # Safe substitution: envsubst replaces only listed vars (single pass, no recursion)
+          envsubst '$ISSUE_NUMBER $ISSUE_TITLE $ISSUE_BODY $INTENT_TYPE $INTENT_DESC $MAX_RETRIES' \
+            < /tmp/auto-bmad-prompt.txt > /tmp/auto-bmad-prompt-final.txt
+
+          # Run the agent (set -e ensures non-zero exit propagates)
+          claude --print --dangerously-skip-permissions --verbose \
+            "$(cat /tmp/auto-bmad-prompt-final.txt)" 2>/tmp/claude-stderr.txt
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "duration=${DURATION}" >> "$GITHUB_OUTPUT"
+
+      # --- Success: post summary ---
+      - name: Post success comment
+        if: steps.guard.outputs.skip != 'true' && success()
+        uses: actions/github-script@v7
+        env:
+          AGENT_DURATION: ${{ steps.agent.outputs.duration }}
+          AGENT_INTENT: ${{ steps.issue.outputs.intent }}
+        with:
+          script: |
+            const duration = parseInt(process.env.AGENT_DURATION || '0');
+            const minutes = Math.floor(duration / 60);
+            const seconds = duration % 60;
+            const intent = process.env.AGENT_INTENT || 'unknown';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Auto BMad - Completed\n\n` +
+                `The autonomous agent has finished processing this issue.\n\n` +
+                `**Duration:** ${minutes}m ${seconds}s\n` +
+                `**Intent:** ${intent}\n\n` +
+                `Please review the created PR and approve/merge when ready.`
+            });
+
+      # --- Failure: post diagnostic ---
+      - name: Post failure comment
+        if: steps.guard.outputs.skip != 'true' && failure()
+        uses: actions/github-script@v7
+        env:
+          AGENT_INTENT: ${{ steps.issue.outputs.intent }}
+          TIMEOUT_MINUTES: ${{ vars.AUTO_BMAD_TIMEOUT_MINUTES || '30' }}
+        with:
+          script: |
+            const intent = process.env.AGENT_INTENT || 'unknown';
+            const timeout = process.env.TIMEOUT_MINUTES;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Auto BMad - Failed\n\n` +
+                `The autonomous agent was unable to complete this issue.\n\n` +
+                `**Intent:** ${intent}\n` +
+                `**Possible causes:**\n` +
+                `- ANTHROPIC_API_KEY secret not configured\n` +
+                `- Issue scope too large or ambiguous\n` +
+                `- Quality gates could not be satisfied after retries\n` +
+                `- Timeout reached (${timeout} minutes)\n\n` +
+                `Check the [workflow run logs](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions) for details.\n\n` +
+                `To retry: re-apply the \`auto-bmad\` label.`
+            });
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['auto-bmad-failed']
+            });
+
+      # --- Always: remove running label ---
+      - name: Remove running label
+        if: steps.guard.outputs.skip != 'true' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: 'auto-bmad-running'
+              });
+            } catch (e) {
+              core.warning(`Failed to remove auto-bmad-running label: ${e.message}`);
+            }
