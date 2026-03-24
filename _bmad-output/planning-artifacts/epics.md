@@ -390,7 +390,7 @@ So that code review is integrated into the agentic workflow without requiring ma
 - Which AI reviewer to use (GitHub Copilot review, custom GitHub Action with Claude, third-party)?
 - How to configure reviewer selection per-PR or per-repo?
 
-### Story 1.9: Mobile-First Autonomous GitHub Flow
+### Story 1.9: Mobile-First Autonomous GitHub Flow [DONE]
 
 As TheDev,
 I want to create a tagged GitHub issue from my phone, have a cloud-based automation pick it up, run the full BMad workflow autonomously (YOLO mode), and present the result as a PR for review — which I can review, approve, and merge from my phone, triggering the full release pipeline,
