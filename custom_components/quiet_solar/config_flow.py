@@ -879,8 +879,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if options:
             # Multi-select: store as list of selected domains
-            default = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDERS)
-            if default is None:
+            raw_providers = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDERS)
+            if raw_providers is not None:
+                # New format is list of dicts; extract domain strings for the selector
+                default = [
+                    p[CONF_SOLAR_PROVIDER_DOMAIN] if isinstance(p, dict) else p for p in raw_providers
+                ]
+            else:
                 # Migration: convert old single-provider to list
                 old_single = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
                 default = [old_single] if old_single else None

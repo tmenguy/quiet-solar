@@ -147,6 +147,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             self._active_provider_name = next(iter(self.solar_forecast_providers))
             self.solar_forecast_provider_handler = self.solar_forecast_providers[self._active_provider_name]
 
+        self._last_daily_scoring_date: datetime | None = None
         self.solar_production = 0
         self.inverter_output_power = 0
 
@@ -171,10 +172,13 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         """Return list of configured provider names."""
         return list(self.solar_forecast_providers.keys())
 
-    def set_provider_mode(self, mode: str) -> None:
+    def set_provider_mode(self, mode: str | None) -> None:
         """Set provider selection mode ('auto' or a provider name)."""
+        # Treat None or unknown provider names as auto
+        if mode is None or (mode != SOLAR_PROVIDER_MODE_AUTO and mode not in self.solar_forecast_providers):
+            mode = SOLAR_PROVIDER_MODE_AUTO
         self._provider_mode = mode
-        if mode != SOLAR_PROVIDER_MODE_AUTO and mode in self.solar_forecast_providers:
+        if mode != SOLAR_PROVIDER_MODE_AUTO:
             self._set_active_provider(mode)
 
     def _set_active_provider(self, name: str) -> None:
@@ -184,7 +188,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             self.solar_forecast_provider_handler = self.solar_forecast_providers[name]
 
     def auto_select_best_provider(self) -> None:
-        """In auto mode, select provider with lowest score (MAE)."""
+        """In auto mode, select provider with lowest score (MAE), falling back to freshness."""
         if not self.solar_forecast_providers:
             return
         best_name = None
@@ -203,6 +207,19 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 best_freshness = freshness
         if best_name is not None:
             self._set_active_provider(best_name)
+            return
+        # Fallback: no scores yet — pick the freshest non-stale provider
+        freshest_name = None
+        freshest_time: datetime | None = None
+        for name, provider in self.solar_forecast_providers.items():
+            if provider.is_stale:
+                continue
+            ft = provider.latest_successful_forecast_time
+            if ft is not None and (freshest_time is None or ft > freshest_time):
+                freshest_time = ft
+                freshest_name = name
+        if freshest_name is not None:
+            self._set_active_provider(freshest_name)
 
     def get_historical_solar_fallback(self, time: datetime) -> list[tuple[datetime, float]]:
         """Return historical solar production as a fallback forecast when APIs are stale."""
@@ -224,13 +241,44 @@ class QSSolar(HADeviceMixin, AbstractDevice):
     async def update_forecast(self, time: datetime) -> None:
         """Update all providers and select active one."""
         for provider in self.solar_forecast_providers.values():
-            await provider.update(time)
+            try:
+                await provider.update(time)
+            except Exception:
+                _LOGGER.exception("Error updating solar forecast provider %s", provider.provider_name)
+
+        # Daily scoring/dampening cycle at day boundary
+        self._run_daily_scoring_cycle(time)
 
         if self._provider_mode == SOLAR_PROVIDER_MODE_AUTO:
             self.auto_select_best_provider()
 
         # Keep legacy handler in sync
         self.solar_forecast_provider_handler = self.active_provider
+
+    def _run_daily_scoring_cycle(self, time: datetime) -> None:
+        """Run scoring/dampening pipeline once per day (at midnight boundary)."""
+        local_now = time.astimezone(tz=None) if time.tzinfo else time
+        local_date = local_now.date()
+
+        if self._last_daily_scoring_date is not None and self._last_daily_scoring_date >= local_date:
+            return
+
+        self._last_daily_scoring_date = local_date
+
+        for name, provider in self.solar_forecast_providers.items():
+            # Record forecast snapshot for the ending day
+            provider.record_forecast_snapshot(time)
+            # Compute scores
+            provider.compute_score()
+            # Compute dampening if enabled
+            if provider.dampening_enabled:
+                provider.compute_dampening(self.solar_max_output_power_value)
+            # Advance to next day slot
+            provider.advance_history_day()
+            _LOGGER.debug("Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
+                          name,
+                          provider.score_raw if provider.score_raw is not None else float("nan"),
+                          provider.score_dampened)
 
     def get_forecast(
         self, start_time: datetime, end_time: datetime | None
@@ -369,8 +417,11 @@ class QSSolarProvider:
             step_idx = self._time_to_step_index(ts)
             if step_idx is not None and 0 <= step_idx < len(self._dampening_coefficients):
                 a_k, b_k = self._dampening_coefficients[step_idx]
-                dampened = max(0.0, a_k * value + b_k)
-                result.append((ts, dampened))
+                if np.isfinite(a_k) and np.isfinite(b_k):
+                    dampened = max(0.0, a_k * value + b_k)
+                    result.append((ts, dampened))
+                else:
+                    result.append((ts, value))
             else:
                 result.append((ts, value))
         return result
@@ -383,16 +434,32 @@ class QSSolarProvider:
         return seconds_since_midnight // self.forecast_step_seconds
 
     def _detect_step_size(self) -> None:
-        """Detect the forecast temporal resolution from consecutive timestamps."""
+        """Detect the forecast temporal resolution using median of consecutive gaps."""
         if len(self.solar_forecast) < 2:
             return
-        ts0 = self.solar_forecast[0][0]
-        ts1 = self.solar_forecast[1][0]
-        if ts0 is not None and ts1 is not None:
-            step_s = int((ts1 - ts0).total_seconds())
+        gaps = []
+        for i in range(min(len(self.solar_forecast) - 1, 10)):
+            ts0 = self.solar_forecast[i][0]
+            ts1 = self.solar_forecast[i + 1][0]
+            if ts0 is not None and ts1 is not None:
+                gap_s = int((ts1 - ts0).total_seconds())
+                if gap_s > 0:
+                    gaps.append(gap_s)
+        if gaps:
+            step_s = int(np.median(gaps))
             if step_s > 0:
+                old_steps = self._steps_per_day
                 self.forecast_step_seconds = step_s
                 self._steps_per_day = 86400 // step_s
+                # Invalidate dampening coefficients if step size changed
+                if old_steps is not None and old_steps != self._steps_per_day and self._dampening_coefficients is not None:
+                    _LOGGER.info(
+                        "Step size changed for %s (%s -> %s steps/day), invalidating dampening coefficients",
+                        self.provider_name,
+                        old_steps,
+                        self._steps_per_day,
+                    )
+                    self._dampening_coefficients = None
 
     async def fill_orchestrators(self):
         """Return the orchestrators for the domain."""
@@ -433,10 +500,14 @@ class QSSolarProvider:
                 # Temporarily swap in only healthy orchestrators for extraction
                 original_orchestrators = self.orchestrators
                 self.orchestrators = healthy_orchestrators
-                self.solar_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
-                self.orchestrators = original_orchestrators
+                try:
+                    new_forecast = await self.extract_solar_forecast_from_data(time, period=FLOATING_PERIOD_S)
+                finally:
+                    self.orchestrators = original_orchestrators
 
-                if len(self.solar_forecast) > 0:
+                if len(new_forecast) > 0:
+                    self.solar_forecast = new_forecast
+                    prev_successful_time = self._latest_successful_forecast_time
                     self._latest_update_time = time
                     self._latest_successful_forecast_time = time
 
@@ -447,10 +518,12 @@ class QSSolarProvider:
                     # Stale transition notification (Task 9)
                     if self._was_stale:
                         age_h = 0.0
-                        if self._latest_successful_forecast_time is not None:
-                            age_h = (time - self._latest_successful_forecast_time).total_seconds() / 3600.0
+                        if prev_successful_time is not None:
+                            age_h = (time - prev_successful_time).total_seconds() / 3600.0
                         _LOGGER.info(
-                            "Solar forecast recovered for provider %s (age: %.1f hours)", self.provider_name, age_h
+                            "Solar forecast recovered for provider %s (was stale for %.1f hours)",
+                            self.provider_name,
+                            age_h,
                         )
                         self._was_stale = False
             else:
@@ -574,6 +647,8 @@ class QSSolarProvider:
     def _apply_dampening_to_array(self, forecasts: np.ndarray) -> np.ndarray:
         """Apply dampening coefficients to a forecast array."""
         if self._dampening_coefficients is None:
+            return forecasts
+        if self._dampening_coefficients.shape[0] != forecasts.shape[1]:
             return forecasts
         result = np.copy(forecasts)
         for k in range(result.shape[1]):

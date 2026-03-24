@@ -2991,10 +2991,10 @@ class QSHomeConsumptionHistoryAndForecast:
             and self.solar_production_history is None
             and self.home is not None
             and self.home.solar_plant is not None
-            and self.home.solar_plant.solar_inverter_active_power is not None
+            and self.home.solar_plant.solar_inverter_input_active_power is not None
         ):
             self.solar_production_history = QSSolarHistoryVals(
-                entity_id=self.home.solar_plant.solar_inverter_active_power, forecast=self
+                entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self
             )
             await self.solar_production_history.init(time)
 

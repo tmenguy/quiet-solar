@@ -174,12 +174,15 @@ def create_ha_select_for_QSSolar(device: QSSolar):
     if not device.solar_forecast_providers:
         return entities
 
+    async def _async_set_provider_mode(device, key, option, for_init):
+        device.set_provider_mode(option)
+
     provider_mode_description = QSSelectEntityDescription(
         key=SELECT_SOLAR_PROVIDER_MODE,
         translation_key=SELECT_SOLAR_PROVIDER_MODE,
         get_available_options_fn=lambda device, key: [SOLAR_PROVIDER_MODE_AUTO] + device.get_provider_names(),
         get_current_option_fn=lambda device, key: device.provider_mode,
-        async_set_current_option_fn=lambda device, key, option, for_init: device.set_provider_mode(option),
+        async_set_current_option_fn=_async_set_provider_mode,
         qs_default_option=SOLAR_PROVIDER_MODE_AUTO,
     )
     entities.append(

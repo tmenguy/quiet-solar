@@ -49,7 +49,7 @@ DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY = "dashboard_device_section"
 LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSHome: "settings",
     CONF_TYPE_NAME_QSBattery: "settings",
-    CONF_TYPE_NAME_QSSolar: None,
+    CONF_TYPE_NAME_QSSolar: "settings",
     "charger": None,
     CONF_TYPE_NAME_QSChargerOCPP: None,
     CONF_TYPE_NAME_QSChargerWallbox: None,
