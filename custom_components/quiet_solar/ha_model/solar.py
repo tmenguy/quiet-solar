@@ -61,12 +61,12 @@ def _migrate_solar_providers_config(config_data: dict) -> list[dict]:
     if old_provider is None:
         return []
 
-    if old_provider == SOLCAST_SOLAR_DOMAIN:
-        label = "Solcast"
-    elif old_provider == FORECAST_SOLAR_DOMAIN:
-        label = "Forecast.Solar"
-    else:
-        label = "Open-Meteo"
+    domain_labels = {
+        SOLCAST_SOLAR_DOMAIN: "Solcast",
+        FORECAST_SOLAR_DOMAIN: "Forecast.Solar",
+        OPEN_METEO_SOLAR_DOMAIN: "Open-Meteo",
+    }
+    label = domain_labels.get(old_provider, old_provider)
     return [{CONF_SOLAR_PROVIDER_DOMAIN: old_provider, CONF_SOLAR_PROVIDER_NAME: label}]
 
 
@@ -831,7 +831,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
                 self.orchestrators.append(orch)
                 self._orchestrator_health[id(orch)] = True
             except AttributeError, TypeError:
-                pass
+                _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
 
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
@@ -914,7 +914,7 @@ class QSSolarProviderForecastSolar(QSSolarProvider):
                 self.orchestrators.append(orch)
                 self._orchestrator_health[id(orch)] = True
             except AttributeError, TypeError:
-                pass
+                _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
 
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None

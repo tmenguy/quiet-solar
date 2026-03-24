@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytz
@@ -403,6 +403,13 @@ class TestMigration:
         result = _migrate_solar_providers_config(config)
         assert result is providers
 
+    def test_migrate_unknown_domain_uses_raw_value(self):
+        """Test migration of unknown domain uses the raw domain string as label."""
+        config = {CONF_SOLAR_FORECAST_PROVIDER: "some_unknown_domain"}
+        result = _migrate_solar_providers_config(config)
+        assert len(result) == 1
+        assert result[0][CONF_SOLAR_PROVIDER_NAME] == "some_unknown_domain"
+
 
 # ============================================================================
 # Multi-provider integration (AC3 — scoring, dampening, auto-selection)
@@ -467,9 +474,7 @@ class TestForecastSolarMultiProviderIntegration:
         assert fs_provider.is_stale is True
 
         # Set a recent forecast time — should not be stale
-        from datetime import timezone
-
-        fs_provider._latest_successful_forecast_time = datetime.now(tz=timezone.utc)
+        fs_provider._latest_successful_forecast_time = datetime.now(tz=UTC)
         assert fs_provider.is_stale is False
 
     def test_forecast_solar_health_monitoring(self):
