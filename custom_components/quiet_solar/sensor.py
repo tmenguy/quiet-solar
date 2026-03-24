@@ -51,6 +51,10 @@ from .const import (
     SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    SENSOR_SOLAR_FORECAST_AGE,
+    SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX,
+    SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX,
     QSForecastHomeNonControlledSensors,
     QSForecastSolarSensors,
 )
@@ -60,6 +64,7 @@ from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .ha_model.home import QSHome
 from .ha_model.person import QSPerson
+from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice, AbstractLoad
 
 
@@ -365,6 +370,66 @@ def create_ha_sensor_for_QSHome(device: QSHome):
     return entities
 
 
+def create_ha_sensor_for_QSSolar(device: QSSolar):
+    entities = []
+    if not device.solar_forecast_providers:
+        return entities
+
+    # Forecast age sensor
+    forecast_age_sensor = QSSensorEntityDescription(
+        key=SENSOR_SOLAR_FORECAST_AGE,
+        translation_key=SENSOR_SOLAR_FORECAST_AGE,
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        device_class=SensorDeviceClass.DURATION,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device, key: device.get_forecast_age_hours(),
+        qs_is_none_unavailable=True,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=forecast_age_sensor))
+
+    # Per-provider score sensors
+    for provider_name, provider in device.solar_forecast_providers.items():
+        safe_name = provider_name.lower().replace(" ", "_").replace("-", "_")
+
+        # Active score (dampened if enabled, raw otherwise)
+        score_key = f"{SENSOR_SOLAR_FORECAST_SCORE_PREFIX}{safe_name}"
+        score_sensor = QSSensorEntityDescription(
+            key=score_key,
+            translation_key=score_key,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key, prov=provider: prov.get_active_score(),
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=score_sensor))
+
+        # Raw score
+        raw_key = f"{SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX}{safe_name}"
+        raw_sensor = QSSensorEntityDescription(
+            key=raw_key,
+            translation_key=raw_key,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key, prov=provider: prov.score_raw,
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=raw_sensor))
+
+        # Dampened score
+        dampened_key = f"{SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX}{safe_name}"
+        dampened_sensor = QSSensorEntityDescription(
+            key=dampened_key,
+            translation_key=dampened_key,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key, prov=provider: prov.score_dampened,
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=dampened_sensor))
+
+    return entities
+
+
 def create_ha_sensor(device: AbstractDevice):
 
     ret = []
@@ -378,6 +443,8 @@ def create_ha_sensor(device: AbstractDevice):
         ret.extend(create_ha_sensor_for_QSPerson(device))
     elif isinstance(device, QSBiStateDuration):
         ret.extend(create_ha_sensor_for_QSBiStateDuration(device))
+    elif isinstance(device, QSSolar):
+        ret.extend(create_ha_sensor_for_QSSolar(device))
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_sensor_for_Load(device))

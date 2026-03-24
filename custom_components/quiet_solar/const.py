@@ -49,7 +49,7 @@ DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY = "dashboard_device_section"
 LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSHome: "settings",
     CONF_TYPE_NAME_QSBattery: "settings",
-    CONF_TYPE_NAME_QSSolar: None,
+    CONF_TYPE_NAME_QSSolar: "settings",
     "charger": None,
     CONF_TYPE_NAME_QSChargerOCPP: None,
     CONF_TYPE_NAME_QSChargerWallbox: None,
@@ -94,6 +94,13 @@ CONF_GRID_POWER_SENSOR_INVERTED = "grid_active_power_sensor_inverted"
 CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR = "inverter_active_power_sensor"
 CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR = "inverter_input_power_sensor"
 CONF_SOLAR_FORECAST_PROVIDER = "solar_forecast_provider"
+CONF_SOLAR_FORECAST_PROVIDERS = "solar_forecast_providers"
+CONF_SOLAR_PROVIDER_DOMAIN = "provider_domain"
+CONF_SOLAR_PROVIDER_NAME = "provider_name"
+CONF_SOLAR_PROVIDER_MODE_KEY = "solar_provider_mode"
+SOLAR_PROVIDER_MODE_AUTO = "auto"
+SOLAR_FORECAST_STALE_THRESHOLD_S = 6 * 3600
+SOLAR_ORCHESTRATOR_REPROBE_CYCLES = 5
 CONF_SOLAR_MAX_OUTPUT_POWER_VALUE = "solar_max_output_power_value"
 CONF_SOLAR_MAX_PHASE_AMPS = "solar_max_phase_amps"
 
@@ -213,6 +220,15 @@ BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS = "qs_car_use_charge_percent_co
 BINARY_SENSOR_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 BINARY_SENSOR_HOME_REAL_OFF_GRID = "qs_home_real_off_grid"
 BINARY_SENSOR_HOME_PERSISTENCE_HEALTH = "qs_home_persistence_health"
+BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
+
+SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
+SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
+SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX = "qs_solar_forecast_score_raw_"
+SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX = "qs_solar_forecast_score_dampened_"
+
+SELECT_SOLAR_PROVIDER_MODE = "qs_solar_provider_mode"
+SWITCH_SOLAR_DAMPENING_PREFIX = "qs_solar_dampening_"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,

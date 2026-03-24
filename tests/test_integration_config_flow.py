@@ -74,6 +74,7 @@ from custom_components.quiet_solar.const import (
     CONF_POOL_TEMPERATURE_SENSOR,
     CONF_POWER,
     CONF_SOLAR_FORECAST_PROVIDER,
+    CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
@@ -1394,14 +1395,15 @@ async def test_options_solar_step_with_entities_and_providers(
     assert result["type"] == FlowResultType.FORM
     schema = result["data_schema"]
     assert _schema_has_key(schema, CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR)
-    assert _schema_has_key(schema, CONF_SOLAR_FORECAST_PROVIDER)
+    assert _schema_has_key(schema, CONF_SOLAR_FORECAST_PROVIDERS)
     assert _schema_has_key(schema, CONF_SOLAR_MAX_OUTPUT_POWER_VALUE)
     assert _schema_has_key(schema, CONF_SOLAR_MAX_PHASE_AMPS)
 
     for key in schema.schema:
         k = getattr(key, "schema", None)
-        if k == CONF_SOLAR_FORECAST_PROVIDER:
-            assert key.description == {"suggested_value": SOLCAST_SOLAR_DOMAIN}
+        if k == CONF_SOLAR_FORECAST_PROVIDERS:
+            # Old single-provider config migrated to list for suggested value
+            assert key.description == {"suggested_value": [SOLCAST_SOLAR_DOMAIN]}
 
 
 @pytest.mark.asyncio

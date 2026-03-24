@@ -44,6 +44,7 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_POWER,
     CONF_SOLAR_FORECAST_PROVIDER,
+    CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SWITCH,
     DEVICE_TYPE,
     DOMAIN,
@@ -234,11 +235,13 @@ async def test_config_flow_solar_with_forecast_provider(
         solar_flow["flow_id"],
         {
             CONF_NAME: "Solar",
-            CONF_SOLAR_FORECAST_PROVIDER: SOLCAST_SOLAR_DOMAIN,
+            CONF_SOLAR_FORECAST_PROVIDERS: [SOLCAST_SOLAR_DOMAIN],
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_SOLAR_FORECAST_PROVIDER] == SOLCAST_SOLAR_DOMAIN
+    providers = result["data"][CONF_SOLAR_FORECAST_PROVIDERS]
+    assert len(providers) == 1
+    assert providers[0]["provider_domain"] == SOLCAST_SOLAR_DOMAIN
 
 
 async def test_config_flow_battery_creates_entry(

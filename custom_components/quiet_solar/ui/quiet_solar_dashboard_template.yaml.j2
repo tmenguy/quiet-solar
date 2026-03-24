@@ -238,6 +238,34 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
+            {% elif device.device_type == "solar" -%}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_provider_mode") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_forecast_ok") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_forecast_age") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- for entity_key, ha_entity in device.ha_entities.items() %}
+              {%-   if entity_key.startswith("qs_solar_dampening_") %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%-   endif %}
+              {%- endfor %}
+              {%- for entity_key, ha_entity in device.ha_entities.items() %}
+              {%-   if entity_key.startswith("qs_solar_forecast_score_") and not entity_key.startswith("qs_solar_forecast_score_raw_") and not entity_key.startswith("qs_solar_forecast_score_dampened_") %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%-   endif %}
+              {%- endfor %}
             {% endif %}
             {%- if device.device_type not in ["car", "pool", "climate", "on_off_duration"] %}
             show_header_toggle: false

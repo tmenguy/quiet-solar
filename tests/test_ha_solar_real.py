@@ -561,7 +561,7 @@ class TestQSSolarProviderBaseExtended:
         with caplog.at_level(logging.ERROR):
             await provider.update(time)
 
-        assert "No solar orchestrator found for domain test_domain" in caplog.text
+        assert "No healthy solar orchestrator found for provider" in caplog.text
 
     @pytest.mark.asyncio
     async def test_dump_for_debug_writes_pickle(self, hass: HomeAssistant, solar_mock, tmp_path):
@@ -760,8 +760,8 @@ class TestOrchestratorValidation:
     """Test the validation pass in update() that prunes invalid orchestrators."""
 
     @pytest.mark.asyncio
-    async def test_update_prunes_invalid_solcast_orchestrators(self, solar_mock):
-        """Test that update() removes orchestrators that raise on validation."""
+    async def test_update_marks_invalid_solcast_orchestrators_unhealthy(self, solar_mock):
+        """Test that update() marks orchestrators that raise on validation as unhealthy."""
         provider = QSSolarProviderSolcast(solar=solar_mock)
 
         good_orchestrator = MagicMock()
@@ -770,22 +770,26 @@ class TestOrchestratorValidation:
         bad_orchestrator = MagicMock()
         del bad_orchestrator.solcast
 
-        provider.fill_orchestrators = AsyncMock()
-        provider.orchestrators = [good_orchestrator, bad_orchestrator]
-
         async def fake_fill():
             provider.orchestrators = [good_orchestrator, bad_orchestrator]
+            provider._orchestrator_health = {
+                id(good_orchestrator): True,
+                id(bad_orchestrator): True,
+            }
 
         provider.fill_orchestrators = fake_fill
 
         time = datetime.datetime.now(pytz.UTC)
         await provider.update(time)
 
-        assert provider.orchestrators == [good_orchestrator]
+        # Both orchestrators remain, but bad one is marked unhealthy
+        assert len(provider.orchestrators) == 2
+        assert provider._orchestrator_health[id(good_orchestrator)] is True
+        assert provider._orchestrator_health[id(bad_orchestrator)] is False
 
     @pytest.mark.asyncio
-    async def test_update_prunes_invalid_openweather_orchestrators(self, solar_mock):
-        """Test that update() removes orchestrators that raise on validation."""
+    async def test_update_marks_invalid_openweather_orchestrators_unhealthy(self, solar_mock):
+        """Test that update() marks orchestrators that raise on validation as unhealthy."""
         provider = QSSolarProviderOpenWeather(solar=solar_mock)
 
         good_orchestrator = MagicMock()
@@ -796,13 +800,19 @@ class TestOrchestratorValidation:
 
         async def fake_fill():
             provider.orchestrators = [good_orchestrator, bad_orchestrator]
+            provider._orchestrator_health = {
+                id(good_orchestrator): True,
+                id(bad_orchestrator): True,
+            }
 
         provider.fill_orchestrators = fake_fill
 
         time = datetime.datetime.now(pytz.UTC)
         await provider.update(time)
 
-        assert provider.orchestrators == [good_orchestrator]
+        assert len(provider.orchestrators) == 2
+        assert provider._orchestrator_health[id(good_orchestrator)] is True
+        assert provider._orchestrator_health[id(bad_orchestrator)] is False
 
     @pytest.mark.asyncio
     async def test_update_logs_error_when_all_orchestrators_invalid(self, solar_mock, caplog):
@@ -821,7 +831,7 @@ class TestOrchestratorValidation:
         with caplog.at_level(logging.ERROR):
             await provider.update(time)
 
-        assert "No solar orchestrator found" in caplog.text
+        assert "No healthy solar orchestrator found" in caplog.text
 
     @pytest.mark.asyncio
     async def test_solcast_raises_when_no_solcast_attr(self, solar_mock):

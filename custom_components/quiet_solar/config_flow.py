@@ -117,6 +117,7 @@ from .const import (
     CONF_POOL_TEMPERATURE_SENSOR,
     CONF_POWER,
     CONF_SOLAR_FORECAST_PROVIDER,
+    CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
     CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR,
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
@@ -838,7 +839,23 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         TYPE = QSSolar.conf_type_name
         if user_input is not None:
-            # do some stuff to update
+            # Convert multi-select domain list to provider dicts with auto-names
+            from .const import CONF_SOLAR_PROVIDER_DOMAIN, CONF_SOLAR_PROVIDER_NAME
+
+            domain_list = user_input.pop(CONF_SOLAR_FORECAST_PROVIDERS, None)
+            if domain_list:
+                domain_labels = {
+                    SOLCAST_SOLAR_DOMAIN: "Solcast",
+                    OPEN_METEO_SOLAR_DOMAIN: "Open-Meteo",
+                }
+                providers = []
+                for domain in domain_list:
+                    label = domain_labels.get(domain, domain)
+                    providers.append({CONF_SOLAR_PROVIDER_DOMAIN: domain, CONF_SOLAR_PROVIDER_NAME: label})
+                user_input[CONF_SOLAR_FORECAST_PROVIDERS] = providers
+            # Remove old single-provider key if present
+            user_input.pop(CONF_SOLAR_FORECAST_PROVIDER, None)
+
             r = await self.async_entry_next(user_input, TYPE)
             return r
 
@@ -861,12 +878,22 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             options.append(SelectOptionDict(value=OPEN_METEO_SOLAR_DOMAIN, label="Open Meteo Forecast"))
 
         if options:
-            default = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
+            # Multi-select: store as list of selected domains
+            raw_providers = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDERS)
+            if raw_providers is not None:
+                # New format is list of dicts; extract domain strings for the selector
+                default = [
+                    p[CONF_SOLAR_PROVIDER_DOMAIN] if isinstance(p, dict) else p for p in raw_providers
+                ]
+            else:
+                # Migration: convert old single-provider to list
+                old_single = self.config_entry.data.get(CONF_SOLAR_FORECAST_PROVIDER)
+                default = [old_single] if old_single else None
 
             if default:
-                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER, description={"suggested_value": default})
+                keysc = vol.Optional(CONF_SOLAR_FORECAST_PROVIDERS, description={"suggested_value": default})
             else:
-                keysc = vol.Required(CONF_SOLAR_FORECAST_PROVIDER)
+                keysc = vol.Optional(CONF_SOLAR_FORECAST_PROVIDERS)
 
             sc_dict.update(
                 {
@@ -874,6 +901,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         SelectSelectorConfig(
                             options=options,
                             mode=SelectSelectorMode.LIST,
+                            multiple=True,
                         )
                     )
                 }
