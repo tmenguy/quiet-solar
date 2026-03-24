@@ -191,7 +191,7 @@ PR title should be under 70 characters.
 
 ---
 
-## Phase 3d: Code Review
+## Phase 3d: Code Review & Feedback Loop
 
 After the PR is created, run `/bmad-code-review` on the story before considering it done.
 
@@ -200,6 +200,17 @@ After the PR is created, run `/bmad-code-review` on the story before considering
 - This applies to **all** stories — even config-only or documentation stories
 
 The agent MUST propose this step to the user after every dev-story completion.
+
+### Processing Review Feedback
+
+After code review (local or human), run `/bmad-pr-review-feedback` to process comments interactively:
+
+1. The skill pulls all unresolved review threads from the PR via GitHub API
+2. Each thread is presented with file path, line, code context, and reviewer comment
+3. For each thread, TheDev chooses: **fix** (implement + commit + push + resolve), **discuss** (reply on PR), **reject** (post rationale + resolve), or **skip**
+4. After all threads are processed, quality gates re-run if any fixes were made
+
+This works with ANY review source — local `/bmad-code-review`, human reviewers, GitHub Copilot, or any future CI-based reviewer.
 
 ---
 

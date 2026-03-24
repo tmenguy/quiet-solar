@@ -64,6 +64,7 @@ Before any PR or completion claim, ALL of these must pass:
 | "Implement story 3.2" | Issue (if needed) → worktree → dev-story → quality gates → PR |
 | "Work on issue #N" | Fetches issue → bug label = quick-dev, otherwise = feature flow. Skips issue creation. |
 | "Merge PR #N" | Merge commit + delete branch + worktree cleanup |
+| "Process PR feedback" | `/bmad-pr-review-feedback` → interactive comment processing |
 | "Create a release" | Tag `vYYYY.MM.DD.XX`, release notes from merged PRs |
 
 ## Workflow Routing
@@ -78,6 +79,7 @@ When the user describes work to do, automatically select the right workflow. **E
 | **Implement story X.Y** — the user asks to implement/dev an existing story | Phase 1b (issue, if not yet created) → Phase 1c (worktree) → `/bmad-dev-story` for the specified story inside the worktree → Phase 3. |
 | **From GitHub issue** — the user says "work on issue #N" or similar | Fetch the issue with `gh issue view N` and use the issue title and body as the initial intent/context. If it has the `bug` label, route to the bug flow. Otherwise route to the feature flow. In both cases, **skip Phase 1b** (issue already exists) and use issue number N for branch naming (`QS_N`). |
 | **Merge PR** — the user asks to merge a PR | Follow Phase 3e (Merge & Cleanup) in `development-lifecycle.md`. |
+| **Process PR feedback** — the user says "process PR feedback", "handle review comments", or "review feedback" | `/bmad-pr-review-feedback` — pulls unresolved PR review comments, presents with diff context, processes interactively (fix/discuss/reject/skip). |
 | **Release** — the user asks to create a release, cut a release, or ship a version | Follow Phase 4 (Release) in `development-lifecycle.md`. |
 
 Do NOT ask which workflow to use — infer from the user's description. When in doubt (ambiguous scope), default to the bug fix flow.
