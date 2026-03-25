@@ -2,11 +2,7 @@
 
 ## Process Authority
 
-All project rules, workflows, and process decisions live in `_qsprocess/` — this is the single source of truth. This folder is tool-agnostic: it works identically whether the agent is Claude Code, Cursor, or any other tool.
-
-- **Never** store project process rules exclusively in tool-specific locations (`.claude/`, `.cursor/`, etc.)
-- Tool-specific config files (`CLAUDE.md`, `.cursorrules`) must reference `_qsprocess/`, not duplicate its content
-- When a new process rule is established, add it here — not only in agent memory
+All project rules, workflows, and skills live in `_qsprocess/`. Tool-specific config (`.claude/`, `.cursor/`) references `_qsprocess/`, never duplicates it.
 
 ## Project Overview
 
@@ -14,95 +10,52 @@ Quiet Solar is a Home Assistant custom component that optimizes solar energy sel
 
 ## Commands
 
-ALWAYS use the project's virtual environment (`./venv`) for running pytest and all Python commands.
+Use `./venv` for all Python commands. Quality gates are automated:
 
 ```bash
-# Activate venv first
-source venv/bin/activate
+# Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
+python scripts/qs/quality_gate.py
 
-# Run all tests
-pytest tests/
+# Auto-fix formatting and lint
+python scripts/qs/quality_gate.py --fix
 
-# Run a single test file
-pytest tests/test_solver.py
+# JSON output for scripts
+python scripts/qs/quality_gate.py --json
 
-# Run a single test
-pytest tests/test_solver.py::test_function_name -v
+# Run tests only
+source venv/bin/activate && pytest tests/ -v
 
-# Run with coverage (100% is mandatory)
-pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing
-
-# Run only unit or integration tests
-pytest tests/ -m unit
-pytest tests/ -m integration
+# Single test
+source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
-
-## Quality Gates
-
-Before any PR or completion claim, ALL of these must pass:
-
-1. `pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing` — 100% coverage mandatory
-2. `ruff check custom_components/quiet_solar/` — zero violations
-3. `ruff format --check custom_components/quiet_solar/` — all formatted
-4. `mypy custom_components/quiet_solar/` — no issues found
 
 ## Architecture Constraints
 
-- **Two-layer boundary**: domain logic (`home_model/`) NEVER imports `homeassistant.*`. HA bridge layer (`ha_model/`) may import both.
+- **Two-layer boundary**: `home_model/` NEVER imports `homeassistant.*`. `ha_model/` bridges both.
 - **Solver step size**: `SOLVER_STEP_S = 900` in `const.py` — don't touch.
 - **All config keys in `const.py`** — never hardcode strings.
-- **Async rules**: no blocking calls in async code, use `hass.async_add_executor_job()` for blocking operations.
-- **Logging**: lazy logging with `%s`, no f-strings in log calls, no periods at end.
-- **Translations**: `translations/en.json` is GENERATED — **NEVER edit it directly**. Edit `strings.json` instead, then run `bash scripts/generate-translations.sh`. This applies to both human and AI agents.
-
-## Workflow Quick Reference
-
-| You say | What happens |
-|---------|-------------|
-| "Fix this bug where..." | Issue → worktree → quick-dev → quality gates → PR |
-| "I want to add a feature that..." | create-story → commit → issue → worktree → dev-story → quality gates → PR |
-| "Create story 3.2" | create-story → commit story file. Stops here. |
-| "Implement story 3.2" | Issue (if needed) → worktree → dev-story → quality gates → PR |
-| "Work on issue #N" | Fetches issue → bug label = quick-dev, otherwise = feature flow. Skips issue creation. |
-| "Merge PR #N" | Merge commit + delete branch + worktree cleanup |
-| "Process PR feedback" | `/bmad-pr-review-feedback` → interactive comment processing |
-| "Create a release" | Tag `vYYYY.MM.DD.XX`, release notes from merged PRs |
-| Apply `auto-bmad` label on issue | Autonomous agent: branch → implement → quality gates → PR (cloud, no local setup) |
+- **Async rules**: no blocking calls in async code, use `hass.async_add_executor_job()`.
+- **Logging**: lazy `%s`, no f-strings in log calls, no periods at end.
+- **Translations**: NEVER edit `translations/en.json` — edit `strings.json`, run `bash scripts/generate-translations.sh`.
 
 ## Workflow Routing
 
-When the user describes work to do, automatically select the right workflow. **Every development workflow MUST follow the lifecycle phases** from `development-lifecycle.md` — the routing below specifies which phases to execute.
+Use skills (`/command`) for all development work. Do NOT ask which to use — infer from context.
 
-| Intent | Workflow |
-|--------|----------|
-| **Bug fix / small fix** — the user describes a bug, defect, or small correction | Phase 1b (issue) → Phase 1c (worktree) → `/bmad-quick-dev-new-preview` inside the worktree → Phase 3 (quality gates, PR, review). |
-| **Feature / new functionality** — the user describes new functionality or a significant change | `/bmad-create-story` → Phase 1a (commit story) → Phase 1b (issue) → Phase 1c (worktree) → `/bmad-dev-story` inside the worktree → Phase 3. |
-| **Create story X.Y** — the user explicitly asks to create/plan a story | `/bmad-create-story` for the specified story → Phase 1a (commit story). Stop here — the user will ask for implementation separately. |
-| **Implement story X.Y** — the user asks to implement/dev an existing story | Phase 1b (issue, if not yet created) → Phase 1c (worktree) → `/bmad-dev-story` for the specified story inside the worktree → Phase 3. |
-| **From GitHub issue** — the user says "work on issue #N" or similar | Fetch the issue with `gh issue view N` and use the issue title and body as the initial intent/context. If it has the `bug` label, route to the bug flow. Otherwise route to the feature flow. In both cases, **skip Phase 1b** (issue already exists) and use issue number N for branch naming (`QS_N`). |
-| **Merge PR** — the user asks to merge a PR | Follow Phase 3e (Merge & Cleanup) in `development-lifecycle.md`. |
-| **Process PR feedback** — the user says "process PR feedback", "handle review comments", or "review feedback" | `/bmad-pr-review-feedback` — pulls unresolved PR review comments, presents with diff context, processes interactively (fix/discuss/reject/skip). |
-| **Release** — the user asks to create a release, cut a release, or ship a version | Follow Phase 4 (Release) in `development-lifecycle.md`. |
-| **Autonomous (auto-bmad)** — triggered by applying `auto-bmad` label to a GitHub issue | Runs entirely in CI via `.github/workflows/auto-bmad.yml`. See "Autonomous Flow" section in `development-lifecycle.md`. No local action needed — the agent handles everything cloud-side. |
+| You say | Skill |
+|---------|-------|
+| "Create story 3.2" or describe feature | `/create-story` |
+| "Setup story 42" or "work on issue #42" | `/setup-story` |
+| "Implement story" (inside worktree) | `/implement-story` |
+| "Review PR #5" or "review story" | `/review-story` |
+| "Merge PR #5" or "finish story" | `/finish-story` |
+| "Create a release" | `/release` |
+| Bug fix / small fix | `/create-story` (skip story file, create issue + branch directly) |
 
-Do NOT ask which workflow to use — infer from the user's description. When in doubt (ambiguous scope), default to the bug fix flow.
+Each skill is defined in `_qsprocess/skills/` and handles all steps including quality gates.
 
-**Worktree mode**: All workflows create a git worktree by default (Phase 1c). If the user says "no worktree" (or similar), fall back to `git checkout -b` in the main directory. See the Appendix in `development-lifecycle.md` for details.
+**Commit authorization**: Skills are authorized to commit and push as part of their defined workflow steps. Outside of skill execution, always ask the user before committing.
 
-## Development Lifecycle
+## Code Rules Reference
 
-When developing stories or fixes, follow the full lifecycle in `_qsprocess/workflows/development-lifecycle.md`. This covers:
-- Committing story artifacts to main before worktree creation (Phase 1a)
-- GitHub issue creation (Phase 1b) and branch/worktree setup (Phase 1c)
-- Quality gate commands and 100% coverage enforcement
-- PR creation with risk assessment
-- Worktree cleanup after merge
-
-## Full Documentation
-
-Before implementing any code, read these documents:
-
-- **Development lifecycle**: `_qsprocess/workflows/development-lifecycle.md` — issue → branch → develop → PR
-- **Code-level rules (42 rules)**: `_bmad-output/project-context.md` — naming, async, logging, error handling, testing anti-patterns
-- **Architecture & patterns (9 patterns)**: `_bmad-output/planning-artifacts/architecture.md` — component model, decision map, implementation patterns, project structure, CI/CD strategy
-- **Failure mode catalog**: `docs/failure-mode-catalog.md` — external dependency weaknesses, fallback behaviors, recovery paths (NFR20: update when new failure modes discovered)
+Before implementing code, read `_bmad-output/project-context.md` for the full 42-rule set covering naming, async, logging, error handling, and testing patterns.
