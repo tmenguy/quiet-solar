@@ -689,6 +689,24 @@ class TestQSSolarProviderSolcast:
 
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_get_power_series_end_before_data(self, solar_mock):
+        """Test Solcast returns empty when time window is before all data."""
+        provider = QSSolarProviderSolcast(solar=solar_mock)
+        tz = pytz.UTC
+        data = [
+            {"period_start": datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=tz), "pv_estimate": 1.0},
+            {"period_start": datetime.datetime(2024, 6, 15, 13, 0, 0, tzinfo=tz), "pv_estimate": 1.5},
+        ]
+        orchestrator = MagicMock()
+        orchestrator.solcast.data_forecasts = data
+
+        early = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=tz)
+        result = await provider.get_power_series_from_orchestrator(
+            orchestrator, early, datetime.datetime(2024, 6, 15, 9, 0, 0, tzinfo=tz)
+        )
+        assert result == []
+
 
 class TestQSSolarProviderOpenWeather:
     """Test QSSolarProviderOpenWeather class."""
@@ -753,6 +771,36 @@ class TestQSSolarProviderOpenWeather:
 
         result = await provider.get_power_series_from_orchestrator(mock_orchestrator, time, time + timedelta(hours=3))
 
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_power_series_none_coordinator_data(self, solar_mock):
+        """Test OpenWeather returns empty when orchestrator.data is None."""
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
+        time = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.data = None
+
+        result = await provider.get_power_series_from_orchestrator(mock_orchestrator, time, time + timedelta(hours=3))
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_power_series_end_before_data(self, solar_mock):
+        """Test OpenWeather returns empty when time window is before all data."""
+        provider = QSSolarProviderOpenWeather(solar=solar_mock)
+        tz = pytz.UTC
+        watts = {
+            datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=tz): 500,
+            datetime.datetime(2024, 6, 15, 13, 0, 0, tzinfo=tz): 1200,
+        }
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.data.watts = watts
+
+        early = datetime.datetime(2024, 6, 15, 8, 0, 0, tzinfo=tz)
+        result = await provider.get_power_series_from_orchestrator(
+            mock_orchestrator, early, datetime.datetime(2024, 6, 15, 9, 0, 0, tzinfo=tz)
+        )
         assert result == []
 
 

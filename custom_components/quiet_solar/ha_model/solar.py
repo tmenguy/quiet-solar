@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import pickle
 from abc import abstractmethod
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
 from os.path import join
@@ -25,6 +25,7 @@ from ..const import (
     CONF_SOLAR_PROVIDER_NAME,
     DOMAIN,
     FLOATING_PERIOD_S,
+    FORECAST_SOLAR_DOMAIN,
     MAX_AMP_INFINITE,
     MAX_POWER_INFINITE,
     OPEN_METEO_SOLAR_DOMAIN,
@@ -60,7 +61,12 @@ def _migrate_solar_providers_config(config_data: dict) -> list[dict]:
     if old_provider is None:
         return []
 
-    label = "Solcast" if old_provider == SOLCAST_SOLAR_DOMAIN else "Open-Meteo"
+    domain_labels = {
+        SOLCAST_SOLAR_DOMAIN: "Solcast",
+        FORECAST_SOLAR_DOMAIN: "Forecast.Solar",
+        OPEN_METEO_SOLAR_DOMAIN: "Open-Meteo",
+    }
+    label = domain_labels.get(old_provider, old_provider)
     return [{CONF_SOLAR_PROVIDER_DOMAIN: old_provider, CONF_SOLAR_PROVIDER_NAME: label}]
 
 
@@ -70,6 +76,8 @@ def _create_provider_for_domain(domain: str, solar: QSSolar, name: str) -> QSSol
         return QSSolarProviderSolcast(solar=solar, provider_name=name)
     if domain == OPEN_METEO_SOLAR_DOMAIN:
         return QSSolarProviderOpenWeather(solar=solar, provider_name=name)
+    if domain == FORECAST_SOLAR_DOMAIN:
+        return QSSolarProviderForecastSolar(solar=solar, provider_name=name)
     _LOGGER.warning("Unknown solar forecast domain %s, skipping", domain)
     return None
 
@@ -823,7 +831,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
                 self.orchestrators.append(orch)
                 self._orchestrator_health[id(orch)] = True
             except AttributeError, TypeError:
-                pass
+                _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
 
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
@@ -850,13 +858,14 @@ class QSSolarProviderSolcast(QSSolarProvider):
             if data[start_idx]["period_start"] != start_time:
                 start_idx -= 1
 
-        end_idx = bisect_left(data, end_time, key=itemgetter("period_start"))
-        if end_idx >= len(data):
-            end_idx = len(data) - 1
+        end_idx = bisect_right(data, end_time, key=itemgetter("period_start")) - 1
+        if end_idx < start_idx:
+            return []
 
         return [
             (d["period_start"].astimezone(tz=pytz.UTC), 1000.0 * d["pv_estimate"])
             for d in data[start_idx : end_idx + 1]
+            if d["pv_estimate"] is not None
         ]
 
 
@@ -867,6 +876,8 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
     ) -> list[tuple[datetime | None, str | float | None]]:
+        if orchestrator.data is None:
+            return []
         data = orchestrator.data.watts
         if start_time is None or end_time is None:
             return []
@@ -884,8 +895,54 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
             if data[start_idx][0] != start_time:
                 start_idx -= 1
 
-        end_idx = bisect_left(data, end_time, key=itemgetter(0))
-        if end_idx >= len(data):
-            end_idx = len(data) - 1
+        end_idx = bisect_right(data, end_time, key=itemgetter(0)) - 1
+        if end_idx < start_idx:
+            return []
 
-        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1]]
+        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1] if d[1] is not None]
+
+
+class QSSolarProviderForecastSolar(QSSolarProvider):
+    def __init__(self, solar: QSSolar, provider_name: str = "", **kwargs) -> None:
+        super().__init__(solar=solar, domain=FORECAST_SOLAR_DOMAIN, provider_name=provider_name, **kwargs)
+
+    async def fill_orchestrators(self):
+        """Return the orchestrators for the domain."""
+        self.orchestrators = []
+        self._orchestrator_health = {}
+        entries = self.hass.config_entries.async_entries(self.domain)
+        for entry in entries:
+            try:
+                orch = entry.runtime_data
+                self.orchestrators.append(orch)
+                self._orchestrator_health[id(orch)] = True
+            except AttributeError, TypeError:
+                _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
+
+    async def get_power_series_from_orchestrator(
+        self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
+    ) -> list[tuple[datetime | None, str | float | None]]:
+        if orchestrator.data is None:
+            return []
+        data = orchestrator.data.watts
+        if start_time is None or end_time is None:
+            return []
+        if data is None:
+            return []
+
+        data = [(t, p) for t, p in data.items()]
+        data.sort(key=itemgetter(0))
+
+        start_idx = bisect_left(data, start_time, key=itemgetter(0))
+        if start_idx >= len(data):
+            return []
+
+        if start_idx > 0:
+            if data[start_idx][0] != start_time:
+                start_idx -= 1
+
+        end_idx = bisect_right(data, end_time, key=itemgetter(0)) - 1
+        if end_idx < start_idx:
+            return []
+
+        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1] if d[1] is not None]

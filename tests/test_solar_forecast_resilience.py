@@ -228,6 +228,49 @@ class TestProviderSelection:
         solar.auto_select_best_provider()
         assert solar.active_provider_name == "A"
 
+    def test_auto_no_scores_picks_freshest_non_stale(self, fake_hass):
+        """Test auto mode fallback picks the freshest non-stale provider when no scores exist."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+            {CONF_SOLAR_PROVIDER_DOMAIN: OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "B"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        now = datetime.datetime.now(pytz.UTC)
+
+        # No scores on any provider (score_raw = None by default)
+        assert solar.solar_forecast_providers["A"].score_raw is None
+        assert solar.solar_forecast_providers["B"].score_raw is None
+
+        # A is fresh but older, B is fresher — both non-stale
+        solar.solar_forecast_providers["A"]._latest_successful_forecast_time = now - timedelta(hours=2)
+        solar.solar_forecast_providers["B"]._latest_successful_forecast_time = now - timedelta(hours=1)
+
+        # Default active is "A" (first provider)
+        assert solar.active_provider_name == "A"
+
+        solar.auto_select_best_provider()
+        # Should pick "B" as the freshest non-stale
+        assert solar.active_provider_name == "B"
+
+    def test_auto_no_scores_skips_stale_providers(self, fake_hass):
+        """Test auto mode fallback skips stale providers when no scores exist."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+            {CONF_SOLAR_PROVIDER_DOMAIN: OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "B"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        now = datetime.datetime.now(pytz.UTC)
+
+        # A is stale (very old), B is fresh
+        solar.solar_forecast_providers["A"]._latest_successful_forecast_time = now - timedelta(
+            seconds=SOLAR_FORECAST_STALE_THRESHOLD_S + 3600
+        )
+        solar.solar_forecast_providers["B"]._latest_successful_forecast_time = now - timedelta(hours=1)
+
+        solar.auto_select_best_provider()
+        # Should pick "B" — "A" is stale and skipped
+        assert solar.active_provider_name == "B"
+
     def test_get_platforms_includes_select_switch(self, fake_hass):
         """Test that solar with providers includes SELECT and SWITCH platforms."""
         from homeassistant.const import Platform
@@ -393,6 +436,60 @@ class TestAccuracyScoring:
         assert provider.forecast_step_seconds == 900
         assert provider._steps_per_day == 96
 
+    def test_detect_step_size_change_invalidates_dampening(self):
+        """Test step size change invalidates existing dampening coefficients."""
+        provider = _TestProvider(solar=None, domain="test")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+
+        # Start with 30-min steps (48 steps/day)
+        provider.solar_forecast = [
+            (t0, 1000.0),
+            (t0 + timedelta(minutes=30), 1200.0),
+            (t0 + timedelta(minutes=60), 900.0),
+        ]
+        provider._detect_step_size()
+        assert provider.forecast_step_seconds == 1800
+        assert provider._steps_per_day == 48
+
+        # Set dampening coefficients for 48 steps
+        provider._dampening_coefficients = np.ones((48, 2), dtype=np.float64)
+        assert provider._dampening_coefficients is not None
+
+        # Now change to 15-min steps (96 steps/day)
+        provider.solar_forecast = [
+            (t0, 1000.0),
+            (t0 + timedelta(minutes=15), 1200.0),
+            (t0 + timedelta(minutes=30), 900.0),
+        ]
+        provider._detect_step_size()
+        assert provider.forecast_step_seconds == 900
+        assert provider._steps_per_day == 96
+        # Dampening coefficients should be invalidated
+        assert provider._dampening_coefficients is None
+
+    def test_detect_step_size_same_keeps_dampening(self):
+        """Test step size detection with same step size preserves dampening coefficients."""
+        provider = _TestProvider(solar=None, domain="test")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+
+        # Set 30-min steps
+        provider.solar_forecast = [
+            (t0, 1000.0),
+            (t0 + timedelta(minutes=30), 1200.0),
+            (t0 + timedelta(minutes=60), 900.0),
+        ]
+        provider._detect_step_size()
+        assert provider._steps_per_day == 48
+
+        # Set dampening coefficients
+        coeffs = np.ones((48, 2), dtype=np.float64)
+        provider._dampening_coefficients = coeffs
+
+        # Re-detect with same step size
+        provider._detect_step_size()
+        # Coefficients should be preserved
+        assert provider._dampening_coefficients is coeffs
+
     def test_detect_step_size_insufficient_data(self):
         """Test step detection with insufficient data."""
         provider = _TestProvider(solar=None, domain="test")
@@ -552,6 +649,29 @@ class TestDampening:
         forecast = [(t, 100.0)]  # 0.5*100 - 600 = -550, should clamp to 0
         result = provider._apply_dampening(forecast)
         assert result[0][1] == 0.0
+
+    def test_apply_dampening_non_finite_coefficients_fallback(self):
+        """Test dampening uses raw value when coefficients contain NaN or Inf."""
+        provider = _TestProvider(solar=None, domain="test")
+        provider.forecast_step_seconds = 3600
+        provider._steps_per_day = 24
+        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
+        provider._dampening_coefficients[:, 1] = 0.0
+
+        # Set step 12 coefficients to NaN
+        provider._dampening_coefficients[12, 0] = float("nan")
+        provider._dampening_coefficients[12, 1] = float("nan")
+        # Set step 13 coefficients to Inf
+        provider._dampening_coefficients[13, 0] = float("inf")
+        provider._dampening_coefficients[13, 1] = 0.0
+
+        t12 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        t13 = datetime.datetime(2024, 6, 15, 13, 0, tzinfo=pytz.UTC)
+        forecast = [(t12, 1000.0), (t13, 2000.0)]
+        result = provider._apply_dampening(forecast)
+        # Both should pass through unchanged (raw fallback)
+        assert result[0][1] == 1000.0
+        assert result[1][1] == 2000.0
 
     def test_apply_dampening_preserves_none(self):
         """Test dampening preserves None values."""
@@ -750,6 +870,36 @@ class TestStaleNotifications:
         assert "Solar forecast recovered" in caplog.text
         assert provider._was_stale is False
 
+    @pytest.mark.asyncio
+    async def test_recovery_logs_stale_age_from_prev_successful_time(self, caplog):
+        """Test recovery log includes accurate stale duration from prev_successful_time."""
+        solar_mock = MagicMock()
+        solar_mock.hass = FakeHass()
+        solar_mock.hass.data["test"] = {"a": MagicMock()}
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="TestProv")
+        provider._was_stale = True
+
+        now = datetime.datetime.now(pytz.UTC)
+        # Set a previous successful time 5 hours ago so age_h is computed
+        provider._latest_successful_forecast_time = now - timedelta(hours=5)
+
+        good_orch = MagicMock()
+        good_orch.power_series = [(now, 1000.0), (now + timedelta(minutes=30), 1200.0)]
+
+        async def fill_with_good():
+            provider.orchestrators = [good_orch]
+            provider._orchestrator_health = {id(good_orch): True}
+
+        provider.fill_orchestrators = fill_with_good
+
+        with caplog.at_level(logging.INFO):
+            await provider.update(now)
+
+        assert "Solar forecast recovered" in caplog.text
+        # Should include the stale duration (approximately 5.0 hours)
+        assert "5.0 hours" in caplog.text
+        assert provider._was_stale is False
+
 
 # ============================================================================
 # Task 6 continued: History recording
@@ -841,6 +991,28 @@ class TestUpdateForecast:
             p.update.assert_called_once_with(now)
 
     @pytest.mark.asyncio
+    async def test_update_forecast_exception_in_one_provider_doesnt_stop_others(self, fake_hass, caplog):
+        """Test that an exception in one provider doesn't prevent other providers from updating."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+            {CONF_SOLAR_PROVIDER_DOMAIN: OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "B"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+
+        # Provider A raises an exception
+        solar.solar_forecast_providers["A"].update = AsyncMock(side_effect=RuntimeError("API failure"))
+        solar.solar_forecast_providers["B"].update = AsyncMock()
+
+        now = datetime.datetime.now(pytz.UTC)
+        with caplog.at_level(logging.ERROR):
+            await solar.update_forecast(now)
+
+        # A raised but B should still have been called
+        solar.solar_forecast_providers["A"].update.assert_called_once_with(now)
+        solar.solar_forecast_providers["B"].update.assert_called_once_with(now)
+        assert "Error updating solar forecast provider" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_update_forecast_auto_selects(self, fake_hass):
         """Test that update_forecast auto-selects best provider."""
         providers_config = [
@@ -858,6 +1030,67 @@ class TestUpdateForecast:
 
         await solar.update_forecast(datetime.datetime.now(pytz.UTC))
         assert solar.active_provider_name == "B"
+
+    def test_daily_scoring_cycle_skips_on_same_date(self, fake_hass):
+        """Test _run_daily_scoring_cycle early-returns when already run for today."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        provider = solar.solar_forecast_providers["A"]
+        provider.record_forecast_snapshot = MagicMock()
+        provider.compute_score = MagicMock()
+        provider.advance_history_day = MagicMock()
+
+        now = datetime.datetime.now(pytz.UTC)
+
+        # First call should run the cycle
+        solar._run_daily_scoring_cycle(now)
+        assert provider.record_forecast_snapshot.call_count == 1
+        assert provider.compute_score.call_count == 1
+
+        # Second call with same date should be a no-op
+        provider.record_forecast_snapshot.reset_mock()
+        provider.compute_score.reset_mock()
+        solar._run_daily_scoring_cycle(now)
+        assert provider.record_forecast_snapshot.call_count == 0
+        assert provider.compute_score.call_count == 0
+
+    def test_daily_scoring_cycle_calls_compute_dampening_when_enabled(self, fake_hass):
+        """Test _run_daily_scoring_cycle calls compute_dampening when dampening is enabled."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        provider = solar.solar_forecast_providers["A"]
+        provider.dampening_enabled = True
+        provider.record_forecast_snapshot = MagicMock()
+        provider.compute_score = MagicMock()
+        provider.compute_dampening = MagicMock()
+        provider.advance_history_day = MagicMock()
+
+        now = datetime.datetime.now(pytz.UTC)
+        solar._run_daily_scoring_cycle(now)
+
+        provider.compute_dampening.assert_called_once_with(solar.solar_max_output_power_value)
+
+    def test_daily_scoring_cycle_skips_compute_dampening_when_disabled(self, fake_hass):
+        """Test _run_daily_scoring_cycle does NOT call compute_dampening when dampening is disabled."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        provider = solar.solar_forecast_providers["A"]
+        provider.dampening_enabled = False
+        provider.record_forecast_snapshot = MagicMock()
+        provider.compute_score = MagicMock()
+        provider.compute_dampening = MagicMock()
+        provider.advance_history_day = MagicMock()
+
+        now = datetime.datetime.now(pytz.UTC)
+        solar._run_daily_scoring_cycle(now)
+
+        provider.compute_dampening.assert_not_called()
 
     def test_get_forecast_delegates_to_active(self, fake_hass):
         """Test get_forecast delegates to the active provider."""
@@ -1172,6 +1405,18 @@ class TestGuardClauses:
         assert result[0, 1] == pytest.approx(400.0)  # a=2, b=0
         assert result[0, 2] == pytest.approx(300.0)  # a=1, b=0
 
+    def test_apply_dampening_to_array_shape_mismatch(self):
+        """Test _apply_dampening_to_array returns input when column count doesn't match coefficient count."""
+        provider = _TestProvider(solar=None, domain="test")
+        # 3 coefficients but forecast array has 5 columns
+        provider._dampening_coefficients = np.ones((3, 2), dtype=np.float64)
+        provider._dampening_coefficients[:, 1] = 0.0
+
+        forecasts = np.array([[100.0, 200.0, 300.0, 400.0, 500.0]], dtype=np.float32)
+        result = provider._apply_dampening_to_array(forecasts)
+        # Should return the original array unchanged
+        assert result is forecasts
+
     def test_apply_dampening_to_array_guard_none(self):
         """Test _apply_dampening_to_array returns input when no coefficients."""
         provider = _TestProvider(solar=None, domain="test")
@@ -1302,3 +1547,23 @@ class TestGuardClauses:
         # Step 0 should be identity (no data)
         assert provider._dampening_coefficients[0, 0] == 1.0
         assert provider._dampening_coefficients[0, 1] == 0.0
+
+    def test_compute_dampening_polyfit_linalg_error(self):
+        """Test compute_dampening catches LinAlgError from polyfit and falls back to identity."""
+        provider = _TestProvider(solar=None, domain="test")
+        provider.forecast_step_seconds = 3600
+        provider._steps_per_day = 24
+
+        provider._forecast_history = np.full((7, 24), np.nan, dtype=np.float32)
+        provider._actual_history = np.full((7, 24), np.nan, dtype=np.float32)
+
+        # Create data with inf values which causes LinAlgError in polyfit
+        for day in range(7):
+            provider._forecast_history[day, 12] = float("inf")
+            provider._actual_history[day, 12] = 500.0 + day * 100
+
+        provider.compute_dampening(max_power=6000.0)
+        assert provider._dampening_coefficients is not None
+        # Step 12 should remain identity because polyfit raised LinAlgError
+        assert provider._dampening_coefficients[12, 0] == 1.0
+        assert provider._dampening_coefficients[12, 1] == 0.0

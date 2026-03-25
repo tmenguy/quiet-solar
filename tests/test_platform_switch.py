@@ -515,3 +515,57 @@ async def test_async_unload_entry_handles_exception(hass: HomeAssistant, switch_
     result = await async_unload_entry(hass, switch_platform_config_entry)
 
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_qs_switch_entity_turn_on_force_update_all_exception():
+    """Test turn_on logs error when force_update_all raises."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock(side_effect=RuntimeError("update failed"))
+    mock_device = create_mock_device("test", home=mock_home)
+    mock_device.test_switch = False
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+
+    with patch("custom_components.quiet_solar.switch._LOGGER") as mock_logger:
+        await switch.async_turn_on()
+
+    assert switch._attr_is_on is True
+    mock_home.force_update_all.assert_awaited_once()
+    mock_logger.error.assert_called_once()
+    assert "force_update_all failed" in mock_logger.error.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_qs_switch_entity_turn_off_force_update_all_exception():
+    """Test turn_off logs error when force_update_all raises."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock(side_effect=RuntimeError("update failed"))
+    mock_device = create_mock_device("test", home=mock_home)
+    mock_device.test_switch = True
+
+    mock_description = QSSwitchEntityDescription(
+        key="test_switch",
+        translation_key="test",
+    )
+
+    switch = QSSwitchEntity(mock_handler, mock_device, mock_description)
+    switch.async_write_ha_state = MagicMock()
+
+    with patch("custom_components.quiet_solar.switch._LOGGER") as mock_logger:
+        await switch.async_turn_off()
+
+    assert switch._attr_is_on is False
+    mock_home.force_update_all.assert_awaited_once()
+    mock_logger.error.assert_called_once()
+    assert "force_update_all failed" in mock_logger.error.call_args[0][0]

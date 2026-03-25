@@ -4286,3 +4286,88 @@ class TestHomeGaps96:
         await hass.async_block_till_done()
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
         assert isinstance(home.get_solar_from_current_forecast(now, now + timedelta(hours=24)), list)
+
+
+# ========================================================================
+# Coverage: home.py line 3343 - _get_values returns None in loop
+# ========================================================================
+
+
+class TestGetHistoricalSolarPatternGetValuesNone:
+    """Test get_historical_solar_pattern continues when _get_values returns (None, None)."""
+
+    def test_continues_past_none_get_values(self):
+        """When _get_values returns (None, None) for some days, the loop should continue
+        and find valid data from a later probe day.  Covers line 3343 (continue).
+        """
+        from unittest.mock import patch
+
+        from custom_components.quiet_solar.ha_model.home import (
+            BUFFER_SIZE_IN_INTERVALS,
+            NUM_INTERVAL_PER_HOUR,
+            NUM_INTERVALS_PER_DAY,
+            QSHomeConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
+
+        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        vals = QSSolarHistoryVals(entity_id="sensor.solar_test", forecast=forecast)
+
+        # Provide a non-None values array so the early return at line 3330 is NOT taken
+        vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.float32)
+
+        t = datetime(2026, 3, 20, 12, 0, tzinfo=pytz.UTC)
+        future_hours = 24
+        num_intervals = future_hours * NUM_INTERVAL_PER_HOUR
+
+        # Fill day-3-ago with valid data so the loop can succeed on probe_days=3
+        idx_now, _ = vals.get_index_from_time(t)
+        idx_3_days = (idx_now - 3 * NUM_INTERVALS_PER_DAY) % BUFFER_SIZE_IN_INTERVALS
+        for i in range(num_intervals):
+            slot = (idx_3_days + i) % BUFFER_SIZE_IN_INTERVALS
+            vals.values[0][slot] = 300.0 + i
+            vals.values[1][slot] = 1  # valid day marker
+
+        # Patch _get_values so it returns (None, None) for probe_days 1 and 2,
+        # then delegates to the real implementation for probe_days >= 3.
+        real_get_values = vals._get_values
+        call_count = 0
+
+        def fake_get_values(start_idx, end_idx):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return None, None
+            return real_get_values(start_idx, end_idx)
+
+        with patch.object(vals, "_get_values", side_effect=fake_get_values):
+            result = vals.get_historical_solar_pattern(t, future_hours=future_hours)
+
+        # The first two calls hit the continue; the third should succeed
+        assert call_count == 3
+        assert len(result) == num_intervals
+        assert result[0][0] == t
+        assert result[0][1] == pytest.approx(300.0)
+
+    def test_all_get_values_none_returns_empty(self):
+        """When _get_values returns (None, None) for ALL 7 probe days,
+        get_historical_solar_pattern should return an empty list.
+        """
+        from unittest.mock import patch
+
+        from custom_components.quiet_solar.ha_model.home import (
+            BUFFER_SIZE_IN_INTERVALS,
+            QSHomeConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
+
+        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        vals = QSSolarHistoryVals(entity_id="sensor.solar_test2", forecast=forecast)
+        vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.float32)
+
+        t = datetime(2026, 3, 20, 12, 0, tzinfo=pytz.UTC)
+
+        with patch.object(vals, "_get_values", return_value=(None, None)):
+            result = vals.get_historical_solar_pattern(t, future_hours=24)
+
+        assert result == []

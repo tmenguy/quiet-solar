@@ -182,6 +182,7 @@ POOL_TEMP_STEPS = [[-100, 10, 2], [10, 12, 4], [12, 16, 7], [16, 24, 12], [24, 2
 
 SOLCAST_SOLAR_DOMAIN = "solcast_solar"
 OPEN_METEO_SOLAR_DOMAIN = "open_meteo_solar_forecast"
+FORECAST_SOLAR_DOMAIN = "forecast_solar"
 
 SENSOR_HOME_AVAILABLE_EXTRA_POWER = "qs_home_extra_available_power"
 SENSOR_HOME_CONSUMPTION_POWER = "qs_home_consumption_power"

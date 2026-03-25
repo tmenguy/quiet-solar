@@ -310,3 +310,29 @@ async def test_select_entities_in_ha(
 
     updated_state = hass.states.get(select_entity_id)
     assert updated_state is not None
+
+
+@pytest.mark.asyncio
+async def test_select_force_update_all_exception():
+    """Test select logs error when force_update_all raises."""
+    handler = MagicMock()
+    handler.hass = MagicMock()
+    device = _make_device()
+    device.mode = "option_1"
+    device.home.force_update_all = AsyncMock(side_effect=RuntimeError("update failed"))
+
+    description = QSSelectEntityDescription(
+        key="mode",
+        translation_key="mode",
+        options=["option_1", "option_2"],
+    )
+
+    entity = QSBaseSelect(handler, device, description)
+    entity.async_write_ha_state = MagicMock()
+
+    with patch("custom_components.quiet_solar.select._LOGGER") as mock_logger:
+        await entity.async_select_option("option_2")
+
+    device.home.force_update_all.assert_awaited_once()
+    mock_logger.error.assert_called_once()
+    assert "force_update_all failed" in mock_logger.error.call_args[0][0]

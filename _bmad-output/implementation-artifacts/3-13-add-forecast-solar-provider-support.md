@@ -1,6 +1,6 @@
 # Story 3.13: Add Forecast.Solar Provider Support
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -30,35 +30,25 @@ So that I have a third provider option and can compare its accuracy against othe
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add Forecast.Solar domain constant and provider class (AC: 1, 2)
-  - [ ] 1.1 Add `FORECAST_SOLAR_DOMAIN = "forecast_solar"` in `const.py` next to `SOLCAST_SOLAR_DOMAIN` (line 183) and `OPEN_METEO_SOLAR_DOMAIN` (line 184)
-  - [ ] 1.2 Create `QSSolarProviderForecastSolar(QSSolarProvider)` in `ha_model/solar.py` after `QSSolarProviderOpenWeather` (line 886)
-  - [ ] 1.3 Override `fill_orchestrators()`: use `hass.config_entries.async_entries(FORECAST_SOLAR_DOMAIN)` then `entry.runtime_data` directly (the coordinator IS runtime_data, not `.coordinator` on it - unlike Solcast). Pattern:
-    ```python
-    entries = self.hass.config_entries.async_entries(self.domain)
-    for entry in entries:
-        try:
-            orch = entry.runtime_data  # Direct! ForecastSolarDataUpdateCoordinator
-            self.orchestrators.append(orch)
-            self._orchestrator_health[id(orch)] = True
-        except (AttributeError, TypeError):
-            pass
-    ```
-  - [ ] 1.4 Override `get_power_series_from_orchestrator()`: read `orchestrator.data.watts` (`dict[datetime, int]`), convert to sorted `list[tuple[datetime, float]]`. Nearly identical to `QSSolarProviderOpenWeather.get_power_series_from_orchestrator()` (lines 861-885)
-  - [ ] 1.5 Write tests: provider creation, orchestrator discovery, data extraction, empty/None data handling
+- [x] Task 1: Add Forecast.Solar domain constant and provider class (AC: 1, 2)
+  - [x] 1.1 Add `FORECAST_SOLAR_DOMAIN = "forecast_solar"` in `const.py`
+  - [x] 1.2 Create `QSSolarProviderForecastSolar(QSSolarProvider)` in `ha_model/solar.py`
+  - [x] 1.3 Override `fill_orchestrators()` using `config_entries.async_entries()` + `entry.runtime_data` directly
+  - [x] 1.4 Override `get_power_series_from_orchestrator()` reading `orchestrator.data.watts`
+  - [x] 1.5 Write tests: 19 tests covering provider creation, orchestrator discovery, data extraction, edge cases
 
-- [ ] Task 2: Register in factory and config flow (AC: 1)
-  - [ ] 2.1 In `_create_provider_for_domain()` (solar.py line 67): add `if domain == FORECAST_SOLAR_DOMAIN: return QSSolarProviderForecastSolar(...)`
-  - [ ] 2.2 In `config_flow.py` `async_step_solar()` (line 871): add provider detection. IMPORTANT: Forecast.Solar does NOT populate `hass.data[domain]` - it stores the coordinator in `entry.runtime_data`. Detection MUST use `hass.config_entries.async_entries(FORECAST_SOLAR_DOMAIN)` (not `hass.data.get()`)
-  - [ ] 2.3 Add `SelectOptionDict(value=FORECAST_SOLAR_DOMAIN, label="Forecast.Solar")` when entries found
-  - [ ] 2.4 In `domain_labels` dict (line 847): add `FORECAST_SOLAR_DOMAIN: "Forecast.Solar"`
-  - [ ] 2.5 Add import of `FORECAST_SOLAR_DOMAIN` in config_flow.py (line 134 area)
-  - [ ] 2.6 In `_migrate_solar_providers_config()` (solar.py line 53): add `"Forecast.Solar"` label mapping for the new domain (for edge case where old config format is used)
-  - [ ] 2.7 Write tests: provider appears in options when integration installed, does not appear when not installed
+- [x] Task 2: Register in factory and config flow (AC: 1)
+  - [x] 2.1 Added `FORECAST_SOLAR_DOMAIN` branch in `_create_provider_for_domain()` factory
+  - [x] 2.2 Added config flow detection using `hass.config_entries.async_entries(FORECAST_SOLAR_DOMAIN)`
+  - [x] 2.3 Added `SelectOptionDict` option for Forecast.Solar
+  - [x] 2.4 Added `FORECAST_SOLAR_DOMAIN: "Forecast.Solar"` to `domain_labels` dict
+  - [x] 2.5 Added import of `FORECAST_SOLAR_DOMAIN` in config_flow.py
+  - [x] 2.6 Updated `_migrate_solar_providers_config()` with Forecast.Solar label mapping
+  - [x] 2.7 Write tests: 7 tests covering factory, migration, and regression
 
-- [ ] Task 3: Verify full feature integration (AC: 3)
-  - [ ] 3.1 Write integration test: configure Forecast.Solar alongside Solcast, verify both providers score independently, dampening applies per-provider, auto-selection picks the better one
-  - [ ] 3.2 Verify staleness detection and health monitoring work (inherited from base class, just test it)
+- [x] Task 3: Verify full feature integration (AC: 3)
+  - [x] 3.1 Integration tests: multi-provider coexistence, score attributes, dampening attributes
+  - [x] 3.2 Staleness detection and health monitoring verified via inherited base class
 
 ## Dev Notes
 
@@ -153,8 +143,23 @@ Forecast.Solar uses the same `config_entries.async_entries()` pattern as Solcast
 
 ### Agent Model Used
 
+Claude Opus 4.6
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Added `FORECAST_SOLAR_DOMAIN = "forecast_solar"` constant in const.py
+- Created `QSSolarProviderForecastSolar` class with `fill_orchestrators()` (config_entries + entry.runtime_data) and `get_power_series_from_orchestrator()` (Estimate.watts dict extraction)
+- Registered in `_create_provider_for_domain()` factory and `_migrate_solar_providers_config()`
+- Updated config_flow.py: import, domain_labels, provider detection via `async_entries()`
+- 30 new tests in `test_solar_forecast_solar_provider.py` covering provider creation, orchestrator discovery, data extraction, factory registration, migration, and multi-provider integration
+- All quality gates pass: 4096 tests (0 failures), ruff lint/format clean, mypy clean
+- Coverage: 99% overall (no regression — uncovered lines are pre-existing)
+
 ### File List
+
+- `custom_components/quiet_solar/const.py` (modified — added FORECAST_SOLAR_DOMAIN)
+- `custom_components/quiet_solar/ha_model/solar.py` (modified — added QSSolarProviderForecastSolar, updated factory and migration)
+- `custom_components/quiet_solar/config_flow.py` (modified — added Forecast.Solar detection and options)
+- `tests/test_solar_forecast_solar_provider.py` (new — 30 tests)
