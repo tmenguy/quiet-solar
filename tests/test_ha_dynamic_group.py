@@ -731,19 +731,25 @@ class TestDynamicGroupNestedCapacity:
 
         # Root group: 64A per phase
         root = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Root", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
         )
 
         # Mid group: 32A per phase
         mid = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Mid", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
         )
 
         # Leaf group: 16A per phase
         leaf = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Leaf", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
         )
 
@@ -775,13 +781,17 @@ class TestDynamicGroupNestedCapacity:
 
         # Parent: 20A
         parent = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 20},
         )
 
         # Child: configured 50A but parent only allows 20A
         child = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Child", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 50},
         )
 
@@ -800,15 +810,21 @@ class TestDynamicGroupNestedCapacity:
         time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
 
         root = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Root", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
         )
         mid = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Mid", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
         )
         leaf = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Leaf", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
         )
 
@@ -836,13 +852,17 @@ class TestDynamicGroupNestedCapacity:
         time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
 
         parent = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
         )
 
         # Single-phase child on phase 0
         child = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Child Mono", CONF_IS_3P: False, CONF_DYN_GROUP_MAX_PHASE_AMPS: 16},
         )
 
@@ -867,17 +887,23 @@ class TestDynamicGroupNestedCapacity:
         time = datetime.datetime(2024, 6, 1, 10, 0, 0, tzinfo=pytz.UTC)
 
         parent = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Parent", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 64},
         )
 
         child_a = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Child A", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 32},
         )
 
         child_b = QSDynamicGroup(
-            hass=hass, config_entry=dyn_group_config_entry, home=dyn_group_home,
+            hass=hass,
+            config_entry=dyn_group_config_entry,
+            home=dyn_group_home,
             **{CONF_NAME: "Child B", CONF_IS_3P: True, CONF_DYN_GROUP_MAX_PHASE_AMPS: 20},
         )
 

@@ -51,10 +51,10 @@ from .const import (
     SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    SENSOR_SOLAR_ACTIVE_PROVIDER,
     SENSOR_SOLAR_FORECAST_AGE,
     SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX,
-    SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
-    SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX,
+    SENSOR_SOLAR_FORECAST_SCORE_NO_DAMPENING_PREFIX,
     QSForecastHomeNonControlledSensors,
     QSForecastSolarSensors,
 )
@@ -391,41 +391,42 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
     for provider_name, provider in device.solar_forecast_providers.items():
         safe_name = provider_name.lower().replace(" ", "_").replace("-", "_")
 
-        # Active score (dampened if enabled, raw otherwise)
-        score_key = f"{SENSOR_SOLAR_FORECAST_SCORE_PREFIX}{safe_name}"
-        score_sensor = QSSensorEntityDescription(
-            key=score_key,
-            name=f"Score ({provider_name})",
-            native_unit_of_measurement=UnitOfPower.WATT,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.get_active_score(),
-            qs_is_none_unavailable=True,
-        )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=score_sensor))
-
-        # Raw score
-        raw_key = f"{SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX}{safe_name}"
-        raw_sensor = QSSensorEntityDescription(
-            key=raw_key,
-            name=f"Raw Score ({provider_name})",
-            native_unit_of_measurement=UnitOfPower.WATT,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.score_raw,
-            qs_is_none_unavailable=True,
-        )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=raw_sensor))
-
-        # Dampened score
+        # Dampened score with dampening coefficients as attributes
         dampened_key = f"{SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX}{safe_name}"
         dampened_sensor = QSSensorEntityDescription(
             key=dampened_key,
             name=f"Dampened Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.score_dampened,
+            value_fn_and_attr=lambda device, key, prov=provider: (
+                prov.score_dampened,
+                prov.get_dampening_attributes(),
+            ),
             qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=dampened_sensor))
+
+        # No-dampening score (raw MAE)
+        no_damp_key = f"{SENSOR_SOLAR_FORECAST_SCORE_NO_DAMPENING_PREFIX}{safe_name}"
+        no_damp_sensor = QSSensorEntityDescription(
+            key=no_damp_key,
+            name=f"No Dampening Score ({provider_name})",
+            native_unit_of_measurement=UnitOfPower.WATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key, prov=provider: prov.score_raw,
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=no_damp_sensor))
+
+    # Active solar provider sensor
+    active_provider_sensor = QSSensorEntityDescription(
+        key=SENSOR_SOLAR_ACTIVE_PROVIDER,
+        translation_key=SENSOR_SOLAR_ACTIVE_PROVIDER,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device, key: device.active_provider_name,
+        qs_is_none_unavailable=True,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=active_provider_sensor))
 
     return entities
 

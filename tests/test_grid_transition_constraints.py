@@ -672,12 +672,8 @@ class TestOffGridSolverEdgeCases:
         # Filler loads should get less energy than mandatory
         pool_result = [r for r in result if r[0] == pool]
         boiler_result = [r for r in result if r[0] == boiler]
-        pool_energy = calculate_energy_from_commands(
-            pool_result[0][1], self.end_time
-        ) if pool_result else 0.0
-        boiler_energy = calculate_energy_from_commands(
-            boiler_result[0][1], self.end_time
-        ) if boiler_result else 0.0
+        pool_energy = calculate_energy_from_commands(pool_result[0][1], self.end_time) if pool_result else 0.0
+        boiler_energy = calculate_energy_from_commands(boiler_result[0][1], self.end_time) if boiler_result else 0.0
 
         assert car_energy >= pool_energy, (
             f"Mandatory car ({car_energy:.0f}Wh) should get at least as much "

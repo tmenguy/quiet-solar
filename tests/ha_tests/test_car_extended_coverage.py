@@ -18,7 +18,8 @@ Key targets:
  - Various other under-tested happy paths and corner cases
 """
 
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -271,6 +272,7 @@ async def test_user_set_next_charge_target_energy_mode(
     car._use_percent_mode = False
     car.car_is_invited = True  # force energy mode
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
+
     async def _mock_set_energy(value):
         car._next_charge_target_energy = 30000
         return True

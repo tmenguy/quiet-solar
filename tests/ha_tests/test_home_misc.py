@@ -48,6 +48,11 @@ async def test_home_force_update_and_resets(
     await home.reset_forecasts(time_now)
     home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now)
 
+    # Cover solar_plant.reset_dampening branch (line 2901)
+    home.physical_solar_plant = MagicMock()
+    await home.reset_forecasts(time_now)
+    home.solar_plant.reset_dampening.assert_called_once_with(time_now)
+
     await home.light_reset_forecasts(time_now)
     home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now, light_reset=True)
 

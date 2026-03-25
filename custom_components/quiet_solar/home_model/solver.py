@@ -20,7 +20,7 @@ from .commands import (
     merge_commands,
 )
 from .constraints import DATETIME_MAX_UTC, LoadConstraint
-from .home_utils import add_amps, get_average_time_series
+from .home_utils import add_amps, slot_value_from_time_series
 from .load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,56 +212,14 @@ class PeriodSolver:
             prices[i] = self._tariffs[i_tariff][1]
 
             # now compute the best power for the slots
-            i_ua, ua_power = self._power_slot_from_forecast(self._ua_forecast, begin_slot, end_slot, i_ua)
-            i_pv, pv_power = self._power_slot_from_forecast(
+            i_ua, ua_power = slot_value_from_time_series(self._ua_forecast, begin_slot, end_slot, i_ua)
+            i_pv, pv_power = slot_value_from_time_series(
                 self._pv_forecast, begin_slot, end_slot, i_pv, geometric_smoothing=True
             )  # solar prediction can be smoothed a bit
 
             available_power[i] = ua_power - pv_power
 
         return prices, durations_s, available_power
-
-    def _power_slot_from_forecast(self, forecast, begin_slot, end_slot, last_end, geometric_smoothing=False):
-
-        if not forecast:
-            return last_end, 0.0
-
-        prev_end = last_end
-        # <= end_slot and not < end_slot because an exact value on the end of the slot has to be counted "in"
-        while last_end < len(forecast) - 1 and forecast[last_end + 1][0] <= end_slot:
-            last_end += 1
-        # get all the power data in the slot:
-        power_series = []
-        if prev_end >= 0:
-            if forecast[prev_end][0] == begin_slot:
-                power_series.append((begin_slot, forecast[prev_end][1]))
-            elif forecast[prev_end][0] < begin_slot and prev_end < len(forecast) - 1:
-                adapted_power = forecast[prev_end][1]
-                if geometric_smoothing:
-                    adapted_power += (
-                        (forecast[prev_end + 1][1] - forecast[prev_end][1])
-                        * (begin_slot - forecast[prev_end][0]).total_seconds()
-                        / (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds()
-                    )
-                power_series.append((begin_slot, adapted_power))
-        for j in range(prev_end + 1, last_end + 1):
-            power_series.append((forecast[j][0], forecast[j][1]))
-        # if i_ua is not the exact end, we need to adapt the power by computing an additional value
-        # (else by construction if self._ua_forecast[i_ua][1] == end_slot it is inside already and in the power values)
-        if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
-            adapted_power = forecast[last_end][1]
-            if geometric_smoothing:
-                adapted_power += (
-                    (forecast[last_end + 1][1] - forecast[last_end][1])
-                    * (end_slot - forecast[last_end][0]).total_seconds()
-                    / (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds()
-                )
-            power_series.append((end_slot, adapted_power))
-
-        if len(power_series) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
-            power_series.append((forecast[prev_end][0], forecast[prev_end][1]))
-
-        return last_end, get_average_time_series(power_series, geometric_mean=geometric_smoothing)
 
     def _merge_commands_slots_for_load(
         self, loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False

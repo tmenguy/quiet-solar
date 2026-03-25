@@ -71,6 +71,7 @@ class TestBoostOnlyDeviceBehavior(TestCase):
     def test_force_charge_score_higher_than_auto_consign(self):
         """FORCE_CHARGE scores higher than AUTO_CONSIGN (more aggressive)."""
         from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN
+
         force_score = commands_scores[CMD_CST_FORCE_CHARGE]
         auto_score = commands_scores[CMD_CST_AUTO_CONSIGN]
         assert force_score > auto_score
@@ -78,6 +79,7 @@ class TestBoostOnlyDeviceBehavior(TestCase):
     def test_force_charge_score_lower_than_on(self):
         """FORCE_CHARGE scores lower than ON (ON is highest)."""
         from custom_components.quiet_solar.home_model.commands import CMD_CST_ON
+
         force_score = commands_scores[CMD_CST_FORCE_CHARGE]
         on_score = commands_scores[CMD_CST_ON]
         assert force_score < on_score

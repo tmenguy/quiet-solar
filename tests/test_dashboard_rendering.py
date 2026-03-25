@@ -20,17 +20,17 @@ from homeassistant.helpers.template import Template
 
 from custom_components.quiet_solar.const import (
     CONF_POOL_TEMPERATURE_SENSOR,
+    CONF_POWER,
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
     CONF_SWITCH,
-    CONF_TYPE_NAME_QSPool,
     DASHBOARD_DEFAULT_SECTIONS,
     DEVICE_TYPE,
     DOMAIN,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
-    CONF_POWER,
     SOLCAST_SOLAR_DOMAIN,
+    CONF_TYPE_NAME_QSPool,
 )
 from tests.ha_tests.const import (
     MOCK_BATTERY_CONFIG,
@@ -197,7 +197,9 @@ class TestDashboardTemplateRendering:
         assert "qs_solar_forecast_age" in rendered
         # Dynamic entities created from Solcast provider
         assert "qs_solar_dampening_solcast" in rendered
-        assert "qs_solar_forecast_score_solcast" in rendered
+        assert "qs_solar_forecast_score_dampened_solcast" in rendered
+        assert "qs_solar_forecast_score_no_dampening_solcast" in rendered
+        assert "qs_solar_active_provider" in rendered
 
     @pytest.mark.asyncio
     async def test_home_forecast_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
@@ -238,13 +240,11 @@ class TestEntityNamesAreStrings:
                     name = entity.name
                     if not isinstance(name, str):
                         failures.append(
-                            f"{device.name} ({device.device_type}): "
-                            f"entity '{key}' has non-string name: {name!r}"
+                            f"{device.name} ({device.device_type}): entity '{key}' has non-string name: {name!r}"
                         )
 
-        assert failures == [], (
-            "Entities with non-string names (likely missing translation):\n"
-            + "\n".join(f"  - {f}" for f in failures)
+        assert failures == [], "Entities with non-string names (likely missing translation):\n" + "\n".join(
+            f"  - {f}" for f in failures
         )
 
     @pytest.mark.asyncio
@@ -259,14 +259,10 @@ class TestEntityNamesAreStrings:
                     eid = entity.entity_id
                     if not isinstance(eid, str):
                         failures.append(
-                            f"{device.name} ({device.device_type}): "
-                            f"entity '{key}' has non-string entity_id: {eid!r}"
+                            f"{device.name} ({device.device_type}): entity '{key}' has non-string entity_id: {eid!r}"
                         )
 
-        assert failures == [], (
-            "Entities with non-string entity_ids:\n"
-            + "\n".join(f"  - {f}" for f in failures)
-        )
+        assert failures == [], "Entities with non-string entity_ids:\n" + "\n".join(f"  - {f}" for f in failures)
 
 
 # ============================================================================
@@ -312,9 +308,7 @@ class TestEntityTranslationKeys:
                             f"not found in strings.json[entity][{platform}]"
                         )
 
-        assert missing == [], (
-            "Missing translations:\n" + "\n".join(f"  - {m}" for m in missing)
-        )
+        assert missing == [], "Missing translations:\n" + "\n".join(f"  - {m}" for m in missing)
 
 
 # ============================================================================
@@ -358,9 +352,7 @@ class TestDashboardSectionMapping:
         )
 
         for key in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION:
-            assert isinstance(key, str), (
-                f"Key {key!r} in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION is not a string"
-            )
+            assert isinstance(key, str), f"Key {key!r} in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION is not a string"
 
     @pytest.mark.asyncio
     async def test_all_devices_assigned_to_sections(self, full_dashboard_home):

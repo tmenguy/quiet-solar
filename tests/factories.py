@@ -339,6 +339,7 @@ def create_minimal_home_model(
         return None
 
     home.get_car_by_name = get_car_by_name
+    home._consumption_forecast = None
     return home
 
 

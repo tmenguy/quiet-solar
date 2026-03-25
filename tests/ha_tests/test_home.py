@@ -915,7 +915,10 @@ async def test_home_consumption_reset_forecasts(tmp_path) -> None:
     home = SimpleNamespace(
         hass=None,
         battery=SimpleNamespace(charge_discharge_sensor="sensor.battery_power"),
-        solar_plant=SimpleNamespace(solar_inverter_active_power="sensor.solar_power", solar_inverter_input_active_power="sensor.solar_input_power"),
+        solar_plant=SimpleNamespace(
+            solar_inverter_active_power="sensor.solar_power",
+            solar_inverter_input_active_power="sensor.solar_input_power",
+        ),
         grid_active_power_sensor="sensor.grid_power",
         grid_active_power_sensor_inverted=False,
         _childrens=[],

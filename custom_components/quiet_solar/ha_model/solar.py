@@ -7,6 +7,7 @@ from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
 from os.path import join
+from typing import Any
 
 import aiofiles.os
 import numpy as np
@@ -23,7 +24,6 @@ from ..const import (
     CONF_SOLAR_MAX_PHASE_AMPS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
-    DOMAIN,
     FLOATING_PERIOD_S,
     FORECAST_SOLAR_DOMAIN,
     MAX_AMP_INFINITE,
@@ -36,19 +36,24 @@ from ..const import (
     CONF_TYPE_NAME_QSSolar,
 )
 from ..ha_model.device import HADeviceMixin
-from ..home_model.load import (
-    AbstractDevice,
+from ..home_model.home_utils import (
     align_time_series_and_values,
+    align_time_series_on_time_slots,
     get_slots_from_time_series,
     get_value_from_time_series,
 )
+from ..home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
 
 DAMPENING_A_MIN = 0.1
 DAMPENING_A_MAX = 3.0
 DAMPENING_MIN_DATA_POINTS = 3
-DAMPENING_HISTORY_DAYS = 7
+DAMPENING_BUFFER_DAYS = 365  # How long to retain raw time-series (actuals + forecast snapshots)
+DAMPENING_WINDOW_DAYS = 7  # Sliding window for dampening regression computation
+DAMPENING_NUM_TOD_BUFFERS = 12
+DAMPENING_TOD_HOURS = 2
+DAMPENING_ACTUALS_STEP_MN = 5  # Record actual production every N minutes from sensor
 
 
 def _migrate_solar_providers_config(config_data: dict) -> list[dict]:
@@ -155,6 +160,10 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             self._active_provider_name = next(iter(self.solar_forecast_providers))
             self.solar_forecast_provider_handler = self.solar_forecast_providers[self._active_provider_name]
 
+        # Shared actuals buffer (single buffer for all providers)
+        self._actuals_buffer: list[tuple[datetime, float]] = []
+        self._last_actuals_record_time: datetime | None = None
+
         self._last_daily_scoring_date: datetime | None = None
         self.solar_production = 0
         self.inverter_output_power = 0
@@ -246,6 +255,50 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             return self.solar_production - self.solar_max_output_power_value
         return 0.0
 
+    def record_actual_production(self, time: datetime, actual_values: list[tuple[datetime, float]]) -> None:
+        """Record actual solar production into the shared continuous rolling buffer.
+
+        New values replace existing entries at the same timestamp (merge-by-time).
+        """
+        if not actual_values:
+            return
+
+        cutoff = time - timedelta(days=DAMPENING_BUFFER_DAYS)
+        merged: dict[datetime, float] = {ts: v for ts, v in self._actuals_buffer if ts >= cutoff}
+        for ts, v in actual_values:
+            if ts >= cutoff:
+                merged[ts] = v
+        self._actuals_buffer = sorted(merged.items(), key=itemgetter(0))
+
+    def _record_actual_from_sensor(self, time: datetime) -> None:
+        """Record actual production from the inverter input power sensor.
+
+        Called during update_forecast. Reads get_average_sensor over
+        the last DAMPENING_ACTUALS_STEP_MN minutes and pushes to the
+        shared actuals buffer. Skips if called too soon after last recording.
+        """
+        step_seconds = DAMPENING_ACTUALS_STEP_MN * 60
+
+        if self._last_actuals_record_time is not None:
+            elapsed = (time - self._last_actuals_record_time).total_seconds()
+            if elapsed < step_seconds:
+                return
+
+        if self.solar_inverter_input_active_power is None:
+            return
+
+        value = self.get_average_sensor(
+            self.solar_inverter_input_active_power,
+            step_seconds,
+            time,
+            min_val=0.0,
+        )
+        if value is None:
+            return
+
+        self._last_actuals_record_time = time
+        self.record_actual_production(time, [(time, value)])
+
     async def update_forecast(self, time: datetime) -> None:
         """Update all providers and select active one."""
         for provider in self.solar_forecast_providers.values():
@@ -253,6 +306,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
                 await provider.update(time)
             except Exception:
                 _LOGGER.exception("Error updating solar forecast provider %s", provider.provider_name)
+
+        # Bootstrap shared actuals from history if empty (first startup only)
+        QSSolarProvider._bootstrap_actuals_from_history(self, time)
+
+        # Record actual production from sensor at regular intervals
+        self._record_actual_from_sensor(time)
 
         # Daily scoring/dampening cycle at day boundary
         self._run_daily_scoring_cycle(time)
@@ -262,6 +321,22 @@ class QSSolar(HADeviceMixin, AbstractDevice):
 
         # Keep legacy handler in sync
         self.solar_forecast_provider_handler = self.active_provider
+
+    def reset_dampening(self, time: datetime) -> None:
+        """Clear all dampening buffers for all providers and re-bootstrap actuals."""
+        # Clear shared actuals buffer and re-bootstrap from history
+        self._actuals_buffer = []
+        fallback = self.get_historical_solar_fallback(time)
+        if fallback:
+            self._actuals_buffer = list(fallback)
+            _LOGGER.info(
+                "Re-bootstrapped shared actuals buffer from historical data (%d points)",
+                len(self._actuals_buffer),
+            )
+        self._last_actuals_record_time = None
+
+        for provider in self.solar_forecast_providers.values():
+            provider.reset_dampening_buffers()
 
     def _run_daily_scoring_cycle(self, time: datetime) -> None:
         """Run scoring/dampening pipeline once per day (at midnight boundary)."""
@@ -276,13 +351,10 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         for name, provider in self.solar_forecast_providers.items():
             # Record forecast snapshot for the ending day
             provider.record_forecast_snapshot(time)
-            # Compute scores
+            # Compute scores — always, regardless of dampening switch state
             provider.compute_score()
-            # Compute dampening if enabled
-            if provider.dampening_enabled:
-                provider.compute_dampening(self.solar_max_output_power_value)
-            # Advance to next day slot
-            provider.advance_history_day()
+            # Compute dampening — always, regardless of dampening switch state
+            provider.compute_dampening(self.solar_max_output_power_value)
             _LOGGER.debug(
                 "Daily scoring cycle for provider %s: raw=%.2f, dampened=%s",
                 name,
@@ -357,20 +429,22 @@ class QSSolarProvider:
         self._orchestrator_health: dict[int, bool] = {}
         self._update_cycle_count: int = 0
 
-        # Scoring (Task 6)
-        self.forecast_step_seconds: int | None = None
-        self._steps_per_day: int | None = None
-        self._forecast_history: np.ndarray | None = None  # shape (7, steps_per_day)
-        self._actual_history: np.ndarray | None = None  # shape (7, steps_per_day)
-        self._history_day_index: int = 0
+        # Scoring
         self._last_score_date: datetime | None = None
         self.score_raw: float | None = None
         self.score_dampened: float | None = None
 
-        # Dampening (Task 7)
+        # Dampening — resolution-independent rolling buffers
         self.dampening_enabled: bool = False
-        self._dampening_coefficients: np.ndarray | None = None  # shape (steps_per_day, 2)
+        self._dampening_coefficients: np.ndarray | None = None
+        self._dampening_coefficients_per_tod: dict[int, np.ndarray | None] = {}
         self._last_dampening_date: datetime | None = None
+
+        # Local actuals fallback only used in tests where solar=None
+        self._local_actuals_buffer: list[tuple[datetime, float]] = []
+
+        # Forecast snapshots: 12 rolling buffers (one per 2-hour time-of-day)
+        self._forecast_buffers: list[list[tuple[datetime, float]]] = [[] for _ in range(DAMPENING_NUM_TOD_BUFFERS)]
 
         # Stale notification state (Task 9)
         self._was_stale: bool = False
@@ -389,11 +463,54 @@ class QSSolarProvider:
         age_s = (now - self._latest_successful_forecast_time).total_seconds()
         return age_s > SOLAR_FORECAST_STALE_THRESHOLD_S
 
+    @property
+    def _actuals_buffer(self) -> list[tuple[datetime, float]]:
+        """Return the shared actuals buffer from the parent QSSolar.
+
+        Falls back to a local buffer for test scenarios where solar=None.
+        """
+        if self.solar is not None:
+            return self.solar._actuals_buffer
+        return self._local_actuals_buffer
+
+    @_actuals_buffer.setter
+    def _actuals_buffer(self, value: list[tuple[datetime, float]]) -> None:
+        if self.solar is not None:
+            self.solar._actuals_buffer = value
+        else:
+            self._local_actuals_buffer = value
+
     def get_active_score(self) -> float | None:
         """Return the active score (dampened if enabled, raw otherwise)."""
         if self.dampening_enabled and self.score_dampened is not None:
             return self.score_dampened
         return self.score_raw
+
+    def get_dampening_attributes(self) -> dict[str, Any]:
+        """Return dampening info as a dict for HA sensor attributes.
+
+        All internal data is stored in UTC.  User-facing hour labels and
+        timestamps are converted to local time for display.
+        """
+        attrs: dict[str, Any] = {"dampening_enabled": self.dampening_enabled}
+        if self._last_dampening_date is not None:
+            # Display in local time for the user
+            local_dt = self._last_dampening_date.astimezone(tz=None)
+            attrs["last_dampening_date"] = local_dt.isoformat()
+        if self._dampening_coefficients is not None and len(self._dampening_coefficients) > 0:
+            attrs["coefficients_count"] = len(self._dampening_coefficients)
+            attrs["avg_scale_factor"] = round(float(np.mean(self._dampening_coefficients[:, 0])), 4)
+            attrs["avg_offset"] = round(float(np.mean(self._dampening_coefficients[:, 1])), 2)
+        for buf_idx in range(DAMPENING_NUM_TOD_BUFFERS):
+            # Internal buffer index is UTC-based; convert to local hour for display
+            utc_hour = buf_idx * DAMPENING_TOD_HOURS
+            utc_dt = datetime.now(pytz.UTC).replace(hour=utc_hour, minute=0, second=0, microsecond=0)
+            local_hour = utc_dt.astimezone(tz=None).hour
+            coeffs = self._dampening_coefficients_per_tod.get(buf_idx)
+            if coeffs is not None and len(coeffs) > 0:
+                attrs[f"tod_{local_hour:02d}h_scale"] = round(float(np.mean(coeffs[:, 0])), 4)
+                attrs[f"tod_{local_hour:02d}h_offset"] = round(float(np.mean(coeffs[:, 1])), 2)
+        return attrs
 
     def get_forecast(
         self, start_time: datetime, end_time: datetime | None
@@ -408,25 +525,28 @@ class QSSolarProvider:
 
     def _get_effective_forecast(self) -> list[tuple[datetime | None, float | None]]:
         """Return dampened forecast if enabled, otherwise raw."""
-        if self.dampening_enabled and self._dampening_coefficients is not None and self._steps_per_day is not None:
+        if self.dampening_enabled and self._dampening_coefficients is not None:
             return self._apply_dampening(self.solar_forecast)
         return self.solar_forecast
 
     def _apply_dampening(
         self, forecast: list[tuple[datetime | None, float | None]]
     ) -> list[tuple[datetime | None, float | None]]:
-        """Apply MOS dampening to a forecast time series."""
-        if not forecast or self._dampening_coefficients is None or self._steps_per_day is None:
+        """Apply MOS dampening coefficients to a forecast time series.
+
+        Coefficients are indexed by forecast position (matching the slot
+        boundaries used during computation via align_time_series_on_time_slots).
+        """
+        if not forecast or self._dampening_coefficients is None:
             return forecast
 
         result = []
-        for ts, value in forecast:
+        for i, (ts, value) in enumerate(forecast):
             if ts is None or value is None:
                 result.append((ts, value))
                 continue
-            step_idx = self._time_to_step_index(ts)
-            if step_idx is not None and 0 <= step_idx < len(self._dampening_coefficients):
-                a_k, b_k = self._dampening_coefficients[step_idx]
+            if i < len(self._dampening_coefficients):
+                a_k, b_k = self._dampening_coefficients[i]
                 if np.isfinite(a_k) and np.isfinite(b_k):
                     dampened = max(0.0, a_k * value + b_k)
                     result.append((ts, dampened))
@@ -436,44 +556,13 @@ class QSSolarProvider:
                 result.append((ts, value))
         return result
 
-    def _time_to_step_index(self, ts: datetime) -> int | None:
-        """Convert a timestamp to a step index within the day."""
-        if self.forecast_step_seconds is None or self.forecast_step_seconds <= 0:
-            return None
-        seconds_since_midnight = ts.hour * 3600 + ts.minute * 60 + ts.second
-        return seconds_since_midnight // self.forecast_step_seconds
+    @staticmethod
+    def _tod_buffer_index(time: datetime) -> int:
+        """Return the 2-hour time-of-day buffer index (0..11) for a given time.
 
-    def _detect_step_size(self) -> None:
-        """Detect the forecast temporal resolution using median of consecutive gaps."""
-        if len(self.solar_forecast) < 2:
-            return
-        gaps = []
-        for i in range(min(len(self.solar_forecast) - 1, 10)):
-            ts0 = self.solar_forecast[i][0]
-            ts1 = self.solar_forecast[i + 1][0]
-            if ts0 is not None and ts1 is not None:
-                gap_s = int((ts1 - ts0).total_seconds())
-                if gap_s > 0:
-                    gaps.append(gap_s)
-        if gaps:
-            step_s = int(np.median(gaps))
-            if step_s > 0:
-                old_steps = self._steps_per_day
-                self.forecast_step_seconds = step_s
-                self._steps_per_day = 86400 // step_s
-                # Invalidate dampening coefficients if step size changed
-                if (
-                    old_steps is not None
-                    and old_steps != self._steps_per_day
-                    and self._dampening_coefficients is not None
-                ):
-                    _LOGGER.info(
-                        "Step size changed for %s (%s -> %s steps/day), invalidating dampening coefficients",
-                        self.provider_name,
-                        old_steps,
-                        self._steps_per_day,
-                    )
-                    self._dampening_coefficients = None
+        Uses UTC hour to avoid DST discontinuities in stored data.
+        """
+        return time.hour // DAMPENING_TOD_HOURS
 
     async def fill_orchestrators(self):
         """Return the orchestrators for the domain."""
@@ -524,10 +613,6 @@ class QSSolarProvider:
                     prev_successful_time = self._latest_successful_forecast_time
                     self._latest_update_time = time
                     self._latest_successful_forecast_time = time
-
-                    # Detect step size on first successful forecast
-                    if self.forecast_step_seconds is None:
-                        self._detect_step_size()
 
                     # Stale transition notification (Task 9)
                     if self._was_stale:
@@ -583,131 +668,191 @@ class QSSolarProvider:
         return v_aggregated
 
     def record_forecast_snapshot(self, time: datetime) -> None:
-        """Record current forecast into the 7-day history buffer for scoring/dampening."""
-        if self._steps_per_day is None or self.forecast_step_seconds is None:
-            return
+        """Record current forecast into the matching 2-hour rolling buffer.
+
+        Before appending, removes any existing buffer entries whose timestamp
+        falls within the new snapshot's range, preventing stale overlapping data.
+        """
         if not self.solar_forecast:
             return
 
-        # Initialize buffers on first call
-        if self._forecast_history is None:
-            self._forecast_history = np.full((DAMPENING_HISTORY_DAYS, self._steps_per_day), np.nan, dtype=np.float32)
-            self._actual_history = np.full((DAMPENING_HISTORY_DAYS, self._steps_per_day), np.nan, dtype=np.float32)
+        buf_idx = self._tod_buffer_index(time)
+        cutoff = time - timedelta(days=DAMPENING_BUFFER_DAYS)
 
-        # Check buffer shape matches current step size
-        if self._forecast_history.shape[1] != self._steps_per_day:
-            self._forecast_history = np.full((DAMPENING_HISTORY_DAYS, self._steps_per_day), np.nan, dtype=np.float32)
-            self._actual_history = np.full((DAMPENING_HISTORY_DAYS, self._steps_per_day), np.nan, dtype=np.float32)
-            self._history_day_index = 0
-
-        day_slot = self._history_day_index % DAMPENING_HISTORY_DAYS
-
-        # Clear the slot
-        self._forecast_history[day_slot, :] = np.nan
-
-        # Fill from current forecast
-        for ts, value in self.solar_forecast:
-            if ts is None or value is None:
-                continue
-            step_idx = self._time_to_step_index(ts)
-            if step_idx is not None and 0 <= step_idx < self._steps_per_day:
-                self._forecast_history[day_slot, step_idx] = value
-
-    def record_actual_production(self, time: datetime, actual_values: list[tuple[datetime, float]]) -> None:
-        """Record actual solar production into the history buffer."""
-        if self._steps_per_day is None or self.forecast_step_seconds is None:
-            return
-        if self._actual_history is None:
+        # Copy current forecast (strip None values)
+        snapshot: list[tuple[datetime, float]] = [
+            (ts, v) for ts, v in self.solar_forecast if ts is not None and v is not None
+        ]
+        if not snapshot:
             return
 
-        day_slot = self._history_day_index % DAMPENING_HISTORY_DAYS
-        self._actual_history[day_slot, :] = np.nan
+        # Remove existing entries that overlap with the new snapshot range
+        first_ts = snapshot[0][0]
+        buf = self._forecast_buffers[buf_idx]
+        buf = [(ts, v) for ts, v in buf if ts < first_ts and ts >= cutoff]
+        buf.extend(snapshot)
+        self._forecast_buffers[buf_idx] = buf
 
-        for ts, value in actual_values:
-            step_idx = self._time_to_step_index(ts)
-            if step_idx is not None and 0 <= step_idx < self._steps_per_day:
-                self._actual_history[day_slot, step_idx] = value
+    def reset_dampening_buffers(self) -> None:
+        """Clear dampening buffers (forecasts + coefficients). Actuals buffer is shared on QSSolar."""
+        self._forecast_buffers = [[] for _ in range(DAMPENING_NUM_TOD_BUFFERS)]
+        self._dampening_coefficients = None
+        self._dampening_coefficients_per_tod = {}
+        self.score_raw = None
+        self.score_dampened = None
 
-    def advance_history_day(self) -> None:
-        """Move to next day slot in the rolling buffer (call at midnight)."""
-        self._history_day_index += 1
+    @staticmethod
+    def _bootstrap_actuals_from_history(solar: QSSolar, time: datetime) -> None:
+        """On first startup with empty shared buffer, bootstrap from HA sensor history."""
+        if solar._actuals_buffer:
+            return
+        fallback = solar.get_historical_solar_fallback(time)
+        if fallback:
+            solar._actuals_buffer = list(fallback)
+            _LOGGER.info(
+                "Bootstrapped shared actuals buffer from historical data (%d points)",
+                len(solar._actuals_buffer),
+            )
 
     def compute_score(self) -> None:
-        """Compute MAE score over the 7-day window."""
-        if self._forecast_history is None or self._actual_history is None:
+        """Compute MAE scores using the current forecast and actuals buffer."""
+        if not self._actuals_buffer or not self.solar_forecast:
             return
 
-        # Raw score
-        self.score_raw = self._compute_mae(self._forecast_history, self._actual_history)
+        # Build forecast slot boundaries from current forecast
+        fc_times = [ts for ts, _ in self.solar_forecast if ts is not None]
+        if len(fc_times) < 2:
+            return
 
-        # Dampened score
-        if self.dampening_enabled and self._dampening_coefficients is not None:
-            dampened_forecasts = self._apply_dampening_to_array(self._forecast_history)
-            self.score_dampened = self._compute_mae(dampened_forecasts, self._actual_history)
+        # Align actuals onto forecast slots
+        aligned_actuals = align_time_series_on_time_slots(self._actuals_buffer, fc_times)
+        aligned_forecast = align_time_series_on_time_slots(
+            [(ts, v) for ts, v in self.solar_forecast if ts is not None and v is not None],
+            fc_times,
+        )
 
-    def _compute_mae(self, forecasts: np.ndarray, actuals: np.ndarray) -> float | None:
-        """Compute MAE over daytime steps, excluding all-NaN steps."""
-        # Mask: valid where both have values and at least one is > 0
-        valid = ~np.isnan(forecasts) & ~np.isnan(actuals)
-        daytime = (forecasts > 0) | (actuals > 0)
-        mask = valid & daytime
+        if not aligned_actuals or not aligned_forecast:
+            return
 
-        if not np.any(mask):
+        # Compute raw MAE (undampened forecast vs actuals)
+        self.score_raw = self._compute_mae_from_aligned(aligned_forecast, aligned_actuals)
+
+        # Compute dampened MAE (dampened forecast vs actuals)
+        if self._dampening_coefficients is not None:
+            dampened_fc = self._apply_dampening(self.solar_forecast)
+            dampened_fc_clean = [(ts, v) for ts, v in dampened_fc if ts is not None and v is not None]
+            aligned_dampened = align_time_series_on_time_slots(dampened_fc_clean, fc_times)
+            if aligned_dampened:
+                self.score_dampened = self._compute_mae_from_aligned(aligned_dampened, aligned_actuals)
+        else:
+            self.score_dampened = self.score_raw
+
+    @staticmethod
+    def _compute_mae_from_aligned(
+        forecast_aligned: list[tuple[datetime, float]],
+        actuals_aligned: list[tuple[datetime, float]],
+    ) -> float | None:
+        """Compute MAE from two aligned time series (same slot boundaries)."""
+        n = min(len(forecast_aligned), len(actuals_aligned))
+        if n == 0:
             return None
 
-        errors = np.abs(forecasts[mask] - actuals[mask])
+        errors = []
+        for i in range(n):
+            fv = forecast_aligned[i][1]
+            av = actuals_aligned[i][1]
+            # Only score daytime slots (at least one > 0)
+            if fv > 0 or av > 0:
+                errors.append(abs(fv - av))
+
+        if not errors:
+            return None
         return float(np.mean(errors))
 
-    def _apply_dampening_to_array(self, forecasts: np.ndarray) -> np.ndarray:
-        """Apply dampening coefficients to a forecast array."""
-        if self._dampening_coefficients is None:
-            return forecasts
-        if self._dampening_coefficients.shape[0] != forecasts.shape[1]:
-            return forecasts
-        result = np.copy(forecasts)
-        for k in range(result.shape[1]):
-            a_k, b_k = self._dampening_coefficients[k]
-            col = result[:, k]
-            valid = ~np.isnan(col)
-            col[valid] = np.maximum(0.0, a_k * col[valid] + b_k)
-        return result
-
     def compute_dampening(self, max_power: float) -> None:
-        """Compute MOS dampening coefficients from 7-day history."""
-        if self._forecast_history is None or self._actual_history is None or self._steps_per_day is None:
+        """Compute MOS dampening coefficients from rolling history buffers.
+
+        Selects the forecast buffer closest to the current time-of-day,
+        shifts historical timestamps to align with today's forecast,
+        and computes per-slot linear regression coefficients.
+        """
+        if not self.solar_forecast or not self._actuals_buffer:
             return
 
-        coeffs = np.ones((self._steps_per_day, 2), dtype=np.float64)
+        fc_times = [ts for ts, _ in self.solar_forecast if ts is not None]
+        if len(fc_times) < 2:
+            return
+
+        # All timestamps are UTC — consistent for storage and DST-safe
+        now = fc_times[0]
+        buf_idx = self._tod_buffer_index(now)
+        forecast_buf = self._forecast_buffers[buf_idx]
+
+        if not forecast_buf:
+            return
+
+        # Number of aligned slots = number of consecutive time-boundary pairs
+        num_slots = len(fc_times) - 1
+        coeffs = np.ones((num_slots, 2), dtype=np.float64)
         coeffs[:, 1] = 0.0  # identity: a=1, b=0
 
         b_bound = max_power * 0.3
 
-        for k in range(self._steps_per_day):
-            fc_col = self._forecast_history[:, k]
-            ac_col = self._actual_history[:, k]
+        # Group historical forecast data by day, shift to today, and align
+        today_date = now.date()
+        window_start = today_date - timedelta(days=DAMPENING_WINDOW_DAYS)
+        hist_days = self._group_by_day(forecast_buf)
 
-            valid = ~np.isnan(fc_col) & ~np.isnan(ac_col)
-            fc_valid = fc_col[valid]
-            ac_valid = ac_col[valid]
+        fc_values_per_slot: list[list[float]] = [[] for _ in range(num_slots)]
+        ac_values_per_slot: list[list[float]] = [[] for _ in range(num_slots)]
 
-            # Nighttime guard
-            if len(fc_valid) == 0 or (np.all(fc_valid == 0) and np.all(ac_valid == 0)):
+        for day_date, day_fc in hist_days.items():
+            if day_date == today_date or day_date < window_start:
+                continue
+            # Shift timestamps to today
+            day_offset = today_date - day_date
+            shifted_fc = [(ts + day_offset, v) for ts, v in day_fc]
+
+            # Align both onto current forecast time slots
+            aligned_fc = align_time_series_on_time_slots(shifted_fc, fc_times)
+            # For actuals, shift actuals from that day similarly
+            day_start = datetime.combine(day_date, datetime.min.time(), tzinfo=now.tzinfo)
+            day_end = day_start + timedelta(days=1)
+            day_actuals = [(ts, v) for ts, v in self._actuals_buffer if day_start <= ts < day_end]
+            if not day_actuals:
+                continue
+            shifted_actuals = [(ts + day_offset, v) for ts, v in day_actuals]
+            aligned_ac = align_time_series_on_time_slots(shifted_actuals, fc_times)
+
+            n = min(len(aligned_fc), len(aligned_ac), num_slots)
+            for k in range(n):
+                fc_values_per_slot[k].append(aligned_fc[k][1])
+                ac_values_per_slot[k].append(aligned_ac[k][1])
+
+        for k in range(num_slots):
+            fc_arr = np.array(fc_values_per_slot[k])
+            ac_arr = np.array(ac_values_per_slot[k])
+
+            if len(fc_arr) == 0:
                 continue
 
-            # Minimum data guard: need points where forecast > 0 or actual > 0
-            daytime_mask = (fc_valid > 0) | (ac_valid > 0)
+            # Nighttime guard
+            if np.all(fc_arr == 0) and np.all(ac_arr == 0):
+                continue
+
+            # Daytime filter
+            daytime_mask = (fc_arr > 0) | (ac_arr > 0)
             if np.sum(daytime_mask) < DAMPENING_MIN_DATA_POINTS:
                 continue
 
-            fc_fit = fc_valid[daytime_mask]
-            ac_fit = ac_valid[daytime_mask]
+            fc_fit = fc_arr[daytime_mask]
+            ac_fit = ac_arr[daytime_mask]
 
             try:
                 a_k, b_k = np.polyfit(fc_fit, ac_fit, deg=1)
-            except np.linalg.LinAlgError, ValueError:
+            except (np.linalg.LinAlgError, ValueError):
                 continue
 
-            # Coefficient bounds
             a_k = float(np.clip(a_k, DAMPENING_A_MIN, DAMPENING_A_MAX))
             b_k = float(np.clip(b_k, -b_bound, b_bound))
 
@@ -715,65 +860,21 @@ class QSSolarProvider:
             coeffs[k, 1] = b_k
 
         self._dampening_coefficients = coeffs
+        self._dampening_coefficients_per_tod[buf_idx] = coeffs
+        self._last_dampening_date = datetime.now(pytz.UTC)
 
-    def get_dampening_persistence_path(self) -> str | None:
-        """Return path for persisting dampening data."""
-        if self.solar is None or self.hass is None:
-            return None
-        storage_dir = join(self.hass.config.path(), DOMAIN)
-        safe_name = self.provider_name.replace(" ", "_").replace("/", "_")
-        return join(storage_dir, f"dampening_{safe_name}.npy")
-
-    async def save_dampening(self) -> None:
-        """Persist dampening coefficients and steps_per_day to disk."""
-        path = self.get_dampening_persistence_path()
-        if path is None or self._dampening_coefficients is None or self._steps_per_day is None:
-            return
-
-        storage_dir = join(self.hass.config.path(), DOMAIN)
-        await aiofiles.os.makedirs(storage_dir, exist_ok=True)
-
-        data = {
-            "coefficients": self._dampening_coefficients,
-            "steps_per_day": self._steps_per_day,
-        }
-
-        def _save(p, d):
-            np.save(p, d, allow_pickle=True)
-
-        await self.hass.async_add_executor_job(_save, path, data)
-
-    async def load_dampening(self) -> None:
-        """Load dampening coefficients from disk."""
-        path = self.get_dampening_persistence_path()
-        if path is None:
-            return
-
-        def _load(p):
-            return np.load(p, allow_pickle=True).item()
-
-        try:
-            data = await self.hass.async_add_executor_job(_load, path)
-        except OSError, ValueError, EOFError:
-            return
-
-        stored_steps = data.get("steps_per_day")
-        coeffs = data.get("coefficients")
-        if stored_steps is None or coeffs is None:
-            return
-
-        # Discard if step size doesn't match current provider resolution
-        if self._steps_per_day is not None and stored_steps != self._steps_per_day:
-            _LOGGER.info(
-                "Dampening data for %s has mismatched step size (%s vs %s), reinitializing",
-                self.provider_name,
-                stored_steps,
-                self._steps_per_day,
-            )
-            return
-
-        self._dampening_coefficients = coeffs
-        self._steps_per_day = stored_steps
+    @staticmethod
+    def _group_by_day(
+        time_series: list[tuple[datetime, float]],
+    ) -> dict[Any, list[tuple[datetime, float]]]:
+        """Group a time series by date."""
+        groups: dict[Any, list[tuple[datetime, float]]] = {}
+        for ts, v in time_series:
+            d = ts.date()
+            if d not in groups:
+                groups[d] = []
+            groups[d].append((ts, v))
+        return groups
 
     async def dump_for_debug(self, debug_path: str) -> None:
         storage_path = debug_path
@@ -830,7 +931,7 @@ class QSSolarProviderSolcast(QSSolarProvider):
                 orch = entry.runtime_data.coordinator
                 self.orchestrators.append(orch)
                 self._orchestrator_health[id(orch)] = True
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
 
     async def get_power_series_from_orchestrator(
@@ -916,7 +1017,7 @@ class QSSolarProviderForecastSolar(QSSolarProvider):
                 orch = entry.runtime_data
                 self.orchestrators.append(orch)
                 self._orchestrator_health[id(orch)] = True
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 _LOGGER.debug("Skipping config entry %s for %s: runtime_data not ready", entry.entry_id, self.domain)
 
     async def get_power_series_from_orchestrator(

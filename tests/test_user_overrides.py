@@ -18,7 +18,6 @@ Tests cover:
 from __future__ import annotations
 
 import datetime
-from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,9 +32,7 @@ from custom_components.quiet_solar.const import (
     DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
-from custom_components.quiet_solar.home_model.load import AbstractDevice
 from tests.factories import MinimalTestLoad, create_minimal_home_model
-
 
 # =============================================================================
 # AbstractDevice _user_originated CRUD

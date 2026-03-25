@@ -43,7 +43,10 @@ from tests.utils.scenario_builders import (
 
 def _make_car_steps(min_amps=7, max_amps=32, phases=3, voltage=230.0):
     """Create car charging power steps."""
-    return [LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * phases * voltage) for a in range(min_amps, max_amps + 1)]
+    return [
+        LoadCommand(command=CMD_CST_AUTO_CONSIGN, power_consign=a * phases * voltage)
+        for a in range(min_amps, max_amps + 1)
+    ]
 
 
 def _apply_cloud_cover(forecast, start_hour, end_hour, reduction_factor):
@@ -183,9 +186,7 @@ class TestSolverForecastChanges(TestCase):
 
         # Filler pool should get less energy than mandatory car under limited solar
         pool_result = [r for r in result if r[0] == pool]
-        pool_energy = calculate_energy_from_commands(
-            pool_result[0][1], self.end_time
-        ) if pool_result else 0.0
+        pool_energy = calculate_energy_from_commands(pool_result[0][1], self.end_time) if pool_result else 0.0
         assert car_energy >= pool_energy, (
             f"Mandatory car ({car_energy:.0f}Wh) should get at least as much "
             f"energy as filler pool ({pool_energy:.0f}Wh)"
@@ -379,12 +380,9 @@ class TestSolverForecastChanges(TestCase):
         # Under limited solar, ASAP car (highest priority) should get at least
         # as much energy as the lower-priority BEFORE_BATTERY_GREEN boiler
         boiler_result = [r for r in result if r[0] == boiler]
-        boiler_energy = calculate_energy_from_commands(
-            boiler_result[0][1], self.end_time
-        ) if boiler_result else 0.0
+        boiler_energy = calculate_energy_from_commands(boiler_result[0][1], self.end_time) if boiler_result else 0.0
         assert car_energy >= boiler_energy, (
-            f"ASAP car ({car_energy:.0f}Wh) should get at least as much "
-            f"energy as green boiler ({boiler_energy:.0f}Wh)"
+            f"ASAP car ({car_energy:.0f}Wh) should get at least as much energy as green boiler ({boiler_energy:.0f}Wh)"
         )
 
     def test_solver_sudden_cloud_cover_with_battery_backup(self):

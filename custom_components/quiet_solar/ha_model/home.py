@@ -70,6 +70,7 @@ from ..home_model.home_utils import (
     add_amps,
     diff_amps,
     get_average_time_series,
+    get_value_from_time_series,
     hungarian_algorithm,
     min_amps,
 )
@@ -78,7 +79,6 @@ from ..home_model.load import (
     AbstractLoad,
     PilotedDevice,
     extract_name_and_index_from_dashboard_section_option,
-    get_value_from_time_series,
 )
 from ..home_model.solver import PeriodSolver
 from ..ui.dashboard import generate_dashboard_yaml
@@ -2897,6 +2897,8 @@ class QSHome(QSDynamicGroup):
             time = datetime.now(pytz.UTC)
         if self._consumption_forecast:
             await self._consumption_forecast.reset_forecasts(time)
+        if self.solar_plant:
+            self.solar_plant.reset_dampening(time)
 
     async def light_reset_forecasts(self, time: datetime = None):
         if time is None:
