@@ -709,7 +709,7 @@ So that optimization always uses the most accurate forecast available, even when
 **And** `sensor.qs_solar_forecast_score_dampened_<provider>` shows accuracy with dampening
 **And** if dampening is disabled, the raw forecast is used directly
 
-### Story 3.13: Add Forecast.Solar Provider Support
+### Story 3.13: Add Forecast.Solar Provider Support — DONE
 
 As TheAdmin,
 I want Forecast.Solar to be available as a solar forecast provider alongside Solcast and Open-Meteo,
