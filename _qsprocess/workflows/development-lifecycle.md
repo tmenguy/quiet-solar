@@ -24,7 +24,7 @@ Creates a story artifact file and commits it on a feature branch `QS_N`.
 Sets up a worktree for parallel development.
 
 - Creates worktree via `scripts/worktree-setup.sh`
-- Outputs a `claude --name "QS_N: Title"` command for a fresh context
+- Outputs a launch command using `CLAUDE_LAUNCH_OPTS` from `scripts/qs/utils.py` (includes terminal title, standard options, and `--name`)
 - The implementation context is isolated from the main worktree
 
 ## Phase 3: Implementation (`/implement-story`)

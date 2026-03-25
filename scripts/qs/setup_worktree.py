@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from utils import get_main_worktree, get_worktree_dir, output_json, run_git
+from utils import claude_launch_command, get_main_worktree, get_worktree_dir, output_json, run_git
 
 
 def main() -> None:
@@ -75,7 +75,7 @@ def main() -> None:
     title = args.title or f"Issue #{issue}"
 
     # Build claude launch command
-    claude_cmd = f'cd "{work_dir}" && claude --name "QS_{issue}: {title}"'
+    claude_cmd = claude_launch_command(work_dir, issue, title)
     implement_prompt = f"/implement-story --issue {issue}"
     if story_file_rel:
         implement_prompt += f" --story-file {story_file_rel}"

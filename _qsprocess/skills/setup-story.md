@@ -20,10 +20,7 @@ python scripts/qs/setup_worktree.py {{issue_number}} --story-key "{{story_key}}"
 From the JSON output, show the user:
 
 1. **Worktree path** — where the code lives
-2. **Launch command** — copy-paste command to start a new Claude context:
-   ```
-   cd "{{worktree_path}}" && claude --name "QS_{{issue_number}}: {{title}}"
-   ```
+2. **Launch command** — use the `launch_command` field from the JSON output (it already includes terminal title, `CLAUDE_LAUNCH_OPTS`, and `--name`)
 3. **First prompt** — what to type in the new context:
    ```
    /implement-story --issue {{issue_number}} --story-file {{story_file}}

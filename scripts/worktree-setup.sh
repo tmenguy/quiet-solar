@@ -30,12 +30,6 @@ MAIN_BASENAME="$(basename "$MAIN_DIR")"
 WORKTREES_DIR="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
 WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
 
-# Check branch doesn't already exist
-if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
-    echo "Error: Branch ${BRANCH} already exists"
-    exit 1
-fi
-
 # Check worktree doesn't already exist
 if [ -d "$WORKTREE_DIR" ]; then
     echo "Error: Worktree directory ${WORKTREE_DIR} already exists"
@@ -45,9 +39,14 @@ fi
 # Create worktrees parent directory if needed
 mkdir -p "$WORKTREES_DIR"
 
-# Create worktree with new branch from main
-echo "Creating worktree at ${WORKTREE_DIR} on branch ${BRANCH}..."
-git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH"
+# Create worktree — reuse existing branch or create new one
+if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
+    echo "Creating worktree at ${WORKTREE_DIR} using existing branch ${BRANCH}..."
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
+else
+    echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH"
+fi
 
 # P2: Symlink venv using derived basename (not hardcoded)
 if [ -d "${MAIN_DIR}/venv" ]; then
@@ -65,7 +64,6 @@ if [ -d "${MAIN_DIR}/config" ]; then
         [ -e "$item" ] || continue
         name="$(basename "$item")"
         target="${WORKTREE_DIR}/config/${name}"
-        # Skip items that are tracked in git (already present in worktree)
         if echo "$TRACKED_CONFIG" | grep -q "^config/${name}$"; then
             continue
         fi

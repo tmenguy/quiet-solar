@@ -114,6 +114,19 @@ def find_story_file(story_key: str | None = None) -> Path | None:
     return story_files[0] if story_files else None
 
 
+CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
+
+
+def claude_launch_command(work_dir: str, issue: int, title: str) -> str:
+    """Build the full claude launch command with terminal title and standard options."""
+    tab_title = f"QS_{issue}: {title}"
+    return (
+        f'printf "\\e]0;{tab_title}\\a" && '
+        f'cd "{work_dir}" && '
+        f'claude {CLAUDE_LAUNCH_OPTS} --name "{tab_title}"'
+    )
+
+
 def detect_risk_level(changed_files: list[str]) -> list[str]:
     """Determine risk levels from changed file paths."""
     risk_map = {

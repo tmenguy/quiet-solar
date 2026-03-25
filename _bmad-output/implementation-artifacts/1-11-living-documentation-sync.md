@@ -1,6 +1,6 @@
 # Story 1.11: Living Documentation Sync During Dev Lifecycle
 
-Status: ready-for-dev
+Status: dev-complete
 
 issue: 46
 branch: "QS_46"
@@ -52,42 +52,42 @@ So that the story artifact, architecture, and project rules stay aligned with re
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add inline doc-impact detection instructions to `/implement-story` skill (AC: #1)
-  - [ ] 1.1 Edit `_qsprocess/skills/implement-story.md` to add an "Inline Doc-Sync" guidance section between Step 2 (BMad dev-story) and Step 3 (Final quality gate)
-  - [ ] 1.2 The guidance instructs the agent: when the user provides direction that changes scope, acceptance criteria, technical approach, or tasks — flag it, propose edits to the story artifact, wait for approval, apply if accepted
-  - [ ] 1.3 Secondary docs (architecture.md, project-rules.md, project-context.md) are mentioned only when the change is structural, not for every small adjustment
+- [x] Task 1: Add inline doc-impact detection instructions to `/implement-story` skill (AC: #1)
+  - [x] 1.1 Edit `_qsprocess/skills/implement-story.md` to add an "Inline Doc-Sync" guidance section between Step 2 (BMad dev-story) and Step 3 (Final quality gate)
+  - [x] 1.2 The guidance instructs the agent: when the user provides direction that changes scope, acceptance criteria, technical approach, or tasks — flag it, propose edits to the story artifact, wait for approval, apply if accepted
+  - [x] 1.3 Secondary docs (architecture.md, project-rules.md, project-context.md) are mentioned only when the change is structural, not for every small adjustment
 
-- [ ] Task 2: Add inline doc-impact detection instructions to `/review-story` skill (AC: #2, #3)
-  - [ ] 2.1 Edit `_qsprocess/skills/review-story.md` Step 4 (Process each unresolved comment) to add "doc-update" as a fifth action alongside fix/discuss/reject/skip
-  - [ ] 2.2 The "doc-update" action: agent proposes specific edits to the story artifact (or other docs), TheDev approves, changes are applied and committed
-  - [ ] 2.3 Add guidance for adversarial review findings (from `/bmad-code-review`): when a finding reveals a spec gap, the agent flags the doc impact alongside the code finding
+- [x] Task 2: Add inline doc-impact detection instructions to `/review-story` skill (AC: #2, #3)
+  - [x] 2.1 Edit `_qsprocess/skills/review-story.md` Step 4 (Process each unresolved comment) to add "doc-update" as a fifth action alongside fix/discuss/reject/skip
+  - [x] 2.2 The "doc-update" action: agent proposes specific edits to the story artifact (or other docs), TheDev approves, changes are applied and committed
+  - [x] 2.3 Add guidance for adversarial review findings (from `/bmad-code-review`): when a finding reveals a spec gap, the agent flags the doc impact alongside the code finding
 
-- [ ] Task 3: Add compound doc-sync step to `/implement-story` (AC: #4, #7)
-  - [ ] 3.1 Add a new Step 3.5 "Compound Doc-Sync" between current Step 3 (quality gate) and Step 4 (commit)
-  - [ ] 3.2 The step reviews all user direction given during the session, all implementation decisions that deviated from the original spec, and any new information discovered
-  - [ ] 3.3 Proposes a consolidated list of story artifact updates (AC adjustments, task modifications, dev notes)
-  - [ ] 3.4 Optionally proposes architecture.md or project-rules.md updates if implementation revealed structural gaps
-  - [ ] 3.5 TheDev approves/rejects each item; approved changes are applied and included in the commit
+- [x] Task 3: Add compound doc-sync step to `/implement-story` (AC: #4, #7)
+  - [x] 3.1 Add a new Step 3.5 "Compound Doc-Sync" between current Step 3 (quality gate) and Step 4 (commit)
+  - [x] 3.2 The step reviews all user direction given during the session, all implementation decisions that deviated from the original spec, and any new information discovered
+  - [x] 3.3 Proposes a consolidated list of story artifact updates (AC adjustments, task modifications, dev notes)
+  - [x] 3.4 Optionally proposes architecture.md or project-rules.md updates if implementation revealed structural gaps
+  - [x] 3.5 TheDev approves/rejects each item; approved changes are applied and included in the commit
 
-- [ ] Task 4: Add compound doc-sync step to `/review-story` (AC: #5, #7)
-  - [ ] 4.1 Add a new Step 4.5 "Compound Doc-Sync" after Step 4 (process comments) and before Step 5 (output finish command)
-  - [ ] 4.2 Same mechanism as Task 3 but also incorporates review findings (GitHub comments, adversarial review, Copilot feedback)
-  - [ ] 4.3 TheDev approves/rejects; approved changes committed and pushed
+- [x] Task 4: Add compound doc-sync step to `/review-story` (AC: #5, #7)
+  - [x] 4.1 Add a new Step 4.5 "Compound Doc-Sync" after Step 4 (process comments) and before Step 5 (output finish command)
+  - [x] 4.2 Same mechanism as Task 3 but also incorporates review findings (GitHub comments, adversarial review, Copilot feedback)
+  - [x] 4.3 TheDev approves/rejects; approved changes committed and pushed
 
-- [ ] Task 5: Add mandatory doc-sync gate to `/finish-story` (AC: #6, #7)
-  - [ ] 5.1 Add a new Step 0.5 "Mandatory Doc-Sync Gate" before Step 1 (quality gate) in `_qsprocess/skills/finish-story.md`
-  - [ ] 5.2 The gate reads the story artifact and compares acceptance criteria against actual implementation (files changed, tests present, behavior delivered)
-  - [ ] 5.3 Flags discrepancies: ACs not covered by tests, tasks marked done but not implemented, scope changes not reflected in the doc
-  - [ ] 5.4 TheDev must resolve each discrepancy (update doc or explain why it's fine) before merge proceeds
-  - [ ] 5.5 Include `_bmad-output/` in the git add for the commit step so doc changes are captured
+- [x] Task 5: Add mandatory doc-sync gate to `/finish-story` (AC: #6, #7)
+  - [x] 5.1 Add a new Step 0.5 "Mandatory Doc-Sync Gate" before Step 1 (quality gate) in `_qsprocess/skills/finish-story.md`
+  - [x] 5.2 The gate uses `scripts/qs/doc_sync.py` to compare story artifact against git diff, plus manual agent review
+  - [x] 5.3 Flags discrepancies: ACs not covered by tests, tasks marked done but not implemented, scope changes not reflected in the doc
+  - [x] 5.4 TheDev must resolve each discrepancy (update doc or explain why it's fine) before merge proceeds
+  - [x] 5.5 Include `_bmad-output/`, `_qsprocess/`, `scripts/` in the git add for the commit step so doc and script changes are captured
 
-- [ ] Task 6: Update project-context.md development lifecycle section (AC: all)
-  - [ ] 6.1 Add a brief note in the Development Lifecycle section of `_bmad-output/project-context.md` mentioning that doc-sync is built into implement/review/finish skills
-  - [ ] 6.2 Keep it concise — one or two sentences, not a full explanation
+- [x] Task 6: Update project-context.md development lifecycle section (AC: all)
+  - [x] 6.1 Add a brief note in the Development Lifecycle section of `_bmad-output/project-context.md` mentioning that doc-sync is built into implement/review/finish skills
+  - [x] 6.2 Keep it concise — one or two sentences, not a full explanation
 
-- [ ] Task 7: Mirror skill changes to Cursor (AC: all)
-  - [ ] 7.1 Ensure any skill file changes in `_qsprocess/skills/` are the canonical source (Claude and Cursor both read from there)
-  - [ ] 7.2 If any BMad skill workflows were modified (in `.claude/skills/`), mirror to `.cursor/skills/` for dual-tool compatibility
+- [x] Task 7: Mirror skill changes to Cursor (AC: all)
+  - [x] 7.1 Ensure any skill file changes in `_qsprocess/skills/` are the canonical source (Claude and Cursor both read from there) — confirmed, no BMad skills were modified
+  - [x] 7.2 If any BMad skill workflows were modified (in `.claude/skills/`), mirror to `.cursor/skills/` for dual-tool compatibility — N/A, no BMad skills modified
 
 ## Dev Notes
 
@@ -132,9 +132,26 @@ Story 1.8 (AI-Assisted PR Review) followed the same pattern: process/tooling sto
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+N/A — process/tooling story, no code debugging needed
 
 ### Completion Notes List
+- Added inline doc-sync (Step 2.5) to both implement-story and review-story skills
+- Added compound doc-sync (Steps 3.5 and 4.5) to implement-story and review-story respectively
+- Added mandatory doc-sync gate (Step 0.5) to finish-story skill
+- Added "doc-update" as fifth action in review-story comment processing
+- Added adversarial review doc-impact guidance to review-story
+- Created `scripts/qs/doc_sync.py` script for automated story-vs-implementation comparison (used by finish-story gate)
+- Updated git add in implement-story and finish-story to include `_qsprocess/` and `scripts/`
+- Updated project-context.md with doc-sync lifecycle note
+- User direction: favored scriptable checks over pure instructions where possible
 
 ### File List
+- `_qsprocess/skills/implement-story.md` — added Step 2.5 (inline doc-sync) + Step 3.5 (compound doc-sync) + expanded git add
+- `_qsprocess/skills/review-story.md` — added Step 2.5 (inline doc-sync) + doc-update action + adversarial guidance + Step 4.5 (compound doc-sync)
+- `_qsprocess/skills/finish-story.md` — added Step 0.5 (mandatory doc-sync gate with script) + expanded git add
+- `scripts/qs/doc_sync.py` — new script: parses story artifact, compares against git diff, reports discrepancies
+- `_bmad-output/project-context.md` — added doc-sync note to Development Lifecycle section
+- `_bmad-output/implementation-artifacts/1-11-living-documentation-sync.md` — updated tasks to done + dev agent record

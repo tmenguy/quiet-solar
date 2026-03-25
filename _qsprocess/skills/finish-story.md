@@ -9,6 +9,24 @@ Final quality gate, merge PR, clean up worktree, update epics.
 
 ## Steps
 
+### 0.5. Mandatory doc-sync gate
+
+Before anything else, run the automated doc-sync check:
+
+```bash
+python scripts/qs/doc_sync.py {{story_file}} --base-branch main
+```
+
+This compares the story artifact's tasks, acceptance criteria, and dev notes against the actual git diff. Review its output, then:
+
+1. **For each discrepancy**: present it to the user with context
+2. **User resolves each**: update the doc, or explain why the discrepancy is acceptable
+3. **Apply approved changes** and stage them (`_bmad-output/` is included in the commit step)
+
+Also do a manual read of the story artifact to catch anything the script can't — e.g., ACs whose intent doesn't match the implementation, or dev notes that are stale.
+
+This gate is **mandatory** — do NOT proceed to merge until all discrepancies are resolved.
+
 ### 1. Final quality gate
 
 ```bash
@@ -20,7 +38,7 @@ If it fails, fix issues before proceeding. Do NOT skip.
 ### 2. Push any remaining changes
 
 ```bash
-git add custom_components/ tests/ _bmad-output/ && git status
+git add custom_components/ tests/ _bmad-output/ _qsprocess/ scripts/ && git status
 ```
 
 If there are uncommitted changes, ask the user to confirm, then commit and push:
