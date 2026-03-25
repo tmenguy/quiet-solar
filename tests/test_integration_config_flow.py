@@ -78,10 +78,12 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
+    CONF_SOLAR_PROVIDER_DOMAIN,
     DASHBOARD_NO_SECTION,
     DATA_HANDLER,
     DEVICE_TYPE,
     DOMAIN,
+    FORECAST_SOLAR_DOMAIN,
     OPEN_METEO_SOLAR_DOMAIN,
     SOLCAST_SOLAR_DOMAIN,
     CONF_TYPE_NAME_QSClimateDuration,
@@ -1764,3 +1766,119 @@ async def test_get_common_schema_measured_power_placeholder_absent(
     )
 
     assert placeholders[f"measured_{CONF_POWER}"] == "-- W"
+
+
+@pytest.mark.asyncio
+async def test_options_solar_step_forecast_solar_option_appears(
+    hass: HomeAssistant,
+):
+    """Test that Forecast.Solar appears as a provider option when its config entries exist."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_solar_fs_option",
+        data={
+            CONF_NAME: "Test Solar FS",
+            DEVICE_TYPE: QSSolar.conf_type_name,
+            CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.pv_power",
+            CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 6000,
+            CONF_SOLAR_MAX_PHASE_AMPS: 25,
+        },
+        title="solar: Test Solar FS",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "sensor.pv_power",
+        "3000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+
+    # Register a forecast_solar config entry so async_entries returns it
+    fs_entry = MockConfigEntry(
+        domain=FORECAST_SOLAR_DOMAIN,
+        entry_id="forecast_solar_1",
+        data={},
+        title="Forecast.Solar",
+    )
+    fs_entry.add_to_hass(hass)
+
+    # Also set up solcast so there are multiple options
+    hass.data[SOLCAST_SOLAR_DOMAIN] = {"some_key": True}
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_solar()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_SOLAR_FORECAST_PROVIDERS)
+
+    # Extract the SelectSelector config to inspect available options
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_SOLAR_FORECAST_PROVIDERS:
+            sel = schema.schema[key]
+            option_values = [opt["value"] for opt in sel.config["options"]]
+            assert FORECAST_SOLAR_DOMAIN in option_values
+            assert SOLCAST_SOLAR_DOMAIN in option_values
+            break
+    else:
+        pytest.fail("CONF_SOLAR_FORECAST_PROVIDERS key not found in schema")
+
+
+@pytest.mark.asyncio
+async def test_options_solar_step_forecast_provider_filtered_when_unavailable(
+    hass: HomeAssistant,
+):
+    """Test that saved providers are filtered from default when no longer installed."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_solar_filter_prov",
+        data={
+            CONF_NAME: "Test Solar Filter",
+            DEVICE_TYPE: QSSolar.conf_type_name,
+            CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR: "sensor.pv_power",
+            CONF_SOLAR_MAX_OUTPUT_POWER_VALUE: 6000,
+            CONF_SOLAR_MAX_PHASE_AMPS: 25,
+            # New dict-format providers: solcast + forecast_solar saved
+            CONF_SOLAR_FORECAST_PROVIDERS: [
+                {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN},
+                {CONF_SOLAR_PROVIDER_DOMAIN: FORECAST_SOLAR_DOMAIN},
+            ],
+        },
+        title="solar: Test Solar Filter",
+    )
+    config_entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "sensor.pv_power",
+        "3000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+
+    # Only solcast is available; forecast_solar has NO config entries
+    hass.data[SOLCAST_SOLAR_DOMAIN] = {"some_key": True}
+    # (no forecast_solar entries registered, no open_meteo data)
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_solar()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_SOLAR_FORECAST_PROVIDERS)
+
+    for key in schema.schema:
+        if getattr(key, "schema", None) == CONF_SOLAR_FORECAST_PROVIDERS:
+            # forecast_solar was saved but is not installed, so filtered out
+            assert key.description == {"suggested_value": [SOLCAST_SOLAR_DOMAIN]}
+            break
+    else:
+        pytest.fail("CONF_SOLAR_FORECAST_PROVIDERS key not found in schema")

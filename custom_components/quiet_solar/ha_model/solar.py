@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import pickle
 from abc import abstractmethod
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
 from os.path import join
@@ -858,13 +858,14 @@ class QSSolarProviderSolcast(QSSolarProvider):
             if data[start_idx]["period_start"] != start_time:
                 start_idx -= 1
 
-        end_idx = bisect_left(data, end_time, key=itemgetter("period_start"))
-        if end_idx >= len(data):
-            end_idx = len(data) - 1
+        end_idx = bisect_right(data, end_time, key=itemgetter("period_start")) - 1
+        if end_idx < start_idx:
+            return []
 
         return [
             (d["period_start"].astimezone(tz=pytz.UTC), 1000.0 * d["pv_estimate"])
             for d in data[start_idx : end_idx + 1]
+            if d["pv_estimate"] is not None
         ]
 
 
@@ -875,6 +876,8 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
     ) -> list[tuple[datetime | None, str | float | None]]:
+        if orchestrator.data is None:
+            return []
         data = orchestrator.data.watts
         if start_time is None or end_time is None:
             return []
@@ -892,11 +895,11 @@ class QSSolarProviderOpenWeather(QSSolarProvider):
             if data[start_idx][0] != start_time:
                 start_idx -= 1
 
-        end_idx = bisect_left(data, end_time, key=itemgetter(0))
-        if end_idx >= len(data):
-            end_idx = len(data) - 1
+        end_idx = bisect_right(data, end_time, key=itemgetter(0)) - 1
+        if end_idx < start_idx:
+            return []
 
-        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1]]
+        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1] if d[1] is not None]
 
 
 class QSSolarProviderForecastSolar(QSSolarProvider):
@@ -919,6 +922,8 @@ class QSSolarProviderForecastSolar(QSSolarProvider):
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
     ) -> list[tuple[datetime | None, str | float | None]]:
+        if orchestrator.data is None:
+            return []
         data = orchestrator.data.watts
         if start_time is None or end_time is None:
             return []
@@ -936,8 +941,8 @@ class QSSolarProviderForecastSolar(QSSolarProvider):
             if data[start_idx][0] != start_time:
                 start_idx -= 1
 
-        end_idx = bisect_left(data, end_time, key=itemgetter(0))
-        if end_idx >= len(data):
-            end_idx = len(data) - 1
+        end_idx = bisect_right(data, end_time, key=itemgetter(0)) - 1
+        if end_idx < start_idx:
+            return []
 
-        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1]]
+        return [(d[0].astimezone(tz=pytz.UTC), float(d[1])) for d in data[start_idx : end_idx + 1] if d[1] is not None]

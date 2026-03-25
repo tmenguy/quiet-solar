@@ -477,3 +477,44 @@ async def test_climate_duration_select_unload(
 
     # Entry should be unloaded or failed to unload (both are acceptable)
     assert climate_entry.state in (ConfigEntryState.NOT_LOADED, ConfigEntryState.FAILED_UNLOAD)
+
+
+# =============================================================================
+# Coverage: select.py line 175 - create_ha_select_for_QSSolar early return
+# =============================================================================
+
+
+def test_create_ha_select_for_qssolar_empty_providers():
+    """When device.solar_forecast_providers is empty, return an empty list.
+
+    Covers select.py line 175.
+    """
+    from unittest.mock import MagicMock
+
+    from custom_components.quiet_solar.select import create_ha_select_for_QSSolar
+
+    device = MagicMock()
+    device.solar_forecast_providers = {}
+
+    result = create_ha_select_for_QSSolar(device)
+
+    assert isinstance(result, list)
+    assert len(result) == 0
+
+
+def test_create_ha_select_for_qssolar_none_providers():
+    """When device.solar_forecast_providers is None (falsy), return an empty list.
+
+    Also covers select.py line 175.
+    """
+    from unittest.mock import MagicMock
+
+    from custom_components.quiet_solar.select import create_ha_select_for_QSSolar
+
+    device = MagicMock()
+    device.solar_forecast_providers = None
+
+    result = create_ha_select_for_QSSolar(device)
+
+    assert isinstance(result, list)
+    assert len(result) == 0

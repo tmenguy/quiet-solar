@@ -205,6 +205,20 @@ class TestForecastSolarDataExtraction:
 
         assert result == []
 
+    async def test_extract_none_coordinator_data(self):
+        """Test extraction when orchestrator.data is None."""
+        utc = pytz.UTC
+        t1 = datetime(2026, 3, 24, 10, 0, tzinfo=utc)
+        t2 = datetime(2026, 3, 24, 12, 0, tzinfo=utc)
+        coordinator = MagicMock()
+        coordinator.data = None
+        solar = _make_solar_mock()
+        provider = QSSolarProviderForecastSolar(solar=solar, provider_name="Forecast.Solar")
+
+        result = await provider.get_power_series_from_orchestrator(coordinator, t1, t2)
+
+        assert result == []
+
     async def test_extract_none_data(self):
         """Test extraction when watts is None."""
         utc = pytz.UTC
@@ -255,11 +269,13 @@ class TestForecastSolarDataExtraction:
         # Query window from t1 to t3
         result = await provider.get_power_series_from_orchestrator(coordinator, t1, t3)
 
-        # Should include t0 (before start but within lookback), t1, t2, t3
         values = [v for _, v in result]
         assert 500.0 in values
         assert 1200.0 in values
         assert 800.0 in values
+        # Out-of-range values must be excluded
+        assert 100.0 not in values
+        assert 300.0 not in values
 
     async def test_extract_start_beyond_data(self):
         """Test extraction returns empty when start is beyond all data."""
@@ -316,6 +332,24 @@ class TestForecastSolarDataExtraction:
         assert len(result) == 2
         assert result[0] == (t1, 500.0)
         assert result[1] == (t2, 1200.0)
+
+    async def test_extract_end_before_start_in_data(self):
+        """Test extraction returns empty when end_time is before first data point."""
+        utc = pytz.UTC
+        t1 = datetime(2026, 3, 24, 10, 0, tzinfo=utc)
+        t2 = datetime(2026, 3, 24, 11, 0, tzinfo=utc)
+        watts = {t1: 500, t2: 1200}
+
+        coordinator = _make_coordinator(watts)
+        solar = _make_solar_mock()
+        provider = QSSolarProviderForecastSolar(solar=solar, provider_name="Forecast.Solar")
+
+        early = datetime(2026, 3, 24, 8, 0, tzinfo=utc)
+        result = await provider.get_power_series_from_orchestrator(
+            coordinator, early, datetime(2026, 3, 24, 9, 0, tzinfo=utc)
+        )
+
+        assert result == []
 
     async def test_extract_unsorted_dict_becomes_sorted(self):
         """Test that an unordered watts dict is sorted by time."""
