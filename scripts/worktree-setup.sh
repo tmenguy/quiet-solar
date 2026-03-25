@@ -55,10 +55,25 @@ if [ -d "${MAIN_DIR}/venv" ]; then
     echo "Symlinked venv"
 fi
 
-# P2: Symlink config using derived basename
+# P2: Symlink config contents using derived basename
+# config/ may already exist as a directory (git creates it for tracked files like configuration.yaml).
+# Symlink each non-git item inside config/ individually, same pattern as custom_components/.
 if [ -d "${MAIN_DIR}/config" ]; then
-    ln -s "../../${MAIN_BASENAME}/config" "${WORKTREE_DIR}/config"
-    echo "Symlinked config"
+    mkdir -p "${WORKTREE_DIR}/config"
+    TRACKED_CONFIG="$(git -C "$MAIN_DIR" ls-files -- config/)"
+    for item in "${MAIN_DIR}/config"/*; do
+        [ -e "$item" ] || continue
+        name="$(basename "$item")"
+        target="${WORKTREE_DIR}/config/${name}"
+        # Skip items that are tracked in git (already present in worktree)
+        if echo "$TRACKED_CONFIG" | grep -q "^config/${name}$"; then
+            continue
+        fi
+        if [ ! -e "$target" ]; then
+            ln -s "../../../${MAIN_BASENAME}/config/${name}" "$target"
+            echo "Symlinked config/${name}"
+        fi
+    done
 fi
 
 # Symlink non-git custom_components using derived basename
