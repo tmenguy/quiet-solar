@@ -265,7 +265,16 @@ class QSButtonEntity(QSDeviceEntity, ButtonEntity):
         _LOGGER.info("QSButtonEntity:async_press : %s on %s", self.entity_description.key, self.device.name)
         await self.entity_description.async_press(self)
         if self.device.home:
-            await self.device.home.force_update_all()
+            try:
+                await self.device.home.force_update_all()
+            except Exception as e:
+                _LOGGER.error(
+                    "async_press: force_update_all failed for %s on %s: %s",
+                    self.entity_description.key,
+                    self.device.name,
+                    e,
+                    exc_info=True,
+                )
 
     @callback
     def async_update_callback(self, time: datetime) -> None:

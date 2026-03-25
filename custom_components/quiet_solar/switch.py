@@ -103,7 +103,7 @@ def create_ha_switch_for_QSSolar(device: QSSolar):
 
         dampening_description = QSSwitchEntityDescription(
             key=key,
-            translation_key=key,
+            name=f"Dampening ({provider_name})",
             async_switch=_set_dampening,
         )
         entities.append(
@@ -245,7 +245,16 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         self._set_availabiltiy()
         self.async_write_ha_state()
         if self.device.home and not for_init:
-            await self.device.home.force_update_all()
+            try:
+                await self.device.home.force_update_all()
+            except Exception as e:
+                _LOGGER.error(
+                    "async_turn_on: force_update_all failed for %s on %s: %s",
+                    self.entity_description.key,
+                    self.device.name,
+                    e,
+                    exc_info=True,
+                )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
 
@@ -262,7 +271,16 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
         self._set_availabiltiy()
         self.async_write_ha_state()
         if self.device.home and not for_init:
-            await self.device.home.force_update_all()
+            try:
+                await self.device.home.force_update_all()
+            except Exception as e:
+                _LOGGER.error(
+                    "async_turn_off: force_update_all failed for %s on %s: %s",
+                    self.entity_description.key,
+                    self.device.name,
+                    e,
+                    exc_info=True,
+                )
 
 
 class QSSwitchEntityWithRestore(QSSwitchEntity, RestoreEntity):

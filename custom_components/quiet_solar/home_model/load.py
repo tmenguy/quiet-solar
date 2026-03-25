@@ -115,7 +115,7 @@ class AbstractDevice:
         device_type = self.device_type
 
         if self._conf_dashboard_section_option is None and device_type is not None:
-            self._conf_dashboard_section_option = LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.get(type)
+            self._conf_dashboard_section_option = LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.get(device_type)
 
         if self._conf_dashboard_section_option is None:
             self._conf_dashboard_section_option = DASHBOARD_NO_SECTION

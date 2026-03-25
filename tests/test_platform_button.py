@@ -295,3 +295,28 @@ async def test_async_unload_entry_handles_exception(fake_hass, mock_config_entry
     result = await async_unload_entry(fake_hass, mock_config_entry)
 
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_qs_button_entity_press_force_update_all_exception():
+    """Test button press logs error when force_update_all raises."""
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+    mock_home = MagicMock()
+    mock_home.force_update_all = AsyncMock(side_effect=RuntimeError("update failed"))
+    mock_device = create_mock_device("test", home=mock_home)
+
+    mock_description = QSButtonEntityDescription(
+        key="test_button",
+        translation_key="test",
+        async_press=AsyncMock(),
+    )
+
+    button = QSButtonEntity(mock_handler, mock_device, mock_description)
+
+    with patch("custom_components.quiet_solar.button._LOGGER") as mock_logger:
+        await button.async_press()
+
+    mock_home.force_update_all.assert_awaited_once()
+    mock_logger.error.assert_called_once()
+    assert "force_update_all failed" in mock_logger.error.call_args[0][0]

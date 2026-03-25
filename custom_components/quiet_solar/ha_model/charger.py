@@ -400,10 +400,17 @@ class QSChargerStatus:
             try_amps = from_amp * 3
             to_phase = 1
 
+        if not self.possible_amps:
+            return 0, to_phase, self.get_amps_from_values(0, to_phase)
+
         try_amps = min(try_amps, self.possible_amps[-1] + delta_for_borders)
         if from_amp > 0:
             if self.possible_amps[0] == 0:
-                try_amps = max(try_amps, self.possible_amps[1] + delta_for_borders)  # will be decreased/increased later
+                if len(self.possible_amps) > 1:
+                    try_amps = max(
+                        try_amps, self.possible_amps[1] + delta_for_borders
+                    )  # will be decreased/increased later
+                # else: only [0] available, keep try_amps as-is (charger can only stay off)
             else:
                 try_amps = max(try_amps, self.possible_amps[0] + delta_for_borders)  # will be decreased/increased later
 
@@ -415,8 +422,9 @@ class QSChargerStatus:
         self, allow_state_change=True, allow_phase_change=False, increase=True
     ) -> tuple[float | None, int]:
 
-        if self.budgeted_amp is None:
-            return None, self.possible_num_phases[-1]
+        if self.budgeted_amp is None or not self.possible_amps or not self.possible_num_phases:
+            default_num_phases = 3 if self.charger.physical_3p else 1
+            return None, self.possible_num_phases[-1] if self.possible_num_phases else default_num_phases
 
         def _try_amp_decrease(self, amp, allow_state_change):
             next_amp = None
@@ -962,7 +970,9 @@ class QSChargerGroup:
             # the best one is not charging
             # if actionable_chargers[0].possible_amps[0] is not 0: ... it will be started by nature right after in the normal _do_prepare_budgets_for_algo
             if actionable_chargers[0].current_real_max_charging_amp == 0 and (
-                actionable_chargers[0].possible_amps[0] == 0 and len(actionable_chargers[0].possible_amps) > 1
+                actionable_chargers[0].possible_amps
+                and actionable_chargers[0].possible_amps[0] == 0
+                and len(actionable_chargers[0].possible_amps) > 1
             ):
                 do_try_to_stop_other_chargers = True
                 _LOGGER.debug(
@@ -986,7 +996,7 @@ class QSChargerGroup:
                         and actionable_chargers[i].can_be_started_and_stopped
                     ):
                         # pick the last possible ones
-                        if actionable_chargers[i].possible_amps[0] == 0:
+                        if actionable_chargers[i].possible_amps and actionable_chargers[i].possible_amps[0] == 0:
                             # we can stop it now
                             cs_to_stop_can_now = actionable_chargers[i]
                         else:
@@ -1429,6 +1439,16 @@ class QSChargerGroup:
         mandatory_amps = [0.0, 0.0, 0.0]
         has_phase_changes = False
         for cs in actionable_chargers:
+            if not cs.possible_amps or not cs.possible_num_phases:
+                _LOGGER.warning(
+                    "_do_prepare_budgets_for_algo: %s has empty possible_amps or possible_num_phases, defaulting to off",
+                    cs.name,
+                )
+                default_num_phases = 3 if cs.charger.physical_3p else 1
+                cs.budgeted_amp = 0
+                cs.budgeted_num_phases = default_num_phases
+                continue
+
             if do_reset_allocation:
                 # put the minimum values for the amps
                 cs.budgeted_amp = cs.possible_amps[0]
@@ -1549,7 +1569,9 @@ class QSChargerGroup:
                 for cs in actionable_chargers
                 if (cs.command.is_like_one_of_cmds([CMD_AUTO_GREEN_ONLY, CMD_AUTO_GREEN_CAP, CMD_AUTO_PRICE]))
             ]
-            shave_only_amps_cs = [cs for cs in actionable_chargers if cs.possible_amps[0] > cs.charger.min_charge]
+            shave_only_amps_cs = [
+                cs for cs in actionable_chargers if cs.possible_amps and cs.possible_amps[0] > cs.charger.min_charge
+            ]
 
             for cs_s in [really_stoppable_shave_cs, first_stoppable_shave_cs, shave_only_amps_cs, actionable_chargers]:
                 if possible_allotment_reached:
@@ -1558,6 +1580,8 @@ class QSChargerGroup:
                 while possible_allotment_reached is False:
                     has_shaved = False
                     for cs in cs_s:
+                        if not cs.possible_amps:
+                            continue
                         if cs.possible_amps[0] > 0:
                             # we can lower the charge by stopping it if needed
 
@@ -2245,6 +2269,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 _LOGGER.info(
                     f"get_stable_dynamic_charge_status: {self.name} CAP/GREEN_CONSIGN {cs.command} ({self.current_command}) {possible_amps} (can_change_state: {can_change_state} current_state: {current_state})"
                 )
+
+        if not possible_amps:
+            _LOGGER.warning("get_stable_dynamic_charge_status: %s empty possible_amps, defaulting to [0]", self.name)
+            possible_amps = [0]
+        if not possible_num_phases:
+            _LOGGER.warning(
+                "get_stable_dynamic_charge_status: %s empty possible_num_phases, defaulting to [%s]",
+                self.name,
+                cs.current_active_phase_number,
+            )
+            possible_num_phases = [cs.current_active_phase_number]
 
         cs.possible_amps = possible_amps
         cs.possible_num_phases = possible_num_phases

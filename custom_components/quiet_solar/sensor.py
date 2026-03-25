@@ -395,7 +395,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         score_key = f"{SENSOR_SOLAR_FORECAST_SCORE_PREFIX}{safe_name}"
         score_sensor = QSSensorEntityDescription(
             key=score_key,
-            translation_key=score_key,
+            name=f"Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key, prov=provider: prov.get_active_score(),
@@ -407,7 +407,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         raw_key = f"{SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX}{safe_name}"
         raw_sensor = QSSensorEntityDescription(
             key=raw_key,
-            translation_key=raw_key,
+            name=f"Raw Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key, prov=provider: prov.score_raw,
@@ -419,7 +419,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         dampened_key = f"{SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX}{safe_name}"
         dampened_sensor = QSSensorEntityDescription(
             key=dampened_key,
-            translation_key=dampened_key,
+            name=f"Dampened Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key, prov=provider: prov.score_dampened,

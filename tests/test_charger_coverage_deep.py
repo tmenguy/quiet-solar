@@ -6704,3 +6704,403 @@ class TestChargeTimeUserOriginatedFallback:
         # A timed constraint should have been created
         timed_cts = [c for c in charger._constraints if c is not None and c.from_user is True]
         assert len(timed_cts) >= 1
+
+
+# =============================================================================
+# Empty possible_amps defensive fallbacks
+# (lines 404, 1443-1450, 1584, 2274-2275, 2277-2282)
+# =============================================================================
+
+
+class TestGetAmpsPhaseSwitchEmptyPossibleAmps:
+    """Line 404: get_amps_phase_switch returns early when possible_amps is empty."""
+
+    def _cs_empty_amps(self):
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, is_3p=True)
+        car = _make_real_car(hass, home)
+        _init_charger_states(ch, num_phases=1)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
+        cs = QSChargerStatus(ch)
+        cs.possible_amps = []
+        cs.possible_num_phases = [1, 3]
+        return cs
+
+    def test_empty_amps_1_to_3_returns_zero(self):
+        """Line 404: from 1-phase with empty possible_amps returns (0, 3, amps_list)."""
+        cs = self._cs_empty_amps()
+        amp, to_phase, amps_list = cs.get_amps_phase_switch(12, 1)
+        assert amp == 0
+        assert to_phase == 3
+        assert amps_list == [0, 0, 0]
+
+    def test_empty_amps_3_to_1_returns_zero(self):
+        """Line 404: from 3-phase with empty possible_amps returns (0, 1, amps_list)."""
+        cs = self._cs_empty_amps()
+        amp, to_phase, amps_list = cs.get_amps_phase_switch(6, 3)
+        assert amp == 0
+        assert to_phase == 1
+        # mono_phase_index determines which element is nonzero; for empty amps all are 0
+        assert sum(amps_list) == 0
+
+    def test_none_possible_amps_1_to_3_returns_zero(self):
+        """Line 404: possible_amps=None (falsy) also triggers the early return."""
+        cs = self._cs_empty_amps()
+        cs.possible_amps = None
+        amp, to_phase, amps_list = cs.get_amps_phase_switch(15, 1)
+        assert amp == 0
+        assert to_phase == 3
+
+
+class TestPrepareBudgetsEmptyPossibleAmps:
+    """Lines 1443-1450: _do_prepare_budgets_for_algo defaults charger with empty possible_amps."""
+
+    def _setup(self, is_3p=False):
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="EmptyAmpsCharger", is_3p=is_3p)
+        car = _make_real_car(hass, home)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+        _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
+        _plug_car(ch, car, past)
+
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch._expected_charge_state.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+        cs.charge_score = 100
+        cs.can_be_started_and_stopped = True
+        return group, ch, cs, now
+
+    @pytest.mark.asyncio
+    async def test_empty_possible_amps_defaults_to_off(self):
+        """Lines 1443-1450: charger with empty possible_amps gets budgeted_amp=0."""
+        group, ch, cs, now = self._setup(is_3p=False)
+        cs.possible_amps = []
+        cs.possible_num_phases = [1]
+
+        current_amps, has_phase_changes, mandatory_amps = (
+            await group._do_prepare_budgets_for_algo([cs], do_reset_allocation=True)
+        )
+
+        assert cs.budgeted_amp == 0
+        # 1p charger -> default_num_phases = 1
+        assert cs.budgeted_num_phases == 1
+        # Empty-amps charger doesn't contribute to current_amps or mandatory_amps
+        assert current_amps == [0.0, 0.0, 0.0]
+        assert mandatory_amps == [0.0, 0.0, 0.0]
+
+    @pytest.mark.asyncio
+    async def test_empty_possible_num_phases_defaults_to_off(self):
+        """Lines 1442-1450: charger with empty possible_num_phases gets budgeted_amp=0."""
+        group, ch, cs, now = self._setup(is_3p=True)
+        cs.possible_amps = [0, 6, 7, 8]
+        cs.possible_num_phases = []
+
+        current_amps, has_phase_changes, mandatory_amps = (
+            await group._do_prepare_budgets_for_algo([cs], do_reset_allocation=True)
+        )
+
+        assert cs.budgeted_amp == 0
+        # 3p charger -> default_num_phases = 3
+        assert cs.budgeted_num_phases == 3
+
+    @pytest.mark.asyncio
+    async def test_3p_charger_empty_amps_defaults_3_phases(self):
+        """Lines 1447: physical_3p charger defaults to 3 phases when empty."""
+        group, ch, cs, now = self._setup(is_3p=True)
+        cs.possible_amps = []
+        cs.possible_num_phases = [1, 3]
+
+        await group._do_prepare_budgets_for_algo([cs], do_reset_allocation=False)
+
+        assert cs.budgeted_amp == 0
+        assert cs.budgeted_num_phases == 3
+
+    @pytest.mark.asyncio
+    async def test_empty_amps_mixed_with_normal_charger(self):
+        """Lines 1443-1450: one empty-amps charger alongside a normal one."""
+        hass = _make_hass()
+        home = _make_home()
+        ch1 = _create_charger(hass, home, name="NormalCh")
+        ch2 = _create_charger(hass, home, name="EmptyCh")
+        car1 = _make_real_car(hass, home, name="Car1")
+        car2 = _make_real_car(hass, home, name="Car2")
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        for ch in [ch1, ch2]:
+            _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
+            ch._do_update_charger_state = AsyncMock()
+            ch.is_charger_unavailable = MagicMock(return_value=False)
+            ch.is_not_plugged = MagicMock(return_value=False)
+            ch.get_median_sensor = MagicMock(return_value=500.0)
+            ch.get_current_active_constraint = MagicMock(return_value=None)
+            ch._expected_charge_state.last_change_asked = past
+            ch._ensure_correct_state = AsyncMock(return_value=True)
+
+        _plug_car(ch1, car1, past)
+        _plug_car(ch2, car2, past)
+
+        group = _make_charger_group(home, [ch1, ch2])
+        ch1.father_device.charger_group = group
+        ch2.father_device.charger_group = group
+
+        cs1 = QSChargerStatus(ch1)
+        cs1.current_real_max_charging_amp = 10
+        cs1.current_active_phase_number = 1
+        cs1.possible_amps = [0, 6, 7, 8, 9, 10]
+        cs1.possible_num_phases = [1]
+        cs1.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        cs2 = QSChargerStatus(ch2)
+        cs2.current_real_max_charging_amp = 10
+        cs2.current_active_phase_number = 1
+        cs2.possible_amps = []
+        cs2.possible_num_phases = [1]
+        cs2.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        current_amps, has_phase_changes, mandatory_amps = (
+            await group._do_prepare_budgets_for_algo([cs1, cs2], do_reset_allocation=True)
+        )
+
+        # cs2 should be defaulted to off
+        assert cs2.budgeted_amp == 0
+        assert cs2.budgeted_num_phases == 1
+        # cs1 should get normal budget
+        assert cs1.budgeted_amp == 0  # possible_amps[0] = 0 with reset
+
+
+class TestShaveMandatoryBudgetsEmptyPossibleAmps:
+    """Line 1584: _shave_mandatory_budgets skips chargers with empty possible_amps."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        ch1 = _create_charger(hass, home, name="EmptyAmpsCh")
+        ch2 = _create_charger(hass, home, name="NormalCh")
+        car1 = _make_real_car(hass, home, name="Car1")
+        car2 = _make_real_car(hass, home, name="Car2")
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        for ch in [ch1, ch2]:
+            _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
+            ch._do_update_charger_state = AsyncMock()
+            ch.is_charger_unavailable = MagicMock(return_value=False)
+            ch.is_not_plugged = MagicMock(return_value=False)
+            ch.get_median_sensor = MagicMock(return_value=500.0)
+            ch.get_current_active_constraint = MagicMock(return_value=None)
+            ch._expected_charge_state.last_change_asked = past
+            ch._ensure_correct_state = AsyncMock(return_value=True)
+
+        _plug_car(ch1, car1, past)
+        _plug_car(ch2, car2, past)
+
+        group = _make_charger_group(home, [ch1, ch2])
+        ch1.father_device.charger_group = group
+        ch2.father_device.charger_group = group
+
+        cs1 = QSChargerStatus(ch1)
+        cs1.current_real_max_charging_amp = 0
+        cs1.current_active_phase_number = 1
+        cs1.budgeted_amp = 0
+        cs1.budgeted_num_phases = 1
+        cs1.possible_amps = []  # empty: should be skipped at line 1584
+        cs1.possible_num_phases = [1]
+        cs1.charge_score = 50
+        cs1.can_be_started_and_stopped = True
+        cs1.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        cs2 = QSChargerStatus(ch2)
+        cs2.current_real_max_charging_amp = 10
+        cs2.current_active_phase_number = 1
+        cs2.budgeted_amp = 10
+        cs2.budgeted_num_phases = 1
+        cs2.possible_amps = [6, 7, 8, 9, 10]
+        cs2.possible_num_phases = [1]
+        cs2.charge_score = 100
+        cs2.can_be_started_and_stopped = True
+        cs2.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        return group, cs1, cs2, now
+
+    @pytest.mark.asyncio
+    async def test_empty_amps_charger_skipped_in_shave_loop(self):
+        """Line 1584: charger with empty possible_amps is skipped (continue) in shave loop."""
+        group, cs1, cs2, now = self._setup()
+
+        # Make mandatory_amps exceed acceptable so _shave_mandatory_budgets enters the loop
+        call_count = [0]
+
+        def _acceptable(**kwargs):
+            call_count[0] += 1
+            # First call: not acceptable (triggers shaving), then acceptable after some work
+            return call_count[0] > 3
+
+        group.dynamic_group.is_current_acceptable = MagicMock(side_effect=_acceptable)
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
+            return_value=(True, [0.0, 0.0, 0.0])
+        )
+
+        mandatory_amps = [20.0, 0.0, 0.0]
+        current_amps = [10.0, 0.0, 0.0]
+
+        result = await group._shave_mandatory_budgets(
+            [cs1, cs2], current_amps, mandatory_amps, now
+        )
+
+        # cs1 with empty possible_amps should have been skipped, cs2 should have been shaved
+        assert cs1.possible_amps == []  # unchanged: skipped at line 1584
+
+    @pytest.mark.asyncio
+    async def test_all_empty_amps_no_shaving_possible(self):
+        """Line 1584: when all chargers have empty possible_amps, no shaving occurs."""
+        group, cs1, cs2, now = self._setup()
+        cs2.possible_amps = []  # make both chargers have empty amps
+
+        group.dynamic_group.is_current_acceptable = MagicMock(return_value=False)
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
+            return_value=(False, [5.0, 0.0, 0.0])
+        )
+
+        mandatory_amps = [20.0, 0.0, 0.0]
+        current_amps = [10.0, 0.0, 0.0]
+
+        result = await group._shave_mandatory_budgets(
+            [cs1, cs2], current_amps, mandatory_amps, now
+        )
+
+        # Both skipped, mandatory_amps unchanged
+        assert result == [20.0, 0.0, 0.0]
+
+
+class TestGetStableDynamicChargeStatusEmptyPossibleAmps:
+    """Lines 2274-2275, 2277-2282: fallback when possible_amps/possible_num_phases are empty."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        charger = _create_charger(hass, home, is_3p=False)
+        car = _make_real_car(hass, home)
+        past = datetime.now(pytz.UTC) - timedelta(hours=2)
+        now = datetime.now(pytz.UTC)
+
+        _init_charger_states(charger, charge_state=True, amperage=10, num_phases=1)
+        _plug_car(charger, car, past)
+
+        charger.qs_enable_device = True
+        charger.is_not_plugged = MagicMock(return_value=False)
+        charger.is_charger_unavailable = MagicMock(return_value=False)
+        charger._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
+        charger.get_median_sensor = MagicMock(return_value=1000.0)
+        charger.get_current_active_constraint = MagicMock(return_value=None)
+        charger.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+
+        charger._expected_charge_state.last_change_asked = past
+        charger._expected_charge_state.last_time_set = past
+        charger._expected_num_active_phases.last_change_asked = past
+        charger._expected_num_active_phases.last_time_set = past
+
+        return hass, home, charger, car, now
+
+    def test_empty_possible_amps_defaults_to_zero(self):
+        """Lines 2274-2275: empty possible_amps defaults to [0]."""
+        *_, charger, car, now = self._setup()
+        # Use CMD_AUTO_FROM_CONSIGN with a mocked get_consign_amps_values
+        # that returns min_amps > max_charge, making range(...) empty
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=50000)
+
+        with patch.object(
+            QSChargerStatus,
+            "get_consign_amps_values",
+            return_value=([1], charger.max_charge + 1),
+        ):
+            cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert cs is not None
+        assert cs.possible_amps == [0]
+
+    def test_empty_possible_num_phases_defaults_to_current(self):
+        """Lines 2277-2282: empty possible_num_phases defaults to [current_active_phase_number]."""
+        *_, charger, car, now = self._setup()
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=50000)
+
+        # Return empty list for possible_num_phases and valid min_amps
+        with patch.object(
+            QSChargerStatus,
+            "get_consign_amps_values",
+            return_value=([], charger.min_charge),
+        ):
+            cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert cs is not None
+        # Should default to [current_active_phase_number] which is 1
+        assert cs.possible_num_phases == [1]
+
+    def test_both_empty_defaults(self):
+        """Lines 2274-2282: both possible_amps and possible_num_phases empty."""
+        *_, charger, car, now = self._setup()
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=50000)
+
+        # Return empty list for both
+        with patch.object(
+            QSChargerStatus,
+            "get_consign_amps_values",
+            return_value=([], charger.max_charge + 1),
+        ):
+            cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert cs is not None
+        assert cs.possible_amps == [0]
+        assert cs.possible_num_phases == [1]
+
+    def test_3p_charger_empty_num_phases_defaults_to_current_phase(self):
+        """Lines 2277-2282: 3p charger with current_active_phase_number=3."""
+        hass = _make_hass()
+        home = _make_home()
+        charger = _create_charger(hass, home, is_3p=True)
+        car = _make_real_car(hass, home)
+        past = datetime.now(pytz.UTC) - timedelta(hours=2)
+        now = datetime.now(pytz.UTC)
+
+        _init_charger_states(charger, charge_state=True, amperage=10, num_phases=3)
+        _plug_car(charger, car, past)
+
+        charger.qs_enable_device = True
+        charger.is_not_plugged = MagicMock(return_value=False)
+        charger.is_charger_unavailable = MagicMock(return_value=False)
+        charger._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
+        charger.get_median_sensor = MagicMock(return_value=1000.0)
+        charger.get_current_active_constraint = MagicMock(return_value=None)
+        charger.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        charger._expected_charge_state.last_change_asked = past
+        charger._expected_charge_state.last_time_set = past
+        charger._expected_num_active_phases.last_change_asked = past
+        charger._expected_num_active_phases.last_time_set = past
+
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=50000)
+
+        with patch.object(
+            QSChargerStatus,
+            "get_consign_amps_values",
+            return_value=([], charger.min_charge),
+        ):
+            cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert cs is not None
+        # current_active_phase_number is 3
+        assert cs.possible_num_phases == [3]
