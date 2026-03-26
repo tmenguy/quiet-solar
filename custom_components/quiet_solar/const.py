@@ -224,12 +224,10 @@ BINARY_SENSOR_HOME_PERSISTENCE_HEALTH = "qs_home_persistence_health"
 BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
-SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX = "qs_solar_forecast_score_dampened_"
-SENSOR_SOLAR_FORECAST_SCORE_NO_DAMPENING_PREFIX = "qs_solar_forecast_score_no_dampening_"
+SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
 SENSOR_SOLAR_ACTIVE_PROVIDER = "qs_solar_active_provider"
 
 SELECT_SOLAR_PROVIDER_MODE = "qs_solar_provider_mode"
-SWITCH_SOLAR_DAMPENING_PREFIX = "qs_solar_dampening_"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,

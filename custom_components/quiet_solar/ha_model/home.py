@@ -2898,7 +2898,7 @@ class QSHome(QSDynamicGroup):
         if self._consumption_forecast:
             await self._consumption_forecast.reset_forecasts(time)
         if self.solar_plant:
-            self.solar_plant.reset_dampening(time)
+            self.solar_plant.reset_scoring(time)
 
     async def light_reset_forecasts(self, time: datetime = None):
         if time is None:
@@ -4026,7 +4026,15 @@ class QSSolarHistoryVals:
             self._current_days = days
             self._current_values = [(time, value)]
         else:
-            self._current_values.append((time, value))
+            # ensure one value per timestamp in current interval, then keep chronological order
+            for i, (existing_time, _existing_value) in enumerate(self._current_values):
+                if existing_time == time:
+                    self._current_values[i] = (time, value)
+                    break
+            else:
+                self._current_values.append((time, value))
+
+            self._current_values.sort(key=lambda item: item[0])
 
         return something_done
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -23,7 +23,6 @@ from custom_components.quiet_solar.const import (
     SOLCAST_SOLAR_DOMAIN,
 )
 from custom_components.quiet_solar.ha_model.solar import (
-    DAMPENING_A_MAX,
     QSSolar,
     QSSolarProvider,
     QSSolarProviderOpenWeather,
@@ -198,8 +197,8 @@ class TestProviderSelection:
             {CONF_SOLAR_PROVIDER_DOMAIN: OPEN_METEO_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "B"},
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
-        solar.solar_forecast_providers["A"].score_raw = 500.0
-        solar.solar_forecast_providers["B"].score_raw = 200.0
+        solar.solar_forecast_providers["A"].score = 500.0
+        solar.solar_forecast_providers["B"].score = 200.0
         solar.set_provider_mode(SOLAR_PROVIDER_MODE_AUTO)
         solar.auto_select_best_provider()
         assert solar.active_provider_name == "B"
@@ -212,9 +211,9 @@ class TestProviderSelection:
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         now = datetime.datetime.now(pytz.UTC)
-        solar.solar_forecast_providers["A"].score_raw = 200.0
+        solar.solar_forecast_providers["A"].score = 200.0
         solar.solar_forecast_providers["A"]._latest_successful_forecast_time = now - timedelta(hours=2)
-        solar.solar_forecast_providers["B"].score_raw = 200.0
+        solar.solar_forecast_providers["B"].score = 200.0
         solar.solar_forecast_providers["B"]._latest_successful_forecast_time = now - timedelta(hours=1)
         solar.auto_select_best_provider()
         assert solar.active_provider_name == "B"
@@ -238,9 +237,9 @@ class TestProviderSelection:
         solar = _make_solar(fake_hass, providers_config=providers_config)
         now = datetime.datetime.now(pytz.UTC)
 
-        # No scores on any provider (score_raw = None by default)
-        assert solar.solar_forecast_providers["A"].score_raw is None
-        assert solar.solar_forecast_providers["B"].score_raw is None
+        # No scores on any provider (score = None by default)
+        assert solar.solar_forecast_providers["A"].score is None
+        assert solar.solar_forecast_providers["B"].score is None
 
         # A is fresh but older, B is fresher — both non-stale
         solar.solar_forecast_providers["A"]._latest_successful_forecast_time = now - timedelta(hours=2)
@@ -272,8 +271,8 @@ class TestProviderSelection:
         # Should pick "B" — "A" is stale and skipped
         assert solar.active_provider_name == "B"
 
-    def test_get_platforms_includes_select_switch(self, fake_hass):
-        """Test that solar with providers includes SELECT and SWITCH platforms."""
+    def test_get_platforms_includes_select(self, fake_hass):
+        """Test that solar with providers includes SELECT platform."""
         from homeassistant.const import Platform
 
         providers_config = [
@@ -282,7 +281,6 @@ class TestProviderSelection:
         solar = _make_solar(fake_hass, providers_config=providers_config)
         platforms = solar.get_platforms()
         assert Platform.SELECT in platforms
-        assert Platform.SWITCH in platforms
 
 
 # ============================================================================
@@ -417,204 +415,34 @@ class TestAccuracyScoring:
         provider = _TestProvider(solar=None, domain="test")
 
         t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
-        # Build forecast and actuals with known 200W difference
+        # Store a forecast snapshot, then compute score with known 200W difference
         provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(12)]
-        provider._actuals_buffer = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
+        provider.store_forecast_snapshot()
+        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
 
-        provider.compute_score()
-        assert provider.score_raw is not None
-        assert abs(provider.score_raw - 200.0) < 0.01
+        provider.compute_score(actuals)
+        assert provider.score is not None
+        assert abs(provider.score - 200.0) < 0.01
 
     def test_score_none_with_no_data(self):
         """Test score is None when no data available."""
         provider = _TestProvider(solar=None, domain="test")
-        provider.compute_score()
-        assert provider.score_raw is None
+        provider.compute_score([])
+        assert provider.score is None
 
-    def test_get_active_score_returns_dampened_when_enabled(self):
-        """Test get_active_score returns dampened score when enabled."""
+    def test_score_none_with_no_stored_forecast(self):
+        """Test score is None when no stored forecast."""
         provider = _TestProvider(solar=None, domain="test")
-        provider.score_raw = 300.0
-        provider.score_dampened = 150.0
-        provider.dampening_enabled = True
-        assert provider.get_active_score() == 150.0
+        t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
+        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
+        provider.compute_score(actuals)
+        assert provider.score is None
 
-    def test_get_active_score_returns_raw_when_disabled(self):
-        """Test get_active_score returns raw score when dampening disabled."""
+    def test_get_active_score_returns_score(self):
+        """Test get_active_score returns the score."""
         provider = _TestProvider(solar=None, domain="test")
-        provider.score_raw = 300.0
-        provider.dampening_enabled = False
+        provider.score = 300.0
         assert provider.get_active_score() == 300.0
-
-
-# ============================================================================
-# Task 7: Dampening — MOS linear correction
-# ============================================================================
-
-
-class TestDampening:
-    """Test MOS dampening computation and application."""
-
-    def test_compute_dampening_identity_for_nighttime(self):
-        """Test dampening produces identity (a=1, b=0) for all-zero nighttime steps."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 0.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        for day_offset in range(1, 8):
-            day = t0 - timedelta(days=day_offset)
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), 0.0))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 0.0))
-
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is not None
-        # num_slots = len(forecast) - 1 = 23 for a 24-entry forecast
-        # All should be identity since everything is zero (nighttime guard)
-        for k in range(len(provider._dampening_coefficients)):
-            assert provider._dampening_coefficients[k, 0] == 1.0
-            assert provider._dampening_coefficients[k, 1] == 0.0
-
-    def test_compute_dampening_identity_for_insufficient_data(self):
-        """Test dampening produces identity when fewer than 3 data points."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Only 2 days → 2 data points per slot, less than DAMPENING_MIN_DATA_POINTS (3)
-        for day_offset in range(1, 3):
-            day = t0 - timedelta(days=day_offset)
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), 1000.0))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 800.0))
-
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is not None
-        # num_slots = len(forecast) - 1 = 23; all identity due to insufficient data
-        for k in range(len(provider._dampening_coefficients)):
-            assert provider._dampening_coefficients[k, 0] == 1.0
-            assert provider._dampening_coefficients[k, 1] == 0.0
-
-    def test_compute_dampening_with_known_linear_data(self):
-        """Test dampening computes correct coefficients for known linear relationship."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # 7 days of data: actual = 0.8 * forecast + 100
-        for day_offset in range(1, 8):
-            day = t0 - timedelta(days=day_offset)
-            fc = 1000.0 + day_offset * 100
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), fc))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 0.8 * fc + 100))
-
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is not None
-        # Check a midday slot
-        a_k = provider._dampening_coefficients[12, 0]
-        b_k = provider._dampening_coefficients[12, 1]
-        assert abs(a_k - 0.8) < 0.01
-        assert abs(b_k - 100.0) < 1.0
-
-    def test_dampening_coefficient_bounds(self):
-        """Test coefficient clamping to bounds."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Data where actual ≈ 5 * forecast → a > 3.0, should be clamped
-        for day_offset in range(1, 8):
-            day = t0 - timedelta(days=day_offset)
-            fc = 100.0 + day_offset * 10
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), fc))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 5 * fc))
-
-        provider.compute_dampening(max_power=6000.0)
-        a_k = provider._dampening_coefficients[12, 0]
-        assert a_k == DAMPENING_A_MAX
-
-    def test_apply_dampening_output_clamp(self):
-        """Test dampened output is clamped to >= 0."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        # Position-based: forecast[0] uses coefficient[0]
-        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
-        provider._dampening_coefficients[0, 0] = 0.5
-        provider._dampening_coefficients[0, 1] = -600.0
-
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        forecast = [(t, 100.0)]  # 0.5*100 - 600 = -550, should clamp to 0
-        result = provider._apply_dampening(forecast)
-        assert result[0][1] == 0.0
-
-    def test_apply_dampening_non_finite_coefficients_fallback(self):
-        """Test dampening uses raw value when coefficients contain NaN or Inf."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        # Position-based: positions 0 and 1 in the forecast list
-        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
-        provider._dampening_coefficients[:, 1] = 0.0
-
-        # Position 0 coefficients = NaN → raw fallback
-        provider._dampening_coefficients[0, 0] = float("nan")
-        provider._dampening_coefficients[0, 1] = float("nan")
-        # Position 1 coefficients = Inf → raw fallback
-        provider._dampening_coefficients[1, 0] = float("inf")
-        provider._dampening_coefficients[1, 1] = 0.0
-
-        t12 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        t13 = datetime.datetime(2024, 6, 15, 13, 0, tzinfo=pytz.UTC)
-        forecast = [(t12, 1000.0), (t13, 2000.0)]
-        result = provider._apply_dampening(forecast)
-        # Both should pass through unchanged (raw fallback)
-        assert result[0][1] == 1000.0
-        assert result[1][1] == 2000.0
-
-    def test_apply_dampening_preserves_none(self):
-        """Test dampening preserves None values."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
-        provider._dampening_coefficients[:, 1] = 0.0
-
-        forecast = [(None, None), (datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC), None)]
-        result = provider._apply_dampening(forecast)
-        assert result[0] == (None, None)
-        assert result[1][1] is None
-
-    def test_get_effective_forecast_raw_when_dampening_off(self):
-        """Test raw forecast used when dampening disabled."""
-        provider = _TestProvider(solar=None, domain="test")
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t, 1000.0)]
-        provider.dampening_enabled = False
-        result = provider._get_effective_forecast()
-        assert result == [(t, 1000.0)]
-
-    def test_get_effective_forecast_dampened_when_enabled(self):
-        """Test dampened forecast used when dampening enabled."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        # Position-based: forecast[0] uses coefficient[0]
-        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
-        provider._dampening_coefficients[:, 1] = 0.0
-        provider._dampening_coefficients[0, 0] = 2.0  # double for position 0
-
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t, 500.0)]
-        provider.dampening_enabled = True
-        result = provider._get_effective_forecast()
-        assert result[0][1] == 1000.0  # 2.0 * 500
 
 
 # ============================================================================
@@ -748,119 +576,136 @@ class TestStaleNotifications:
 # ============================================================================
 
 
-class TestHistoryRecording:
-    """Test forecast and actual history recording with rolling buffers."""
+class TestForecastSnapshot:
+    """Test forecast snapshot storage."""
 
-    def test_record_forecast_snapshot(self):
-        """Test recording forecast into 2-hour rolling buffer."""
+    def test_store_forecast_snapshot(self):
+        """Test storing forecast as a snapshot."""
         provider = _TestProvider(solar=None, domain="test")
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider.solar_forecast = [(t0, 1000.0), (t0 + timedelta(hours=1), 1200.0)]
 
-        provider.record_forecast_snapshot(t0)
+        provider.store_forecast_snapshot()
 
-        buf_idx = provider._tod_buffer_index(t0)  # 12 // 2 = 6
-        assert len(provider._forecast_buffers[buf_idx]) == 2
-        assert provider._forecast_buffers[buf_idx][0] == (t0, 1000.0)
-        assert provider._forecast_buffers[buf_idx][1] == (t0 + timedelta(hours=1), 1200.0)
+        assert len(provider._stored_forecast) == 2
+        assert provider._stored_forecast[0] == (t0, 1000.0)
+        assert provider._stored_forecast[1] == (t0 + timedelta(hours=1), 1200.0)
 
-    def test_record_forecast_snapshot_removes_overlapping(self):
-        """Test snapshot dedup: existing entries overlapping new snapshot are removed."""
+    def test_store_forecast_snapshot_overwrites(self):
+        """Test snapshot is overwritten on each call."""
         provider = _TestProvider(solar=None, domain="test")
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-
-        # First snapshot
-        provider.solar_forecast = [(t0, 1000.0), (t0 + timedelta(hours=1), 1200.0)]
-        provider.record_forecast_snapshot(t0)
-        buf_idx = provider._tod_buffer_index(t0)
-        assert len(provider._forecast_buffers[buf_idx]) == 2
-
-        # Add older data that won't overlap
-        old_ts = t0 - timedelta(days=1)
-        provider._forecast_buffers[buf_idx].insert(0, (old_ts, 500.0))
-        assert len(provider._forecast_buffers[buf_idx]) == 3
-
-        # Second snapshot with same start time — should replace overlapping entries
-        provider.solar_forecast = [(t0, 1100.0), (t0 + timedelta(hours=1), 1300.0)]
-        provider.record_forecast_snapshot(t0)
-
-        buf = provider._forecast_buffers[buf_idx]
-        # Old data (before first_ts) preserved + new snapshot = 3
-        assert len(buf) == 3
-        assert buf[0] == (old_ts, 500.0)
-        assert buf[1] == (t0, 1100.0)
-        assert buf[2] == (t0 + timedelta(hours=1), 1300.0)
-
-    def test_actuals_buffer_property_delegates_to_solar(self, fake_hass):
-        """Test _actuals_buffer property delegates to QSSolar shared buffer."""
-        providers_config = [
-            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
-        ]
-        solar = _make_solar(fake_hass, providers_config=providers_config)
-        provider = solar.solar_forecast_providers["A"]
-
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        # Write through provider property
-        provider._actuals_buffer = [(t0, 500.0)]
-        # Read from solar directly
-        assert solar._actuals_buffer == [(t0, 500.0)]
-        # Read from provider property
-        assert provider._actuals_buffer == [(t0, 500.0)]
-
-    def test_actuals_buffer_property_local_fallback(self):
-        """Test _actuals_buffer uses local fallback when solar=None."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider._actuals_buffer = [(t0, 500.0)]
-        assert provider._actuals_buffer == [(t0, 500.0)]
-        assert provider._local_actuals_buffer == [(t0, 500.0)]
-
-    def test_record_actual_production_on_solar(self, fake_hass):
-        """Test recording actual production into the shared QSSolar buffer."""
-        solar = _make_solar(fake_hass)
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        actuals = [(t0, 900.0), (t0 + timedelta(hours=1), 1100.0)]
-
-        solar.record_actual_production(t0, actuals)
-        assert len(solar._actuals_buffer) == 2
-        assert solar._actuals_buffer[0] == (t0, 900.0)
-        assert solar._actuals_buffer[1] == (t0 + timedelta(hours=1), 1100.0)
-
-    def test_record_forecast_snapshot_trims_old_data(self):
-        """Test that old data beyond DAMPENING_BUFFER_DAYS is trimmed."""
-        from custom_components.quiet_solar.ha_model.solar import DAMPENING_BUFFER_DAYS
-
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Pre-fill with data older than DAMPENING_BUFFER_DAYS
-        old_time = t0 - timedelta(days=DAMPENING_BUFFER_DAYS + 5)
-        provider._forecast_buffers[buf_idx] = [(old_time, 500.0)]
 
         provider.solar_forecast = [(t0, 1000.0)]
-        provider.record_forecast_snapshot(t0)
+        provider.store_forecast_snapshot()
+        assert len(provider._stored_forecast) == 1
 
-        # Old data should be trimmed, only new data remains
-        for ts, v in provider._forecast_buffers[buf_idx]:
-            assert ts >= t0 - timedelta(days=DAMPENING_BUFFER_DAYS)
+        provider.solar_forecast = [(t0, 2000.0), (t0 + timedelta(hours=1), 2500.0)]
+        provider.store_forecast_snapshot()
+        assert len(provider._stored_forecast) == 2
+        assert provider._stored_forecast[0] == (t0, 2000.0)
 
-    def test_record_actual_production_trims_old_data(self, fake_hass):
-        """Test that old actuals beyond DAMPENING_BUFFER_DAYS are trimmed."""
-        from custom_components.quiet_solar.ha_model.solar import DAMPENING_BUFFER_DAYS
+    def test_store_forecast_snapshot_strips_none(self):
+        """Test snapshot strips entries with None timestamps or values."""
+        provider = _TestProvider(solar=None, domain="test")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        provider.solar_forecast = [(None, 100.0), (t0, None), (t0, 500.0)]
+
+        provider.store_forecast_snapshot()
+        assert len(provider._stored_forecast) == 1
+        assert provider._stored_forecast[0] == (t0, 500.0)
+
+    def test_store_forecast_snapshot_empty_forecast(self):
+        """Test snapshot from empty forecast yields empty stored forecast."""
+        provider = _TestProvider(solar=None, domain="test")
+        provider.solar_forecast = []
+        provider.store_forecast_snapshot()
+        assert provider._stored_forecast == []
+
+    def test_get_production_actuals_last_24h_no_home(self, fake_hass):
+        """Test _get_production_actuals_last_24h returns empty when no home."""
+        solar = _make_solar(fake_hass)
+        solar.home = None
+        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        assert solar._get_production_actuals_last_24h(t) == []
+
+    def test_get_production_actuals_last_24h_no_forecast_handler(self, fake_hass):
+        """Test _get_production_actuals_last_24h returns empty when no _consumption_forecast."""
+        solar = _make_solar(fake_hass)
+        if hasattr(solar.home, "_consumption_forecast"):
+            del solar.home._consumption_forecast
+        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        assert solar._get_production_actuals_last_24h(t) == []
+
+    def test_get_production_actuals_last_24h_no_history(self, fake_hass):
+        """Test _get_production_actuals_last_24h returns empty when no solar_production_history."""
+        from custom_components.quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast
+
+        solar = _make_solar(fake_hass)
+        forecast_handler = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        solar.home._consumption_forecast = forecast_handler
+        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        assert solar._get_production_actuals_last_24h(t) == []
+
+    def test_get_production_actuals_last_24h_with_data(self, fake_hass):
+        """Test _get_production_actuals_last_24h extracts data from history."""
+        import numpy as np
 
         solar = _make_solar(fake_hass)
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
-        # Pre-fill with data older than DAMPENING_BUFFER_DAYS
-        old_time = t0 - timedelta(days=DAMPENING_BUFFER_DAYS + 5)
-        solar._actuals_buffer = [(old_time, 500.0)]
+        # Create a mock history object with the right interface
+        mock_history = MagicMock()
+        mock_history.values = np.ones((2, 100))  # non-None to pass guard
+        # Return 4 data points (simulating 4 x 15-min intervals = 1 hour)
+        power_vals = np.array([500.0, 600.0, 700.0, 0.0])
+        day_vals = np.array([1, 1, 1, 0])  # last one has no data
+        mock_history._get_values.return_value = (power_vals, day_vals)
+        mock_history.get_index_from_time.return_value = (0, 1)
 
-        solar.record_actual_production(t0, [(t0, 900.0)])
+        forecast_handler = MagicMock()
+        forecast_handler.solar_production_history = mock_history
+        solar.home._consumption_forecast = forecast_handler
 
-        # Old data should be trimmed
-        for ts, v in solar._actuals_buffer:
-            assert ts >= t0 - timedelta(days=DAMPENING_BUFFER_DAYS)
+        result = solar._get_production_actuals_last_24h(t0)
+        # Should have 3 entries (day_vals[3] == 0 is skipped)
+        assert len(result) == 3
+        assert result[0][1] == 500.0
+        assert result[1][1] == 600.0
+        assert result[2][1] == 700.0
+
+    def test_get_production_actuals_last_24h_get_values_returns_none(self, fake_hass):
+        """Test _get_production_actuals_last_24h returns empty when _get_values returns None."""
+        import numpy as np
+
+        solar = _make_solar(fake_hass)
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+
+        mock_history = MagicMock()
+        mock_history.values = np.ones((2, 100))
+        mock_history._get_values.return_value = (None, None)
+        mock_history.get_index_from_time.return_value = (0, 1)
+
+        forecast_handler = MagicMock()
+        forecast_handler.solar_production_history = mock_history
+        solar.home._consumption_forecast = forecast_handler
+
+        assert solar._get_production_actuals_last_24h(t0) == []
+
+    def test_compute_score_empty_aligned_result(self):
+        """Test compute_score handles empty alignment result (line 551)."""
+        provider = _TestProvider(solar=None, domain="test")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+
+        provider._stored_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(5)]
+        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(5)]
+
+        with patch(
+            "custom_components.quiet_solar.ha_model.solar.align_time_series_on_time_slots",
+            return_value=[],
+        ):
+            provider.compute_score(actuals)
+        assert provider.score is None
 
 
 # ============================================================================
@@ -924,70 +769,57 @@ class TestUpdateForecast:
         for p in solar.solar_forecast_providers.values():
             p.update = AsyncMock()
 
-        solar.solar_forecast_providers["A"].score_raw = 500.0
-        solar.solar_forecast_providers["B"].score_raw = 200.0
+        solar.solar_forecast_providers["A"].score = 500.0
+        solar.solar_forecast_providers["B"].score = 200.0
 
         await solar.update_forecast(datetime.datetime.now(pytz.UTC))
         assert solar.active_provider_name == "B"
 
-    def test_daily_scoring_cycle_skips_on_same_date(self, fake_hass):
-        """Test _run_daily_scoring_cycle early-returns when already run for today."""
+    def test_scoring_cycle_skips_same_half_day(self, fake_hass):
+        """Test _run_scoring_cycle early-returns when already run for this half-day."""
         providers_config = [
             {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         provider = solar.solar_forecast_providers["A"]
-        provider.record_forecast_snapshot = MagicMock()
+        provider.store_forecast_snapshot = MagicMock()
         provider.compute_score = MagicMock()
-        provider.compute_dampening = MagicMock()
 
-        now = datetime.datetime.now(pytz.UTC)
+        now = datetime.datetime(2024, 6, 15, 8, 0, tzinfo=pytz.UTC)
 
         # First call should run the cycle
-        solar._run_daily_scoring_cycle(now)
-        assert provider.record_forecast_snapshot.call_count == 1
+        solar._run_scoring_cycle(now)
+        assert provider.store_forecast_snapshot.call_count == 1
         assert provider.compute_score.call_count == 1
 
-        # Second call with same date should be a no-op
-        provider.record_forecast_snapshot.reset_mock()
+        # Second call in same half-day should be a no-op
+        provider.store_forecast_snapshot.reset_mock()
         provider.compute_score.reset_mock()
-        solar._run_daily_scoring_cycle(now)
-        assert provider.record_forecast_snapshot.call_count == 0
+        solar._run_scoring_cycle(now + timedelta(hours=1))
+        assert provider.store_forecast_snapshot.call_count == 0
         assert provider.compute_score.call_count == 0
 
-    def test_daily_scoring_cycle_calls_compute_dampening_when_enabled(self, fake_hass):
-        """Test _run_daily_scoring_cycle calls compute_dampening when dampening is enabled."""
+    def test_scoring_cycle_runs_at_noon_boundary(self, fake_hass):
+        """Test _run_scoring_cycle runs again after crossing the 12:00 boundary."""
         providers_config = [
             {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         provider = solar.solar_forecast_providers["A"]
-        provider.dampening_enabled = True
-        provider.record_forecast_snapshot = MagicMock()
+        provider.store_forecast_snapshot = MagicMock()
         provider.compute_score = MagicMock()
-        provider.compute_dampening = MagicMock()
 
-        now = datetime.datetime.now(pytz.UTC)
-        solar._run_daily_scoring_cycle(now)
+        morning = datetime.datetime(2024, 6, 15, 8, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(morning)
+        assert provider.compute_score.call_count == 1
 
-        provider.compute_dampening.assert_called_once_with(solar.solar_max_output_power_value)
-
-    def test_daily_scoring_cycle_always_computes_dampening(self, fake_hass):
-        """Test _run_daily_scoring_cycle always calls compute_dampening regardless of switch state."""
-        providers_config = [
-            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
-        ]
-        solar = _make_solar(fake_hass, providers_config=providers_config)
-        provider = solar.solar_forecast_providers["A"]
-        provider.dampening_enabled = False
-        provider.record_forecast_snapshot = MagicMock()
-        provider.compute_score = MagicMock()
-        provider.compute_dampening = MagicMock()
-
-        now = datetime.datetime.now(pytz.UTC)
-        solar._run_daily_scoring_cycle(now)
-
-        provider.compute_dampening.assert_called_once_with(solar.solar_max_output_power_value)
+        # After noon boundary, should run again
+        provider.store_forecast_snapshot.reset_mock()
+        provider.compute_score.reset_mock()
+        afternoon = datetime.datetime(2024, 6, 15, 14, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(afternoon)
+        assert provider.compute_score.call_count == 1
+        assert provider.store_forecast_snapshot.call_count == 1
 
     def test_get_forecast_delegates_to_active(self, fake_hass):
         """Test get_forecast delegates to the active provider."""
@@ -1185,74 +1017,6 @@ class TestHistoricalSolarFallback:
 class TestGuardClauses:
     """Test guard clauses and edge cases for full coverage."""
 
-    def test_apply_dampening_guard_no_coefficients(self):
-        """Test _apply_dampening returns forecast unchanged when no coefficients."""
-        provider = _TestProvider(solar=None, domain="test")
-        provider._dampening_coefficients = None
-        forecast = [(datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC), 1000.0)]
-        result = provider._apply_dampening(forecast)
-        assert result is forecast
-
-    def test_apply_dampening_position_out_of_range(self):
-        """Test _apply_dampening passes through when position exceeds coefficient count."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        # Only 2 coefficients; position 2 will be out of range
-        provider._dampening_coefficients = np.array([[1.5, 0.0], [1.5, 0.0]], dtype=np.float64)
-
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        forecast = [
-            (t0, 500.0),  # position 0: dampened (1.5*500=750)
-            (t0 + timedelta(hours=1), 500.0),  # position 1: dampened (750)
-            (t0 + timedelta(hours=2), 500.0),  # position 2: out of range, pass through
-        ]
-        result = provider._apply_dampening(forecast)
-        assert result[0][1] == 750.0  # dampened
-        assert result[1][1] == 750.0  # dampened
-        assert result[2][1] == 500.0  # passed through unchanged
-
-    def test_record_forecast_snapshot_guard_no_forecast(self):
-        """Test record_forecast_snapshot returns early when no forecast data."""
-        provider = _TestProvider(solar=None, domain="test")
-        provider.solar_forecast = []
-        provider.record_forecast_snapshot(datetime.datetime.now(pytz.UTC))
-        assert all(len(buf) == 0 for buf in provider._forecast_buffers)
-
-    def test_record_forecast_snapshot_skips_none_values(self):
-        """Test record_forecast_snapshot skips entries with None timestamps or values."""
-        provider = _TestProvider(solar=None, domain="test")
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(None, 100.0), (t, None), (t, 500.0)]
-        provider.record_forecast_snapshot(t)
-        buf_idx = provider._tod_buffer_index(t)
-        # Only (t, 500.0) should be stored
-        assert len(provider._forecast_buffers[buf_idx]) == 1
-        assert provider._forecast_buffers[buf_idx][0] == (t, 500.0)
-
-    def test_record_actual_production_guard_empty_actuals(self, fake_hass):
-        """Test record_actual_production returns early when actuals are empty."""
-        solar = _make_solar(fake_hass)
-        t = datetime.datetime.now(pytz.UTC)
-        solar.record_actual_production(t, [])
-        assert solar._actuals_buffer == []
-
-    def test_compute_score_with_dampening(self):
-        """Test compute_score also computes dampened score when enabled."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(12)]
-        provider._actuals_buffer = [(t0 + timedelta(hours=h), 900.0) for h in range(12)]
-
-        # Enable dampening with identity coefficients
-        provider.dampening_enabled = True
-        provider._dampening_coefficients = np.ones((24, 2), dtype=np.float64)
-        provider._dampening_coefficients[:, 1] = 0.0
-
-        provider.compute_score()
-        assert provider.score_raw == pytest.approx(100.0)
-        assert provider.score_dampened is not None
-
     def test_compute_mae_from_aligned_empty(self):
         """Test _compute_mae_from_aligned returns None when inputs are empty."""
         assert QSSolarProvider._compute_mae_from_aligned([], []) is None
@@ -1263,14 +1027,6 @@ class TestGuardClauses:
         fc = [(t0, 0.0), (t0 + timedelta(hours=1), 0.0)]
         ac = [(t0, 0.0), (t0 + timedelta(hours=1), 0.0)]
         assert QSSolarProvider._compute_mae_from_aligned(fc, ac) is None
-
-    def test_compute_dampening_guard_no_history(self):
-        """Test compute_dampening returns early when no actuals or forecast."""
-        provider = _TestProvider(solar=None, domain="test")
-        provider._actuals_buffer = []
-        provider.solar_forecast = []
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is None
 
     def test_solar_get_historical_fallback_with_history(self, fake_hass):
         """Test QSSolar fallback delegates to solar_production_history."""
@@ -1305,672 +1061,69 @@ class TestGuardClauses:
         t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         assert solar.get_historical_solar_fallback(t) == []
 
-    def test_compute_dampening_polyfit_error(self):
-        """Test compute_dampening handles polyfit errors gracefully."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # All forecasts identical per slot → polyfit may struggle but handles it
-        for day_offset in range(1, 8):
-            day = t0 - timedelta(days=day_offset)
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), 1000.0))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 500.0 + day_offset * 100))
-
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is not None
-
-    def test_compute_dampening_polyfit_linalg_error(self):
-        """Test compute_dampening catches LinAlgError from polyfit and falls back to identity."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Inf values should cause LinAlgError in polyfit
-        for day_offset in range(1, 8):
-            day = t0 - timedelta(days=day_offset)
-            for h in range(24):
-                provider._forecast_buffers[buf_idx].append((day + timedelta(hours=h), float("inf")))
-                provider._actuals_buffer.append((day + timedelta(hours=h), 500.0 + day_offset * 100))
-
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is not None
-        # Step 12 should remain identity because polyfit raised LinAlgError
-        assert provider._dampening_coefficients[12, 0] == 1.0
-        assert provider._dampening_coefficients[12, 1] == 0.0
-
-    def test_record_forecast_snapshot_all_none_entries(self):
-        """Test record_forecast_snapshot returns early when all entries have None values."""
-        provider = _TestProvider(solar=None, domain="test")
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(None, 100.0), (t, None)]
-        provider.record_forecast_snapshot(t)
-        # All entries stripped → empty snapshot → early return
-        assert all(len(buf) == 0 for buf in provider._forecast_buffers)
-
-    def test_compute_score_single_point_forecast(self):
-        """Test compute_score returns early when forecast has < 2 time points."""
+    def test_compute_score_single_point_stored_forecast(self):
+        """Test compute_score returns early when stored forecast has < 2 time points."""
         provider = _TestProvider(solar=None, domain="test")
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider.solar_forecast = [(t0, 1000.0)]
-        provider._actuals_buffer = [(t0, 800.0)]
-        provider.compute_score()
-        assert provider.score_raw is None
+        provider.store_forecast_snapshot()
+        actuals = [(t0, 800.0)]
+        provider.compute_score(actuals)
+        assert provider.score is None
 
-    def test_compute_dampening_guard_single_point_forecast(self):
-        """Test compute_dampening returns early when forecast has < 2 time points."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0, 1000.0)]
-        provider._actuals_buffer = [(t0, 800.0)]
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is None
-
-    def test_compute_dampening_guard_empty_forecast_buffer(self):
-        """Test compute_dampening returns early when forecast buffer is empty."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-        provider._actuals_buffer = [(t0, 800.0)]
-        # All forecast buffers are empty (default) → early return
-        provider.compute_dampening(max_power=6000.0)
-        assert provider._dampening_coefficients is None
-
-    def test_compute_dampening_skips_today_data(self):
-        """Test compute_dampening skips forecast data from today's date."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Put data for TODAY only (should be skipped)
-        for h in range(24):
-            provider._forecast_buffers[buf_idx].append((t0 + timedelta(hours=h), 1000.0))
-        provider._actuals_buffer = [(t0 + timedelta(hours=h), 800.0) for h in range(24)]
-
-        provider.compute_dampening(max_power=6000.0)
-        # All data was for today → skipped → identity coefficients
-        assert provider._dampening_coefficients is not None
-        assert provider._dampening_coefficients[12, 0] == 1.0
-
-    def test_compute_dampening_skips_day_without_actuals(self):
-        """Test compute_dampening skips historical days that have no actuals."""
-        provider = _TestProvider(solar=None, domain="test")
-
-        t0 = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(24)]
-
-        buf_idx = provider._tod_buffer_index(t0)
-        # Forecast data for yesterday but NO actuals for that day
-        yesterday = t0 - timedelta(days=1)
-        for h in range(24):
-            provider._forecast_buffers[buf_idx].append((yesterday + timedelta(hours=h), 1000.0))
-        # Actuals only for 2 days ago (not yesterday)
-        two_days_ago = t0 - timedelta(days=2)
-        provider._actuals_buffer = [(two_days_ago + timedelta(hours=h), 800.0) for h in range(24)]
-
-        provider.compute_dampening(max_power=6000.0)
-        # Yesterday skipped (no actuals) → identity
-        assert provider._dampening_coefficients is not None
-        assert provider._dampening_coefficients[12, 0] == 1.0
-
-    def test_reset_dampening(self, fake_hass):
-        """Test QSSolar.reset_dampening clears shared actuals and provider buffers."""
+    def test_reset_scoring(self, fake_hass):
+        """Test QSSolar.reset_scoring clears provider state."""
         providers_config = [
             {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         provider = solar.solar_forecast_providers["A"]
 
-        # Give solar and provider some data
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        solar._actuals_buffer = [(t0, 500.0)]
-        provider._dampening_coefficients = np.ones((24, 2))
-        provider.score_raw = 100.0
+        provider.score = 100.0
+        provider._stored_forecast = [(t0, 500.0)]
+        solar._last_scoring_half_day = (t0.date(), 1)
 
-        solar.reset_dampening(t0)
-        assert solar._actuals_buffer == []
-        assert solar._last_actuals_record_time is None
-        assert provider._dampening_coefficients is None
-        assert provider.score_raw is None
+        solar.reset_scoring(t0)
+        assert solar._last_scoring_half_day is None
+        assert provider.score is None
+        assert provider._stored_forecast == []
 
-    def test_reset_dampening_buffers_clears_provider_state(self):
-        """Test reset_dampening_buffers clears coefficients and scores (not actuals)."""
+    def test_reset_scoring_buffers_clears_provider_state(self):
+        """Test reset_scoring_buffers clears score and stored forecast."""
         provider = _TestProvider(solar=None, domain="test")
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider._dampening_coefficients = np.ones((24, 2))
-        provider.score_raw = 100.0
-        provider.score_dampened = 90.0
-        provider._forecast_buffers[0] = [(t0, 500.0)]
+        provider.score = 100.0
+        provider._stored_forecast = [(t0, 500.0)]
 
-        provider.reset_dampening_buffers()
-        assert provider._dampening_coefficients is None
-        assert provider.score_raw is None
-        assert provider.score_dampened is None
-        assert all(len(buf) == 0 for buf in provider._forecast_buffers)
-
-    def test_bootstrap_actuals_skips_when_buffer_nonempty(self):
-        """Test _bootstrap_actuals_from_history is a no-op when buffer already has data."""
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-
-        solar_mock = MagicMock()
-        solar_mock._actuals_buffer = [(t0, 500.0)]
-        solar_mock.get_historical_solar_fallback = MagicMock(return_value=[(t0, 999.0)])
-
-        QSSolarProvider._bootstrap_actuals_from_history(solar_mock, t0)
-        # Buffer unchanged — bootstrap skipped
-        assert len(solar_mock._actuals_buffer) == 1
-        assert solar_mock._actuals_buffer[0][1] == 500.0
-        solar_mock.get_historical_solar_fallback.assert_not_called()
-
-    def test_bootstrap_actuals_from_history_with_data(self):
-        """Test _bootstrap_actuals_from_history populates empty buffer from fallback."""
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-
-        solar_mock = MagicMock()
-        solar_mock._actuals_buffer = []
-        solar_mock.get_historical_solar_fallback = MagicMock(
-            return_value=[(t0, 700.0), (t0 + timedelta(hours=1), 800.0)]
-        )
-
-        QSSolarProvider._bootstrap_actuals_from_history(solar_mock, t0)
-        assert len(solar_mock._actuals_buffer) == 2
-
-    def test_record_actual_from_sensor_no_sensor(self, fake_hass):
-        """Test _record_actual_from_sensor does nothing when sensor is None."""
-        solar = _make_solar(fake_hass)
-        solar.solar_inverter_input_active_power = None
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        solar._record_actual_from_sensor(t)
-        assert solar._actuals_buffer == []
-
-    def test_record_actual_from_sensor_too_soon(self, fake_hass):
-        """Test _record_actual_from_sensor skips when called before step interval."""
-        from custom_components.quiet_solar.ha_model.solar import DAMPENING_ACTUALS_STEP_MN
-
-        solar = _make_solar(fake_hass)
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        solar._last_actuals_record_time = t0
-
-        # Call again 1 minute later — should skip
-        t1 = t0 + timedelta(minutes=1)
-        solar._record_actual_from_sensor(t1)
-        assert solar._actuals_buffer == []
-
-        # Call after full step — would proceed (but sensor returns None here)
-        t2 = t0 + timedelta(minutes=DAMPENING_ACTUALS_STEP_MN)
-        solar.solar_inverter_input_active_power = None
-        solar._record_actual_from_sensor(t2)
-        assert solar._actuals_buffer == []
-
-    def test_record_actual_from_sensor_sensor_returns_none(self, fake_hass):
-        """Test _record_actual_from_sensor handles sensor returning None."""
-        solar = _make_solar(fake_hass)
-        solar.solar_inverter_input_active_power = "sensor.solar_input"
-        solar.get_average_sensor = MagicMock(return_value=None)
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        solar._record_actual_from_sensor(t)
-        assert solar._actuals_buffer == []
-
-    def test_record_actual_from_sensor_records_value(self, fake_hass):
-        """Test _record_actual_from_sensor records value from sensor."""
-        solar = _make_solar(fake_hass)
-        solar.solar_inverter_input_active_power = "sensor.solar_input"
-        solar.get_average_sensor = MagicMock(return_value=1500.0)
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        solar._record_actual_from_sensor(t)
-        assert len(solar._actuals_buffer) == 1
-        assert solar._actuals_buffer[0] == (t, 1500.0)
-        assert solar._last_actuals_record_time == t
+        provider.reset_scoring_buffers()
+        assert provider.score is None
+        assert provider._stored_forecast == []
 
     def test_compute_score_empty_alignment(self):
         """Test compute_score returns early when aligned forecast is empty."""
         provider = _TestProvider(solar=None, domain="test")
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        # Forecast with valid timestamps but all None values → cleaned list is empty
+        # Store forecast with valid timestamps but all None values → cleaned list is empty
         provider.solar_forecast = [(t0 + timedelta(hours=h), None) for h in range(12)]
-        provider._actuals_buffer = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
-        provider.compute_score()
-        assert provider.score_raw is None
+        provider.store_forecast_snapshot()
+        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
+        provider.compute_score(actuals)
+        assert provider.score is None
+
+    def test_scoring_half_day_static_method(self, fake_hass):
+        """Test _scoring_half_day returns correct (date, slot) tuples."""
+        solar = _make_solar(fake_hass)
+        morning = datetime.datetime(2024, 6, 15, 8, 0, tzinfo=pytz.UTC)
+        afternoon = datetime.datetime(2024, 6, 15, 14, 0, tzinfo=pytz.UTC)
+        midnight = datetime.datetime(2024, 6, 16, 0, 0, tzinfo=pytz.UTC)
+
+        d_morning, s_morning = solar._scoring_half_day(morning)
+        d_afternoon, s_afternoon = solar._scoring_half_day(afternoon)
+        d_midnight, s_midnight = solar._scoring_half_day(midnight)
+
+        assert s_morning == 0
+        assert s_afternoon == 1
+        assert s_midnight == 0
+        assert d_midnight > d_morning
 
-    @pytest.mark.asyncio
-    async def test_update_forecast_records_actual_from_sensor(self, fake_hass):
-        """Test update_forecast calls _record_actual_from_sensor and bootstraps shared buffer."""
-        providers_config = [
-            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
-        ]
-        solar = _make_solar(fake_hass, providers_config=providers_config)
-        provider = solar.solar_forecast_providers["A"]
-        provider.update = AsyncMock()
-
-        # Set up sensor-based recording
-        solar.solar_inverter_input_active_power = "sensor.solar_input"
-        solar.get_average_sensor = MagicMock(return_value=1200.0)
-
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        await solar.update_forecast(t)
-
-        # Shared buffer should have the sensor reading
-        assert len(solar._actuals_buffer) == 1
-        assert solar._actuals_buffer[0] == (t, 1200.0)
-        # Provider sees shared buffer via property
-        assert len(provider._actuals_buffer) == 1
-
-
-# ============================================================================
-# get_dampening_attributes
-# ============================================================================
-
-
-class TestGetDampeningAttributes:
-    """Tests for QSSolarProvider.get_dampening_attributes()."""
-
-    def test_empty_provider(self, fake_hass):
-        """No coefficients, no date — minimal attrs."""
-        solar = _make_solar(fake_hass, single_provider=SOLCAST_SOLAR_DOMAIN)
-        provider = next(iter(solar.solar_forecast_providers.values()))
-        attrs = provider.get_dampening_attributes()
-        assert attrs["dampening_enabled"] is False
-        assert "last_dampening_date" not in attrs
-        assert "coefficients_count" not in attrs
-        # No per-tod entries
-        assert not any(k.startswith("tod_") for k in attrs)
-
-    def test_with_coefficients(self, fake_hass):
-        """Coefficients set → attrs contain count and averages."""
-        solar = _make_solar(fake_hass, single_provider=SOLCAST_SOLAR_DOMAIN)
-        provider = next(iter(solar.solar_forecast_providers.values()))
-        provider.dampening_enabled = True
-        provider._dampening_coefficients = np.array([[0.9, 10.0], [1.1, -5.0], [1.0, 0.0]])
-        utc_dt = datetime.datetime(2025, 6, 15, 12, 0, 0, tzinfo=pytz.UTC)
-        provider._last_dampening_date = utc_dt
-
-        attrs = provider.get_dampening_attributes()
-        assert attrs["dampening_enabled"] is True
-        # last_dampening_date is displayed in local time
-        expected_local = utc_dt.astimezone(tz=None).isoformat()
-        assert attrs["last_dampening_date"] == expected_local
-        assert attrs["coefficients_count"] == 3
-        assert attrs["avg_scale_factor"] == pytest.approx(1.0, abs=0.01)
-        assert "avg_offset" in attrs
-
-    def test_with_per_tod_coefficients(self, fake_hass):
-        """Per-tod coefficients appear as tod_XXh_scale/offset attrs with local hours."""
-        solar = _make_solar(fake_hass, single_provider=SOLCAST_SOLAR_DOMAIN)
-        provider = next(iter(solar.solar_forecast_providers.values()))
-        provider._dampening_coefficients_per_tod = {
-            0: np.array([[0.95, 5.0], [1.05, -3.0]]),
-            6: np.array([[0.8, 20.0]]),
-        }
-
-        attrs = provider.get_dampening_attributes()
-
-        # Compute expected local hours the same way the production code does
-        def _local_hour_for_buf_idx(buf_idx: int) -> int:
-            utc_hour = buf_idx * 2  # DAMPENING_TOD_HOURS = 2
-            utc_dt = datetime.datetime.now(pytz.UTC).replace(hour=utc_hour, minute=0, second=0, microsecond=0)
-            return utc_dt.astimezone(tz=None).hour
-
-        local_h0 = _local_hour_for_buf_idx(0)
-        local_h6 = _local_hour_for_buf_idx(6)
-
-        assert f"tod_{local_h0:02d}h_scale" in attrs
-        assert f"tod_{local_h0:02d}h_offset" in attrs
-        assert f"tod_{local_h6:02d}h_scale" in attrs
-        assert f"tod_{local_h6:02d}h_offset" in attrs
-        # buf_idx 6 → utc_hour 12 → local_hour depends on timezone
-        assert attrs[f"tod_{local_h6:02d}h_scale"] == pytest.approx(0.8, abs=0.01)
-        assert attrs[f"tod_{local_h6:02d}h_offset"] == pytest.approx(20.0, abs=0.1)
-
-
-# ============================================================================
-# Realistic end-to-end dampening scenarios (no mocks)
-# ============================================================================
-
-import math
-
-
-class TestRealisticDampeningScenarios:
-    """End-to-end dampening tests with realistic synthetic solar data.
-
-    No mocks on dampening internals: real bell-curve solar profiles,
-    real multi-day histories, and real compute_dampening / _apply_dampening.
-    Verify that learned coefficients match expected biases and that
-    dampened forecasts materially reduce MAE vs raw forecasts.
-    """
-
-    @staticmethod
-    def _solar_bell(day_start, max_power, sunrise=6, sunset=18):
-        """24 hourly points of a sine-shaped solar production curve."""
-        result = []
-        for h in range(24):
-            t = day_start + timedelta(hours=h)
-            if sunrise <= h < sunset:
-                phase = math.pi * (h - sunrise) / (sunset - sunrise)
-                result.append((t, round(max_power * math.sin(phase), 1)))
-            else:
-                result.append((t, 0.0))
-        return result
-
-    @staticmethod
-    def _daytime_mae(series_a, series_b):
-        """MAE over daytime slots (where either side > 0)."""
-        errors = []
-        n = min(len(series_a), len(series_b))
-        for i in range(n):
-            a = series_a[i][1]
-            b = series_b[i][1]
-            if a > 0 or b > 0:
-                errors.append(abs(a - b))
-        return sum(errors) / len(errors) if errors else 0.0
-
-    # Deterministic daily power scaling — ensures regression gets varied x-values
-    _DAILY_FACTORS = [0.85, 1.15, 0.92, 1.08, 0.88, 1.12, 1.00, 0.95, 1.05, 0.90]
-
-    def _build_history(
-        self,
-        provider,
-        today_start,
-        num_days,
-        max_power,
-        scale_bias,
-        offset_bias,
-        noise_rng=None,
-        fc_daily_variation=0.0,
-    ):
-        """Populate provider buffers with num_days of forecast + actuals.
-
-        For each past day:
-          forecast = solar_bell(day, max_power * daily_factor)
-          actual = scale_bias * forecast + offset_bias + noise  (daytime only)
-
-        Daily factors introduce natural weather variation so polyfit gets
-        varied x-values per slot (avoids degenerate regression).
-        """
-        buf_idx = provider._tod_buffer_index(today_start)
-
-        for day_offset in range(1, num_days + 1):
-            day_start = today_start - timedelta(days=day_offset)
-
-            # Natural weather variation: deterministic ±15% per day
-            daily_factor = self._DAILY_FACTORS[(day_offset - 1) % len(self._DAILY_FACTORS)]
-            if fc_daily_variation > 0 and noise_rng is not None:
-                daily_factor *= 1.0 + fc_daily_variation * (noise_rng.random() * 2 - 1)
-
-            day_fc = self._solar_bell(day_start, max_power * daily_factor)
-
-            day_ac = []
-            for ts, v in day_fc:
-                if v > 0:
-                    actual = scale_bias * v + offset_bias
-                    if noise_rng is not None:
-                        actual += noise_rng.normal(0, 50)
-                    day_ac.append((ts, max(0.0, actual)))
-                else:
-                    day_ac.append((ts, 0.0))
-
-            provider._forecast_buffers[buf_idx].extend(day_fc)
-            provider._actuals_buffer.extend(day_ac)
-
-    # ------------------------------------------------------------------ #
-    # Scenario 1: consistent over-estimation
-    # ------------------------------------------------------------------ #
-
-    def test_consistent_overestimation(self):
-        """Forecast 25% too high over 7 days → a ≈ 0.75, b ≈ 0.
-
-        Verifies coefficients AND that dampened MAE is ≪ raw MAE.
-        """
-        provider = _TestProvider(solar=None, domain="test")
-        today = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        max_power = 5000.0
-
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        self._build_history(
-            provider,
-            today,
-            num_days=7,
-            max_power=max_power,
-            scale_bias=0.75,
-            offset_bias=0.0,
-        )
-
-        provider.compute_dampening(max_power)
-        assert provider._dampening_coefficients is not None
-
-        # Daytime slots (positions 6-16): a ≈ 0.75, b ≈ 0
-        for k in range(7, 18):
-            a = provider._dampening_coefficients[k, 0]
-            b = provider._dampening_coefficients[k, 1]
-            assert 0.70 <= a <= 0.80, f"Slot {k}: a={a}, expected ~0.75"
-            assert abs(b) < 150, f"Slot {k}: b={b}, expected ~0"
-
-        # Nighttime slots remain identity (0-6 and 18-22)
-        for k in list(range(0, 7)) + list(range(18, 23)):
-            assert provider._dampening_coefficients[k, 0] == 1.0
-            assert provider._dampening_coefficients[k, 1] == 0.0
-
-        # MAE improvement
-        today_ac = [(ts, 0.75 * v if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-        raw_mae = self._daytime_mae(provider.solar_forecast, today_ac)
-        dampened = provider._apply_dampening(provider.solar_forecast)
-        dampened_mae = self._daytime_mae(dampened, today_ac)
-
-        assert raw_mae > 200, f"Sanity: raw MAE should be significant, got {raw_mae}"
-        assert dampened_mae < raw_mae * 0.15, f"Dampened ({dampened_mae:.0f}) should be ≪ raw ({raw_mae:.0f})"
-
-    # ------------------------------------------------------------------ #
-    # Scenario 2: under-estimation with positive offset
-    # ------------------------------------------------------------------ #
-
-    def test_underestimation_with_offset(self):
-        """Actual = 1.1×fc + 150 → a ≈ 1.1, b ≈ 150, dampening improves."""
-        provider = _TestProvider(solar=None, domain="test")
-        today = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        max_power = 4000.0
-
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        self._build_history(
-            provider,
-            today,
-            num_days=7,
-            max_power=max_power,
-            scale_bias=1.1,
-            offset_bias=150.0,
-        )
-
-        provider.compute_dampening(max_power)
-        assert provider._dampening_coefficients is not None
-
-        for k in range(7, 18):
-            a = provider._dampening_coefficients[k, 0]
-            b = provider._dampening_coefficients[k, 1]
-            assert 1.05 <= a <= 1.15, f"Slot {k}: a={a}, expected ~1.1"
-            assert 100 <= b <= 200, f"Slot {k}: b={b}, expected ~150"
-
-        today_ac = [(ts, max(0.0, 1.1 * v + 150) if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-        raw_mae = self._daytime_mae(provider.solar_forecast, today_ac)
-        dampened = provider._apply_dampening(provider.solar_forecast)
-        dampened_mae = self._daytime_mae(dampened, today_ac)
-
-        assert dampened_mae < raw_mae * 0.15
-
-    # ------------------------------------------------------------------ #
-    # Scenario 3: noisy data — regression still improves
-    # ------------------------------------------------------------------ #
-
-    def test_noisy_data_still_improves(self):
-        """With noise (σ=50 W), dampening still materially reduces MAE."""
-        rng = np.random.default_rng(42)
-        provider = _TestProvider(solar=None, domain="test")
-        today = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        max_power = 5000.0
-
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        self._build_history(
-            provider,
-            today,
-            num_days=7,
-            max_power=max_power,
-            scale_bias=0.8,
-            offset_bias=0.0,
-            noise_rng=rng,
-        )
-
-        provider.compute_dampening(max_power)
-        assert provider._dampening_coefficients is not None
-
-        daytime_a = [provider._dampening_coefficients[k, 0] for k in range(7, 18)]
-        avg_a = sum(daytime_a) / len(daytime_a)
-        assert 0.70 <= avg_a <= 0.90, f"Avg a={avg_a}, expected ~0.8"
-
-        today_ac = [(ts, 0.8 * v if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-        raw_mae = self._daytime_mae(provider.solar_forecast, today_ac)
-        dampened = provider._apply_dampening(provider.solar_forecast)
-        dampened_mae = self._daytime_mae(dampened, today_ac)
-
-        assert dampened_mae < raw_mae * 0.5, (
-            f"Noisy dampened ({dampened_mae:.0f}) should be < 50% of raw ({raw_mae:.0f})"
-        )
-
-    # ------------------------------------------------------------------ #
-    # Scenario 4: window filter — old data excluded
-    # ------------------------------------------------------------------ #
-
-    def test_window_filter_uses_only_recent_days(self):
-        """Data older than DAMPENING_WINDOW_DAYS is excluded from regression."""
-        from custom_components.quiet_solar.ha_model.solar import DAMPENING_WINDOW_DAYS
-
-        provider = _TestProvider(solar=None, domain="test")
-        today = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        max_power = 5000.0
-        buf_idx = provider._tod_buffer_index(today)
-
-        # Old data (outside window): actual = 1.5 × forecast
-        for day_offset in range(DAMPENING_WINDOW_DAYS + 1, DAMPENING_WINDOW_DAYS + 8):
-            day_start = today - timedelta(days=day_offset)
-            df = self._DAILY_FACTORS[(day_offset - 1) % len(self._DAILY_FACTORS)]
-            day_fc = self._solar_bell(day_start, max_power * df)
-            day_ac = [(ts, 1.5 * v if v > 0 else 0.0) for ts, v in day_fc]
-            provider._forecast_buffers[buf_idx].extend(day_fc)
-            provider._actuals_buffer.extend(day_ac)
-
-        # Recent data (inside window): actual = 0.6 × forecast
-        for day_offset in range(1, DAMPENING_WINDOW_DAYS + 1):
-            day_start = today - timedelta(days=day_offset)
-            df = self._DAILY_FACTORS[(day_offset - 1) % len(self._DAILY_FACTORS)]
-            day_fc = self._solar_bell(day_start, max_power * df)
-            day_ac = [(ts, 0.6 * v if v > 0 else 0.0) for ts, v in day_fc]
-            provider._forecast_buffers[buf_idx].extend(day_fc)
-            provider._actuals_buffer.extend(day_ac)
-
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        provider.compute_dampening(max_power)
-
-        # Coefficients must reflect RECENT data (a ≈ 0.6), not old (a ≈ 1.5)
-        for k in range(7, 18):
-            a = provider._dampening_coefficients[k, 0]
-            assert 0.55 <= a <= 0.65, f"Slot {k}: a={a}, expected ~0.6 (recent window)"
-
-    # ------------------------------------------------------------------ #
-    # Scenario 5: varying daily forecast power levels
-    # ------------------------------------------------------------------ #
-
-    def test_varying_forecast_levels(self):
-        """Regression handles ±20% daily forecast variation."""
-        rng = np.random.default_rng(123)
-        provider = _TestProvider(solar=None, domain="test")
-        today = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
-        max_power = 5000.0
-
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        self._build_history(
-            provider,
-            today,
-            num_days=7,
-            max_power=max_power,
-            scale_bias=0.85,
-            offset_bias=100.0,
-            fc_daily_variation=0.2,
-            noise_rng=rng,
-        )
-
-        provider.compute_dampening(max_power)
-        assert provider._dampening_coefficients is not None
-
-        daytime_a = [provider._dampening_coefficients[k, 0] for k in range(7, 18)]
-        avg_a = sum(daytime_a) / len(daytime_a)
-        assert 0.70 <= avg_a <= 1.0, f"Avg a={avg_a}, expected ~0.85"
-
-        today_ac = [(ts, max(0.0, 0.85 * v + 100) if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-        raw_mae = self._daytime_mae(provider.solar_forecast, today_ac)
-        dampened = provider._apply_dampening(provider.solar_forecast)
-        dampened_mae = self._daytime_mae(dampened, today_ac)
-
-        assert dampened_mae < raw_mae * 0.5
-
-    # ------------------------------------------------------------------ #
-    # Scenario 6: full production call sequence over 7 days
-    # ------------------------------------------------------------------ #
-
-    def test_production_call_sequence(self):
-        """Simulate the exact production update cycle over 7 days.
-
-        Each day: set forecast → record actuals → snapshot → score → dampening.
-        Then verify today's dampened forecast is closer to actual.
-        """
-        provider = _TestProvider(solar=None, domain="test")
-        max_power = 5000.0
-        scale_bias = 0.8  # forecast is 20% too high
-
-        today = datetime.datetime(2024, 6, 22, 0, 0, tzinfo=pytz.UTC)
-
-        # Simulate 7 past days in chronological order
-        for day_num in range(7, 0, -1):
-            day_start = today - timedelta(days=day_num)
-            df = self._DAILY_FACTORS[(day_num - 1) % len(self._DAILY_FACTORS)]
-
-            # 1. Provider gets forecast (as provider.update would)
-            provider.solar_forecast = self._solar_bell(day_start, max_power * df)
-
-            # 2. Record actuals (directly into shared buffer, as _record_actual_from_sensor would)
-            day_ac = [(ts, scale_bias * v if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-            provider._actuals_buffer.extend(day_ac)
-
-            # 3. Daily scoring cycle (as _run_daily_scoring_cycle would)
-            provider.record_forecast_snapshot(day_start)
-            provider.compute_score()
-            provider.compute_dampening(max_power)
-
-        # Today: fresh forecast, final scoring cycle
-        provider.solar_forecast = self._solar_bell(today, max_power)
-        provider.record_forecast_snapshot(today)
-        provider.compute_score()
-        provider.compute_dampening(max_power)
-
-        assert provider._dampening_coefficients is not None
-        assert provider._last_dampening_date is not None
-
-        # Coefficients should reflect 0.8× bias
-        for k in range(7, 18):
-            a = provider._dampening_coefficients[k, 0]
-            assert 0.75 <= a <= 0.85, f"Position {k}: a={a}"
-
-        # MAE improvement via the full _get_effective_forecast path
-        today_ac = [(ts, scale_bias * v if v > 0 else 0.0) for ts, v in provider.solar_forecast]
-        raw_mae = self._daytime_mae(provider.solar_forecast, today_ac)
-
-        provider.dampening_enabled = True
-        dampened = provider._get_effective_forecast()
-        dampened_mae = self._daytime_mae(dampened, today_ac)
-
-        assert dampened_mae < raw_mae * 0.3, f"Dampened ({dampened_mae:.0f}) should be ≪ raw ({raw_mae:.0f})"
-
-        # Score should exist from the scoring cycle
-        assert provider.score_raw is not None

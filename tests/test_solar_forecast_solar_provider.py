@@ -446,7 +446,7 @@ class TestMigration:
 
 
 # ============================================================================
-# Multi-provider integration (AC3 — scoring, dampening, auto-selection)
+# Multi-provider integration (AC3 — scoring, auto-selection)
 # ============================================================================
 
 
@@ -493,10 +493,8 @@ class TestForecastSolarMultiProviderIntegration:
         solar = self._make_multi_provider_solar(hass)
         fs_provider = solar.solar_forecast_providers["Forecast.Solar"]
 
-        # Score attributes from base class should exist
-        assert hasattr(fs_provider, "score_raw")
-        assert hasattr(fs_provider, "score_dampened")
-        assert hasattr(fs_provider, "_dampening_coefficients")
+        # Score attribute from base class should exist
+        assert hasattr(fs_provider, "score")
 
     def test_forecast_solar_staleness_detection(self):
         """Test Forecast.Solar provider inherits staleness detection."""

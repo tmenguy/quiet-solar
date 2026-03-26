@@ -196,9 +196,7 @@ class TestDashboardTemplateRendering:
         assert "qs_solar_forecast_ok" in rendered
         assert "qs_solar_forecast_age" in rendered
         # Dynamic entities created from Solcast provider
-        assert "qs_solar_dampening_solcast" in rendered
-        assert "qs_solar_forecast_score_dampened_solcast" in rendered
-        assert "qs_solar_forecast_score_no_dampening_solcast" in rendered
+        assert "qs_solar_forecast_score_solcast" in rendered
         assert "qs_solar_active_provider" in rendered
 
     @pytest.mark.asyncio
