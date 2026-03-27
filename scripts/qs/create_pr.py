@@ -14,20 +14,14 @@ import sys
 
 from utils import (
     detect_risk_level,
+    find_pr_for_branch,
+    get_changed_files,
     get_current_branch,
     get_issue_from_branch,
     output_json,
     run_gh,
     run_git,
 )
-
-
-def get_changed_files() -> list[str]:
-    """Get files changed in this branch vs main."""
-    result = run_git(["diff", "--name-only", "main...HEAD"], check=False)
-    if result.returncode != 0:
-        return []
-    return [f for f in result.stdout.strip().split("\n") if f]
 
 
 def main() -> None:
@@ -40,6 +34,18 @@ def main() -> None:
 
     branch = get_current_branch()
     issue = args.issue or get_issue_from_branch(branch)
+
+    # Check for existing PR to prevent duplicates
+    existing = find_pr_for_branch(branch)
+    if existing:
+        output_json({
+            "pr_number": existing["pr_number"],
+            "url": existing["url"],
+            "branch": branch,
+            "issue": issue,
+            "already_existed": True,
+        })
+        return
 
     # Push branch
     push_result = run_git(["push", "-u", "origin", branch], check=False)

@@ -453,6 +453,20 @@ So that the story artifact, architecture, and project rules stay aligned with re
 **And** a mandatory doc-sync gate runs at finish-story before merge
 **And** `scripts/qs/doc_sync.py` compares the story artifact against the git diff
 
+### Story 1.12: Systematic Finish-Story Workflow Enhancement
+
+As TheDev,
+I want `/finish-story` to require zero arguments — it auto-detects the branch, auto-commits pending changes, auto-creates the PR if missing, runs all gates, merges, and cleans up — all driven by a Python script, not agent rules,
+So that finishing a story is a single command that handles everything end-to-end with no loose ends.
+
+**Acceptance Criteria:**
+
+**Given** TheDev runs `/finish-story` with no arguments from a feature branch
+**Then** it auto-detects branch/issue/story, auto-commits and pushes pending changes, auto-creates PR if missing
+**And** runs doc-sync gate, quality gate, verifies CI checks, ensures issue link, merges PR
+**And** post-merge: closes issue, updates story status to "done", updates epics, cleans up worktree
+**And** all mechanical steps are in `scripts/qs/finish_story.py`, skill file is thin
+
 ## Epic 2: Trust-Critical Test Scenarios
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
@@ -753,7 +767,7 @@ As TheAdmin,
 I want the solar forecast scoring system to record real production data, compute meaningful accuracy scores per provider, and show me which provider is active,
 So that auto-provider selection uses real accuracy data and I can monitor forecast quality.
 
-**Status:** in-progress | **Priority:** P2 — degraded optimization | **Size:** L
+**Status:** DONE | **Priority:** P2 — degraded optimization | **Size:** L
 **Dependencies:** Story 3.7 (scoring infrastructure), Story 3.13 (multi-provider)
 **GitHub Issue:** #43
 

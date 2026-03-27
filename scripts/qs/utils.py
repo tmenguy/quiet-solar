@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -144,3 +145,233 @@ def detect_risk_level(changed_files: list[str]) -> list[str]:
             if any(p in f for p in patterns):
                 levels.add(level)
     return sorted(levels, key=["CRITICAL", "HIGH", "MEDIUM", "LOW"].index) if levels else ["LOW"]
+
+
+# --- Workflow helpers (reusable across scripts) ---
+
+_DEFAULT_STAGE_PATHS = [
+    "custom_components/quiet_solar/",
+    "tests/",
+    "_bmad-output/",
+    "_qsprocess/",
+    "scripts/",
+]
+
+_EXCLUDE_PATTERNS = [
+    ".DS_Store",
+    "__pycache__",
+    "venv/",
+    "config/",
+    ".idea/",
+    ".vscode/",
+]
+
+
+def get_changed_files() -> list[str]:
+    """Get files changed in this branch vs main."""
+    result = run_git(["diff", "--name-only", "main...HEAD"], check=False)
+    if result.returncode != 0:
+        return []
+    return [f for f in result.stdout.strip().split("\n") if f]
+
+
+def auto_commit_and_push(
+    message: str,
+    *,
+    paths: list[str] | None = None,
+) -> dict:
+    """Stage safe paths, commit if changes exist, push.
+
+    Only stages files in known-safe paths. Never stages junk files.
+    Returns {"committed": bool, "pushed": bool, "files": list}.
+    """
+    stage_paths = paths or _DEFAULT_STAGE_PATHS
+
+    # Stage each path (git add is a no-op for non-existent paths)
+    for p in stage_paths:
+        run_git(["add", p], check=False)
+
+    # Remove any junk that might have been staged
+    for pattern in _EXCLUDE_PATTERNS:
+        run_git(["reset", "HEAD", "--", f"*{pattern}*"], check=False)
+
+    # Check what's actually staged
+    result = run_git(["diff", "--cached", "--name-only"], check=False)
+    files = [f for f in result.stdout.strip().split("\n") if f]
+
+    if not files:
+        return {"committed": False, "pushed": False, "files": []}
+
+    # Commit
+    commit_result = run_git(["commit", "-m", message], check=False)
+    if commit_result.returncode != 0:
+        return {"committed": False, "pushed": False, "files": files, "detail": commit_result.stderr.strip()}
+
+    # Push
+    push_result = run_git(["push"], check=False)
+    pushed = push_result.returncode == 0
+
+    return {"committed": True, "pushed": pushed, "files": files}
+
+
+def find_pr_for_branch(branch: str) -> dict | None:
+    """Find an open PR for the given branch.
+
+    Returns {"pr_number": int, "url": str} or None.
+    """
+    result = run_gh(
+        ["pr", "list", "--head", branch, "--json", "number,url,state"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        prs = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not prs:
+        return None
+    pr = prs[0]
+    return {"pr_number": pr["number"], "url": pr["url"]}
+
+
+def check_ci_status(pr_number: int) -> dict:
+    """Check CI check status for a PR.
+
+    Returns {"checks": list, "all_passed": bool, "pending": list, "failed": list}.
+    Uses gh pr checks fields: name, state (SUCCESS|FAILURE|IN_PROGRESS|...), bucket.
+    """
+    result = run_gh(
+        ["pr", "checks", str(pr_number), "--json", "name,state,bucket"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return {
+            "checks": [],
+            "all_passed": False,
+            "pending": [],
+            "failed": [],
+            "detail": result.stderr.strip(),
+        }
+    try:
+        checks = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return {"checks": [], "all_passed": False, "pending": [], "failed": [], "detail": "invalid JSON"}
+
+    failed = []
+    pending = []
+    for c in checks:
+        state = c.get("state", "")
+        if state == "SUCCESS":
+            continue
+        elif state in ("IN_PROGRESS", "QUEUED", "PENDING", "REQUESTED", "WAITING"):
+            pending.append(c["name"])
+        else:
+            failed.append(c["name"])
+
+    return {
+        "checks": checks,
+        "all_passed": len(failed) == 0 and len(pending) == 0,
+        "pending": pending,
+        "failed": failed,
+    }
+
+
+def ensure_issue_link(pr_number: int, issue_number: int) -> dict:
+    """Ensure PR body contains a Fixes/Closes #N link.
+
+    Returns {"linked": bool, "added": bool}.
+    """
+    result = run_gh(
+        ["pr", "view", str(pr_number), "--json", "body"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return {"linked": False, "added": False, "detail": result.stderr.strip()}
+
+    try:
+        body = json.loads(result.stdout).get("body", "")
+    except (json.JSONDecodeError, TypeError):
+        return {"linked": False, "added": False, "detail": "invalid JSON"}
+
+    # Check for existing link
+    pattern = rf"(?:Fixes|Closes|Resolves)\s+#{issue_number}\b"
+    if re.search(pattern, body, re.IGNORECASE):
+        return {"linked": True, "added": False}
+
+    # Add link
+    new_body = body.rstrip() + f"\n\nFixes #{issue_number}\n"
+    edit_result = run_gh(
+        ["pr", "edit", str(pr_number), "--body", new_body],
+        check=False,
+    )
+    if edit_result.returncode != 0:
+        return {"linked": False, "added": False, "detail": edit_result.stderr.strip()}
+
+    return {"linked": True, "added": True}
+
+
+def close_issue_if_open(issue_number: int, *, comment: str | None = None) -> dict:
+    """Close a GitHub issue if it is still open.
+
+    Returns {"closed": bool, "was_open": bool}.
+    """
+    result = run_gh(
+        ["issue", "view", str(issue_number), "--json", "state"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return {"closed": False, "was_open": False, "detail": result.stderr.strip()}
+
+    try:
+        state = json.loads(result.stdout).get("state", "")
+    except (json.JSONDecodeError, TypeError):
+        return {"closed": False, "was_open": False, "detail": "invalid JSON"}
+
+    if state != "OPEN":
+        return {"closed": False, "was_open": False}
+
+    cmd = ["issue", "close", str(issue_number)]
+    if comment:
+        cmd.extend(["--comment", comment])
+    close_result = run_gh(cmd, check=False)
+
+    if close_result.returncode != 0:
+        return {"closed": False, "was_open": True, "detail": close_result.stderr.strip()}
+
+    return {"closed": True, "was_open": True}
+
+
+def update_story_status(story_file: str, status: str) -> dict:
+    """Update the Status: line in a story markdown file.
+
+    Returns {"updated": bool}.
+    """
+    path = Path(story_file)
+    if not path.exists():
+        return {"updated": False, "detail": "file not found"}
+
+    content = path.read_text()
+    new_content, count = re.subn(
+        r"^(Status:\s*).*$",
+        rf"\g<1>{status}",
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count == 0:
+        return {"updated": False, "detail": "no Status: line found"}
+
+    path.write_text(new_content)
+    return {"updated": True}
+
+
+def suggest_release(changed_files: list[str]) -> str:
+    """Suggest whether a release is needed based on changed files.
+
+    Returns "release" if production code changed, "no-release" otherwise.
+    """
+    for f in changed_files:
+        if f.startswith("custom_components/"):
+            return "release"
+    return "no-release"
