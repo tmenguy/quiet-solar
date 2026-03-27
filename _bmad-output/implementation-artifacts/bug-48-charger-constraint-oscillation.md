@@ -1,6 +1,6 @@
 # Bug #48: Charger Person-Constraint / Best-Effort Oscillation
 
-Status: review
+Status: done
 issue: 48
 branch: "QS_48"
 
