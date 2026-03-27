@@ -2,8 +2,7 @@
 """Finish a story: zero-arg orchestrator that auto-detects everything.
 
 Usage:
-    python scripts/qs/finish_story.py [--pr N] [--issue N] [--story-key X.Y]
-                                       [--story-file PATH] [--skip-quality-gate]
+    python scripts/qs/finish_story.py [--pr N] [--issue N] [--skip-quality-gate]
 
 All flags are optional overrides. By default, auto-detects from the current branch.
 
@@ -346,8 +345,6 @@ def run_finish_story(
     *,
     pr_number: int | None = None,
     issue_number: int | None = None,
-    story_file: str | None = None,
-    story_key: str | None = None,
     skip_quality_gate: bool = False,
 ) -> dict:
     """Run the full finish-story orchestration.
@@ -363,17 +360,14 @@ def run_finish_story(
     if issue_number is None:
         return phase_report(steps, failed_phase="prepare")
 
-    # Auto-discover story file
-    if story_file is None:
-        found = find_story_file(story_key)
-        if found:
-            story_file = str(found)
-        else:
-            story_file = ""
+    # Auto-discover story file by issue number
+    found = find_story_file(issue_number)
+    story_file = str(found) if found else ""
 
-    # Extract story key from filename if not provided
-    if story_key is None and story_file:
-        # "1-12-systematic-finish-story-enhancement.md" -> "1.12"
+    # Extract story key from filename
+    story_key: str | None = None
+    if story_file:
+        # "1-12-Github-#51-systematic-finish-story-enhancement.md" -> "1.12"
         name = Path(story_file).stem
         key_match = re.match(r"^(\d+)-(\d+)", name)
         if key_match:
@@ -429,16 +423,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Finish story — zero-arg orchestrator")
     parser.add_argument("--pr", type=int, default=None, help="PR number (auto-detected if omitted)")
     parser.add_argument("--issue", type=int, default=None, help="Issue number (auto-detected from branch)")
-    parser.add_argument("--story-key", default=None, help="Story key (e.g., '1.12') for epics update")
-    parser.add_argument("--story-file", default=None, help="Path to story artifact")
     parser.add_argument("--skip-quality-gate", action="store_true", help="Skip quality gate check")
     args = parser.parse_args()
 
     report = run_finish_story(
         pr_number=args.pr,
         issue_number=args.issue,
-        story_file=args.story_file,
-        story_key=args.story_key,
         skip_quality_gate=args.skip_quality_gate,
     )
 
