@@ -438,6 +438,21 @@ So that the codebase follows HA logging guidelines and avoids unnecessary string
 **And** no f-string log calls remain in `custom_components/quiet_solar/`
 **And** all existing tests still pass
 
+### Story 1.11: Living Documentation Sync During Dev Lifecycle [DONE]
+
+As TheDev,
+I want the dev workflow skills to detect when user direction, review feedback, or adversarial findings impact the story specification (or other project docs), proactively propose doc changes for my approval, and run a formal doc-sync checkpoint at key lifecycle boundaries,
+So that the story artifact, architecture, and project rules stay aligned with reality throughout implementation and review.
+
+**Acceptance Criteria:**
+
+**Given** the agent detects direction/findings that impact documentation during implement/review/finish
+**Then** it flags the impact, proposes edits, and waits for approval
+**And** inline doc-sync runs continuously during implement and review
+**And** compound doc-sync runs at session boundaries
+**And** a mandatory doc-sync gate runs at finish-story before merge
+**And** `scripts/qs/doc_sync.py` compares the story artifact against the git diff
+
 ## Epic 2: Trust-Critical Test Scenarios
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
