@@ -6,9 +6,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "qs"
 
@@ -129,6 +126,9 @@ class TestNextStep:
         assert "--pr 5" in data["same_context"]
         assert "--story-key 3.2" in data["same_context"]
         assert "claude" in data["new_context"]
+        # No --issue provided; tab title should use PR number, not 0
+        assert "QS_5" in data["new_context"]
+        assert "QS_0" not in data["new_context"]
 
     def test_missing_required_args(self):
         """Missing --skill should fail."""

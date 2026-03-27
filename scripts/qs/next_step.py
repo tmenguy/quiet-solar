@@ -40,8 +40,8 @@ def main() -> None:
     parser.add_argument("--title", required=True, help="Issue/story title for display")
     args = parser.parse_args()
 
-    # Use issue number for the launch command; fall back to 0 if not provided
-    issue = args.issue or 0
+    # Use issue or PR for the tab title; prefer issue, fall back to PR
+    issue = args.issue or args.pr or 0
 
     same_context = build_skill_prompt(
         args.skill,
