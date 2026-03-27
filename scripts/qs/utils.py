@@ -150,7 +150,7 @@ def detect_risk_level(changed_files: list[str]) -> list[str]:
 # --- Workflow helpers (reusable across scripts) ---
 
 _DEFAULT_STAGE_PATHS = [
-    "custom_components/",
+    "custom_components/quiet_solar/",
     "tests/",
     "_bmad-output/",
     "_qsprocess/",
@@ -239,9 +239,10 @@ def check_ci_status(pr_number: int) -> dict:
     """Check CI check status for a PR.
 
     Returns {"checks": list, "all_passed": bool, "pending": list, "failed": list}.
+    Uses gh pr checks fields: name, state (SUCCESS|FAILURE|IN_PROGRESS|...), bucket.
     """
     result = run_gh(
-        ["pr", "checks", str(pr_number), "--json", "name,state,conclusion"],
+        ["pr", "checks", str(pr_number), "--json", "name,state,bucket"],
         check=False,
     )
     if result.returncode != 0:
@@ -261,10 +262,11 @@ def check_ci_status(pr_number: int) -> dict:
     pending = []
     for c in checks:
         state = c.get("state", "")
-        conclusion = c.get("conclusion", "")
-        if state != "COMPLETED":
+        if state == "SUCCESS":
+            continue
+        elif state in ("IN_PROGRESS", "QUEUED", "PENDING", "REQUESTED", "WAITING"):
             pending.append(c["name"])
-        elif conclusion != "SUCCESS":
+        else:
             failed.append(c["name"])
 
     return {

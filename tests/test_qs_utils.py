@@ -182,8 +182,8 @@ def test_find_pr_for_branch_gh_error(monkeypatch):
 def test_check_ci_status_all_pass(monkeypatch):
     """Reports all checks passed."""
     checks = [
-        {"name": "build", "state": "COMPLETED", "conclusion": "SUCCESS"},
-        {"name": "lint", "state": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "build", "state": "SUCCESS", "bucket": "pass"},
+        {"name": "lint", "state": "SUCCESS", "bucket": "pass"},
     ]
 
     def fake_run(cmd, **kwargs):
@@ -201,8 +201,8 @@ def test_check_ci_status_all_pass(monkeypatch):
 def test_check_ci_status_some_fail(monkeypatch):
     """Reports failed checks."""
     checks = [
-        {"name": "build", "state": "COMPLETED", "conclusion": "SUCCESS"},
-        {"name": "lint", "state": "COMPLETED", "conclusion": "FAILURE"},
+        {"name": "build", "state": "SUCCESS", "bucket": "pass"},
+        {"name": "lint", "state": "FAILURE", "bucket": "fail"},
     ]
 
     def fake_run(cmd, **kwargs):
@@ -219,7 +219,7 @@ def test_check_ci_status_some_fail(monkeypatch):
 def test_check_ci_status_pending(monkeypatch):
     """Reports pending checks."""
     checks = [
-        {"name": "build", "state": "IN_PROGRESS", "conclusion": ""},
+        {"name": "build", "state": "IN_PROGRESS", "bucket": "pending"},
     ]
 
     def fake_run(cmd, **kwargs):

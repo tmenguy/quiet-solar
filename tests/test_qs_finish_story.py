@@ -95,7 +95,7 @@ def test_phase_prepare_no_pr_creates_one(monkeypatch, tmp_path):
 def test_phase_validate_all_pass(monkeypatch):
     """All validations pass."""
     responses = {
-        "gh pr checks": {"stdout": json.dumps([{"name": "build", "state": "COMPLETED", "conclusion": "SUCCESS"}])},
+        "gh pr checks": {"stdout": json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])},
         "gh pr view": {"stdout": json.dumps({"body": "Fixes #51"})},
     }
     monkeypatch.setattr(subprocess, "run", _make_run(responses))
