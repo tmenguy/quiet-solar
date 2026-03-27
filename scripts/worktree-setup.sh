@@ -30,12 +30,6 @@ MAIN_BASENAME="$(basename "$MAIN_DIR")"
 WORKTREES_DIR="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
 WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
 
-# Check branch doesn't already exist
-if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
-    echo "Error: Branch ${BRANCH} already exists"
-    exit 1
-fi
-
 # Check worktree doesn't already exist
 if [ -d "$WORKTREE_DIR" ]; then
     echo "Error: Worktree directory ${WORKTREE_DIR} already exists"
@@ -45,9 +39,18 @@ fi
 # Create worktrees parent directory if needed
 mkdir -p "$WORKTREES_DIR"
 
-# Create worktree with new branch from main
-echo "Creating worktree at ${WORKTREE_DIR} on branch ${BRANCH}..."
-git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH"
+# Create worktree — reuse existing branch or create new one
+if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
+    # F17: Warn if existing branch has diverged from main
+    if ! git -C "$MAIN_DIR" merge-base --is-ancestor "$BRANCH" main 2>/dev/null; then
+        echo "Warning: Branch ${BRANCH} has diverged from main. Consider rebasing."
+    fi
+    echo "Creating worktree at ${WORKTREE_DIR} using existing branch ${BRANCH}..."
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
+else
+    echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH"
+fi
 
 # P2: Symlink venv using derived basename (not hardcoded)
 if [ -d "${MAIN_DIR}/venv" ]; then
@@ -55,10 +58,28 @@ if [ -d "${MAIN_DIR}/venv" ]; then
     echo "Symlinked venv"
 fi
 
-# P2: Symlink config using derived basename
+# P2: Symlink config contents using derived basename
+# config/ may already exist as a directory (git creates it for tracked files like configuration.yaml).
+# Symlink each non-git item inside config/ individually, same pattern as custom_components/.
 if [ -d "${MAIN_DIR}/config" ]; then
-    ln -s "../../${MAIN_BASENAME}/config" "${WORKTREE_DIR}/config"
-    echo "Symlinked config"
+    mkdir -p "${WORKTREE_DIR}/config"
+    TRACKED_CONFIG="$(git -C "$MAIN_DIR" ls-files -- config/)"
+    # F4: Enable dotglob so hidden files (.storage, .HA_VERSION, etc.) are included
+    shopt -s dotglob
+    for item in "${MAIN_DIR}/config"/*; do
+        [ -e "$item" ] || continue
+        name="$(basename "$item")"
+        target="${WORKTREE_DIR}/config/${name}"
+        # F15: Use fixed-string match instead of regex to avoid . metacharacter issues
+        if echo "$TRACKED_CONFIG" | grep -qF "config/${name}"; then
+            continue
+        fi
+        if [ ! -e "$target" ]; then
+            ln -s "../../../${MAIN_BASENAME}/config/${name}" "$target"
+            echo "Symlinked config/${name}"
+        fi
+    done
+    shopt -u dotglob
 fi
 
 # Symlink non-git custom_components using derived basename

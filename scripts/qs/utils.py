@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -112,6 +113,21 @@ def find_story_file(story_key: str | None = None) -> Path | None:
     # Return most recently modified story file
     story_files = sorted(artifacts_dir.glob("*.md"), key=os.path.getmtime, reverse=True)
     return story_files[0] if story_files else None
+
+
+CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
+
+
+def claude_launch_command(work_dir: str, issue: int, title: str) -> str:
+    """Build the full claude launch command with terminal title and standard options."""
+    tab_title = f"QS_{issue}: {title}"
+    safe_title = shlex.quote(tab_title)
+    safe_dir = shlex.quote(work_dir)
+    return (
+        f'printf "\\e]0;%s\\a" {safe_title} && '
+        f'cd {safe_dir} && '
+        f'claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}'
+    )
 
 
 def detect_risk_level(changed_files: list[str]) -> list[str]:

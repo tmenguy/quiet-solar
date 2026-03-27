@@ -43,6 +43,17 @@ python scripts/qs/quality_gate.py
 ```
 This enforces ALL project gates: pytest 100% coverage + ruff lint + ruff format + mypy + translations.
 
+### 2.5. Inline doc-sync (continuous)
+
+Throughout implementation, watch for user direction that changes scope, acceptance criteria, technical approach, or tasks. When detected:
+
+1. **Flag it**: tell the user what changed and which documents are affected
+2. **Propose edits**: show specific changes to the story artifact (`_bmad-output/implementation-artifacts/*.md`) — e.g., updated ACs, modified tasks, new dev notes
+3. **Wait for approval**: do NOT apply changes until the user confirms
+4. **Apply if accepted**: edit the story file in place
+
+If the change is structural (e.g., new architecture pattern, new project rule), also mention potential updates to `architecture.md` or `_qsprocess/rules/project-rules.md` — but propose those separately, not bundled with story edits. Most implementation-level adjustments only need story artifact updates.
+
 ### 3. Final quality gate enforcement
 
 After bmad-dev-story completes, run the full quality gate one more time:
@@ -53,11 +64,23 @@ python scripts/qs/quality_gate.py --json
 
 ALL gates MUST pass. If any fail (especially coverage < 100%), fix before proceeding. Do NOT skip this step. bmad-dev-story may consider itself done, but the project requires 100% coverage and all gates green.
 
+### 3.5. Compound doc-sync
+
+Before committing, review everything that happened during the session:
+
+1. **Scan**: all user direction given, implementation decisions that deviated from the original spec, and new information discovered during implementation
+2. **Propose**: a consolidated list of story artifact updates — AC adjustments, task modifications, dev notes additions. Present each proposed change clearly.
+3. **Secondary docs**: if implementation revealed structural gaps, optionally propose updates to `architecture.md` or `_qsprocess/rules/project-rules.md` (separate from story updates)
+4. **User approves/rejects** each item
+5. **Apply**: edit approved changes in place. Modified documents will be included in the commit.
+
+If inline doc-sync (Step 2.5) already captured all changes, say so and move on — don't force unnecessary updates.
+
 ### 4. Commit all changes
 
 Stage all relevant files (NOT .DS_Store, venv, config, __pycache__):
 ```bash
-git add custom_components/ tests/ _bmad-output/
+git add custom_components/ tests/ _bmad-output/ _qsprocess/ scripts/
 git commit -m "{{descriptive_message}}"
 ```
 
@@ -69,12 +92,14 @@ python scripts/qs/create_pr.py --title "{{title}}" --summary "{{bullets}}" --iss
 
 ### 6. Output review command
 
+Build the launch command using `claude_launch_command()` from `scripts/qs/utils.py`. Always use the function — do not copy-paste the `CLAUDE_LAUNCH_OPTS` constant value. See `scripts/qs/utils.py` for the current value.
+
 Tell the user:
 ```
 Implementation complete. PR #{{pr_number}} created: {{url}}
 
 To review, run in a new context:
-  cd "{{main_worktree}}" && claude --name "Review QS_{{issue}}"
+  {{launch_command}}
 Then type:
   /review-story --pr {{pr_number}} --issue {{issue_number}}
 ```

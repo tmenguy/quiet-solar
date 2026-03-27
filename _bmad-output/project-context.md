@@ -23,6 +23,8 @@ Skills are defined in `_qsprocess/skills/`. They delegate creative work to BMad 
 
 Quality gates: `python scripts/qs/quality_gate.py` (pytest 100% coverage + ruff + mypy + translations).
 
+Doc-sync is built into `/implement-story`, `/review-story`, and `/finish-story` — the agent detects documentation impacts inline and runs a compound sync at lifecycle boundaries. The finish-story gate uses `python scripts/qs/doc_sync.py` to compare the story artifact against the actual implementation.
+
 For workflow routing and architecture constraints, see `_qsprocess/rules/project-rules.md`.
 
 ---
