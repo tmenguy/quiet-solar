@@ -200,8 +200,8 @@ class TestDashboardTemplateRendering:
         assert "qs_solar_active_provider" in rendered
 
     @pytest.mark.asyncio
-    async def test_home_forecast_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
-        """Home forecast sensors are present in the rendered dashboard YAML."""
+    async def test_home_forecast_entities_absent_from_rendered_output(self, hass, full_dashboard_home):
+        """Home forecast sensors are NOT present in the rendered home dashboard YAML."""
         home = full_dashboard_home
         template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
         template_content = template_path.read_text()
@@ -209,8 +209,12 @@ class TestDashboardTemplateRendering:
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": home})
 
-        assert "qs_no_control_forecast" in rendered
-        assert "qs_solar_forecast" in rendered
+        assert "qs_no_control_forecast" not in rendered
+        # qs_solar_forecast may still appear in the solar device section
+        # but must not appear in the home device section
+        for line in rendered.splitlines():
+            if "qs_no_control_forecast" in line:
+                pytest.fail(f"qs_no_control_forecast found in rendered output: {line}")
 
 
 # ============================================================================
