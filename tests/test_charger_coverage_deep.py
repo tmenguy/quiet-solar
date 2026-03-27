@@ -1940,7 +1940,6 @@ class TestGetAmpsPhaseSwitch:
 # QSChargerOCPP and QSChargerWallbox specific tests
 # =============================================================================
 
-from custom_components.quiet_solar.ha_model.charger import WallboxChargerStatus
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
@@ -1949,6 +1948,7 @@ from custom_components.quiet_solar.const import (
 )
 from custom_components.quiet_solar.ha_model.charger import (
     QSOCPPv16v201ChargePointStatus,
+    WallboxChargerStatus,
 )
 
 
@@ -6792,8 +6792,8 @@ class TestPrepareBudgetsEmptyPossibleAmps:
         cs.possible_amps = []
         cs.possible_num_phases = [1]
 
-        current_amps, has_phase_changes, mandatory_amps = (
-            await group._do_prepare_budgets_for_algo([cs], do_reset_allocation=True)
+        current_amps, has_phase_changes, mandatory_amps = await group._do_prepare_budgets_for_algo(
+            [cs], do_reset_allocation=True
         )
 
         assert cs.budgeted_amp == 0
@@ -6810,8 +6810,8 @@ class TestPrepareBudgetsEmptyPossibleAmps:
         cs.possible_amps = [0, 6, 7, 8]
         cs.possible_num_phases = []
 
-        current_amps, has_phase_changes, mandatory_amps = (
-            await group._do_prepare_budgets_for_algo([cs], do_reset_allocation=True)
+        current_amps, has_phase_changes, mandatory_amps = await group._do_prepare_budgets_for_algo(
+            [cs], do_reset_allocation=True
         )
 
         assert cs.budgeted_amp == 0
@@ -6873,8 +6873,8 @@ class TestPrepareBudgetsEmptyPossibleAmps:
         cs2.possible_num_phases = [1]
         cs2.command = copy_command(CMD_AUTO_GREEN_ONLY)
 
-        current_amps, has_phase_changes, mandatory_amps = (
-            await group._do_prepare_budgets_for_algo([cs1, cs2], do_reset_allocation=True)
+        current_amps, has_phase_changes, mandatory_amps = await group._do_prepare_budgets_for_algo(
+            [cs1, cs2], do_reset_allocation=True
         )
 
         # cs2 should be defaulted to off
@@ -6952,16 +6952,12 @@ class TestShaveMandatoryBudgetsEmptyPossibleAmps:
             return call_count[0] > 3
 
         group.dynamic_group.is_current_acceptable = MagicMock(side_effect=_acceptable)
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(True, [0.0, 0.0, 0.0])
-        )
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(True, [0.0, 0.0, 0.0]))
 
         mandatory_amps = [20.0, 0.0, 0.0]
         current_amps = [10.0, 0.0, 0.0]
 
-        result = await group._shave_mandatory_budgets(
-            [cs1, cs2], current_amps, mandatory_amps, now
-        )
+        result = await group._shave_mandatory_budgets([cs1, cs2], current_amps, mandatory_amps, now)
 
         # cs1 with empty possible_amps should have been skipped, cs2 should have been shaved
         assert cs1.possible_amps == []  # unchanged: skipped at line 1584
@@ -6973,16 +6969,12 @@ class TestShaveMandatoryBudgetsEmptyPossibleAmps:
         cs2.possible_amps = []  # make both chargers have empty amps
 
         group.dynamic_group.is_current_acceptable = MagicMock(return_value=False)
-        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(
-            return_value=(False, [5.0, 0.0, 0.0])
-        )
+        group.dynamic_group.is_current_acceptable_and_diff = MagicMock(return_value=(False, [5.0, 0.0, 0.0]))
 
         mandatory_amps = [20.0, 0.0, 0.0]
         current_amps = [10.0, 0.0, 0.0]
 
-        result = await group._shave_mandatory_budgets(
-            [cs1, cs2], current_amps, mandatory_amps, now
-        )
+        result = await group._shave_mandatory_budgets([cs1, cs2], current_amps, mandatory_amps, now)
 
         # Both skipped, mandatory_amps unchanged
         assert result == [20.0, 0.0, 0.0]

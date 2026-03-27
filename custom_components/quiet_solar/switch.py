@@ -15,13 +15,11 @@ from .const import (
     SWITCH_BEST_EFFORT_GREEN_ONLY,
     SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
     SWITCH_ENABLE_DEVICE,
-    SWITCH_SOLAR_DAMPENING_PREFIX,
 )
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
-from .ha_model.solar import QSSolar
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,28 +90,6 @@ def create_ha_switch_for_AbstractLoad(device: AbstractLoad):
     return entities
 
 
-def create_ha_switch_for_QSSolar(device: QSSolar):
-    entities = []
-    for provider_name, provider in device.solar_forecast_providers.items():
-        safe_name = provider_name.lower().replace(" ", "_").replace("-", "_")
-        key = f"{SWITCH_SOLAR_DAMPENING_PREFIX}{safe_name}"
-
-        async def _set_dampening(dev, is_on, for_init, prov=provider):
-            prov.dampening_enabled = is_on
-
-        dampening_description = QSSwitchEntityDescription(
-            key=key,
-            name=f"Dampening ({provider_name})",
-            async_switch=_set_dampening,
-        )
-        entities.append(
-            QSSwitchEntityWithRestore(
-                data_handler=device.data_handler, device=device, description=dampening_description
-            )
-        )
-    return entities
-
-
 def create_ha_switch(device: AbstractDevice):
 
     ret = []
@@ -128,9 +104,6 @@ def create_ha_switch(device: AbstractDevice):
 
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_switch_for_AbstractLoad(device))
-
-    if isinstance(device, QSSolar):
-        ret.extend(create_ha_switch_for_QSSolar(device))
 
     return ret
 

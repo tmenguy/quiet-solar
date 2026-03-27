@@ -36,17 +36,8 @@ So that optimization always uses the most accurate forecast available, even when
    **And** for each provider, `sensor.qs_solar_forecast_score_<provider>` shows its 7-day accuracy score (forecast vs actual production from `solar_plant`)
    **And** the score is computed over a rolling 7-day window comparing each provider's forecast against actual solar production data from the ring buffer
 
-4. **AC4 — Forecast dampening (MOS linear correction)**
-   **Given** automatic dampening is enabled for a provider (via `switch.qs_solar_dampening_<provider>`)
-   **When** the system recomputes dampening at midnight
-   **Then** for each time step k in the provider's native temporal resolution (derived from the forecast data itself — detected from consecutive forecast timestamps), it computes dampening coefficients (a_k, b_k) using linear regression on the previous 7 days of (forecast_k, actual_k) data points
-   **And** the dampened forecast for step k is: `max(0, a_k * raw_forecast_k + b_k)` (clamped to non-negative)
-   **And** the dampened forecast is used for optimization instead of the raw forecast
-   **And** `sensor.qs_solar_forecast_score_raw_<provider>` shows the 7-day accuracy without dampening
-   **And** `sensor.qs_solar_forecast_score_dampened_<provider>` shows the 7-day accuracy with dampening
-   **And** if dampening is disabled (switch off), the raw forecast is used directly
-   **And** dampening coefficients are per-provider, with the number of steps determined by each provider's native forecast resolution
-   **And** physical guards are enforced: output clamped to >= 0, nighttime steps use identity (a=1, b=0), coefficients bounded (a_k in [0.1, 3.0]), minimum 3 valid data points per step required for fitting
+4. **AC4 — Forecast dampening (MOS linear correction)** *(REMOVED in Story 3.14)*
+   > **Note:** Solar forecast dampening was fully removed in Story 3.14 (#43). After real-world testing, MOS linear regression added complexity without sufficient benefit — solar forecast providers already apply their own corrections, and simple MAE scoring + auto-provider selection achieves the goal. The dampening code, switches (`switch.qs_solar_dampening_<provider>`), sensors (`score_raw`, `score_dampened`), and all related tests were deleted. Only the scoring infrastructure (MAE computation, provider ranking, auto-selection) remains.
 
 ## Tasks / Subtasks
 

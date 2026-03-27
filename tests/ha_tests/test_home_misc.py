@@ -42,14 +42,19 @@ async def test_home_force_update_and_resets(
     home.update_all_states.assert_awaited_with(time_now)
     home.update_loads.assert_awaited_with(time_now)
 
-    home._consumption_forecast = MagicMock()
-    home._consumption_forecast.reset_forecasts = AsyncMock()
+    home.solar_and_consumption_forecast = MagicMock()
+    home.solar_and_consumption_forecast.reset_forecasts = AsyncMock()
 
     await home.reset_forecasts(time_now)
-    home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now)
+    home.solar_and_consumption_forecast.reset_forecasts.assert_awaited_with(time_now)
+
+    # Cover solar_plant.reset_scoring branch
+    home.physical_solar_plant = MagicMock()
+    await home.reset_forecasts(time_now)
+    home.solar_plant.reset_scoring.assert_called_once_with(time_now)
 
     await home.light_reset_forecasts(time_now)
-    home._consumption_forecast.reset_forecasts.assert_awaited_with(time_now, light_reset=True)
+    home.solar_and_consumption_forecast.reset_forecasts.assert_awaited_with(time_now, light_reset=True)
 
 
 @pytest.mark.asyncio
@@ -61,13 +66,13 @@ async def test_home_reset_forecasts_defaults(
     await _setup_entry(hass, home_config_entry)
 
     home = hass.data[DOMAIN][DATA_HANDLER].home
-    home._consumption_forecast = MagicMock()
-    home._consumption_forecast.reset_forecasts = AsyncMock()
+    home.solar_and_consumption_forecast = MagicMock()
+    home.solar_and_consumption_forecast.reset_forecasts = AsyncMock()
 
     await home.reset_forecasts()
     await home.light_reset_forecasts()
 
-    assert home._consumption_forecast.reset_forecasts.await_count == 2
+    assert home.solar_and_consumption_forecast.reset_forecasts.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -81,8 +86,8 @@ async def test_home_dump_for_debug_and_dashboard_yaml(
 
     home = hass.data[DOMAIN][DATA_HANDLER].home
     home.home_mode = QSHomeMode.HOME_MODE_ON.value
-    home._consumption_forecast = MagicMock()
-    home._consumption_forecast.dump_for_debug = AsyncMock()
+    home.solar_and_consumption_forecast = MagicMock()
+    home.solar_and_consumption_forecast.dump_for_debug = AsyncMock()
 
     home.physical_solar_plant = MagicMock()
     home.physical_solar_plant.dump_for_debug = AsyncMock()
@@ -99,7 +104,7 @@ async def test_home_dump_for_debug_and_dashboard_yaml(
 
     debug_file = tmp_path / DOMAIN / "debug" / "debug_conf.pickle"
     assert debug_file.exists()
-    home._consumption_forecast.dump_for_debug.assert_awaited()
+    home.solar_and_consumption_forecast.dump_for_debug.assert_awaited()
     home.physical_solar_plant.dump_for_debug.assert_awaited()
     home.dump_person_car_data_for_debug.assert_awaited()
 

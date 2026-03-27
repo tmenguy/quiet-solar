@@ -552,13 +552,13 @@ async def test_home_consumption_forecast_object_created(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Test that _consumption_forecast is created on setup."""
+    """Test that solar_and_consumption_forecast is created on setup."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
-    assert home._consumption_forecast is not None
+    assert home.solar_and_consumption_forecast is not None
 
 
 async def test_home_non_controlled_consumption_getter_no_forecast(
@@ -591,7 +591,7 @@ async def test_home_compute_non_controlled_forecast(
 
     time = datetime.now(tz=pytz.UTC)
 
-    with patch.object(home._consumption_forecast, "init_forecasts", new_callable=AsyncMock, return_value=False):
+    with patch.object(home.solar_and_consumption_forecast, "init_forecasts", new_callable=AsyncMock, return_value=False):
         result = await home.compute_non_controlled_forecast(time)
     assert isinstance(result, list)
 
@@ -1360,7 +1360,7 @@ async def test_reset_forecasts_solar_active_power_success(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
     await hass.config_entries.async_unload(solar_entry.entry_id)
     await hass.async_block_till_done()
@@ -1401,7 +1401,7 @@ async def test_reset_forecasts_solar_input_only_success(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
     await hass.config_entries.async_unload(solar_entry.entry_id)
     await hass.async_block_till_done()
@@ -1448,7 +1448,7 @@ async def test_reset_forecasts_solar_active_power_fail(
         return time - timedelta(days=1), time + timedelta(days=1)
 
     with patch.object(QSSolarHistoryVals, "init", mock_solar_fail):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
     await hass.config_entries.async_unload(solar_entry.entry_id)
     await hass.async_block_till_done()
@@ -1495,7 +1495,7 @@ async def test_reset_forecasts_solar_input_only_fail(
         return time - timedelta(days=1), time + timedelta(days=1)
 
     with patch.object(QSSolarHistoryVals, "init", mock_input_fail):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
     await hass.config_entries.async_unload(solar_entry.entry_id)
     await hass.async_block_till_done()
@@ -1520,7 +1520,7 @@ async def test_reset_forecasts_grid_init_fail(
         return None, None
 
     with patch.object(QSSolarHistoryVals, "init", mock_init_fail):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_with_piloted_device(
@@ -1563,7 +1563,7 @@ async def test_reset_forecasts_bfs_with_piloted_device(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_disabled_load(
@@ -1597,7 +1597,7 @@ async def test_reset_forecasts_bfs_disabled_load(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_disabled_device_in_children(
@@ -1631,7 +1631,7 @@ async def test_reset_forecasts_bfs_disabled_device_in_children(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_auto_boosted_load(
@@ -1666,7 +1666,7 @@ async def test_reset_forecasts_bfs_auto_boosted_load(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_onoff_switch_entity(
@@ -1697,7 +1697,7 @@ async def test_reset_forecasts_bfs_onoff_switch_entity(
 
     time = datetime.now(tz=pytz.UTC)
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_dynamic_group(
@@ -1728,7 +1728,7 @@ async def test_reset_forecasts_bfs_dynamic_group(
     home = data_handler.home
 
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_dynamic_group_with_sensor(
@@ -1765,7 +1765,7 @@ async def test_reset_forecasts_bfs_dynamic_group_with_sensor(
             break
 
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_non_ha_device_mixin(
@@ -1786,7 +1786,7 @@ async def test_reset_forecasts_bfs_non_ha_device_mixin(
     home._childrens.append(non_ha_device)
 
     with patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 async def test_reset_forecasts_bfs_load_init_fails(
@@ -1837,7 +1837,7 @@ async def test_reset_forecasts_bfs_load_init_fails(
         return strt, end
 
     with patch.object(QSSolarHistoryVals, "init", mock_init_some_fail):
-        await home._consumption_forecast.reset_forecasts(time)
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
 
 
 # ---------------------------------------------------------------------------
@@ -2546,10 +2546,10 @@ async def test_compute_non_controlled_forecast_intl(
 
     mock_forecast_result = MagicMock()
     mock_forecast_result.compute_now_forecast = MagicMock(return_value=[(None, 100.0)])
-    home._consumption_forecast.home_non_controlled_consumption = mock_forecast_result
+    home.solar_and_consumption_forecast.home_non_controlled_consumption = mock_forecast_result
 
     time = datetime.now(tz=pytz.UTC)
-    result = home._compute_non_controlled_forecast_intl(time)
+    result = home.solar_and_consumption_forecast.compute_non_controlled_forecast_intl(time)
     assert result is not None
     mock_forecast_result.compute_now_forecast.assert_called_once()
 

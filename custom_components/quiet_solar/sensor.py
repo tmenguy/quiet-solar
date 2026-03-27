@@ -51,10 +51,9 @@ from .const import (
     SENSOR_LOAD_CURRENT_COMMAND,
     SENSOR_LOAD_OVERRIDE_STATE,
     SENSOR_PERSON_MILEAGE_PREDICTION_KM,
+    SENSOR_SOLAR_ACTIVE_PROVIDER,
     SENSOR_SOLAR_FORECAST_AGE,
-    SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX,
     SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
-    SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX,
     QSForecastHomeNonControlledSensors,
     QSForecastSolarSensors,
 )
@@ -354,19 +353,6 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
 
-    for name in QSForecastSolarSensors:
-        home_forecast_power = QSSensorEntityDescription(
-            key=name,
-            name=name,
-            native_unit_of_measurement=UnitOfPower.WATT,
-            state_class=SensorStateClass.MEASUREMENT,
-            device_class=SensorDeviceClass.POWER,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key: device.home_solar_forecast_sensor_values.get(key, None),
-            qs_is_none_unavailable=True,
-        )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
-
     return entities
 
 
@@ -387,45 +373,60 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=forecast_age_sensor))
 
-    # Per-provider score sensors
+    # Per-provider forecast accuracy score sensor (MAE vs actuals)
     for provider_name, provider in device.solar_forecast_providers.items():
         safe_name = provider_name.lower().replace(" ", "_").replace("-", "_")
 
-        # Active score (dampened if enabled, raw otherwise)
         score_key = f"{SENSOR_SOLAR_FORECAST_SCORE_PREFIX}{safe_name}"
         score_sensor = QSSensorEntityDescription(
             key=score_key,
-            name=f"Score ({provider_name})",
+            name=f"Forecast Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.get_active_score(),
+            value_fn=lambda device, key, prov=provider: prov.score,
             qs_is_none_unavailable=True,
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=score_sensor))
 
-        # Raw score
-        raw_key = f"{SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX}{safe_name}"
-        raw_sensor = QSSensorEntityDescription(
-            key=raw_key,
-            name=f"Raw Score ({provider_name})",
-            native_unit_of_measurement=UnitOfPower.WATT,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.score_raw,
-            qs_is_none_unavailable=True,
-        )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=raw_sensor))
+    # Active solar provider sensor
+    active_provider_sensor = QSSensorEntityDescription(
+        key=SENSOR_SOLAR_ACTIVE_PROVIDER,
+        translation_key=SENSOR_SOLAR_ACTIVE_PROVIDER,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device, key: device.active_provider_name,
+        qs_is_none_unavailable=True,
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=active_provider_sensor))
 
-        # Dampened score
-        dampened_key = f"{SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX}{safe_name}"
-        dampened_sensor = QSSensorEntityDescription(
-            key=dampened_key,
-            name=f"Dampened Score ({provider_name})",
+    for name in QSForecastSolarSensors:
+        home_forecast_power = QSSensorEntityDescription(
+            key=name,
+            name=name,
             native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.POWER,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key, prov=provider: prov.score_dampened,
+            value_fn=lambda device, key: device.solar_forecast_sensor_values.get(key, None),
             qs_is_none_unavailable=True,
         )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=dampened_sensor))
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+
+    for provider_name in device.solar_forecast_providers:
+        for forecast_entity_name_base in QSForecastSolarSensors:
+            name = f"{provider_name}_{forecast_entity_name_base}"
+            home_forecast_power = QSSensorEntityDescription(
+                key=name,
+                name=name,
+                native_unit_of_measurement=UnitOfPower.WATT,
+                state_class=SensorStateClass.MEASUREMENT,
+                device_class=SensorDeviceClass.POWER,
+                entity_category=EntityCategory.DIAGNOSTIC,
+                value_fn=lambda device, key: device.solar_forecast_sensor_values_per_provider.get(key, None),
+                qs_is_none_unavailable=True,
+            )
+            entities.append(
+                QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power)
+            )
 
     return entities
 

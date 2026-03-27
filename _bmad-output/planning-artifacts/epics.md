@@ -747,55 +747,45 @@ So that I have a third provider option and can compare its accuracy against othe
 **And** the provider's native temporal resolution is detected from the data (hourly for free accounts, higher for paid)
 **And** all existing resilience features (staleness detection, health monitoring, re-probing) apply
 
-### Story 3.14: Wire Dampening End-to-End with Resolution-Independent Storage
+### Story 3.14: Solar Forecast Scoring and Provider Auto-Selection *(scope changed from "Wire Dampening End-to-End")*
 
 As TheAdmin,
-I want the solar forecast dampening system to actually work — recording real production data, computing meaningful scores and dampening coefficients per time-of-day, persisting them across restarts, and showing me detailed accuracy metrics,
-So that forecast accuracy improves over time, I can monitor dampening behavior, and auto-provider selection uses real accuracy data.
+I want the solar forecast scoring system to record real production data, compute meaningful accuracy scores per provider, and show me which provider is active,
+So that auto-provider selection uses real accuracy data and I can monitor forecast quality.
 
-**Priority:** P2 — degraded optimization | **Size:** L
-**Dependencies:** Story 3.7 (dampening infrastructure), Story 3.13 (multi-provider)
+**Status:** in-progress | **Priority:** P2 — degraded optimization | **Size:** L
+**Dependencies:** Story 3.7 (scoring infrastructure), Story 3.13 (multi-provider)
 **GitHub Issue:** #43
+
+**Scope change:** Solar forecast dampening (MOS linear regression) was removed entirely — it added complexity without sufficient benefit. Only scoring (MAE computation, provider ranking, auto-selection) remains.
 
 **Acceptance Criteria:**
 
 **Given** time series utils are scattered across `load.py` and `solver.py`
 **When** the refactoring is complete
-**Then** `align_time_series_and_values`, `get_slots_from_time_series`, `get_value_from_time_series` are in `home_utils.py`
-**And** `_power_slot_from_forecast` is extracted as `slot_value_from_time_series` in `home_utils.py`
-**And** a new `align_time_series_on_time_slots` function aligns any time series onto arbitrary slot boundaries
+**Then** all time series utilities live in `home_utils.py` with re-exports for backward compatibility
 
 **Given** the system records actual solar production
 **When** each forecast update runs
-**Then** actuals are stored in a continuous 8-day rolling buffer at 5-min resolution
-**And** on first startup, the buffer is bootstrapped from `get_historical_solar_fallback`
+**Then** actuals are recorded from sensor every 5 minutes into a shared buffer on `QSSolar`
 
 **Given** the system records forecast snapshots
 **When** a new forecast arrives
-**Then** it is stored in one of 12 rolling buffers indexed by 2-hour time-of-day slots (00:00, 02:00, ..., 22:00) covering 8 days each
+**Then** it is stored in one of 12 rolling buffers indexed by 2-hour time-of-day slots with overlap deduplication
 
-**Given** dampening is computed for a forecast at time T
-**When** the system computes coefficients
-**Then** it uses the forecast buffer matching T's 2-hour slot, shifts past timestamps to today, aligns both forecasts and actuals onto the current forecast's time slots, and fits per-slot MOS regression
-
-**Given** any provider, regardless of dampening switch state
-**When** the scoring cycle runs
-**Then** both raw and dampened scores are always computed; dampening coefficients are always computed; the switch only gates forecast application
+**Given** a provider's daily scoring cycle runs
+**When** score is computed
+**Then** it computes MAE of forecast vs actuals over a 7-day window; there is NO dampened score
 
 **Given** sensor changes
 **When** sensors are registered
-**Then** "Score (Provider)" is renamed to "Dampened Score (Provider)" with dampening params in attributes (daily + per 2h slot)
-**And** a new "No Dampening Score (Provider)" sensor shows raw accuracy
-**And** a new "Active Solar Provider" sensor shows the currently used provider name
-**And** the dashboard displays all new sensors
+**Then** a single "Forecast Score (Provider)" sensor per provider shows MAE
+**And** "Active Solar Provider" sensor shows the currently used provider name
+**And** no dampening switches or dampened score sensors exist
 
-**Given** HA restarts
-**When** the solar provider initializes
-**Then** dampening coefficients and rolling buffers are loaded from disk and applied immediately
-
-**Given** the user presses "Full Reset Quiet Solar History from DB"
-**When** the reset completes
-**Then** dampening rolling buffers are cleared and re-bootstrapped
+**Given** HA restarts or full reset
+**When** the system initializes
+**Then** scoring buffers are loaded/cleared appropriately via `reset_scoring()`
 
 ### Story 3.8: FM-007 — Prediction Confidence Resilience
 

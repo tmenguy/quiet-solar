@@ -1,6 +1,8 @@
 import copy
-from collections.abc import Mapping
+from bisect import bisect_left
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from operator import itemgetter
 from typing import Any
 
 import numpy as np
@@ -358,3 +360,338 @@ def _greedy_assignment(cost_matrix: np.ndarray) -> dict[int, int]:
             assigned_cols.add(col)
 
     return assignment
+
+
+def align_time_series_and_values(
+    tsv1: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]],
+    tsv2: list[tuple[datetime | None, str | float | None, Mapping[str, Any] | None | dict]]
+    | list[tuple[datetime | None, str | float | None]]
+    | None,
+    operation: Callable[[Any, Any], Any] | None = None,
+):
+
+    if not tsv1:
+        if not tsv2:
+            if operation is not None:
+                return []
+            else:
+                return [], []
+        else:
+            if operation is not None:
+                if len(tsv2[0]) == 3:
+                    return [(t, operation(None, v), a) for t, v, a in tsv2]
+                else:
+                    return [(t, operation(None, v)) for t, v in tsv2]
+            else:
+                if len(tsv2[0]) == 3:
+                    return [(t, None, None) for t, _, _ in tsv2], tsv2
+                else:
+                    return [(t, None) for t, _ in tsv2], tsv2
+
+    if not tsv2:
+        if operation is not None:
+            if len(tsv1[0]) == 3:
+                return [(t, operation(v, None), a) for t, v, a in tsv1]
+            else:
+                return [(t, operation(v, None)) for t, v in tsv1]
+        else:
+            if len(tsv1[0]) == 3:
+                return tsv1, [(t, None, None) for t, _, _ in tsv1]
+            else:
+                return tsv1, [(t, None) for t, _ in tsv1]
+
+    timings = {}
+
+    for i, tv in enumerate(tsv1):
+        timings[tv[0]] = [i, None]
+    for i, tv in enumerate(tsv2):
+        if tv[0] in timings:
+            timings[tv[0]][1] = i
+        else:
+            timings[tv[0]] = [None, i]
+
+    timings = [(k, v) for k, v in timings.items()]
+    timings.sort(key=lambda x: x[0])
+    t_only = [t for t, _ in timings]
+
+    object_len = 3
+    object_len = min(object_len, len(tsv1[0]), len(tsv2[0]))
+
+    # compute all values for each time
+    new_v1: list[float | str | None] = [0] * len(t_only)
+    new_v2: list[float | str | None] = [0] * len(t_only)
+
+    new_attr_1 = []
+    new_attr_2 = []
+    if object_len == 3:
+        new_attr_1: list[dict | None] = [None] * len(t_only)
+        new_attr_2: list[dict | None] = [None] * len(t_only)
+
+    for vi in range(2):
+        new_v = new_v1
+        new_attr = new_attr_1
+        tsv = tsv1
+        if vi == 1:
+            if operation is None:
+                new_v = new_v2
+                new_attr = new_attr_2
+            tsv = tsv2
+
+        last_real_idx = None
+        for i, (t, idxs) in enumerate(timings):
+            attr_to_put = None
+            if idxs[vi] is not None:
+                # ok an exact value
+                last_real_idx = idxs[vi]
+                val_to_put = tsv[last_real_idx][1]
+                if object_len == 3:
+                    attr_to_put = tsv[last_real_idx][2]
+            else:
+                if last_real_idx is None:
+                    # we have new values "before" the first real value"
+                    val_to_put = tsv[0][1]
+                    if object_len == 3:
+                        attr_to_put = tsv[0][2]
+                elif last_real_idx == len(tsv) - 1:
+                    # we have new values "after" the last real value"
+                    val_to_put = tsv[-1][1]
+                    if object_len == 3:
+                        attr_to_put = tsv[-1][2]
+                else:
+                    # we have new values "between" two real values"
+                    # interpolate
+                    vcur = tsv[last_real_idx][1]
+                    vnxt = tsv[last_real_idx + 1][1]
+
+                    if vnxt is None:
+                        val_to_put = vcur
+                    elif vcur is None:
+                        val_to_put = None
+                    else:
+                        d1 = float((t - tsv[last_real_idx][0]).total_seconds())
+                        d2 = float((tsv[last_real_idx + 1][0] - tsv[last_real_idx][0]).total_seconds())
+                        if d2 > 0:
+                            nv = (d1 / d2) * (vnxt - vcur) + vcur
+                            val_to_put = float(nv)
+                        else:
+                            val_to_put = vcur
+                    if object_len == 3:
+                        attr_to_put = tsv[last_real_idx][2]
+
+            if object_len == 3 and attr_to_put is not None:
+                attr_to_put = dict(attr_to_put)
+
+            if vi == 0 or operation is None:
+                new_v[i] = val_to_put
+                if object_len == 3:
+                    new_attr[i] = attr_to_put
+            else:
+                if new_v[i] is None or val_to_put is None:
+                    new_v[i] = None
+                else:
+                    new_v[i] = operation(new_v[i], val_to_put)
+                if object_len == 3:
+                    if new_attr[i] is None:
+                        new_attr[i] = attr_to_put
+                    elif attr_to_put is not None:
+                        new_attr[i].update(attr_to_put)
+
+    # ok so we do have values and timings for 1 and 2
+    if operation is not None:
+        if object_len == 3:
+            return list(zip(t_only, new_v1, new_attr_1))
+        else:
+            return list(zip(t_only, new_v1))
+    if object_len == 3:
+        return list(zip(t_only, new_v1, new_attr_1)), list(zip(t_only, new_v2, new_attr_2))
+    else:
+        return list(zip(t_only, new_v1)), list(zip(t_only, new_v2))
+
+
+def get_slots_from_time_series(
+    time_serie, start_time: datetime, end_time: datetime | None = None
+) -> list[tuple[datetime | None, str | float | None]]:
+    if not time_serie:
+        return []
+
+    start_idx = bisect_left(time_serie, start_time, key=itemgetter(0))
+    # get one before to have the timing just before
+    if start_idx > 0:
+        if time_serie[start_idx][0] != start_time:
+            start_idx -= 1
+
+    if end_time is None:
+        return time_serie[start_idx : start_idx + 1]
+
+    end_idx = bisect_left(time_serie, end_time, key=itemgetter(0))
+    if end_idx >= len(time_serie):
+        end_idx = len(time_serie) - 1
+    elif end_idx < len(time_serie) - 1:
+        # take one after
+        if time_serie[end_idx][0] != end_time:
+            end_idx += 1
+
+    return time_serie[start_idx : end_idx + 1]
+
+
+def get_value_from_time_series(
+    time_series, time: datetime, interpolation_operation: Callable[[Any, Any, datetime], Any] | None = None
+) -> tuple[datetime | None, str | float | None, bool, int]:
+
+    # find the closest time in the time serie
+    if time_series is None or len(time_series) == 0:
+        return (None, None, False, -1)
+
+    # small optim:
+    if time_series[-1][0] == time:
+        res = time_series[-1]
+        res_idx = len(time_series) - 1
+    elif time_series[0][0] == time:
+        res = time_series[0]
+        res_idx = 0
+    else:
+        idx = bisect_left(time_series, time, key=itemgetter(0))
+
+        if idx >= len(time_series):
+            res = time_series[-1]
+            res_idx = len(time_series) - 1
+        elif idx <= 0:
+            res = time_series[0]
+            res_idx = 0
+        elif time_series[idx][0] == time:
+            res = time_series[idx]
+            res_idx = idx
+        else:
+            # we have multiple scenarios here : we can take the closest one or compute an interpolated value
+            if interpolation_operation is None:
+                # a time serie is normally by construction: the point gives its value to the whole
+                # step
+                res = time_series[idx - 1]
+                res_idx = idx - 1
+
+                # if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
+                #     res = time_series[idx - 1]
+                #     res_idx = idx - 1
+                # else:
+                #     res = time_series[idx]
+                #     res_idx = idx
+            else:
+                v1 = time_series[idx - 1]
+                v2 = time_series[idx]
+
+                if v1[1] is None and v2[1] is None:
+                    res = (None, None)
+                    res_idx = -1
+                elif v1[1] is None:
+                    res = v2
+                    res_idx = idx
+                elif v2[1] is None:
+                    res = v1
+                    res_idx = idx - 1
+                else:
+                    res = interpolation_operation(v1, v2, time)
+                    res_idx = idx - 1
+
+    return res[0], res[1], res[0] == time, res_idx
+
+
+def slot_value_from_time_series(
+    forecast: list[tuple[datetime, float]],
+    begin_slot: datetime,
+    end_slot: datetime,
+    last_end: int,
+    geometric_smoothing: bool = False,
+) -> tuple[int, float]:
+    """Extract an averaged power value from a forecast time series for a given slot.
+
+    Mirrors the logic of ``PeriodSolver._power_slot_from_forecast`` but as a
+    standalone function (no ``self`` dependency).
+
+    Args:
+        forecast: sorted list of (datetime, value) pairs.
+        begin_slot: start of the time slot.
+        end_slot: end of the time slot.
+        last_end: index of the last entry used in the previous slot (-1 initially).
+        geometric_smoothing: if True, linearly interpolate at slot boundaries.
+
+    Returns:
+        (new_last_end, averaged_value) tuple.
+    """
+    if not forecast:
+        return last_end, 0.0
+
+    prev_end = last_end
+    while last_end < len(forecast) - 1 and forecast[last_end + 1][0] <= end_slot:
+        last_end += 1
+
+    power_series: list[tuple[datetime, float]] = []
+    if prev_end >= 0:
+        if forecast[prev_end][0] == begin_slot:
+            power_series.append((begin_slot, forecast[prev_end][1]))
+        elif forecast[prev_end][0] < begin_slot and prev_end < len(forecast) - 1:
+            adapted_power = forecast[prev_end][1]
+            if geometric_smoothing:
+                dt = (forecast[prev_end + 1][0] - forecast[prev_end][0]).total_seconds()
+                if dt > 0:
+                    adapted_power += (
+                        (forecast[prev_end + 1][1] - forecast[prev_end][1])
+                        * (begin_slot - forecast[prev_end][0]).total_seconds()
+                        / dt
+                    )
+            power_series.append((begin_slot, adapted_power))
+    for j in range(prev_end + 1, last_end + 1):
+        power_series.append((forecast[j][0], forecast[j][1]))
+
+    if last_end < len(forecast) - 1 and forecast[last_end][0] < end_slot:
+        adapted_power = forecast[last_end][1]
+        if geometric_smoothing:
+            dt = (forecast[last_end + 1][0] - forecast[last_end][0]).total_seconds()
+            if dt > 0:
+                adapted_power += (
+                    (forecast[last_end + 1][1] - forecast[last_end][1])
+                    * (end_slot - forecast[last_end][0]).total_seconds()
+                    / dt
+                )
+        power_series.append((end_slot, adapted_power))
+
+    if len(power_series) == 0 and prev_end == last_end and last_end == len(forecast) - 1:
+        power_series.append((forecast[prev_end][0], forecast[prev_end][1]))
+
+    return last_end, get_average_time_series(power_series, geometric_mean=geometric_smoothing)
+
+
+def align_time_series_on_time_slots(
+    time_series: list[tuple[datetime, float]],
+    slot_boundaries: list[datetime],
+    geometric_smoothing: bool = False,
+) -> list[tuple[datetime, float]]:
+    """Align a time series onto time slots defined by consecutive boundary pairs.
+
+    For each consecutive pair ``(slot_boundaries[i], slot_boundaries[i+1])``,
+    computes the time-weighted average of *time_series* within that interval
+    using :func:`slot_value_from_time_series`.
+
+    Args:
+        time_series: sorted list of (datetime, value) pairs.
+        slot_boundaries: ordered list of N boundary datetimes producing N-1 slots.
+        geometric_smoothing: passed through to ``slot_value_from_time_series``.
+
+    Returns:
+        List of (slot_start, averaged_value) with one entry per slot.
+    """
+    if not time_series or len(slot_boundaries) < 2:
+        return []
+
+    result: list[tuple[datetime, float]] = []
+    last_end = -1
+    if time_series[0][0] < slot_boundaries[0]:
+        while last_end < len(time_series) - 1 and time_series[last_end + 1][0] <= slot_boundaries[0]:
+            last_end += 1
+
+    for i in range(len(slot_boundaries) - 1):
+        last_end, value = slot_value_from_time_series(
+            time_series, slot_boundaries[i], slot_boundaries[i + 1], last_end, geometric_smoothing
+        )
+        result.append((slot_boundaries[i], value))
+    return result

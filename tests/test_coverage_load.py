@@ -288,10 +288,10 @@ class TestGetValueFromTimeSeries:
         assert result[1] == 10.0  # closer to t(0)
 
     def test_between_times_closer_to_second(self):
-        """Between two times without interpolation, closer to second."""
+        """Between two times without interpolation, returns left neighbor."""
         ts = [(_t(0), 10.0), (_t(2), 20.0)]
         result = get_value_from_time_series(ts, _t(1.5))
-        assert result[1] == 20.0  # closer to t(2)
+        assert result[1] == 10.0  # always returns left neighbor
 
     def test_interpolation_both_none(self):
         """Interpolation with both values None."""

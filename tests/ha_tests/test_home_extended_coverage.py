@@ -29,7 +29,7 @@ from custom_components.quiet_solar.ha_model.home import (
     NUM_INTERVAL_PER_HOUR,
     NUM_INTERVALS_PER_DAY,
     QSforecastValueSensor,
-    QSHomeConsumptionHistoryAndForecast,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSHomeMode,
     QSSolarHistoryVals,
     _sanitize_idx,
@@ -1457,12 +1457,12 @@ class TestNonControlledConsumptionGetter:
 
 
 # ========================================================================
-# QSHomeConsumptionHistoryAndForecast
+# QSHomeSolarAndConsumptionHistoryAndForecast
 # ========================================================================
 
 
 class TestQSHomeConsumptionHistoryAndForecast:
-    """Tests for QSHomeConsumptionHistoryAndForecast."""
+    """Tests for QSHomeSolarAndConsumptionHistoryAndForecast."""
 
     @pytest.mark.asyncio
     async def test_init_forecasts_creates_history_vals(
@@ -1472,7 +1472,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
     ):
         """init_forecasts creates home_non_controlled_consumption. Covers lines 2405-2411."""
         home = await _get_home(hass, home_config_entry)
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
         forecast._in_reset = False
         forecast.home_non_controlled_consumption = None
 
@@ -1490,7 +1490,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
     ):
         """During reset, returns False. Covers line 2411."""
         home = await _get_home(hass, home_config_entry)
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
         forecast._in_reset = True
         now = datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC)
         result = await forecast.init_forecasts(now)
@@ -1500,7 +1500,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
         """_combine_stored_forecast_values with do_add=True. Covers lines 2413-2431."""
         home_mock = MagicMock()
         home_mock.hass = None
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
 
         val1 = np.array([[100, 200, 300], [5, 5, 5]], dtype=np.int32)
         val2 = np.array([[10, 20, 30], [5, 5, 5]], dtype=np.int32)
@@ -1513,7 +1513,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     def test_combine_stored_forecast_values_sub(self):
         """_combine_stored_forecast_values with do_add=False."""
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
 
         val1 = np.array([[100, 200, 300], [5, 5, 5]], dtype=np.int32)
         val2 = np.array([[10, 20, 30], [5, 5, 5]], dtype=np.int32)
@@ -1524,7 +1524,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
 
     def test_combine_stored_forecast_values_different_days_zeroed(self):
         """Different day values produce zeros."""
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
 
         val1 = np.array([[100, 200], [5, 6]], dtype=np.int32)
         val2 = np.array([[10, 20], [5, 7]], dtype=np.int32)
@@ -1544,7 +1544,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
     ):
         """dump_for_debug with no consumption is a no-op. Covers line 2401."""
         home = await _get_home(hass, home_config_entry)
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
         forecast.home_non_controlled_consumption = None
         # Should not raise
         await forecast.dump_for_debug(str(tmp_path))
@@ -1558,7 +1558,7 @@ class TestQSHomeConsumptionHistoryAndForecast:
     ):
         """dump_for_debug saves the file. Covers lines 2401-2403."""
         home = await _get_home(hass, home_config_entry)
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
         mock_hv = MagicMock()
         mock_hv.file_name = "test.npy"
         mock_hv.save_values = AsyncMock()
@@ -3609,7 +3609,7 @@ def _make_lazy_states(entity_id, start, end, interval_s=900, base_value=500.0, v
 
 
 class TestResetForecasts:
-    """Tests for QSHomeConsumptionHistoryAndForecast.reset_forecasts.
+    """Tests for QSHomeSolarAndConsumptionHistoryAndForecast.reset_forecasts.
 
     Uses patched load_from_history to provide synthetic state data
     so that QSSolarHistoryVals.init populates real numpy arrays.
@@ -3722,7 +3722,7 @@ class TestResetForecasts:
             states = state_map.get(entity_id, [])
             return [s for s in states if start_time <= s.last_changed <= end_time]
 
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -3778,7 +3778,7 @@ class TestResetForecasts:
             states = state_map.get(entity_id, [])
             return [s for s in states if start_time <= s.last_changed <= end_time]
 
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -3821,7 +3821,7 @@ class TestResetForecasts:
         async def fake_load(hass_arg, entity_id, start_time, end_time, no_attributes=True):
             return []
 
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -3859,7 +3859,7 @@ class TestResetForecasts:
                 return [s for s in ncc_states if start_time <= s.last_changed <= end_time]
             return []
 
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -3949,7 +3949,7 @@ class TestResetForecasts:
             states = state_map.get(entity_id, [])
             return [s for s in states if start_time <= s.last_changed <= end_time]
 
-        forecast = home._consumption_forecast
+        forecast = home.solar_and_consumption_forecast
 
         with patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
@@ -4306,11 +4306,11 @@ class TestGetHistoricalSolarPatternGetValuesNone:
             BUFFER_SIZE_IN_INTERVALS,
             NUM_INTERVAL_PER_HOUR,
             NUM_INTERVALS_PER_DAY,
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar_test", forecast=forecast)
 
         # Provide a non-None values array so the early return at line 3330 is NOT taken
@@ -4357,11 +4357,11 @@ class TestGetHistoricalSolarPatternGetValuesNone:
 
         from custom_components.quiet_solar.ha_model.home import (
             BUFFER_SIZE_IN_INTERVALS,
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar_test2", forecast=forecast)
         vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.float32)
 

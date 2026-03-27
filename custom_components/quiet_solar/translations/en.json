@@ -612,6 +612,9 @@
             },
             "qs_solar_forecast_age": {
                 "name": "Solar Forecast Age"
+            },
+            "qs_solar_active_provider": {
+                "name": "Active Solar Provider"
             }
         },
         "switch": {

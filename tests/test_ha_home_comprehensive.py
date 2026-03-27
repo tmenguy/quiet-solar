@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime
 from datetime import time as dt_time
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
@@ -1627,9 +1627,7 @@ class TestOffGridAutoDetection:
         await hass.async_block_till_done()
 
         # The good app must still receive the notification despite the failing app
-        assert len(calls_good_app) == 1, (
-            f"Good app should receive exactly 1 notification, got {len(calls_good_app)}"
-        )
+        assert len(calls_good_app) == 1, f"Good app should receive exactly 1 notification, got {len(calls_good_app)}"
 
     @pytest.mark.asyncio
     async def test_broadcast_service_not_found_does_not_block_others(
@@ -1684,9 +1682,7 @@ class TestOffGridAutoDetection:
             )
 
     @pytest.mark.asyncio
-    async def test_no_duplicate_notification_on_same_state(
-        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
-    ):
+    async def test_no_duplicate_notification_on_same_state(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
         """AC#1/#2 idempotency: setting the same state twice fires no extra notification."""
         home = home_with_binary_sensor_off_grid
         home.off_grid_mode = OFF_GRID_MODE_AUTO

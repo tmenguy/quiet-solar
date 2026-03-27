@@ -19,7 +19,7 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_IN_INTERVALS,
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
     INTERVALS_MN,
-    QSHomeConsumptionHistoryAndForecast,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSHomeMode,
     QSSolarHistoryVals,
 )
@@ -253,7 +253,7 @@ async def test_history_vals_init_with_states(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_forecast_combine_and_light_reset(tmp_path) -> None:
     """Test combine helper and light reset path."""
-    forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=str(tmp_path))
+    forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path=str(tmp_path))
 
     val1 = np.array([[10.0, 20.0, 30.0, 40.0], [1.0, 1.0, 0.0, 1.0]])
     val2 = np.array([[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 0.0, 1.0]])
@@ -289,6 +289,7 @@ async def test_forecast_reset_full_path(hass: HomeAssistant, home_config_entry, 
     home.physical_solar_plant = SimpleNamespace(
         solar_inverter_active_power="sensor.solar_power",
         solar_inverter_input_active_power=None,
+        solar_forecast_providers={},
     )
     home.grid_active_power_sensor = "sensor.grid_power"
     home.grid_active_power_sensor_inverted = False
@@ -333,7 +334,7 @@ async def test_forecast_reset_full_path(hass: HomeAssistant, home_config_entry, 
     dummy_load = DummyLoad(hass)
     home._childrens = [dummy_load]
 
-    forecast = QSHomeConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
+    forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
     forecast._all_loads = [dummy_load]
 
     with patch(
@@ -359,6 +360,7 @@ async def test_forecast_reset_with_input_active_power(hass: HomeAssistant, home_
         solar_inverter_active_power=None,
         solar_inverter_input_active_power="sensor.solar_input_power",
         solar_max_output_power_value=1000.0,
+        solar_forecast_providers={},
     )
     home.grid_active_power_sensor = "sensor.grid_power"
     home.grid_active_power_sensor_inverted = False
@@ -379,7 +381,7 @@ async def test_forecast_reset_with_input_active_power(hass: HomeAssistant, home_
         SimpleNamespace(last_changed=time_start + timedelta(minutes=30), state="130"),
     ]
 
-    forecast = QSHomeConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
+    forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
     forecast._all_loads = []
 
     with patch(

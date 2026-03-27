@@ -43,7 +43,6 @@ from custom_components.quiet_solar.const import (
     CONF_HOME_VOLTAGE,
     CONF_IS_3P,
     CONF_POWER,
-    CONF_SOLAR_FORECAST_PROVIDER,
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SWITCH,
     DEVICE_TYPE,

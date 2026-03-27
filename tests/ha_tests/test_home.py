@@ -44,7 +44,7 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_IN_INTERVALS,
     NUM_INTERVALS_PER_DAY,
     QSforecastValueSensor,
-    QSHomeConsumptionHistoryAndForecast,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSHomeMode,
     QSSolarHistoryVals,
     _segments_strong_overlap,
@@ -616,17 +616,16 @@ async def test_home_update_all_states(
     consumption.save_values = AsyncMock()
     consumption.update_current_forecast_if_needed = MagicMock(return_value=True)
 
-    home._consumption_forecast = MagicMock()
-    home._consumption_forecast.init_forecasts = AsyncMock(return_value=True)
-    home._consumption_forecast.home_non_controlled_consumption = consumption
-    home._compute_non_controlled_forecast_intl = MagicMock()
+    home.solar_and_consumption_forecast = MagicMock()
+    home.solar_and_consumption_forecast.init_forecasts = AsyncMock(return_value=True)
+    home.solar_and_consumption_forecast.home_non_controlled_consumption = consumption
+    home.solar_and_consumption_forecast.update_consumption_and_forecast_history = AsyncMock()
 
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     await home.update_all_states(time)
 
     solar.update_forecast.assert_awaited()
     device.update_states.assert_awaited()
-    home._compute_non_controlled_forecast_intl.assert_called_once()
 
 
 async def test_home_update_loads_solver_path(
@@ -915,13 +914,18 @@ async def test_home_consumption_reset_forecasts(tmp_path) -> None:
     home = SimpleNamespace(
         hass=None,
         battery=SimpleNamespace(charge_discharge_sensor="sensor.battery_power"),
-        solar_plant=SimpleNamespace(solar_inverter_active_power="sensor.solar_power", solar_inverter_input_active_power="sensor.solar_input_power"),
+        solar_plant=SimpleNamespace(
+            solar_inverter_active_power="sensor.solar_power",
+            solar_inverter_input_active_power="sensor.solar_input_power",
+            solar_forecast_providers={},
+        ),
+        ha_entities={},
         grid_active_power_sensor="sensor.grid_power",
         grid_active_power_sensor_inverted=False,
         _childrens=[],
         _all_loads=[],
     )
-    forecast = QSHomeConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
+    forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
     forecast._all_loads = []
 
     class DummyHistory:
@@ -1173,9 +1177,10 @@ async def test_home_forecast_getters_and_compute(
         get_value_from_current_forecast=MagicMock(return_value=(None, 12.0)),
         get_closest_stored_value=MagicMock(return_value=(None, 8.0)),
     )
-    home._consumption_forecast = SimpleNamespace(
+    home.solar_and_consumption_forecast = SimpleNamespace(
         home_non_controlled_consumption=forecast_vals,
         init_forecasts=AsyncMock(return_value=True),
+        compute_non_controlled_forecast_intl=MagicMock(return_value=[(None, 5.0)]),
     )
 
     assert home.get_non_controlled_consumption_from_current_forecast_getter(
@@ -1185,8 +1190,7 @@ async def test_home_forecast_getters_and_compute(
         datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
     ) == (None, 8.0)
 
-    with patch.object(home, "_compute_non_controlled_forecast_intl", return_value=[(None, 5.0)]):
-        forecast = await home.compute_non_controlled_forecast(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
+    forecast = await home.compute_non_controlled_forecast(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
 
     assert forecast == [(None, 5.0)]
 
@@ -1272,19 +1276,17 @@ async def test_home_update_all_states_basic_flow(
         save_values=AsyncMock(),
         update_current_forecast_if_needed=MagicMock(return_value=True),
     )
-    home._consumption_forecast = SimpleNamespace(
+    home.solar_and_consumption_forecast = SimpleNamespace(
         init_forecasts=AsyncMock(return_value=True),
         home_non_controlled_consumption=forecast_vals,
+        update_consumption_and_forecast_history=AsyncMock(),
     )
     home.home_non_controlled_consumption = 123.0
 
-    with patch.object(home, "_compute_non_controlled_forecast_intl") as mock_compute:
-        await home.update_all_states(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
+    await home.update_all_states(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
 
     solar.update_forecast.assert_called()
     device_ok.update_states.assert_called()
-    forecast_vals.save_values.assert_called()
-    mock_compute.assert_called()
 
 
 async def test_home_update_loads_no_solver(
@@ -1491,16 +1493,20 @@ async def test_home_update_forecast_probers_flow(
 
     home.home_mode = QSHomeMode.HOME_MODE_ON.value
     home.finish_setup = AsyncMock(return_value=True)
-    home._consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=True))
+    home.solar_and_consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=True))
 
     home.home_non_controlled_power_forecast_sensor_values_providers = {
         "now": SimpleNamespace(push_and_get=MagicMock(return_value=1.0))
     }
-    home.home_solar_forecast_sensor_values_providers = {
+    home.home_solar_forecast_sensor_values_probers = {
         "now": SimpleNamespace(push_and_get=MagicMock(return_value=2.0))
     }
     home.home_non_controlled_power_forecast_sensor_values = {}
     home.home_solar_forecast_sensor_values = {}
+
+    # Set physical_solar_plant so the solar_plant property returns it
+    mock_solar_plant = SimpleNamespace(update_forecast_probers=AsyncMock())
+    home.physical_solar_plant = mock_solar_plant
 
     person = SimpleNamespace(
         name="Person A",
@@ -1528,6 +1534,7 @@ async def test_home_update_forecast_probers_flow(
 
     home.recompute_people_historical_data.assert_called()
     home._compute_and_store_person_car_forecasts.assert_called()
+    mock_solar_plant.update_forecast_probers.assert_awaited_once()
 
 
 async def test_home_update_all_states_handles_solar_exception(
@@ -1549,7 +1556,10 @@ async def test_home_update_all_states_handles_solar_exception(
     home.physical_solar_plant = solar
     home._all_devices = []
 
-    home._consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=False))
+    home.solar_and_consumption_forecast = SimpleNamespace(
+        init_forecasts=AsyncMock(return_value=False),
+        update_consumption_and_forecast_history=AsyncMock(),
+    )
 
     await home.update_all_states(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
 
@@ -1573,7 +1583,7 @@ async def test_home_update_forecast_probers_early_returns(
     await home.update_forecast_probers(datetime(2026, 1, 15, 7, 0, tzinfo=pytz.UTC))
 
     home.finish_setup = AsyncMock(return_value=True)
-    home._consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=False))
+    home.solar_and_consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=False))
     await home.update_forecast_probers(datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))
 
 
@@ -1942,7 +1952,10 @@ async def test_home_update_all_states_device_error_logging(
 
     device = DummyAbstract(name="Device", device_type=None, home=home)
     home._all_devices = [device]
-    home._consumption_forecast = SimpleNamespace(init_forecasts=AsyncMock(return_value=False))
+    home.solar_and_consumption_forecast = SimpleNamespace(
+        init_forecasts=AsyncMock(return_value=False),
+        update_consumption_and_forecast_history=AsyncMock(),
+    )
 
     await home.update_all_states(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
 

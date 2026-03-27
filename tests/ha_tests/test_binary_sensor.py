@@ -112,8 +112,7 @@ async def test_home_binary_sensor_entities(
 
     # Persistence health binary sensor should exist
     persistence_sensors = [
-        e for e in binary_sensor_entries
-        if e.unique_id and BINARY_SENSOR_HOME_PERSISTENCE_HEALTH in e.unique_id
+        e for e in binary_sensor_entries if e.unique_id and BINARY_SENSOR_HOME_PERSISTENCE_HEALTH in e.unique_id
     ]
     assert len(persistence_sensors) >= 1
 

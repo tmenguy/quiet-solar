@@ -225,11 +225,9 @@ BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
-SENSOR_SOLAR_FORECAST_SCORE_RAW_PREFIX = "qs_solar_forecast_score_raw_"
-SENSOR_SOLAR_FORECAST_SCORE_DAMPENED_PREFIX = "qs_solar_forecast_score_dampened_"
+SENSOR_SOLAR_ACTIVE_PROVIDER = "qs_solar_active_provider"
 
 SELECT_SOLAR_PROVIDER_MODE = "qs_solar_provider_mode"
-SWITCH_SOLAR_DAMPENING_PREFIX = "qs_solar_dampening_"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,
@@ -242,10 +240,12 @@ QSForecastHomeNonControlledSensors = {
 
 QSForecastSolarSensors = {
     "qs_solar_forecast_15mn": 15 * 60,
-    "qs_solar_forecast_30mn": 30 * 60,
-    "qs_solar_forecast_1h": 60 * 60,
-    "qs_solar_forecast_3h": 3 * 60 * 60,
-    "qs_solar_forecast_6h": 6 * 60 * 60,
+    "qs_solar_forecast_1h": 3600,
+    "qs_solar_forecast_4h": 4 * 3600,
+    "qs_solar_forecast_8h": 8 * 3600,
+    "qs_solar_forecast_12h": 12 * 3600,
+    "qs_solar_forecast_18h": 18 * 3600,
+    "qs_solar_forecast_24h": 24 * 3600,
 }
 
 CONF_OFF_GRID_ENTITY = "off_grid_entity"

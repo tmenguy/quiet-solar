@@ -463,13 +463,7 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
               {%- for entity_key, ha_entity in device.ha_entities.items() %}
-              {%-   if entity_key.startswith("qs_solar_dampening_") %}
-              {{ "- entity: " + ha_entity.entity_id }}
-              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
-              {%-   endif %}
-              {%- endfor %}
-              {%- for entity_key, ha_entity in device.ha_entities.items() %}
-              {%-   if entity_key.startswith("qs_solar_forecast_score_") and not entity_key.startswith("qs_solar_forecast_score_raw_") and not entity_key.startswith("qs_solar_forecast_score_dampened_") %}
+              {%-   if entity_key.startswith("qs_solar_forecast_score_") or entity_key == "qs_solar_active_provider" %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%-   endif %}

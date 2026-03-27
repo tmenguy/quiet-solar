@@ -65,6 +65,7 @@ class TestGreenOnlyDeviceBehavior(TestCase):
         """Auto-green command scores lower than auto-consign (lower priority)."""
         green_score = commands_scores[CMD_CST_AUTO_GREEN]
         from custom_components.quiet_solar.home_model.commands import CMD_CST_AUTO_CONSIGN
+
         consign_score = commands_scores[CMD_CST_AUTO_CONSIGN]
         assert green_score < consign_score
 
@@ -72,6 +73,7 @@ class TestGreenOnlyDeviceBehavior(TestCase):
         """Auto-green command scores higher than OFF."""
         green_score = commands_scores[CMD_CST_AUTO_GREEN]
         from custom_components.quiet_solar.home_model.commands import CMD_CST_OFF
+
         off_score = commands_scores[CMD_CST_OFF]
         assert green_score > off_score
 
