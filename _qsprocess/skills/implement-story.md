@@ -92,14 +92,20 @@ python scripts/qs/create_pr.py --title "{{title}}" --summary "{{bullets}}" --iss
 
 ### 6. Output review command
 
-Build the launch command using `claude_launch_command()` from `scripts/qs/utils.py`. Always use the function — do not copy-paste the `CLAUDE_LAUNCH_OPTS` constant value. See `scripts/qs/utils.py` for the current value.
+Run `next_step.py` to generate both command options:
 
-Tell the user:
+```bash
+python scripts/qs/next_step.py --skill review-story --issue {{issue_number}} --pr {{pr_number}} --work-dir {{worktree_path}} --title "{{title}}"
+```
+
+Parse the JSON output and tell the user:
+
 ```
 Implementation complete. PR #{{pr_number}} created: {{url}}
 
-To review, run in a new context:
-  {{launch_command}}
-Then type:
-  /review-story --pr {{pr_number}} --issue {{issue_number}}
+**Option A — New context (copy-paste this single command):**
+  {{new_context}}
+
+**Option B — Same context:**
+  {{same_context}}
 ```

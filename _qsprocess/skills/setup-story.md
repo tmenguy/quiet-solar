@@ -20,10 +20,18 @@ python scripts/qs/setup_worktree.py {{issue_number}} --story-key "{{story_key}}"
 From the JSON output, show the user:
 
 1. **Worktree path** — where the code lives
-2. **Launch command** — use the `launch_command` field from the JSON output (it already includes terminal title, `CLAUDE_LAUNCH_OPTS`, and `--name`)
-3. **First prompt** — what to type in the new context:
-   ```
-   /implement-story --issue {{issue_number}} --story-file {{story_file}}
-   ```
+2. **Next-step commands** — parse the `same_context` and `new_context` fields from the JSON output and display both options:
 
-The user will copy these commands and launch a separate terminal/context for implementation. This skill does NOT start implementation itself.
+```
+Worktree ready at {{worktree_path}}
+
+**Option A — New context (copy-paste this single command):**
+  {{new_context}}
+
+**Option B — Same context:**
+  {{same_context}}
+```
+
+The `new_context` command opens a new Claude context AND immediately runs the implement skill (prompt embedded). The `same_context` is just the `/skill --args` string to type in a current session.
+
+The user will copy one of these commands. This skill does NOT start implementation itself.
