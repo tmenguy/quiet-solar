@@ -8,8 +8,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 # Add scripts/qs to path so we can import utils
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "qs"))
 
@@ -118,6 +116,24 @@ def test_auto_commit_and_push_push_fails(monkeypatch):
     result = auto_commit_and_push("test commit")
     assert result["committed"] is True
     assert result["pushed"] is False
+
+
+def test_auto_commit_and_push_commit_fails(monkeypatch):
+    """Reports commit failure when git commit returns non-zero."""
+    def fake_run(cmd, **kwargs):
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[:3] == ["git", "diff", "--cached"]:
+            result.stdout = "scripts/qs/utils.py\n"
+        if cmd[0] == "git" and cmd[1] == "commit":
+            result.returncode = 1
+            result.stderr = "pre-commit hook failed"
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = auto_commit_and_push("test commit")
+    assert result["committed"] is False
+    assert result["pushed"] is False
+    assert "pre-commit hook failed" in result.get("detail", "")
 
 
 # --- find_pr_for_branch tests ---

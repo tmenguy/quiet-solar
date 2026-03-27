@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -202,7 +203,9 @@ def auto_commit_and_push(
         return {"committed": False, "pushed": False, "files": []}
 
     # Commit
-    run_git(["commit", "-m", message], check=False)
+    commit_result = run_git(["commit", "-m", message], check=False)
+    if commit_result.returncode != 0:
+        return {"committed": False, "pushed": False, "files": files, "detail": commit_result.stderr.strip()}
 
     # Push
     push_result = run_git(["push"], check=False)
@@ -277,8 +280,6 @@ def ensure_issue_link(pr_number: int, issue_number: int) -> dict:
 
     Returns {"linked": bool, "added": bool}.
     """
-    import re
-
     result = run_gh(
         ["pr", "view", str(pr_number), "--json", "body"],
         check=False,
@@ -344,8 +345,6 @@ def update_story_status(story_file: str, status: str) -> dict:
 
     Returns {"updated": bool}.
     """
-    import re
-
     path = Path(story_file)
     if not path.exists():
         return {"updated": False, "detail": "file not found"}

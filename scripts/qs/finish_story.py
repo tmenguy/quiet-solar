@@ -149,7 +149,6 @@ def phase_prepare(
     log_result = run_git(["log", "--oneline", "main..HEAD"], check=False)
     summary = log_result.stdout.strip()[:300] if log_result.returncode == 0 else "Implementation complete"
 
-    changed = get_changed_files()
     fixes_line = f"\nFixes #{issue_number}\n" if issue_number else ""
     body = f"## Summary\n{summary}\n{fixes_line}"
 
@@ -350,6 +349,9 @@ def run_finish_story(
     if not validate_result["quality_gate"]["passed"]:
         return phase_report(steps, failed_phase="validate")
 
+    # Capture changed files BEFORE merge (branch gets deleted during merge)
+    changed = get_changed_files()
+
     # Phase 3: Merge + post-merge
     merge_result = phase_merge(
         pr_number=pr_number,
@@ -360,10 +362,9 @@ def run_finish_story(
     steps["merge"] = merge_result
 
     if not merge_result["merge"].get("merged"):
-        return phase_report(steps, failed_phase="merge")
+        return phase_report(steps, changed_files=changed, failed_phase="merge")
 
     # Phase 4: Report
-    changed = get_changed_files()
     return phase_report(steps, changed_files=changed)
 
 
