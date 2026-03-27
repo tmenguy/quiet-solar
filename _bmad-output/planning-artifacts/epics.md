@@ -453,8 +453,7 @@ So that the story artifact, architecture, and project rules stay aligned with re
 **And** a mandatory doc-sync gate runs at finish-story before merge
 **And** `scripts/qs/doc_sync.py` compares the story artifact against the git diff
 
-### Story 1.12: Systematic Finish-Story Workflow Enhancement
-
+### Story 1.12: Systematic Finish-Story Workflow Enhancement [DONE]
 As TheDev,
 I want `/finish-story` to require zero arguments — it auto-detects the branch, auto-commits pending changes, auto-creates the PR if missing, runs all gates, merges, and cleans up — all driven by a Python script, not agent rules,
 So that finishing a story is a single command that handles everything end-to-end with no loose ends.
