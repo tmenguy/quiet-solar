@@ -1,6 +1,6 @@
 # Story 1.13: Fix finish-story worktree self-destruct ordering bug
 
-Status: in-progress
+Status: done
 
 issue: 55
 branch: "QS_55"
