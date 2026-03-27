@@ -1,6 +1,6 @@
 # Story 1.13: Fix finish-story worktree self-destruct ordering bug
 
-Status: ready-for-dev
+Status: in-progress
 
 issue: 55
 branch: "QS_55"
@@ -39,26 +39,26 @@ So that post-merge housekeeping (story status, epics update) completes reliably 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix post-merge execution order in `phase_merge()` (AC: #1, #4)
-  - [ ] 1.1 Reorder: merge -> close issue -> update_main -> update story status -> update epics -> commit housekeeping -> cleanup worktree
-  - [ ] 1.2 Ensure `cleanup_worktree()` is unconditionally LAST
+- [x] Task 1: Fix post-merge execution order in `phase_merge()` (AC: #1, #4)
+  - [x] 1.1 Reorder: merge -> close issue -> update_main -> update story status -> update epics -> commit housekeeping -> cleanup worktree
+  - [x] 1.2 Ensure `cleanup_worktree()` is unconditionally LAST
 
-- [ ] Task 2: Fix story status + epics to target main worktree paths (AC: #2)
-  - [ ] 2.1 After `update_main()`, resolve story file path relative to main worktree (not current worktree)
-  - [ ] 2.2 `update_epics()` already uses `get_main_worktree()` — verify it still works correctly after reorder
-  - [ ] 2.3 `update_story_status()` currently takes a path that may point to the worktree — resolve to main worktree equivalent
+- [x] Task 2: Fix story status + epics to target main worktree paths (AC: #2)
+  - [x] 2.1 After `update_main()`, resolve story file path relative to main worktree (not current worktree)
+  - [x] 2.2 `update_epics()` already uses `get_main_worktree()` — verified it works correctly after reorder
+  - [x] 2.3 `update_story_status()` path resolved via new `resolve_story_file_to_main()` function
 
-- [ ] Task 3: Auto-commit housekeeping changes to main (AC: #3)
-  - [ ] 3.1 After updating story status + epics in main worktree, stage and commit those files with a descriptive message like `chore: mark story X.Y done, update epics`
-  - [ ] 3.2 Push the commit to origin/main
-  - [ ] 3.3 Return commit result in the phase output
+- [x] Task 3: Auto-commit housekeeping changes to main (AC: #3)
+  - [x] 3.1 After updating story status + epics in main worktree, stage and commit with descriptive message
+  - [x] 3.2 Push the commit to origin/main
+  - [x] 3.3 Return commit result in the phase output as `housekeeping_commit` key
 
-- [ ] Task 4: Update tests (AC: #5, #6)
-  - [ ] 4.1 Update `test_qs_finish_story.py` tests that mock `phase_merge` to reflect new ordering
-  - [ ] 4.2 Add test: post-merge steps succeed in correct order
-  - [ ] 4.3 Add test: cleanup_worktree runs last even when prior steps fail
-  - [ ] 4.4 Add test: housekeeping commit is created and pushed
-  - [ ] 4.5 Verify all existing tests pass with the reordered flow
+- [x] Task 4: Update tests (AC: #5, #6)
+  - [x] 4.1 Updated all `test_qs_finish_story.py` tests to reflect new ordering and new functions
+  - [x] 4.2 Added test: `test_phase_merge_correct_execution_order` verifies exact 8-step sequence
+  - [x] 4.3 Added test: `test_phase_merge_cleanup_runs_last_even_on_partial_failure`
+  - [x] 4.4 Added tests: `test_commit_housekeeping_*` (4 tests covering changes/no-changes/failure/no-key)
+  - [x] 4.5 All existing tests pass with reordered flow, 100% coverage maintained
 
 ## Dev Notes
 
@@ -145,9 +145,19 @@ Post-merge steps should not block the overall success report. The merge already 
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None — clean implementation.
 
 ### Completion Notes List
+- Added `resolve_story_file_to_main()` to convert worktree paths to main worktree equivalents
+- Added `commit_housekeeping()` to auto-commit and push story/epics changes to main
+- Reordered `phase_merge()`: merge -> close -> update_main -> story status -> epics -> commit -> cleanup (was: merge -> close -> story -> epics -> cleanup -> main)
+- Added `housekeeping_commit` key to phase_merge return dict
+- 4 new tests for `resolve_story_file_to_main`, 4 for `commit_housekeeping`, 2 for execution order verification
+- All 23 tests pass, 100% coverage, all quality gates green
 
 ### File List
+- `scripts/qs/finish_story.py` — reordered phase_merge, added resolve_story_file_to_main and commit_housekeeping
+- `tests/test_qs_finish_story.py` — updated existing tests, added 10 new tests
