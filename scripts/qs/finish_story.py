@@ -47,9 +47,9 @@ def run_quality_gate() -> bool:
 
 
 def merge_pr(pr_number: int) -> dict:
-    """Merge PR with merge commit, delete remote branch."""
+    """Merge PR with merge commit. Branch cleanup is handled separately."""
     result = run_gh([
-        "pr", "merge", str(pr_number), "--merge", "--delete-branch",
+        "pr", "merge", str(pr_number), "--merge",
     ], check=False)
     if result.returncode != 0:
         return {"merged": False, "detail": result.stderr.strip()}
