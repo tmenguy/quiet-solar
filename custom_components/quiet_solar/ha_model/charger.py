@@ -3053,12 +3053,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             common_additional_kwargs = {"total_capacity_wh": self.car.car_battery_capacity}
 
             target_key = "charge_target_percent" if is_target_percent else "charge_target_energy"
+            user_target = None
             if self.car.has_user_originated(target_key):
                 user_target = self.car.get_user_originated(target_key)
                 if user_target is not None and isinstance(user_target, (int, float)):
                     target_charge = user_target
                     if self.car.can_use_charge_percent_constraints():
                         await self.car.setup_car_charge_target_if_needed(target_charge)
+                else:
+                    user_target = None
 
             # now check if the exiting constraint has the right class, ie the self.car.can_use_charge_percent_constraints() has changed or not
             has_changed_ct = False
@@ -3161,7 +3164,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if ct.as_fast_as_possible:
                             force_constraint = ct
                             ct.reset_load_param(self.car.name)
-                            if force_constraint.target_value != target_charge:
+                            # Person-originated ASAP constraints keep their person-specific target
+                            # unless the user explicitly overrode the charge target
+                            has_person_info = (
+                                force_constraint.load_info is not None
+                                and force_constraint.load_info.get("person") is not None
+                            )
+                            if (user_target is not None or not has_person_info) and force_constraint.target_value != target_charge:
                                 force_constraint.target_value = target_charge
                                 do_force_solve = True
                                 # update the constraints to follow the new as fast target
@@ -3185,7 +3194,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self.car.do_next_charge_time = None
                 self.car.clear_user_originated("force_charge")
                 self.car.clear_user_originated("charge_time")
-                realized_charge_target = target_charge
+                # Use constraint's actual target — for user-forced this equals target_charge,
+                # for person-originated ASAP this preserves the person-specific target
+                if force_charge is True:
+                    realized_charge_target = target_charge
+                else:
+                    realized_charge_target = force_constraint.target_value
             else:
                 user_timed_constraint = None
                 # check for a possible user timed constraint — _user_originated is the canonical source

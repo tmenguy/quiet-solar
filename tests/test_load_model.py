@@ -2162,6 +2162,25 @@ class TestGetActiveStateHash:
         assert "RUNNING:" in hash_val
         assert "-NO-" in hash_val
 
+    def test_get_active_state_hash_with_asap_constraint(self):
+        """Test hash uses ASAP instead of end time for ASAP constraints."""
+        load = self.create_load()
+
+        active = create_real_constraint(
+            load=load,
+            load_param="car_A",
+            time_now=self.BASE_TIME,
+            constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        )
+        load._constraints = [active]
+
+        time_now = self.BASE_TIME
+        hash_val = load.get_active_state_hash(time_now)
+
+        assert "RUNNING:" in hash_val
+        assert "car_A" in hash_val
+        assert hash_val.endswith("-ASAP")
+
 
 # =============================================================================
 # Test set_live_constraints
