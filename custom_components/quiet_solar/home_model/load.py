@@ -1163,13 +1163,17 @@ class AbstractLoad(AbstractDevice):
             load_param = "NO"
             if current_constraint.load_param is not None:
                 load_param = current_constraint.load_param
+            if current_constraint.as_fast_as_possible:
+                end_str = "ASAP"
+            else:
+                end_str = current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
             new_val = (
                 "RUNNING:"
                 + current_constraint.stable_name
                 + "-"
                 + load_param
                 + "-"
-                + current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+                + end_str
             )
 
         return new_val

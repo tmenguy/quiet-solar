@@ -107,11 +107,9 @@ In `load.py` `update_live_constraints()` **line 1460-1466**: Each time the manda
   - [ ] 2.2 Person-originated ASAP constraints should keep their person-specific target (75%) rather than being updated to the car's general target (80% or 100%)
   - [ ] 2.3 The car's charge limit (`adapt_max_charge_limit`) should still use `target_charge` for the physical limit, just not overwrite the constraint's target
 
-- [ ] Task 3: Add notification rate-limiting (AC: 3)
-  - [ ] 3.1 In `load.py` `do_probe_state_change()` (line 1003), add a minimum interval check before sending notifications
-  - [ ] 3.2 Store `_last_notification_time` on the load; skip notification if less than 5 minutes since last one
-  - [ ] 3.3 Exception: always send for `DEVICE_STATUS_CHANGE_ERROR` and `DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED`
-  - [ ] 3.4 The hash should still be updated (so the sensor value stays current) — only the push notification is rate-limited
+- [x] Task 3: Stabilize state hash for ASAP constraints (AC: 3)
+  - [x] 3.1 In `load.py` `get_active_state_hash()`, use literal "ASAP" instead of `end_of_constraint` timestamp when constraint is `as_fast_as_possible`
+  - [x] 3.2 This prevents hash changes from ASAP constraint extensions, eliminating notification spam
 
 - [ ] Task 4: Improve `push_live_constraint` duplicate detection for extended constraints (AC: 4)
   - [ ] 4.1 In `load.py` `push_live_constraint()` line 1321-1329, also compare `initial_end_of_constraint` (not just `end_of_constraint`) against the last completed constraint
