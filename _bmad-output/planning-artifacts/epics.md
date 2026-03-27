@@ -453,6 +453,21 @@ So that the story artifact, architecture, and project rules stay aligned with re
 **And** a mandatory doc-sync gate runs at finish-story before merge
 **And** `scripts/qs/doc_sync.py` compares the story artifact against the git diff
 
+### Story 1.12: Systematic Finish-Story Workflow Enhancement
+
+As TheDev,
+I want the `/finish-story` workflow to be more systematic and complete — verifying CI status, PR approval, issue linkage, and story artifact lifecycle before and after merge, with robust error recovery and a comprehensive delivery report,
+So that finishing a story is a single reliable command that leaves zero loose ends.
+
+**Acceptance Criteria:**
+
+**Given** TheDev runs `/finish-story`
+**Then** CI checks, PR approval, and issue linkage are verified before merge
+**And** the linked GitHub issue is closed after merge (if not auto-closed)
+**And** the story artifact status is updated to "done" on main
+**And** a comprehensive delivery report is shown with next-step suggestions
+**And** any failure includes specific recovery instructions
+
 ## Epic 2: Trust-Critical Test Scenarios
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.
@@ -753,7 +768,7 @@ As TheAdmin,
 I want the solar forecast scoring system to record real production data, compute meaningful accuracy scores per provider, and show me which provider is active,
 So that auto-provider selection uses real accuracy data and I can monitor forecast quality.
 
-**Status:** in-progress | **Priority:** P2 — degraded optimization | **Size:** L
+**Status:** DONE | **Priority:** P2 — degraded optimization | **Size:** L
 **Dependencies:** Story 3.7 (scoring infrastructure), Story 3.13 (multi-provider)
 **GitHub Issue:** #43
 
