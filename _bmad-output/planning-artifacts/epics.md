@@ -466,6 +466,20 @@ So that finishing a story is a single command that handles everything end-to-end
 **And** post-merge: closes issue, updates story status to "done", updates epics, cleans up worktree
 **And** all mechanical steps are in `scripts/qs/finish_story.py`, skill file is thin
 
+### Story 1.13: Fix finish-story worktree self-destruct ordering bug
+
+As TheDev,
+I want `finish_story.py` post-merge phase to execute in the correct order — pulling main and updating docs before destroying the worktree,
+So that post-merge housekeeping (story status, epics update) completes reliably instead of crashing when the worktree is deleted mid-execution.
+
+**Acceptance Criteria:**
+
+**Given** `/finish-story` runs from a worktree branch and the merge succeeds
+**Then** `update_main()` runs BEFORE `cleanup_worktree()`
+**And** story status and epics updates target files in the MAIN worktree, not the feature worktree
+**And** housekeeping changes are auto-committed and pushed to main
+**And** `cleanup_worktree()` is the LAST step in the post-merge phase
+
 ## Epic 2: Trust-Critical Test Scenarios
 
 The system provides a significant volume of implemented trust-critical test scenarios covering charger budgeting, constraint interactions, solver edge cases, and device orchestration gaps — building confidence in the existing codebase before any improvements begin.

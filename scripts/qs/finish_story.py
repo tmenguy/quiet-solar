@@ -29,6 +29,7 @@ from utils import (
     get_current_branch,
     get_issue_from_branch,
     get_main_worktree,
+    get_repo_root,
     output_json,
     run_gh,
     run_git,
@@ -198,6 +199,49 @@ def phase_validate(*, pr_number: int, issue_number: int, skip_quality_gate: bool
     }
 
 
+def resolve_story_file_to_main(story_file: str) -> str:
+    """Resolve a story file path to the equivalent path in the main worktree.
+
+    When running from a feature worktree, story_file points to the worktree copy.
+    After merge + pull, we need to update the file in the main worktree instead.
+    """
+    if not story_file:
+        return story_file
+    main_dir = get_main_worktree()
+    story_path = Path(story_file)
+    # If already under main worktree, return as-is
+    try:
+        story_path.relative_to(main_dir)
+        return story_file
+    except ValueError:
+        pass
+    # Convert worktree path to main worktree path
+    repo_root = get_repo_root()
+    try:
+        relative = story_path.relative_to(repo_root)
+    except ValueError:
+        return story_file
+    return str(main_dir / relative)
+
+
+def commit_housekeeping(story_key: str | None) -> dict:
+    """Commit and push story status + epics changes to main."""
+    main_dir = get_main_worktree()
+    # Stage only the artifacts directory
+    run_git(["add", "_bmad-output/"], check=False, cwd=str(main_dir))
+    # Check if anything was staged
+    result = run_git(["diff", "--cached", "--name-only"], check=False, cwd=str(main_dir))
+    files = [f for f in result.stdout.strip().split("\n") if f]
+    if not files:
+        return {"committed": False, "detail": "no changes to commit"}
+    msg = f"chore: mark story {story_key} done, update epics" if story_key else "chore: update story status and epics"
+    commit_result = run_git(["commit", "-m", msg], check=False, cwd=str(main_dir))
+    if commit_result.returncode != 0:
+        return {"committed": False, "detail": commit_result.stderr.strip()}
+    push_result = run_git(["push"], check=False, cwd=str(main_dir))
+    return {"committed": True, "pushed": push_result.returncode == 0, "files": files}
+
+
 def phase_merge(
     *,
     pr_number: int,
@@ -205,49 +249,62 @@ def phase_merge(
     story_file: str,
     story_key: str | None = None,
 ) -> dict:
-    """Phase 3: Merge PR, close issue, update story status, update epics, cleanup.
+    """Phase 3: Merge PR, close issue, pull main, update docs, commit, cleanup.
 
-    Returns {"merge": dict, "issue": dict, "story_status": dict, "epics": dict, "cleanup": dict, "main": dict}.
+    Execution order ensures cleanup_worktree() is LAST:
+    1. merge_pr — merge the PR
+    2. close_issue — close the linked issue
+    3. update_main — pull merged code into main worktree
+    4. update_story_status — mark story done (in main worktree)
+    5. update_epics — mark story done in epics (in main worktree)
+    6. commit_housekeeping — commit + push doc changes to main
+    7. cleanup_worktree — destroy the feature worktree (LAST)
     """
-    # Merge
+    # 1. Merge
     merge_result = merge_pr(pr_number)
     if not merge_result.get("merged"):
         return {
             "merge": merge_result,
             "issue": {"closed": False},
+            "main": {"updated": False},
             "story_status": {"updated": False},
             "epics": {"updated": False},
+            "housekeeping_commit": {"committed": False},
             "cleanup": {"cleaned": False},
-            "main": {"updated": False},
         }
 
-    # Close issue
+    # 2. Close issue
     issue_result = close_issue_if_open(
         issue_number,
         comment=f"Merged via PR #{pr_number}",
     )
 
-    # Update story status
-    story_result = update_story_status(story_file, "done")
+    # 3. Pull main FIRST — get merged code before any file updates
+    main_result = update_main()
 
-    # Update epics
+    # 4. Update story status in MAIN worktree (not feature worktree)
+    main_story_file = resolve_story_file_to_main(story_file)
+    story_result = update_story_status(main_story_file, "done")
+
+    # 5. Update epics in main worktree
     epics_result = {"updated": False, "detail": "no story key"}
     if story_key:
         epics_result = update_epics(story_key)
 
-    # Cleanup worktree
-    cleanup_result = cleanup_worktree(issue_number)
+    # 6. Commit + push housekeeping changes
+    housekeeping_result = commit_housekeeping(story_key)
 
-    # Update main
-    main_result = update_main()
+    # 7. Cleanup worktree LAST — safe, nothing depends on worktree anymore
+    cleanup_result = cleanup_worktree(issue_number)
 
     return {
         "merge": merge_result,
         "issue": issue_result,
+        "main": main_result,
         "story_status": story_result,
         "epics": epics_result,
+        "housekeeping_commit": housekeeping_result,
         "cleanup": cleanup_result,
-        "main": main_result,
     }
 
 
