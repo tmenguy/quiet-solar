@@ -2,7 +2,7 @@
 
 issue: 52
 branch: "QS_52"
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -43,35 +43,35 @@ so that I never have to copy-paste two separate things and the transition output
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `prompt` parameter to `claude_launch_command()` in `utils.py` (AC: #3)
-  - [ ] 1.1 Add optional `prompt: str | None = None` kwarg
-  - [ ] 1.2 When provided, append `shlex.quote(prompt)` as positional arg to the claude command
-  - [ ] 1.3 Existing callers (no prompt) remain unchanged
+- [x] Task 1: Add `prompt` parameter to `claude_launch_command()` in `utils.py` (AC: #3)
+  - [x] 1.1 Add optional `prompt: str | None = None` kwarg
+  - [x] 1.2 When provided, append `shlex.quote(prompt)` as positional arg to the claude command
+  - [x] 1.3 Existing callers (no prompt) remain unchanged
 
-- [ ] Task 2: Create `scripts/qs/next_step.py` (AC: #2)
-  - [ ] 2.1 Accept args: `--skill` (required), `--issue`, `--pr`, `--story-file`, `--story-key`, `--work-dir` (required), `--title` (required)
-  - [ ] 2.2 Build the skill prompt string (e.g., `/review-story --pr 5 --issue 42`)
-  - [ ] 2.3 Build the full new-context command via `claude_launch_command(work_dir, issue, title, prompt=skill_prompt)`
-  - [ ] 2.4 Output JSON with keys: `same_context`, `new_context`
+- [x] Task 2: Create `scripts/qs/next_step.py` (AC: #2)
+  - [x] 2.1 Accept args: `--skill` (required), `--issue`, `--pr`, `--story-file`, `--story-key`, `--work-dir` (required), `--title` (required)
+  - [x] 2.2 Build the skill prompt string (e.g., `/review-story --pr 5 --issue 42`)
+  - [x] 2.3 Build the full new-context command via `claude_launch_command(work_dir, issue, title, prompt=skill_prompt)`
+  - [x] 2.4 Output JSON with keys: `same_context`, `new_context`
 
-- [ ] Task 3: Update `setup_worktree.py` to output both command options (AC: #4)
-  - [ ] 3.1 Replace current `launch_command` + `first_prompt` + `instructions` with `same_context` and `new_context` fields
-  - [ ] 3.2 Use `claude_launch_command(..., prompt=implement_prompt)` for `new_context`
-  - [ ] 3.3 Keep `implement_prompt` as `same_context`
+- [x] Task 3: Update `setup_worktree.py` to output both command options (AC: #4)
+  - [x] 3.1 Replace current `launch_command` + `first_prompt` + `instructions` with `same_context` and `new_context` fields
+  - [x] 3.2 Use `claude_launch_command(..., prompt=implement_prompt)` for `new_context`
+  - [x] 3.3 Keep `implement_prompt` as `same_context`
 
-- [ ] Task 4: Update `setup-story.md` skill to use new output format (AC: #4)
-  - [ ] 4.1 Step 2: parse `same_context` and `new_context` from JSON
-  - [ ] 4.2 Display both options with clear labels
-  - [ ] 4.3 Enforce: the skill MUST run `next_step.py` or parse the equivalent fields from `setup_worktree.py` — never hand-build commands
+- [x] Task 4: Update `setup-story.md` skill to use new output format (AC: #4)
+  - [x] 4.1 Step 2: parse `same_context` and `new_context` from JSON
+  - [x] 4.2 Display both options with clear labels
+  - [x] 4.3 Enforce: the skill MUST run `next_step.py` or parse the equivalent fields from `setup_worktree.py` — never hand-build commands
 
-- [ ] Task 5: Update `implement-story.md` step 6 to use `next_step.py` (AC: #5)
-  - [ ] 5.1 After PR creation, run `python scripts/qs/next_step.py --skill review-story --issue N --pr PR --work-dir DIR --title TITLE`
-  - [ ] 5.2 Display both options from JSON output
-  - [ ] 5.3 Remove the old "launch_command" + "Then type:" two-step pattern
+- [x] Task 5: Update `implement-story.md` step 6 to use `next_step.py` (AC: #5)
+  - [x] 5.1 After PR creation, run `python scripts/qs/next_step.py --skill review-story --issue N --pr PR --work-dir DIR --title TITLE`
+  - [x] 5.2 Display both options from JSON output
+  - [x] 5.3 Remove the old "launch_command" + "Then type:" two-step pattern
 
-- [ ] Task 6: Update `review-story.md` step 5 to use `next_step.py` (AC: #6)
-  - [ ] 6.1 Run `python scripts/qs/next_step.py --skill finish-story --pr N [--story-key KEY] --work-dir DIR --title TITLE`
-  - [ ] 6.2 Display both options from JSON output
+- [x] Task 6: Update `review-story.md` step 5 to use `next_step.py` (AC: #6)
+  - [x] 6.1 Run `python scripts/qs/next_step.py --skill finish-story --pr N [--story-key KEY] --work-dir DIR --title TITLE`
+  - [x] 6.2 Display both options from JSON output
 
 ## Dev Notes
 
@@ -144,11 +144,29 @@ This is a dev-tooling change (skill markdown + Python scripts). Testing approach
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None
 
 ### Completion Notes List
+- Task 1: Added `prompt: str | None = None` kwarg to `claude_launch_command()`. When provided, appends `shlex.quote(prompt)` to the claude command. Existing callers unaffected.
+- Task 2: Created `next_step.py` following argparse + output_json pattern. Builds both `same_context` (skill prompt string) and `new_context` (full claude launch command with embedded prompt).
+- Task 3: Updated `setup_worktree.py` to output `same_context`/`new_context` instead of `launch_command`/`first_prompt`/`instructions`.
+- Task 4: Updated `setup-story.md` step 2 to parse and display both Option A (new context) and Option B (same context).
+- Task 5: Updated `implement-story.md` step 6 to call `next_step.py` and display both options instead of the old two-step pattern.
+- Task 6: Updated `review-story.md` step 5 to call `next_step.py` and display both options.
+- Also cleaned up 5 unused snapshots (pre-existing) that were causing quality gate failure.
 
 ### Change Log
+- 2026-03-27: Implemented all 6 tasks for unified next-step command output
 
 ### File List
+- `scripts/qs/utils.py` (modified) — added `prompt` kwarg to `claude_launch_command()`
+- `scripts/qs/next_step.py` (new) — centralized next-step command builder
+- `scripts/qs/setup_worktree.py` (modified) — replaced output fields with `same_context`/`new_context`
+- `_qsprocess/skills/setup-story.md` (modified) — updated step 2 display format
+- `_qsprocess/skills/implement-story.md` (modified) — updated step 6 to use `next_step.py`
+- `_qsprocess/skills/review-story.md` (modified) — updated step 5 to use `next_step.py`
+- `tests/test_qs_scripts.py` (new) — unit tests for utils.py prompt param and next_step.py
+- `tests/ha_tests/__snapshots__/test_sensor.ambr` (modified) — removed 5 unused snapshots

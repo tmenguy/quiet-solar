@@ -71,7 +71,20 @@ If inline doc-sync (Step 2.5) and doc-update actions already captured all change
 
 ### 5. Output finish command
 
+Run `next_step.py` to generate both command options:
+
+```bash
+python scripts/qs/next_step.py --skill finish-story --pr {{pr_number}} [--story-key {{key}}] --work-dir {{worktree_path}} --title "{{title}}"
 ```
-Review complete. To finish and merge:
-  /finish-story --pr {{pr_number}} [--story-key {{key}}]
+
+Parse the JSON output and tell the user:
+
+```
+Review complete.
+
+**Option A — New context (copy-paste this single command):**
+  {{new_context}}
+
+**Option B — Same context:**
+  {{same_context}}
 ```

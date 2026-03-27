@@ -74,20 +74,19 @@ def main() -> None:
 
     title = args.title or f"Issue #{issue}"
 
-    # Build claude launch command
-    claude_cmd = claude_launch_command(work_dir, issue, title)
+    # Build next-step commands
     implement_prompt = f"/implement-story --issue {issue}"
     if story_file_rel:
         implement_prompt += f" --story-file {story_file_rel}"
+    new_context = claude_launch_command(work_dir, issue, title, prompt=implement_prompt)
 
     output_json({
         "issue_number": issue,
         "branch": branch,
         "worktree_path": work_dir,
         "story_file": story_file_rel,
-        "launch_command": claude_cmd,
-        "first_prompt": implement_prompt,
-        "instructions": f"Run this to start implementation:\n  {claude_cmd}\nThen type:\n  {implement_prompt}",
+        "same_context": implement_prompt,
+        "new_context": new_context,
     })
 
 
