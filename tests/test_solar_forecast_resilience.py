@@ -56,7 +56,7 @@ def _make_solar(fake_hass, providers_config=None, single_provider=None, **kwargs
     home.voltage = 230
     home.hass = fake_hass
     home.force_update_all = AsyncMock()
-    home._consumption_forecast = None
+    home.solar_and_consumption_forecast = None
 
     config = {
         CONF_NAME: "Test Solar",
@@ -408,34 +408,81 @@ class TestHealthMonitoring:
 
 
 class TestAccuracyScoring:
-    """Test forecast accuracy scoring."""
+    """Test forecast accuracy scoring (new compute_score(time) API)."""
 
     def test_compute_mae_score(self):
-        """Test MAE score computation with known data."""
-        provider = _TestProvider(solar=None, domain="test")
+        """Test MAE score computation with known data via history objects."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
+
+        solar_mock = MagicMock()
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
 
         t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
-        # Store a forecast snapshot, then compute score with known 200W difference
-        provider.solar_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(12)]
-        provider.store_forecast_snapshot()
-        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
+        # Mock solar production history returning actuals at 800W
+        mock_prod_history = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod_history.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 800.0) for h in range(12)
+        ]
+        forecast_handler.solar_production_history = mock_prod_history
 
-        provider.compute_score(actuals)
+        # Mock forecast history for provider with 8h lookahead returning 1000W
+        mock_fc_history = MagicMock(spec=QSSolarHistoryVals)
+        mock_fc_history.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 1000.0) for h in range(12)
+        ]
+        forecast_handler.solar_forecast_history_per_provider = {
+            "test_provider": {"qs_solar_forecast_8h": mock_fc_history}
+        }
+
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="test_provider")
+
+        provider.compute_score(t0)
         assert provider.score is not None
         assert abs(provider.score - 200.0) < 0.01
 
-    def test_score_none_with_no_data(self):
-        """Test score is None when no data available."""
-        provider = _TestProvider(solar=None, domain="test")
-        provider.compute_score([])
+    def test_score_none_with_no_actuals(self):
+        """Test score is None when no actuals available."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
+
+        solar_mock = MagicMock()
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod_history = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod_history.get_historical_data.return_value = []
+        forecast_handler.solar_production_history = mock_prod_history
+        forecast_handler.solar_forecast_history_per_provider = {}
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="test_provider")
+        t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
+        provider.compute_score(t0)
         assert provider.score is None
 
-    def test_score_none_with_no_stored_forecast(self):
-        """Test score is None when no stored forecast."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
-        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
-        provider.compute_score(actuals)
+    def test_score_none_with_no_forecast_history(self):
+        """Test score is None when no forecast history available for provider."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
+
+        solar_mock = MagicMock()
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod_history = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod_history.get_historical_data.return_value = [
+            (datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC), 800.0)
+        ]
+        forecast_handler.solar_production_history = mock_prod_history
+        forecast_handler.solar_forecast_history_per_provider = {}
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="test_provider")
+        provider.compute_score(datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC))
         assert provider.score is None
 
     def test_get_active_score_returns_score(self):
@@ -576,135 +623,115 @@ class TestStaleNotifications:
 # ============================================================================
 
 
-class TestForecastSnapshot:
-    """Test forecast snapshot storage."""
+class TestComputeScoreEdgeCases:
+    """Test compute_score edge cases with new history-based API."""
 
-    def test_store_forecast_snapshot(self):
-        """Test storing forecast as a snapshot."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0, 1000.0), (t0 + timedelta(hours=1), 1200.0)]
+    def test_compute_score_prefers_8h_lookahead(self):
+        """Test compute_score picks the first >= 8h lookahead sensor."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
 
-        provider.store_forecast_snapshot()
-
-        assert len(provider._stored_forecast) == 2
-        assert provider._stored_forecast[0] == (t0, 1000.0)
-        assert provider._stored_forecast[1] == (t0 + timedelta(hours=1), 1200.0)
-
-    def test_store_forecast_snapshot_overwrites(self):
-        """Test snapshot is overwritten on each call."""
-        provider = _TestProvider(solar=None, domain="test")
+        solar_mock = MagicMock()
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
-        provider.solar_forecast = [(t0, 1000.0)]
-        provider.store_forecast_snapshot()
-        assert len(provider._stored_forecast) == 1
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 800.0) for h in range(12)
+        ]
+        forecast_handler.solar_production_history = mock_prod
 
-        provider.solar_forecast = [(t0, 2000.0), (t0 + timedelta(hours=1), 2500.0)]
-        provider.store_forecast_snapshot()
-        assert len(provider._stored_forecast) == 2
-        assert provider._stored_forecast[0] == (t0, 2000.0)
+        # Only provide a 12h lookahead sensor (>= 8h)
+        mock_12h = MagicMock(spec=QSSolarHistoryVals)
+        mock_12h.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 1000.0) for h in range(12)
+        ]
+        forecast_handler.solar_forecast_history_per_provider = {
+            "prov": {"qs_solar_forecast_12h": mock_12h}
+        }
 
-    def test_store_forecast_snapshot_strips_none(self):
-        """Test snapshot strips entries with None timestamps or values."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(None, 100.0), (t0, None), (t0, 500.0)]
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
+        provider.compute_score(t0)
+        assert provider.score is not None
+        assert abs(provider.score - 200.0) < 0.01
 
-        provider.store_forecast_snapshot()
-        assert len(provider._stored_forecast) == 1
-        assert provider._stored_forecast[0] == (t0, 500.0)
+    def test_compute_score_fallback_to_lower_lookahead(self):
+        """Test compute_score falls back to largest available sensor when none >= 8h."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
 
-    def test_store_forecast_snapshot_empty_forecast(self):
-        """Test snapshot from empty forecast yields empty stored forecast."""
-        provider = _TestProvider(solar=None, domain="test")
-        provider.solar_forecast = []
-        provider.store_forecast_snapshot()
-        assert provider._stored_forecast == []
-
-    def test_get_production_actuals_last_24h_no_home(self, fake_hass):
-        """Test _get_production_actuals_last_24h returns empty when no home."""
-        solar = _make_solar(fake_hass)
-        solar.home = None
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        assert solar._get_production_actuals_last_24h(t) == []
-
-    def test_get_production_actuals_last_24h_no_forecast_handler(self, fake_hass):
-        """Test _get_production_actuals_last_24h returns empty when no _consumption_forecast."""
-        solar = _make_solar(fake_hass)
-        if hasattr(solar.home, "_consumption_forecast"):
-            del solar.home._consumption_forecast
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        assert solar._get_production_actuals_last_24h(t) == []
-
-    def test_get_production_actuals_last_24h_no_history(self, fake_hass):
-        """Test _get_production_actuals_last_24h returns empty when no solar_production_history."""
-        from custom_components.quiet_solar.ha_model.home import QSHomeConsumptionHistoryAndForecast
-
-        solar = _make_solar(fake_hass)
-        forecast_handler = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
-        solar.home._consumption_forecast = forecast_handler
-        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        assert solar._get_production_actuals_last_24h(t) == []
-
-    def test_get_production_actuals_last_24h_with_data(self, fake_hass):
-        """Test _get_production_actuals_last_24h extracts data from history."""
-        import numpy as np
-
-        solar = _make_solar(fake_hass)
+        solar_mock = MagicMock()
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
-        # Create a mock history object with the right interface
-        mock_history = MagicMock()
-        mock_history.values = np.ones((2, 100))  # non-None to pass guard
-        # Return 4 data points (simulating 4 x 15-min intervals = 1 hour)
-        power_vals = np.array([500.0, 600.0, 700.0, 0.0])
-        day_vals = np.array([1, 1, 1, 0])  # last one has no data
-        mock_history._get_values.return_value = (power_vals, day_vals)
-        mock_history.get_index_from_time.return_value = (0, 1)
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 500.0) for h in range(12)
+        ]
+        forecast_handler.solar_production_history = mock_prod
 
-        forecast_handler = MagicMock()
-        forecast_handler.solar_production_history = mock_history
-        solar.home._consumption_forecast = forecast_handler
+        # Only provide 4h lookahead (< 8h, so not preferred)
+        mock_4h = MagicMock(spec=QSSolarHistoryVals)
+        mock_4h.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 700.0) for h in range(12)
+        ]
+        forecast_handler.solar_forecast_history_per_provider = {
+            "prov": {"qs_solar_forecast_4h": mock_4h}
+        }
 
-        result = solar._get_production_actuals_last_24h(t0)
-        # Should have 3 entries (day_vals[3] == 0 is skipped)
-        assert len(result) == 3
-        assert result[0][1] == 500.0
-        assert result[1][1] == 600.0
-        assert result[2][1] == 700.0
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
+        provider.compute_score(t0)
+        assert provider.score is not None
+        assert abs(provider.score - 200.0) < 0.01
 
-    def test_get_production_actuals_last_24h_get_values_returns_none(self, fake_hass):
-        """Test _get_production_actuals_last_24h returns empty when _get_values returns None."""
-        import numpy as np
+    def test_compute_score_no_provider_histories(self):
+        """Test compute_score returns None when provider has no histories."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
 
-        solar = _make_solar(fake_hass)
+        solar_mock = MagicMock()
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
-        mock_history = MagicMock()
-        mock_history.values = np.ones((2, 100))
-        mock_history._get_values.return_value = (None, None)
-        mock_history.get_index_from_time.return_value = (0, 1)
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod.get_historical_data.return_value = [
+            (t0 + timedelta(hours=h), 800.0) for h in range(12)
+        ]
+        forecast_handler.solar_production_history = mock_prod
+        forecast_handler.solar_forecast_history_per_provider = {}
 
-        forecast_handler = MagicMock()
-        forecast_handler.solar_production_history = mock_history
-        solar.home._consumption_forecast = forecast_handler
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
+        provider.compute_score(t0)
+        assert provider.score is None
 
-        assert solar._get_production_actuals_last_24h(t0) == []
+    def test_compute_score_empty_actuals(self):
+        """Test compute_score returns None when actuals are empty."""
+        from custom_components.quiet_solar.ha_model.home import (
+            QSHomeSolarAndConsumptionHistoryAndForecast,
+            QSSolarHistoryVals,
+        )
 
-    def test_compute_score_empty_aligned_result(self):
-        """Test compute_score handles empty alignment result (line 551)."""
-        provider = _TestProvider(solar=None, domain="test")
+        solar_mock = MagicMock()
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
-        provider._stored_forecast = [(t0 + timedelta(hours=h), 1000.0) for h in range(5)]
-        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(5)]
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        mock_prod = MagicMock(spec=QSSolarHistoryVals)
+        mock_prod.get_historical_data.return_value = []
+        forecast_handler.solar_production_history = mock_prod
+        forecast_handler.solar_forecast_history_per_provider = {"prov": {"qs_solar_forecast_8h": MagicMock()}}
 
-        with patch(
-            "custom_components.quiet_solar.ha_model.solar.align_time_series_on_time_slots",
-            return_value=[],
-        ):
-            provider.compute_score(actuals)
+        solar_mock.home.solar_and_consumption_forecast = forecast_handler
+        provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
+        provider.compute_score(t0)
         assert provider.score is None
 
 
@@ -782,21 +809,17 @@ class TestUpdateForecast:
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         provider = solar.solar_forecast_providers["A"]
-        provider.store_forecast_snapshot = MagicMock()
         provider.compute_score = MagicMock()
 
         now = datetime.datetime(2024, 6, 15, 8, 0, tzinfo=pytz.UTC)
 
         # First call should run the cycle
         solar._run_scoring_cycle(now)
-        assert provider.store_forecast_snapshot.call_count == 1
         assert provider.compute_score.call_count == 1
 
         # Second call in same half-day should be a no-op
-        provider.store_forecast_snapshot.reset_mock()
         provider.compute_score.reset_mock()
         solar._run_scoring_cycle(now + timedelta(hours=1))
-        assert provider.store_forecast_snapshot.call_count == 0
         assert provider.compute_score.call_count == 0
 
     def test_scoring_cycle_runs_at_noon_boundary(self, fake_hass):
@@ -806,7 +829,6 @@ class TestUpdateForecast:
         ]
         solar = _make_solar(fake_hass, providers_config=providers_config)
         provider = solar.solar_forecast_providers["A"]
-        provider.store_forecast_snapshot = MagicMock()
         provider.compute_score = MagicMock()
 
         morning = datetime.datetime(2024, 6, 15, 8, 0, tzinfo=pytz.UTC)
@@ -814,12 +836,10 @@ class TestUpdateForecast:
         assert provider.compute_score.call_count == 1
 
         # After noon boundary, should run again
-        provider.store_forecast_snapshot.reset_mock()
         provider.compute_score.reset_mock()
         afternoon = datetime.datetime(2024, 6, 15, 14, 0, tzinfo=pytz.UTC)
         solar._run_scoring_cycle(afternoon)
         assert provider.compute_score.call_count == 1
-        assert provider.store_forecast_snapshot.call_count == 1
 
     def test_get_forecast_delegates_to_active(self, fake_hass):
         """Test get_forecast delegates to the active provider."""
@@ -859,11 +879,11 @@ class TestHistoricalSolarFallback:
             BUFFER_SIZE_IN_INTERVALS,
             INTERVALS_MN,
             NUM_INTERVALS_PER_DAY,
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar", forecast=forecast)
 
         # Initialize ring buffer
@@ -893,11 +913,11 @@ class TestHistoricalSolarFallback:
         from custom_components.quiet_solar.ha_model.home import (
             BUFFER_SIZE_IN_INTERVALS,
             NUM_INTERVALS_PER_DAY,
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar", forecast=forecast)
         vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.float32)
 
@@ -920,11 +940,11 @@ class TestHistoricalSolarFallback:
         """Test fallback returns empty when no valid historical data."""
         from custom_components.quiet_solar.ha_model.home import (
             BUFFER_SIZE_IN_INTERVALS,
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar", forecast=forecast)
         vals.values = np.zeros((2, BUFFER_SIZE_IN_INTERVALS), dtype=np.float32)
 
@@ -934,11 +954,11 @@ class TestHistoricalSolarFallback:
     def test_get_historical_solar_pattern_none_values(self):
         """Test fallback returns empty when values is None."""
         from custom_components.quiet_solar.ha_model.home import (
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
-        forecast = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         vals = QSSolarHistoryVals(entity_id="sensor.solar", forecast=forecast)
         assert vals.get_historical_solar_pattern(datetime.datetime.now(pytz.UTC)) == []
 
@@ -952,8 +972,8 @@ class TestHistoricalSolarFallback:
     def test_solar_get_historical_fallback_no_forecast_handler(self, fake_hass):
         """Test QSSolar fallback returns empty when no forecast handler."""
         solar = _make_solar(fake_hass)
-        # Remove _consumption_forecast so getattr returns None
-        solar.home._consumption_forecast = None
+        # Remove solar_and_consumption_forecast so getattr returns None
+        solar.home.solar_and_consumption_forecast = None
         t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         assert solar.get_historical_solar_fallback(t) == []
 
@@ -1031,16 +1051,16 @@ class TestGuardClauses:
     def test_solar_get_historical_fallback_with_history(self, fake_hass):
         """Test QSSolar fallback delegates to solar_production_history."""
         from custom_components.quiet_solar.ha_model.home import (
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
             QSSolarHistoryVals,
         )
 
         solar = _make_solar(fake_hass)
-        forecast_handler = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         mock_history = MagicMock(spec=QSSolarHistoryVals)
         mock_history.get_historical_solar_pattern.return_value = [(datetime.datetime.now(pytz.UTC), 500.0)]
         forecast_handler.solar_production_history = mock_history
-        solar.home._consumption_forecast = forecast_handler
+        solar.home.solar_and_consumption_forecast = forecast_handler
 
         t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         result = solar.get_historical_solar_fallback(t)
@@ -1050,26 +1070,16 @@ class TestGuardClauses:
     def test_solar_get_historical_fallback_no_history_attr(self, fake_hass):
         """Test fallback returns empty when forecast handler has no solar_production_history."""
         from custom_components.quiet_solar.ha_model.home import (
-            QSHomeConsumptionHistoryAndForecast,
+            QSHomeSolarAndConsumptionHistoryAndForecast,
         )
 
         solar = _make_solar(fake_hass)
-        forecast_handler = QSHomeConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
+        forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         # solar_production_history defaults to None
-        solar.home._consumption_forecast = forecast_handler
+        solar.home.solar_and_consumption_forecast = forecast_handler
 
         t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         assert solar.get_historical_solar_fallback(t) == []
-
-    def test_compute_score_single_point_stored_forecast(self):
-        """Test compute_score returns early when stored forecast has < 2 time points."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        provider.solar_forecast = [(t0, 1000.0)]
-        provider.store_forecast_snapshot()
-        actuals = [(t0, 800.0)]
-        provider.compute_score(actuals)
-        assert provider.score is None
 
     def test_reset_scoring(self, fake_hass):
         """Test QSSolar.reset_scoring clears provider state."""
@@ -1081,34 +1091,18 @@ class TestGuardClauses:
 
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider.score = 100.0
-        provider._stored_forecast = [(t0, 500.0)]
         solar._last_scoring_half_day = (t0.date(), 1)
 
         solar.reset_scoring(t0)
         assert solar._last_scoring_half_day is None
         assert provider.score is None
-        assert provider._stored_forecast == []
 
-    def test_reset_scoring_buffers_clears_provider_state(self):
-        """Test reset_scoring_buffers clears score and stored forecast."""
+    def test_reset_scoring_clears_provider_score(self):
+        """Test reset_scoring clears score on provider."""
         provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider.score = 100.0
-        provider._stored_forecast = [(t0, 500.0)]
 
-        provider.reset_scoring_buffers()
-        assert provider.score is None
-        assert provider._stored_forecast == []
-
-    def test_compute_score_empty_alignment(self):
-        """Test compute_score returns early when aligned forecast is empty."""
-        provider = _TestProvider(solar=None, domain="test")
-        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
-        # Store forecast with valid timestamps but all None values → cleaned list is empty
-        provider.solar_forecast = [(t0 + timedelta(hours=h), None) for h in range(12)]
-        provider.store_forecast_snapshot()
-        actuals = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
-        provider.compute_score(actuals)
+        provider.reset_scoring()
         assert provider.score is None
 
     def test_scoring_half_day_static_method(self, fake_hass):

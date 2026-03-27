@@ -195,7 +195,14 @@ class PeriodSolver:
         # anchors contain start stop and everything needed to create the slots
         i_tariff = 0
         i_ua = -1  # the latest entry used in the previous slot
+        if self._ua_forecast and self._ua_forecast[0][0] < anchors[0]:
+            while i_ua < len(anchors) - 1 and self._ua_forecast[i_ua + 1][0] <= anchors[0]:
+                i_ua += 1
+
         i_pv = -1
+        if self._pv_forecast and self._pv_forecast[0][0] < anchors[0]:
+            while i_pv < len(anchors) - 1 and self._pv_forecast[i_pv + 1][0] <= anchors[0]:
+                i_pv += 1
 
         for i in range(len(anchors) - 1):
             begin_slot = anchors[i]

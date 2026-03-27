@@ -105,7 +105,6 @@ def create_ha_switch(device: AbstractDevice):
     if isinstance(device, AbstractLoad):
         ret.extend(create_ha_switch_for_AbstractLoad(device))
 
-
     return ret
 
 

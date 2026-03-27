@@ -49,26 +49,21 @@ The original story title was "Wire Dampening End-to-End with Resolution-Independ
 
 ### Scoring Infrastructure (Dampening Removed)
 
-5. **Given** the system records actual solar production
-   **When** each forecast update cycle runs
-   **Then** actual production is recorded from the `solar_inverter_input_active_power` sensor every 5 minutes
-   **And** the actuals buffer is shared across all providers on `QSSolar` (not duplicated per provider)
-   **And** the rolling buffer covers 365 days
+5. **Given** the system records actual solar production and forecast history
+   **When** `QSHomeSolarAndConsumptionHistoryAndForecast` updates each cycle
+   **Then** actual solar production is stored in `solar_production_history` (a `QSSolarHistoryVals` ring buffer at 15-min intervals, 560 days)
+   **And** forecast values at multiple lookahead intervals (15mn, 1h, 4h, 8h, 12h, 18h, 24h) are recorded via `QSforecastValueSensor` probers into per-sensor and per-provider `QSSolarHistoryVals` ring buffers
+   **And** this data is shared across all providers via the home's forecast handler
 
-6. **Given** the system records forecast snapshots
-   **When** a new forecast is received from a provider
-   **Then** the forecast is stored in one of 12 rolling buffers indexed by 2-hour time-of-day slots (00:00, 02:00, 04:00, ..., 22:00)
-   **And** each buffer holds forecasts within a rolling window
-   **And** overlapping entries (same time range) are deduplicated before appending
-
-7. **Given** a provider's daily scoring cycle runs
-   **When** score is computed
-   **Then** it computes MAE (Mean Absolute Error) of forecast vs actuals over a 7-day rolling window
+6. **Given** the scoring cycle runs (at 00:00 and 12:00 local time)
+   **When** `compute_score(time)` is called on each provider
+   **Then** it retrieves the last 24h of actual production from `solar_production_history.get_historical_data(time, past_hours=24)`
+   **And** it retrieves the last 24h of stored forecast history from the provider's forecast history ring buffers (preferring >= 8h lookahead, falling back to the largest available)
+   **And** it computes MAE (Mean Absolute Error) over daytime slots (where forecast or actual > 0)
    **And** the score is stored as `provider.score`
-   **And** there is NO dampened score — dampening has been removed entirely
 
-8. **Given** the solar plant uses provider auto-selection
-   **When** the daily scoring cycle completes
+7. **Given** the solar plant uses provider auto-selection
+   **When** the scoring cycle completes
    **Then** `auto_select_best_provider` picks the provider with the lowest MAE score
    **And** this works regardless of whether the user has selected "auto" mode or a specific provider
 
@@ -105,12 +100,13 @@ The original story title was "Wire Dampening End-to-End with Resolution-Independ
 
 13. **Given** HA restarts
     **When** the solar provider initializes
-    **Then** scoring buffers (actuals + forecast snapshots) are loaded from disk
-    **And** scores can be recomputed without needing fresh data
+    **Then** the `QSSolarHistoryVals` ring buffers (production history + forecast histories) are loaded from their numpy files on disk
+    **And** scores start as `None` and are recomputed on the next scoring cycle (00:00 or 12:00) using the persisted ring buffer data
+    **And** no separate scoring persistence is needed — the ring buffers ARE the persistence
 
 14. **Given** the user presses "Full Reset Quiet Solar History from DB"
     **When** the reset completes
-    **Then** the scoring rolling buffers are cleared via `reset_scoring()`
+    **Then** the scoring state is cleared via `reset_scoring()` and ring buffers are cleared and re-bootstrapped via `solar_forecast_set_and_reset(for_reset=True)`
 
 ## Tasks / Subtasks
 
@@ -133,14 +129,16 @@ The original story title was "Wire Dampening End-to-End with Resolution-Independ
   - [x] 4.3 Tests for moved functions — verify they still work from both import paths
   - [x] 4.4 Verify `PeriodSolver.create_power_slots` still produces identical results after refactor
 
-- [x] **Task 5: Fix actuals recording** (AC: 5)
-  - [x] 5.1 Move `_actuals_buffer` from per-provider to shared on `QSSolar`
-  - [x] 5.2 Add property delegation on `QSSolarProvider` to access parent's shared buffer
-  - [x] 5.3 Implement `_record_actual_from_sensor` — reads `solar_inverter_input_active_power` sensor every 5 minutes
+- [x] **Task 5: Wire actuals + forecast history recording** (AC: 5)
+  - [x] 5.1 `QSHomeSolarAndConsumptionHistoryAndForecast` records solar production into `solar_production_history` ring buffer
+  - [x] 5.2 `QSforecastValueSensor` probers sample forecast at multiple lookahead intervals (15mn–24h)
+  - [x] 5.3 Per-sensor and per-provider forecast history stored in `QSSolarHistoryVals` ring buffers
+  - [x] 5.4 `solar_forecast_set_and_reset` creates/resets all ring buffers
 
-- [x] **Task 6: Fix forecast snapshot recording** (AC: 6)
-  - [x] 6.1 Add overlap deduplication in `record_forecast_snapshot` — remove entries that overlap with the new forecast before appending
-  - [x] 6.2 12 rolling buffers indexed by 2-hour time-of-day slots
+- [x] **Task 6: Wire scoring cycle** (AC: 6)
+  - [x] 6.1 `_run_scoring_cycle` runs at 00:00 and 12:00 local time
+  - [x] 6.2 `compute_score(time)` fetches 24h actuals and 24h forecast history from ring buffers
+  - [x] 6.3 MAE computed over daytime slots, preferring >= 8h lookahead forecast sensor
 
 - [x] **Task 7: Remove all solar forecast dampening** (AC: 7, 9)
   - [x] 7.1 Remove from `QSSolarProvider.__init__`: `dampening_enabled`, `_dampening_coefficients`, `_dampening_coefficients_per_tod`, `_last_dampening_date`, `score_dampened`
@@ -189,15 +187,17 @@ After real-world testing, MOS linear regression dampening for solar forecasts ad
 
 ### Architecture
 
-- Shared `_actuals_buffer` on `QSSolar` with property delegation on providers — avoids duplicate sensor reads
-- Sensor-based actuals recording (`_record_actual_from_sensor`) every 5 minutes via `get_average_sensor`
-- Forecast snapshot dedup: removes overlapping entries before appending to rolling buffers
+- **Two-layer storage**: `QSSolarHistoryVals` ring buffers (numpy, 15-min intervals, 560 days) persist production actuals and forecast history per-sensor and per-provider
+- **Probers**: `QSforecastValueSensor` samples forecast values at 7 lookahead intervals (15mn, 1h, 4h, 8h, 12h, 18h, 24h) into ring buffers
+- **Scoring**: `compute_score(time)` on `QSSolarProvider` fetches 24h actuals + 24h forecast history from ring buffers, computes MAE over daytime slots
+- **Persistence**: Ring buffers saved as numpy files — no separate scoring persistence needed
 - Constants renamed from `DAMPENING_*` to `SCORING_*` for remaining infrastructure
 - `home.py` calls `reset_scoring()` instead of `reset_dampening()`
+- Circular import between `solar.py` and `home.py` resolved with deferred import in `QSSolar.__init__`
 
 ### Quality Gates
 
-- 4180 tests pass (down from 4211 — removed 31 dampening-specific tests)
+- 4202 tests pass
 - 100% coverage
 - ruff check clean
 - ruff format clean
@@ -224,18 +224,25 @@ None — quality gates passed after implementation.
 
 ### Completion Notes List
 - All dampening code, sensors, switches, and tests removed
-- Scoring infrastructure (MAE, auto-selection, actuals buffer, forecast snapshots) kept and improved
-- Shared actuals buffer on QSSolar (was per-provider)
-- Sensor-based actuals recording every 5 minutes
-- Forecast snapshot overlap deduplication
-- 4180 tests, 100% coverage, all quality gates pass
+- Scoring infrastructure wired end-to-end: probers-based forecast history → ring buffer storage → MAE scoring at 00:00/12:00
+- Production actuals + forecast history stored in `QSSolarHistoryVals` ring buffers (numpy, 15-min, 560 days)
+- `QSforecastValueSensor` probers sample forecast at 7 lookahead intervals per sensor per provider
+- `compute_score(time)` fetches 24h actuals + 24h forecast from ring buffers, computes MAE over daytime slots
+- Code review found and fixed: circular import, 10+ bugs (None guards, wrong attribute chains, dict iteration, missing args), behavioral regression in `get_slots_from_time_series`
+- 4202 tests, 100% coverage, all quality gates pass
 
 ### File List
-- `custom_components/quiet_solar/ha_model/solar.py` — Removed dampening, kept scoring, shared actuals buffer, sensor-based recording
+- `custom_components/quiet_solar/ha_model/solar.py` — Removed dampening, wired scoring with ring buffer history, compute_score(time)
+- `custom_components/quiet_solar/ha_model/home.py` — Forecast history ring buffers, probers, solar_forecast_set_and_reset, reset_scoring
+- `custom_components/quiet_solar/home_model/home_utils.py` — Moved time series utils, new slot_value_from_time_series, align_time_series_on_time_slots
+- `custom_components/quiet_solar/home_model/load.py` — Re-exports for backward compatibility
+- `custom_components/quiet_solar/home_model/solver.py` — Uses slot_value_from_time_series, None guards
 - `custom_components/quiet_solar/const.py` — Removed dampening constants, renamed to SCORING_*, single score prefix
-- `custom_components/quiet_solar/sensor.py` — Single score sensor per provider (was two)
+- `custom_components/quiet_solar/sensor.py` — Single score sensor per provider, active provider sensor
 - `custom_components/quiet_solar/switch.py` — Removed solar dampening switches
-- `custom_components/quiet_solar/ha_model/home.py` — reset_dampening → reset_scoring
+- `tests/test_solar_forecast_scoring.py` — 34 new tests for scoring, forecast history, probers
+- `tests/test_solar_forecast_resilience.py` — Rewritten for new compute_score(time) API
+- `tests/test_time_series_utils.py` — 47+ tests for all time series utils
 - `custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2` — Removed dampening UI
 - `custom_components/quiet_solar/ui/quiet_solar_dashboard_template_standard_ha.yaml.j2` — Removed dampening UI
 - `tests/test_solar_forecast_resilience.py` — Removed 31 dampening tests, updated scoring references

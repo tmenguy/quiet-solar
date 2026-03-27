@@ -240,10 +240,12 @@ QSForecastHomeNonControlledSensors = {
 
 QSForecastSolarSensors = {
     "qs_solar_forecast_15mn": 15 * 60,
-    "qs_solar_forecast_30mn": 30 * 60,
-    "qs_solar_forecast_1h": 60 * 60,
-    "qs_solar_forecast_3h": 3 * 60 * 60,
-    "qs_solar_forecast_6h": 6 * 60 * 60,
+    "qs_solar_forecast_1h": 3600,
+    "qs_solar_forecast_4h": 4 * 3600,
+    "qs_solar_forecast_8h": 8 * 3600,
+    "qs_solar_forecast_12h": 12 * 3600,
+    "qs_solar_forecast_18h": 18 * 3600,
+    "qs_solar_forecast_24h": 24 * 3600,
 }
 
 CONF_OFF_GRID_ENTITY = "off_grid_entity"

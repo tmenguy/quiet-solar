@@ -146,7 +146,7 @@ async def create_integrated_environment(
         "hass": env.hass,
         "config_entry": env.config_entry,
     }
-    with patch("custom_components.quiet_solar.ha_model.home.QSHomeConsumptionHistoryAndForecast"):
+    with patch("custom_components.quiet_solar.ha_model.home.QSHomeSolarAndConsumptionHistoryAndForecast"):
         env.home = QSHome(**home_config)
     data_handler.home = env.home
 

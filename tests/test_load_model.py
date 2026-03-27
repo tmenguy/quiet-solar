@@ -1167,14 +1167,14 @@ class TestGetValueFromTimeSeries:
         assert value == 10.0
 
     def test_closest_value_after(self):
-        """Test finding closest value (time slightly after)."""
+        """Test finding value between times returns left neighbor."""
         time1 = datetime(2024, 1, 1, 12, 0, tzinfo=pytz.UTC)
         time2 = datetime(2024, 1, 1, 13, 0, tzinfo=pytz.UTC)
         series = [(time1, 10.0), (time2, 20.0)]
 
-        target = datetime(2024, 1, 1, 12, 50, tzinfo=pytz.UTC)  # Closer to time2
+        target = datetime(2024, 1, 1, 12, 50, tzinfo=pytz.UTC)  # Between t1 and t2
         result_time, value, exact, idx = get_value_from_time_series(series, target)
-        assert value == 20.0
+        assert value == 10.0  # always returns left neighbor
 
     def test_time_before_series_start(self):
         """Test when target time is before series start."""

@@ -347,16 +347,11 @@ class QSHome(QSDynamicGroup):
         self.grid_consumption_power_sensor = GRID_CONSUMPTION_SENSOR
 
         self.home_non_controlled_power_forecast_sensor_values = {}
-        self.home_solar_forecast_sensor_values = {}
 
         self.home_non_controlled_power_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
             self.get_non_controlled_consumption_from_current_forecast_getter,
             self.get_non_controlled_consumption_best_stored_value_getter,
             QSForecastHomeNonControlledSensors,
-        )
-
-        self.home_solar_forecast_sensor_values_providers = QSforecastValueSensor.get_probers(
-            self.get_solar_from_current_forecast_getter, None, QSForecastSolarSensors
         )
 
         kwargs["home"] = self
@@ -398,7 +393,7 @@ class QSHome(QSDynamicGroup):
             non_ha_entity_get_state=self.home_non_controlled_consumption_sensor_state_getter,
         )
 
-        self._consumption_forecast = QSHomeConsumptionHistoryAndForecast(self)
+        self.solar_and_consumption_forecast = QSHomeSolarAndConsumptionHistoryAndForecast(self)
         # self.register_all_on_change_states()
         self._last_solve_done: datetime | None = None
         self._last_forecast_probe_time: datetime | None = None
@@ -1284,37 +1279,32 @@ class QSHome(QSDynamicGroup):
     def get_non_controlled_consumption_from_current_forecast_getter(
         self, start_time: datetime
     ) -> tuple[datetime | None, str | float | None]:
-        if self._consumption_forecast:
-            if self._consumption_forecast.home_non_controlled_consumption:
-                return self._consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(
-                    start_time
+        if self.solar_and_consumption_forecast:
+            if self.solar_and_consumption_forecast.home_non_controlled_consumption:
+                return (
+                    self.solar_and_consumption_forecast.home_non_controlled_consumption.get_value_from_current_forecast(
+                        start_time
+                    )
                 )
         return (None, None)
 
     def get_non_controlled_consumption_best_stored_value_getter(
         self, start_time: datetime
     ) -> tuple[datetime | None, str | float | None]:
-        if self._consumption_forecast:
-            if self._consumption_forecast.home_non_controlled_consumption:
-                return self._consumption_forecast.home_non_controlled_consumption.get_closest_stored_value(start_time)
+        if self.solar_and_consumption_forecast:
+            if self.solar_and_consumption_forecast.home_non_controlled_consumption:
+                return self.solar_and_consumption_forecast.home_non_controlled_consumption.get_closest_stored_value(
+                    start_time
+                )
         return (None, None)
-
-    def _compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
-
-        forecast = self._consumption_forecast.home_non_controlled_consumption.compute_now_forecast(
-            time_now=time,
-            history_in_hours=24,
-            future_needed_in_hours=int(self._period.total_seconds() // 3600) + 1,
-            set_as_current=True,
-        )
-
-        return forecast
 
     async def compute_non_controlled_forecast(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
 
         unavoidable_consumption_forecast = []
-        if await self._consumption_forecast.init_forecasts(time):
-            unavoidable_consumption_forecast = self._compute_non_controlled_forecast_intl(time)
+        if await self.solar_and_consumption_forecast.init_forecasts(time):
+            unavoidable_consumption_forecast = self.solar_and_consumption_forecast.compute_non_controlled_forecast_intl(
+                time
+            )
 
         return unavoidable_consumption_forecast
 
@@ -2174,15 +2164,15 @@ class QSHome(QSDynamicGroup):
             _LOGGER.info("update_forecast_probers: Home not finished setup, skipping")
             return
 
-        if await self._consumption_forecast.init_forecasts(time) is False:
-            _LOGGER.info("update_forecast_probers: _consumption_forecast not ready skipping")
+        if await self.solar_and_consumption_forecast.init_forecasts(time) is False:
+            _LOGGER.info("update_forecast_probers: solar_and_consumption_forecast not ready skipping")
             return
 
         for name, prober in self.home_non_controlled_power_forecast_sensor_values_providers.items():
             self.home_non_controlled_power_forecast_sensor_values[name] = prober.push_and_get(time)
 
-        for name, prober in self.home_solar_forecast_sensor_values_providers.items():
-            self.home_solar_forecast_sensor_values[name] = prober.push_and_get(time)
+        if self.solar_plant:
+            await self.solar_plant.update_forecast_probers(time)
 
         if prev_time is not None:
             # car  / person forecasts probers
@@ -2661,14 +2651,7 @@ class QSHome(QSDynamicGroup):
                 else:
                     _LOGGER.error("Error updating states for unknown device: %s", err, exc_info=True, stack_info=True)
 
-        if await self._consumption_forecast.init_forecasts(time):
-            if self._consumption_forecast.home_non_controlled_consumption is not None:
-                if self._consumption_forecast.home_non_controlled_consumption.add_value(
-                    time, self.home_non_controlled_consumption
-                ):
-                    await self._consumption_forecast.home_non_controlled_consumption.save_values()
-            if self._consumption_forecast.home_non_controlled_consumption.update_current_forecast_if_needed(time):
-                self._compute_non_controlled_forecast_intl(time)
+        await self.solar_and_consumption_forecast.update_consumption_and_forecast_history(time)
 
         # it has its own logic of tiing and caching
         await self.compute_and_set_best_persons_cars_allocations(time=time, force_update=False, do_notify=True)
@@ -2895,16 +2878,16 @@ class QSHome(QSDynamicGroup):
     async def reset_forecasts(self, time: datetime = None):
         if time is None:
             time = datetime.now(pytz.UTC)
-        if self._consumption_forecast:
-            await self._consumption_forecast.reset_forecasts(time)
+        if self.solar_and_consumption_forecast:
+            await self.solar_and_consumption_forecast.reset_forecasts(time)
         if self.solar_plant:
             self.solar_plant.reset_scoring(time)
 
     async def light_reset_forecasts(self, time: datetime = None):
         if time is None:
             time = datetime.now(pytz.UTC)
-        if self._consumption_forecast:
-            await self._consumption_forecast.reset_forecasts(time, light_reset=True)
+        if self.solar_and_consumption_forecast:
+            await self.solar_and_consumption_forecast.reset_forecasts(time, light_reset=True)
 
     async def dump_for_debug(self):
         storage_path: str = join(self.hass.config.path(), DOMAIN, "debug")
@@ -2915,8 +2898,8 @@ class QSHome(QSDynamicGroup):
 
         time = datetime.now(pytz.UTC)
 
-        if self._consumption_forecast:
-            await self._consumption_forecast.dump_for_debug(storage_path)
+        if self.solar_and_consumption_forecast:
+            await self.solar_and_consumption_forecast.dump_for_debug(storage_path)
 
         debugs = {"now": time}
 
@@ -2954,7 +2937,7 @@ def _sanitize_idx(idx):
     return idx % BUFFER_SIZE_IN_INTERVALS
 
 
-class QSHomeConsumptionHistoryAndForecast:
+class QSHomeSolarAndConsumptionHistoryAndForecast:
     def __init__(self, home: QSHome | None, storage_path: str = None) -> None:
         self.home = home
         if home is None:
@@ -2963,7 +2946,13 @@ class QSHomeConsumptionHistoryAndForecast:
             self.hass = home.hass
 
         self.home_non_controlled_consumption: QSSolarHistoryVals | None = None
+
         self.solar_production_history: QSSolarHistoryVals | None = None
+
+        self.solar_forecast_history: dict[str, QSSolarHistoryVals] | None = None
+
+        self.solar_forecast_history_per_provider: dict[str, dict[str, QSSolarHistoryVals] | None] | None = None
+
         self._in_reset = False
         if storage_path is None:
             if self.hass is None:
@@ -2975,10 +2964,30 @@ class QSHomeConsumptionHistoryAndForecast:
 
         # ok now go through the various spots
 
+    def get_forecast_histories_for_provider(self, provider_name: str) -> dict[str, QSSolarHistoryVals]:
+        if self.solar_forecast_history_per_provider is None:
+            return {}
+        return self.solar_forecast_history_per_provider.get(provider_name, {})
+
     async def dump_for_debug(self, path: str):
         if self.home_non_controlled_consumption is not None:
             file_path = join(path, self.home_non_controlled_consumption.file_name)
             await self.home_non_controlled_consumption.save_values(file_path)
+
+        if self.solar_production_history is not None:
+            file_path = join(path, self.solar_production_history.file_name)
+            await self.solar_production_history.save_values(file_path)
+
+        if self.solar_forecast_history is not None:
+            for name, history in self.solar_forecast_history.items():
+                file_path = join(path, history.file_name)
+                await history.save_values(file_path)
+
+        if self.solar_forecast_history_per_provider is not None:
+            for provider_name, providers_histories in self.solar_forecast_history_per_provider.items():
+                for name, history in providers_histories.items():
+                    file_path = join(path, history.file_name)
+                    await history.save_values(file_path)
 
     async def init_forecasts(self, time: datetime):
 
@@ -2988,19 +2997,128 @@ class QSHomeConsumptionHistoryAndForecast:
             )
             await self.home_non_controlled_consumption.init(time)
 
-        if (
-            self._in_reset is False
-            and self.solar_production_history is None
-            and self.home is not None
-            and self.home.solar_plant is not None
-            and self.home.solar_plant.solar_inverter_input_active_power is not None
-        ):
-            self.solar_production_history = QSSolarHistoryVals(
-                entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self
-            )
-            await self.solar_production_history.init(time)
+        await self.solar_forecast_set_and_reset(time)
 
         return not self._in_reset
+
+    def compute_non_controlled_forecast_intl(self, time: datetime) -> list[tuple[datetime | None, float | None]]:
+
+        forecast = self.home_non_controlled_consumption.compute_now_forecast(
+            time_now=time,
+            history_in_hours=24,
+            future_needed_in_hours=int(self.home._period.total_seconds() // 3600) + 1,
+            set_as_current=True,
+        )
+
+        return forecast
+
+    async def update_consumption_and_forecast_history(self, time: datetime):
+
+        if await self.init_forecasts(time):
+            if self.home_non_controlled_consumption is not None:
+                if self.home_non_controlled_consumption.add_value(time, self.home.home_non_controlled_consumption):
+                    await self.home_non_controlled_consumption.save_values()
+
+            if self.home_non_controlled_consumption.update_current_forecast_if_needed(time):
+                self.compute_non_controlled_forecast_intl(time)
+
+            if self.home.solar_plant:
+                if self.solar_production_history is not None and self.home.solar_plant.solar_production is not None:
+                    if self.solar_production_history.add_value(time, self.home.solar_plant.solar_production):
+                        await self.solar_production_history.save_values()
+
+                if self.solar_forecast_history is not None:
+                    for name, history in self.solar_forecast_history.items():
+                        value = self.home.solar_plant.solar_forecast_sensor_values.get(name, None)
+                        if value is not None:
+                            if history.add_value(time, value):
+                                await history.save_values()
+
+                if self.solar_forecast_history_per_provider is not None:
+                    for provider_name, provider_histories in self.solar_forecast_history_per_provider.items():
+                        for name, history in provider_histories.items():
+                            full_name = f"{provider_name}_{name}"
+                            value = self.home.solar_plant.solar_forecast_sensor_values_per_provider.get(full_name, None)
+                            if value is not None:
+                                if history.add_value(time, value):
+                                    await history.save_values()
+
+    async def solar_forecast_set_and_reset(self, time: datetime, for_reset: bool = False):
+
+        do_solar_production = False
+        do_solar_forecast = False
+        do_solar_forecast_per_provider = False
+
+        if for_reset is False:
+            if self._in_reset is False and self.home is not None and self.home.solar_plant is not None:
+                if (
+                    self.solar_production_history is None
+                    and self.home.solar_plant.solar_inverter_input_active_power is not None
+                ):
+                    do_solar_production = True
+
+                if self.solar_forecast_history is None:
+                    do_solar_forecast = True
+
+                if self.solar_forecast_history_per_provider is None:
+                    do_solar_forecast_per_provider = True
+        else:
+            if self.home is not None and self.home.solar_plant is not None:
+                if self.home.solar_plant.solar_inverter_input_active_power is not None:
+                    do_solar_production = True
+                do_solar_forecast = True
+                do_solar_forecast_per_provider = True
+
+        if do_solar_production:
+            solar_production_history = QSSolarHistoryVals(
+                entity_id=self.home.solar_plant.solar_inverter_input_active_power, forecast=self
+            )
+            await solar_production_history.init(time, for_reset=for_reset)
+            if for_reset:
+                await solar_production_history.save_values(for_reset=True)
+                self.solar_production_history = None
+            else:
+                self.solar_production_history = solar_production_history
+
+        if do_solar_forecast:
+            ret = {}
+            for forecast_entity_name in QSForecastSolarSensors:
+                ha_entity = self.home.ha_entities.get(forecast_entity_name, None)
+                if ha_entity is not None:
+                    forecast_history = QSSolarHistoryVals(entity_id=ha_entity, forecast=self)
+                    await forecast_history.init(time, for_reset=for_reset)
+                    if for_reset:
+                        await forecast_history.save_values(for_reset=True)
+                    ret[forecast_entity_name] = forecast_history
+
+            if for_reset:
+                self.solar_forecast_history = None
+            elif len(ret) > 0:
+                self.solar_forecast_history = ret
+
+        if do_solar_forecast_per_provider:
+            ret = {}
+
+            for provider_name in self.home.solar_plant.solar_forecast_providers:
+                ret_provider = {}
+
+                for forecast_entity_name_base in QSForecastSolarSensors:
+                    forecast_entity_name = f"{provider_name}_{forecast_entity_name_base}"
+                    ha_entity = self.home.ha_entities.get(forecast_entity_name, None)
+                    if ha_entity is not None:
+                        forecast_history = QSSolarHistoryVals(entity_id=ha_entity, forecast=self)
+                        await forecast_history.init(time, for_reset=for_reset)
+                        if for_reset:
+                            await forecast_history.save_values(for_reset=True)
+                        ret_provider[forecast_entity_name_base] = forecast_history
+
+                if len(ret_provider) > 0:
+                    ret[provider_name] = ret_provider
+
+            if for_reset:
+                self.solar_forecast_history_per_provider = None
+            elif len(ret) > 0:
+                self.solar_forecast_history_per_provider = ret
 
     def _combine_stored_forecast_values(self, val1, val2, do_add=True):
 
@@ -3291,13 +3409,15 @@ class QSHomeConsumptionHistoryAndForecast:
             _LOGGER.info("Resetting home consumption LIGHT")
             self.home_non_controlled_consumption = None
 
+        await self.solar_forecast_set_and_reset(time, for_reset=True)
+
         self._in_reset = False
         await self.init_forecasts(time)
         return True
 
 
 class QSSolarHistoryVals:
-    def __init__(self, forecast: QSHomeConsumptionHistoryAndForecast, entity_id: str) -> None:
+    def __init__(self, forecast: QSHomeSolarAndConsumptionHistoryAndForecast, entity_id: str) -> None:
 
         self.forecast = forecast
         if forecast is None:
@@ -3358,6 +3478,40 @@ class QSSolarHistoryVals:
             return result
 
         return []
+
+    def get_historical_data(self, time: datetime, past_hours: int = 24) -> list[tuple[datetime, float]]:
+        """Return historical values as a time series"""
+        if self.values is None:
+            return []
+
+        now_idx, now_days = self.get_index_from_time(time)
+        time_now_idx = self.get_utc_time_from_index(now_idx, now_days)
+
+        num_intervals = past_hours * NUM_INTERVAL_PER_HOUR
+
+        past_start_idx = _sanitize_idx(now_idx - num_intervals)
+
+        power_vals, day_vals = self._get_values(past_start_idx, now_idx)
+
+        if power_vals is None or day_vals is None:
+            return []
+
+        # Need at least 60% valid entries
+        valid_count = int(np.sum(day_vals != 0))
+        if valid_count < 0.6 * num_intervals:
+            return []
+
+        # Build time series shifted to current time
+        result: list[tuple[datetime, float]] = []
+
+        for i in range(len(power_vals)):
+            ts = time_now_idx - timedelta(minutes=(len(power_vals) - 1 - i) * INTERVALS_MN)
+            if day_vals[i] != 0:
+                result.append((ts, power_vals[i]))
+            else:
+                result.append((ts, 0.0))
+
+        return result
 
     def update_current_forecast_if_needed(self, time: datetime) -> bool:
         if self._last_forecast_update_time is None or (time - self._last_forecast_update_time) >= timedelta(

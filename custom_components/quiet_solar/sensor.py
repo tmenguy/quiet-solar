@@ -353,19 +353,6 @@ def create_ha_sensor_for_QSHome(device: QSHome):
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
 
-    for name in QSForecastSolarSensors:
-        home_forecast_power = QSSensorEntityDescription(
-            key=name,
-            name=name,
-            native_unit_of_measurement=UnitOfPower.WATT,
-            state_class=SensorStateClass.MEASUREMENT,
-            device_class=SensorDeviceClass.POWER,
-            entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=lambda device, key: device.home_solar_forecast_sensor_values.get(key, None),
-            qs_is_none_unavailable=True,
-        )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
-
     return entities
 
 
@@ -410,6 +397,36 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         qs_is_none_unavailable=True,
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=active_provider_sensor))
+
+    for name in QSForecastSolarSensors:
+        home_forecast_power = QSSensorEntityDescription(
+            key=name,
+            name=name,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+            device_class=SensorDeviceClass.POWER,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=lambda device, key: device.solar_forecast_sensor_values.get(key, None),
+            qs_is_none_unavailable=True,
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+
+    for provider_name in device.solar_forecast_providers:
+        for forecast_entity_name_base in QSForecastSolarSensors:
+            name = f"{provider_name}_{forecast_entity_name_base}"
+            home_forecast_power = QSSensorEntityDescription(
+                key=name,
+                name=name,
+                native_unit_of_measurement=UnitOfPower.WATT,
+                state_class=SensorStateClass.MEASUREMENT,
+                device_class=SensorDeviceClass.POWER,
+                entity_category=EntityCategory.DIAGNOSTIC,
+                value_fn=lambda device, key: device.solar_forecast_sensor_values_per_provider.get(key, None),
+                qs_is_none_unavailable=True,
+            )
+            entities.append(
+                QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power)
+            )
 
     return entities
 

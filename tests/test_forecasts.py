@@ -38,7 +38,7 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_IN_INTERVALS,
     INTERVALS_MN,
     QSHome,
-    QSHomeConsumptionHistoryAndForecast,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSSolarHistoryVals,
 )
 from custom_components.quiet_solar.ha_model.solar import QSSolarProviderSolcastDebug
@@ -97,7 +97,7 @@ class TestForecast(TestCase):
             time = datetime(year=2024, month=8, day=20, hour=10, minute=5, second=30, microsecond=0, tzinfo=pytz.UTC)
 
             # nothing is here
-            conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
+            conso = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
             conso.home_non_controlled_consumption = QSSolarHistoryVals(
                 entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso
             )
@@ -158,7 +158,7 @@ class TestForecast(TestCase):
 
             home = QSHome(hass=None, config_entry=None, name="test_home", **kwargs)
 
-            conso = QSHomeConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
+            conso = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path=conso_path)
             conso.home_non_controlled_consumption = QSSolarHistoryVals(
                 entity_id=FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER, forecast=conso
             )

@@ -517,7 +517,7 @@ def get_slots_from_time_series(
 
     start_idx = bisect_left(time_serie, start_time, key=itemgetter(0))
     # get one before to have the timing just before
-    if start_idx > 0 and start_idx < len(time_serie):
+    if start_idx > 0:
         if time_serie[start_idx][0] != start_time:
             start_idx -= 1
 
@@ -565,12 +565,17 @@ def get_value_from_time_series(
         else:
             # we have multiple scenarios here : we can take the closest one or compute an interpolated value
             if interpolation_operation is None:
-                if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
-                    res = time_series[idx - 1]
-                    res_idx = idx - 1
-                else:
-                    res = time_series[idx]
-                    res_idx = idx
+                # a time serie is normally by construction: the point gives its value to the whole
+                # step
+                res = time_series[idx - 1]
+                res_idx = idx - 1
+
+                # if time - time_series[idx - 1][0] <= time_series[idx][0] - time:
+                #     res = time_series[idx - 1]
+                #     res_idx = idx - 1
+                # else:
+                #     res = time_series[idx]
+                #     res_idx = idx
             else:
                 v1 = time_series[idx - 1]
                 v2 = time_series[idx]
@@ -680,6 +685,10 @@ def align_time_series_on_time_slots(
 
     result: list[tuple[datetime, float]] = []
     last_end = -1
+    if time_series[0][0] < slot_boundaries[0]:
+        while last_end < len(time_series) - 1 and time_series[last_end + 1][0] <= slot_boundaries[0]:
+            last_end += 1
+
     for i in range(len(slot_boundaries) - 1):
         last_end, value = slot_value_from_time_series(
             time_series, slot_boundaries[i], slot_boundaries[i + 1], last_end, geometric_smoothing

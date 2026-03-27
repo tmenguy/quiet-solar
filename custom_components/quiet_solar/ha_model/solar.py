@@ -33,17 +33,19 @@ from ..const import (
     SOLAR_PROVIDER_MODE_AUTO,
     SOLCAST_SOLAR_DOMAIN,
     CONF_TYPE_NAME_QSSolar,
+    QSForecastSolarSensors,
 )
 from ..ha_model.device import HADeviceMixin
 from ..home_model.home_utils import (
     align_time_series_and_values,
-    align_time_series_on_time_slots,
     get_slots_from_time_series,
     get_value_from_time_series,
 )
 from ..home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
+
+SOLAR_AND_PROVIDER_UPDATE_PERIOD_UPDATE_S = 15 * 60
 
 
 def _migrate_solar_providers_config(config_data: dict) -> list[dict]:
@@ -154,6 +156,30 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self.solar_production = 0
         self.inverter_output_power = 0
 
+        from .home import QSforecastValueSensor  # deferred to avoid circular import
+
+        self.solar_forecast_sensor_values_probers = QSforecastValueSensor.get_probers(
+            self.get_value_from_current_forecast, None, QSForecastSolarSensors
+        )
+
+        self.solar_forecast_sensor_values_per_provider_probers = {}
+        for name, provider in self.solar_forecast_providers.items():
+            self.solar_forecast_sensor_values_per_provider_probers[name] = QSforecastValueSensor.get_probers(
+                provider.get_value_from_current_forecast, None, QSForecastSolarSensors
+            )
+
+        self.solar_forecast_sensor_values = {}
+        self.solar_forecast_sensor_values_per_provider = {}
+
+    async def update_forecast_probers(self, time: datetime):
+        for name, prober in self.solar_forecast_sensor_values_probers.items():
+            self.solar_forecast_sensor_values[name] = prober.push_and_get(time)
+
+        for provider_name, probers in self.solar_forecast_sensor_values_per_provider_probers.items():
+            for name, prober in probers.items():
+                full_name = f"{provider_name}_{name}"
+                self.solar_forecast_sensor_values_per_provider[full_name] = prober.push_and_get(time)
+
     @property
     def provider_mode(self) -> str:
         """Return current provider selection mode."""
@@ -228,7 +254,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         """Return historical solar production as a fallback forecast when APIs are stale."""
         if self.home is None:
             return []
-        forecast_handler = getattr(self.home, "_consumption_forecast", None)
+        forecast_handler = getattr(self.home, "solar_and_consumption_forecast", None)
         if forecast_handler is None:
             return []
         history = getattr(forecast_handler, "solar_production_history", None)
@@ -240,36 +266,6 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         if self.solar_production > self.solar_max_output_power_value:
             return self.solar_production - self.solar_max_output_power_value
         return 0.0
-
-    def _get_production_actuals_last_24h(self, time: datetime) -> list[tuple[datetime, float]]:
-        """Get actual solar production for the last 24 hours from solar_production_history."""
-        if self.home is None:
-            return []
-        forecast_handler = getattr(self.home, "_consumption_forecast", None)
-        if forecast_handler is None:
-            return []
-        history = getattr(forecast_handler, "solar_production_history", None)
-        if history is None or history.values is None:
-            return []
-
-        # Import at function scope to avoid circular import
-        from .home import INTERVALS_MN
-
-        start_time = time - timedelta(hours=24)
-        start_idx, _ = history.get_index_from_time(start_time)
-        end_idx, _ = history.get_index_from_time(time)
-
-        power_vals, day_vals = history._get_values(start_idx, end_idx)
-        if power_vals is None or day_vals is None:
-            return []
-
-        result: list[tuple[datetime, float]] = []
-        for i in range(len(power_vals)):
-            ts = start_time + timedelta(minutes=i * INTERVALS_MN)
-            if day_vals[i] != 0:
-                result.append((ts, float(power_vals[i])))
-
-        return result
 
     async def update_forecast(self, time: datetime) -> None:
         """Update all providers and select active one."""
@@ -292,7 +288,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         """Clear all scoring state for all providers."""
         self._last_scoring_half_day = None
         for provider in self.solar_forecast_providers.values():
-            provider.reset_scoring_buffers()
+            provider.reset_scoring()
 
     @staticmethod
     def _scoring_half_day(time: datetime) -> tuple:
@@ -309,13 +305,10 @@ class QSSolar(HADeviceMixin, AbstractDevice):
 
         self._last_scoring_half_day = current_half
 
-        actuals = self._get_production_actuals_last_24h(time)
-
         for name, provider in self.solar_forecast_providers.items():
             # Score using previously stored forecast vs last 24h actuals
-            provider.compute_score(actuals)
-            # Then store current forecast for next cycle
-            provider.store_forecast_snapshot()
+            provider.compute_score(time)
+
             _LOGGER.debug(
                 "Scoring cycle for provider %s: score=%.2f",
                 name,
@@ -390,8 +383,6 @@ class QSSolarProvider:
 
         # Scoring
         self.score: float | None = None
-        # Single stored forecast snapshot, updated at 00:00 and 12:00 local time
-        self._stored_forecast: list[tuple[datetime, float]] = []
 
         # Stale notification state (Task 9)
         self._was_stale: bool = False
@@ -436,7 +427,7 @@ class QSSolarProvider:
         if (
             len(self.orchestrators) == 0
             or self._latest_update_time is None
-            or (time - self._latest_update_time).total_seconds() > 15 * 60
+            or (time - self._latest_update_time).total_seconds() > SOLAR_AND_PROVIDER_UPDATE_PERIOD_UPDATE_S
         ):
             await self.fill_orchestrators()
 
@@ -503,7 +494,7 @@ class QSSolarProvider:
                 fallback = self.solar.get_historical_solar_fallback(time)
                 if fallback:
                     self.solar_forecast = fallback
-                    _LOGGER.info(
+                    _LOGGER.warning(
                         "Using historical solar pattern as fallback for provider %s (%d points)",
                         self.provider_name,
                         len(fallback),
@@ -526,26 +517,49 @@ class QSSolarProvider:
             v_aggregated = align_time_series_and_values(v_aggregated, v, operation=lambda x, y: x + y)
         return v_aggregated
 
-    def store_forecast_snapshot(self) -> None:
-        """Store current forecast as the snapshot (overwritten each scoring cycle)."""
-        self._stored_forecast = [(ts, v) for ts, v in self.solar_forecast if ts is not None and v is not None]
-
-    def reset_scoring_buffers(self) -> None:
+    def reset_scoring(self) -> None:
         """Clear scoring state (stored forecast + score)."""
-        self._stored_forecast = []
         self.score = None
 
-    def compute_score(self, actuals: list[tuple[datetime, float]]) -> None:
+    def compute_score(self, time: datetime) -> None:
         """Compute MAE score comparing stored forecast vs provided actuals."""
-        if not actuals or not self._stored_forecast:
+        if self.solar is None or self.solar.home is None:
+            return
+        forecast_handler = getattr(self.solar.home, "solar_and_consumption_forecast", None)
+        if forecast_handler is None:
+            return
+        prod_history = getattr(forecast_handler, "solar_production_history", None)
+        if prod_history is None:
             return
 
-        fc_times = [ts for ts, _ in self._stored_forecast]
-        if len(fc_times) < 2:
-            return
+        actual_24_hours = prod_history.get_historical_data(time, past_hours=24)
 
-        aligned_actuals = align_time_series_on_time_slots(actuals, fc_times)
-        aligned_forecast = align_time_series_on_time_slots(self._stored_forecast, fc_times)
+        histories = forecast_handler.get_forecast_histories_for_provider(self.provider_name)
+
+        past_forecast = None
+        # in histories we end up having QSForecastSolarSensors with the timing, 8h can be a good one
+
+        name_list = [(v, n) for n, v in QSForecastSolarSensors.items()]
+        # sort it by time
+        name_list.sort(key=lambda x: x[0])
+
+        for value_s, name in name_list:
+            if value_s >= 8 * 3600:
+                if name in histories:
+                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
+                    if past_forecast:
+                        break
+
+        if past_forecast is None:
+            name_list.sort(key=lambda x: x[0], reverse=True)
+            for value_s, name in name_list:
+                if name in histories:
+                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
+                    if past_forecast:
+                        break
+
+        aligned_actuals = actual_24_hours
+        aligned_forecast = past_forecast
 
         if not aligned_actuals or not aligned_forecast:
             return
@@ -558,6 +572,12 @@ class QSSolarProvider:
         actuals_aligned: list[tuple[datetime, float]],
     ) -> float | None:
         """Compute MAE from two aligned time series (same slot boundaries)."""
+        if len(forecast_aligned) != len(actuals_aligned):
+            _LOGGER.warning(
+                "MAE length mismatch: forecast=%s actuals=%s, truncating to min",
+                len(forecast_aligned),
+                len(actuals_aligned),
+            )
         n = min(len(forecast_aligned), len(actuals_aligned))
         if n == 0:
             return None
