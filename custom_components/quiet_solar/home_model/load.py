@@ -1162,14 +1162,11 @@ class AbstractLoad(AbstractDevice):
             load_param = "NO"
             if current_constraint.load_param is not None:
                 load_param = current_constraint.load_param
-            new_val = (
-                "RUNNING:"
-                + current_constraint.stable_name
-                + "-"
-                + load_param
-                + "-"
-                + current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
-            )
+            if current_constraint.as_fast_as_possible:
+                end_str = "ASAP"
+            else:
+                end_str = current_constraint.end_of_constraint.strftime("%Y-%m-%d %H:%M:%S")
+            new_val = "RUNNING:" + current_constraint.stable_name + "-" + load_param + "-" + end_str
 
         return new_val
 
@@ -1319,11 +1316,15 @@ class AbstractLoad(AbstractDevice):
             # (by a TimeConstraint for example) and making this test erroneous
             if (
                 self._last_completed_constraint is not None
-                and self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
                 and self._last_completed_constraint.requested_target_value == constraint.requested_target_value
+                and (
+                    self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
+                    or self._last_completed_constraint.initial_end_of_constraint == constraint.end_of_constraint
+                )
             ):
                 _LOGGER.debug(
-                    f"Constraint {constraint.name} not pushed because same end date and same target value as last completed one"
+                    "Constraint %s not pushed because same end date (or initial end date) and same target value as last completed one",
+                    constraint.name,
                 )
                 return False
 
