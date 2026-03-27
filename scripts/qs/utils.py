@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -120,10 +121,12 @@ CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
 def claude_launch_command(work_dir: str, issue: int, title: str) -> str:
     """Build the full claude launch command with terminal title and standard options."""
     tab_title = f"QS_{issue}: {title}"
+    safe_title = shlex.quote(tab_title)
+    safe_dir = shlex.quote(work_dir)
     return (
-        f'printf "\\e]0;{tab_title}\\a" && '
-        f'cd "{work_dir}" && '
-        f'claude {CLAUDE_LAUNCH_OPTS} --name "{tab_title}"'
+        f'printf "\\e]0;%s\\a" {safe_title} && '
+        f'cd {safe_dir} && '
+        f'claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}'
     )
 
 

@@ -92,13 +92,7 @@ python scripts/qs/create_pr.py --title "{{title}}" --summary "{{bullets}}" --iss
 
 ### 6. Output review command
 
-Build the launch command using `claude_launch_command()` from `scripts/qs/utils.py` (import the `CLAUDE_LAUNCH_OPTS` constant). The command pattern is:
-
-```
-printf "\e]0;Review QS_{{issue}}: {{title}}\a" && cd "{{main_worktree}}" && claude {{CLAUDE_LAUNCH_OPTS}} --name "Review QS_{{issue}}: {{title}}"
-```
-
-Where `CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"`.
+Build the launch command using `claude_launch_command()` from `scripts/qs/utils.py`. Always use the function — do not copy-paste the `CLAUDE_LAUNCH_OPTS` constant value. See `scripts/qs/utils.py` for the current value.
 
 Tell the user:
 ```

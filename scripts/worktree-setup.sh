@@ -41,6 +41,10 @@ mkdir -p "$WORKTREES_DIR"
 
 # Create worktree — reuse existing branch or create new one
 if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
+    # F17: Warn if existing branch has diverged from main
+    if ! git -C "$MAIN_DIR" merge-base --is-ancestor "$BRANCH" main 2>/dev/null; then
+        echo "Warning: Branch ${BRANCH} has diverged from main. Consider rebasing."
+    fi
     echo "Creating worktree at ${WORKTREE_DIR} using existing branch ${BRANCH}..."
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
 else
@@ -60,11 +64,14 @@ fi
 if [ -d "${MAIN_DIR}/config" ]; then
     mkdir -p "${WORKTREE_DIR}/config"
     TRACKED_CONFIG="$(git -C "$MAIN_DIR" ls-files -- config/)"
+    # F4: Enable dotglob so hidden files (.storage, .HA_VERSION, etc.) are included
+    shopt -s dotglob
     for item in "${MAIN_DIR}/config"/*; do
         [ -e "$item" ] || continue
         name="$(basename "$item")"
         target="${WORKTREE_DIR}/config/${name}"
-        if echo "$TRACKED_CONFIG" | grep -q "^config/${name}$"; then
+        # F15: Use fixed-string match instead of regex to avoid . metacharacter issues
+        if echo "$TRACKED_CONFIG" | grep -qF "config/${name}"; then
             continue
         fi
         if [ ! -e "$target" ]; then
@@ -72,6 +79,7 @@ if [ -d "${MAIN_DIR}/config" ]; then
             echo "Symlinked config/${name}"
         fi
     done
+    shopt -u dotglob
 fi
 
 # Symlink non-git custom_components using derived basename

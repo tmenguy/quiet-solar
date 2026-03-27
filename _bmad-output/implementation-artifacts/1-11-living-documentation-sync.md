@@ -101,6 +101,11 @@ This story modifies skill definition files in `_qsprocess/skills/` and possibly 
 - `_qsprocess/skills/review-story.md` — add doc-update action + inline detection + compound doc-sync step
 - `_qsprocess/skills/finish-story.md` — add mandatory doc-sync gate at start
 - `_bmad-output/project-context.md` — brief lifecycle note
+- `_qsprocess/skills/setup-story.md` — updated to use `claude_launch_command()`
+- `_qsprocess/workflows/development-lifecycle.md` — updated with doc-sync references
+- `scripts/qs/setup_worktree.py` — updated to use `claude_launch_command()`
+- `scripts/qs/utils.py` — added `CLAUDE_LAUNCH_OPTS` constant and `claude_launch_command()` helper
+- `scripts/worktree-setup.sh` — fixed per-item config symlink loop, branch reuse support
 
 ### Design principles
 
@@ -151,7 +156,12 @@ N/A — process/tooling story, no code debugging needed
 ### File List
 - `_qsprocess/skills/implement-story.md` — added Step 2.5 (inline doc-sync) + Step 3.5 (compound doc-sync) + expanded git add
 - `_qsprocess/skills/review-story.md` — added Step 2.5 (inline doc-sync) + doc-update action + adversarial guidance + Step 4.5 (compound doc-sync)
-- `_qsprocess/skills/finish-story.md` — added Step 0.5 (mandatory doc-sync gate with script) + expanded git add
+- `_qsprocess/skills/finish-story.md` — added Step 0.5 (mandatory doc-sync gate with script) + expanded git add + added --story-file input
+- `_qsprocess/skills/setup-story.md` — updated to use `claude_launch_command()`
+- `_qsprocess/workflows/development-lifecycle.md` — updated with doc-sync references
 - `scripts/qs/doc_sync.py` — new script: parses story artifact, compares against git diff, reports discrepancies
+- `scripts/qs/setup_worktree.py` — updated to use `claude_launch_command()` from utils
+- `scripts/qs/utils.py` — added `CLAUDE_LAUNCH_OPTS`, `claude_launch_command()`, `shlex` import
+- `scripts/worktree-setup.sh` — per-item config symlink loop with dotglob, branch reuse with divergence warning
 - `_bmad-output/project-context.md` — added doc-sync note to Development Lifecycle section
 - `_bmad-output/implementation-artifacts/1-11-living-documentation-sync.md` — updated tasks to done + dev agent record

@@ -6,15 +6,18 @@ Final quality gate, merge PR, clean up worktree, update epics.
 
 - `--pr N` (required): PR number
 - `--story-key X.Y` (optional): story key to mark as DONE in epics.md
+- `--story-file PATH` (optional): path to story artifact. If not given, auto-discover via `find_story_file(story_key)` from `scripts/qs/utils.py`, or find the most recent file in `_bmad-output/implementation-artifacts/`.
 
 ## Steps
 
 ### 0.5. Mandatory doc-sync gate
 
-Before anything else, run the automated doc-sync check:
+Before anything else, resolve `{{story_file}}`: use the `--story-file` argument if provided, otherwise auto-discover it from `--story-key` or the most recent artifact in `_bmad-output/implementation-artifacts/`. If no story file can be found, STOP and ask the user.
+
+Then run the automated doc-sync check from the **feature branch worktree** (not from main):
 
 ```bash
-python scripts/qs/doc_sync.py {{story_file}} --base-branch main
+python scripts/qs/doc_sync.py {{story_file}} --base-branch main --repo-path {{feature_worktree}}
 ```
 
 This compares the story artifact's tasks, acceptance criteria, and dev notes against the actual git diff. Review its output, then:
