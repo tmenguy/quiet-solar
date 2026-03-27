@@ -85,7 +85,7 @@ In `load.py` `update_live_constraints()` **line 1460-1466**: Each time the manda
 
 3. **Given** multiple constraint state changes occur within a short window
    **When** the state hash changes
-   **Then** notifications are debounced/rate-limited (e.g., minimum 5-minute interval between notifications for the same load)
+   **Then** the state hash is stable (ASAP constraints use a fixed "ASAP" literal instead of the extending `end_of_constraint` timestamp), preventing repeated notification triggers
 
 4. **Given** a person-based constraint that was just completed (`_last_completed_constraint`)
    **When** `check_load_activity_and_constraints` evaluates whether to re-create a similar person constraint

@@ -1324,7 +1324,8 @@ class AbstractLoad(AbstractDevice):
                 )
             ):
                 _LOGGER.debug(
-                    f"Constraint {constraint.name} not pushed because same end date (or initial end date) and same target value as last completed one"
+                    "Constraint %s not pushed because same end date (or initial end date) and same target value as last completed one",
+                    constraint.name,
                 )
                 return False
 

@@ -3170,7 +3170,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                 force_constraint.load_info is not None
                                 and force_constraint.load_info.get("person") is not None
                             )
-                            if (user_target is not None or not has_person_info) and force_constraint.target_value != target_charge:
+                            if (
+                                user_target is not None or not has_person_info
+                            ) and force_constraint.target_value != target_charge:
                                 force_constraint.target_value = target_charge
                                 do_force_solve = True
                                 # update the constraints to follow the new as fast target
