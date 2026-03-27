@@ -4,15 +4,14 @@ Set up a worktree for story implementation and output the launch command.
 
 ## Input
 
-The user provides: issue number (e.g., `42`) or story key (e.g., `3.2`).
-If a story key is given, look up the issue number from the story file frontmatter or from `gh issue list`.
+The user provides: issue number (e.g., `42`).
 
 ## Steps
 
 ### 1. Run setup script
 
 ```bash
-python scripts/qs/setup_worktree.py {{issue_number}} --story-key "{{story_key}}" --title "{{title}}"
+python scripts/qs/setup_worktree.py {{issue_number}} --title "{{title}}"
 ```
 
 ### 2. Display results

@@ -74,7 +74,7 @@ If inline doc-sync (Step 2.5) and doc-update actions already captured all change
 Run `next_step.py` to generate both command options:
 
 ```bash
-python scripts/qs/next_step.py --skill finish-story --pr {{pr_number}} [--story-key {{key}}] --work-dir {{worktree_path}} --title "{{title}}"
+python scripts/qs/next_step.py --skill finish-story --issue {{issue_number}} --pr {{pr_number}} --work-dir {{worktree_path}} --title "{{title}}"
 ```
 
 Parse the JSON output and tell the user:

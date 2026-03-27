@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import shlex
 import subprocess
@@ -94,26 +93,38 @@ def get_worktree_dir(issue_number: int) -> Path:
     return main.parent / f"{basename}-worktrees" / f"QS_{issue_number}"
 
 
-def find_story_file(story_key: str | None = None) -> Path | None:
-    """Find a story file by key (e.g., '3.2') or return the most recent one."""
+def find_story_file(issue_number: int) -> Path | None:
+    """Find a story file by GitHub issue number.
+
+    Lookup strategy:
+    1. Glob for ``*Github-#N*`` in the filename (new convention).
+    2. Fallback: scan frontmatter of all ``.md`` files for ``issue: N`` (legacy files).
+
+    Returns None if no match — never falls back to "most recent file".
+    """
     root = get_repo_root()
     artifacts_dir = root / "_bmad-output" / "implementation-artifacts"
     if not artifacts_dir.exists():
         return None
 
-    if story_key:
-        # Normalize: "3.2" -> "3-2"
-        normalized = story_key.replace(".", "-")
-        for f in artifacts_dir.glob(f"{normalized}-*.md"):
+    # Primary: filename contains Github-#N
+    for f in artifacts_dir.glob(f"*Github-#{issue_number}*"):
+        if f.suffix == ".md":
             return f
-        # Also try direct match
-        for f in artifacts_dir.glob(f"*{normalized}*.md"):
-            return f
-        return None
 
-    # Return most recently modified story file
-    story_files = sorted(artifacts_dir.glob("*.md"), key=os.path.getmtime, reverse=True)
-    return story_files[0] if story_files else None
+    # Fallback: scan frontmatter for issue: N
+    issue_re = re.compile(rf"^\s*issue:\s*\"?{issue_number}\"?\s*$", re.MULTILINE)
+    for f in sorted(artifacts_dir.glob("*.md")):
+        # Read only first 15 lines (frontmatter area)
+        try:
+            with f.open() as fh:
+                head = "".join(fh.readline() for _ in range(15))
+        except OSError:
+            continue
+        if issue_re.search(head):
+            return f
+
+    return None
 
 
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"

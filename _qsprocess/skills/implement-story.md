@@ -5,10 +5,8 @@ Implement a story following TDD, enforce quality gates, create PR.
 ## Input
 
 - `--issue N` (required): GitHub issue number. Branch is `QS_N`.
-- `--story-file PATH` (optional): path to story artifact.
 
-If `--story-file` not given, find it via `_bmad-output/implementation-artifacts/` matching the issue.
-If no story file is found, STOP and ask the user for the story file path. Do not proceed without it.
+The story file is discovered automatically via `find_story_file(issue_number)` which looks for `*Github-#N*` in `_bmad-output/implementation-artifacts/`. If no story file is found, STOP and ask the user to run `/create-story` first.
 
 ## Prerequisites
 
@@ -28,7 +26,7 @@ Run the BMad dev-story skill which handles the full TDD cycle:
 /bmad-dev-story
 ```
 
-When it asks for the story file, provide the `--story-file` path.
+When it asks for the story file, provide the path found by `find_story_file(issue_number)`.
 
 BMad dev-story handles:
 - Loading story tasks and acceptance criteria

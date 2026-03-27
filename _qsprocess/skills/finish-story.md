@@ -4,26 +4,24 @@ Finish a story: doc-sync, quality gate, merge PR, cleanup — all automated.
 
 ## Input
 
-No arguments required. The script auto-detects everything from the current branch.
+No arguments required. The script auto-detects everything from the current branch (`QS_N` → issue number → story file via `find_story_file(N)`).
 
 Optional overrides (rarely needed):
 - `--pr N`: PR number
 - `--issue N`: issue number
-- `--story-key X.Y`: story key for epics
-- `--story-file PATH`: path to story artifact
 - `--skip-quality-gate`: skip local quality gate
 
 ## Steps
 
 ### 1. Mandatory doc-sync gate (agent judgment required)
 
-Resolve the story file: auto-discover from `_bmad-output/implementation-artifacts/` or use the most recent artifact. If no story file can be found, STOP and ask the user.
-
-Run the automated doc-sync check from the **feature branch worktree**:
+Resolve the story file using the issue number from the current branch. Run:
 
 ```bash
-python scripts/qs/doc_sync.py {{story_file}} --base-branch main --repo-path {{feature_worktree}}
+python scripts/qs/doc_sync.py --issue {{issue_number}} --base-branch main --repo-path {{feature_worktree}}
 ```
+
+If no story file is found, STOP and ask the user.
 
 Review its output, then:
 
@@ -42,6 +40,7 @@ python scripts/qs/finish_story.py
 ```
 
 The script handles everything automatically:
+- Auto-detects issue number from branch, finds story file by issue
 - Auto-commits pending changes and pushes
 - Finds or creates the PR
 - Runs the quality gate

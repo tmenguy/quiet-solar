@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-from utils import output_json, run_git
+from utils import find_story_file, output_json, run_git
 
 
 def parse_story(story_path: Path) -> dict:
@@ -200,19 +200,26 @@ def find_discrepancies(story: dict, changed_files: list[str], git_error: str) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Doc-sync gate: compare story vs implementation")
-    parser.add_argument("story_file", help="Path to story artifact markdown file")
+    parser.add_argument("story_file", nargs="?", default=None, help="Path to story artifact markdown file")
+    parser.add_argument("--issue", type=int, default=None, help="GitHub issue number (alternative to story_file path)")
     parser.add_argument("--base-branch", default="main", help="Base branch to diff against")
     parser.add_argument("--repo-path", default=None, help="Path to repo for git operations (defaults to cwd)")
     parser.add_argument("--json", action="store_true", help="JSON output (default is human-readable)")
     args = parser.parse_args()
 
-    story_path = Path(args.story_file)
-    if not story_path.exists():
-        # F11: Respect --json flag in error path
+    # Resolve story file: --issue takes precedence, then positional path
+    story_path: Path | None = None
+    if args.issue:
+        story_path = find_story_file(args.issue)
+    elif args.story_file:
+        story_path = Path(args.story_file)
+
+    if story_path is None or not story_path.exists():
+        msg = f"Story file not found for issue #{args.issue}" if args.issue else f"Story file not found: {args.story_file}"
         if args.json:
-            output_json({"error": f"Story file not found: {args.story_file}"})
+            output_json({"error": msg})
         else:
-            print(f"Error: Story file not found: {args.story_file}", file=sys.stderr)
+            print(f"Error: {msg}", file=sys.stderr)
         sys.exit(1)
 
     story = parse_story(story_path)

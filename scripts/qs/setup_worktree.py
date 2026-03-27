@@ -2,7 +2,7 @@
 """Set up a worktree for story implementation.
 
 Usage:
-    python scripts/qs/setup_worktree.py <issue_number> [--story-file PATH] [--no-worktree]
+    python scripts/qs/setup_worktree.py <issue_number> [--no-worktree]
 
 Output: JSON with worktree path, branch, and launch commands.
 """
@@ -10,19 +10,15 @@ Output: JSON with worktree path, branch, and launch commands.
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
-from pathlib import Path
 
-from utils import claude_launch_command, get_main_worktree, get_worktree_dir, output_json, run_git
+from utils import claude_launch_command, find_story_file, get_main_worktree, get_worktree_dir, output_json, run_git
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Set up worktree for development")
     parser.add_argument("issue_number", type=int, help="GitHub issue number")
-    parser.add_argument("--story-file", default=None, help="Path to story file")
-    parser.add_argument("--story-key", default=None, help="Story key like 3.2")
     parser.add_argument("--title", default=None, help="Issue/story title for display")
     parser.add_argument("--no-worktree", action="store_true", help="Use branch in main dir instead")
     args = parser.parse_args()
@@ -61,23 +57,14 @@ def main() -> None:
             sys.exit(1)
         work_dir = str(get_worktree_dir(issue))
 
-    # Build context for the implementation agent
-    story_file_rel = ""
-    if args.story_file:
-        story_file_rel = args.story_file
-    elif args.story_key:
-        # Find story file in the worktree
-        from utils import find_story_file
-        sf = find_story_file(args.story_key)
-        if sf:
-            story_file_rel = str(sf.relative_to(get_main_worktree()))
+    # Discover story file by issue number
+    sf = find_story_file(issue)
+    story_file_rel = str(sf.relative_to(get_main_worktree())) if sf else ""
 
     title = args.title or f"Issue #{issue}"
 
-    # Build next-step commands
+    # Build next-step commands — only pass issue number
     implement_prompt = f"/implement-story --issue {issue}"
-    if story_file_rel:
-        implement_prompt += f" --story-file {story_file_rel}"
     new_context = claude_launch_command(work_dir, issue, title, prompt=implement_prompt)
 
     output_json({
