@@ -456,17 +456,16 @@ So that the story artifact, architecture, and project rules stay aligned with re
 ### Story 1.12: Systematic Finish-Story Workflow Enhancement
 
 As TheDev,
-I want the `/finish-story` workflow to be more systematic and complete — verifying CI status, PR approval, issue linkage, and story artifact lifecycle before and after merge, with robust error recovery and a comprehensive delivery report,
-So that finishing a story is a single reliable command that leaves zero loose ends.
+I want `/finish-story` to require zero arguments — it auto-detects the branch, auto-commits pending changes, auto-creates the PR if missing, runs all gates, merges, and cleans up — all driven by a Python script, not agent rules,
+So that finishing a story is a single command that handles everything end-to-end with no loose ends.
 
 **Acceptance Criteria:**
 
-**Given** TheDev runs `/finish-story`
-**Then** CI checks, PR approval, and issue linkage are verified before merge
-**And** the linked GitHub issue is closed after merge (if not auto-closed)
-**And** the story artifact status is updated to "done" on main
-**And** a comprehensive delivery report is shown with next-step suggestions
-**And** any failure includes specific recovery instructions
+**Given** TheDev runs `/finish-story` with no arguments from a feature branch
+**Then** it auto-detects branch/issue/story, auto-commits and pushes pending changes, auto-creates PR if missing
+**And** runs doc-sync gate, quality gate, verifies CI checks, ensures issue link, merges PR
+**And** post-merge: closes issue, updates story status to "done", updates epics, cleans up worktree
+**And** all mechanical steps are in `scripts/qs/finish_story.py`, skill file is thin
 
 ## Epic 2: Trust-Critical Test Scenarios
 

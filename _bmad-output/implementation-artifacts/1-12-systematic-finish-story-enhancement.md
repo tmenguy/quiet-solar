@@ -8,145 +8,148 @@ branch: "QS_51"
 ## Story
 
 As TheDev,
-I want the `/finish-story` workflow to be more systematic and complete — verifying CI status, PR approval, issue linkage, and story artifact lifecycle before and after merge, with robust error recovery and a comprehensive delivery report,
-So that finishing a story is a single reliable command that leaves zero loose ends (no unclosed issues, no stale story statuses, no missed CI failures).
+I want `/finish-story` to require zero arguments — it auto-detects the branch, auto-commits pending changes, auto-creates the PR if missing, runs all gates and validations, merges, and cleans up — all driven by a Python script, not agent rules,
+So that finishing a story is a single command that handles everything end-to-end with no manual steps and no loose ends.
 
 ## Acceptance Criteria
 
-1. **Given** TheDev runs `/finish-story --pr N`
-   **When** the pre-merge validation phase starts
-   **Then** the workflow verifies that all GitHub Actions CI checks on the PR have passed (not just local quality gate)
-   **And** if any remote checks have failed or are still pending, the workflow reports the status and blocks merge until resolved
+1. **Given** TheDev runs `/finish-story` with no arguments from a feature branch (QS_N)
+   **When** the script starts
+   **Then** it auto-detects the current branch, derives the issue number, discovers the story file, and proceeds without requiring any `--pr`, `--issue`, or `--story-key` flags
 
-2. **Given** the PR is ready for merge
-   **When** the workflow checks PR approval status
-   **Then** it verifies the PR has at least one approval (or is self-authored with no required reviewers)
-   **And** if no approval exists, it warns the user and asks whether to proceed
+2. **Given** there are uncommitted changes on the feature branch (staged or unstaged in `custom_components/`, `tests/`, `_bmad-output/`, `_qsprocess/`, `scripts/`)
+   **When** the pre-merge phase starts
+   **Then** the script auto-stages relevant files (excluding `.DS_Store`, `venv/`, `config/`, `__pycache__/`), commits them with a descriptive message, and pushes
 
-3. **Given** the PR exists
-   **When** the workflow validates PR metadata
-   **Then** it verifies the PR body references the linked issue (e.g., "Closes #N" or "Fixes #N")
-   **And** if the issue link is missing, it offers to add it before merge
+3. **Given** no PR exists for the current branch
+   **When** the script checks for an existing PR
+   **Then** it auto-creates a PR against main, linking the issue, with a generated title and summary from the story file and git log
 
-4. **Given** the merge completes successfully
+4. **Given** a PR exists (found or just created)
+   **When** the pre-merge validation phase runs
+   **Then** the script runs the doc-sync gate, the local quality gate, verifies CI checks passed on the remote, verifies PR body links the issue (adds link if missing), and reports all results as structured JSON
+   **And** the script blocks on failures (quality gate, CI) but reports everything so the agent can present it
+
+5. **Given** the merge completes
    **When** the post-merge phase runs
-   **Then** the workflow verifies the linked GitHub issue is closed (auto-closed by the PR or manually)
-   **And** if the issue is still open, it closes it with a reference to the merged PR
+   **Then** the script closes the linked issue if still open, updates the story artifact status to "done", updates epics.md, cleans up the worktree, and pulls main
+   **And** all post-merge steps are in the script, not in skill instructions
 
-5. **Given** the merge completes successfully
-   **When** the story artifact update phase runs
-   **Then** the story file's `Status:` field is updated from its current value to `done`
-   **And** the change is committed on main
+6. **Given** all steps complete (or a step fails)
+   **When** the script outputs its report
+   **Then** the JSON includes every step's status, and on failure includes a `recovery` field with specific instructions
+   **And** the script suggests `/release` if production code changed, or "no release needed" if only process files changed
 
-6. **Given** all finish steps complete
-   **When** the delivery report is shown
-   **Then** it includes: PR merge status, CI check summary, issue closure status, epics update status, story artifact status, worktree cleanup status, and a clear next-step suggestion (`/release` if version bump warranted, or "no release needed")
-
-7. **Given** any step in the workflow fails (merge conflict, CI failure, network error)
-   **When** the failure is detected
-   **Then** the workflow reports exactly what failed and what state was left in (what was done, what wasn't)
-   **And** provides specific recovery instructions rather than a generic error
+7. **Given** the skill file `_qsprocess/skills/finish-story.md` is updated
+   **When** an agent executes `/finish-story`
+   **Then** the skill is thin — it calls the script, presents the JSON report to the user, and handles only the interactive doc-sync resolution (which requires agent judgment)
+   **And** all mechanical steps (commit, PR creation, CI check, merge, cleanup, issue close, story update, epics update) are in the Python script
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add CI check verification to `finish_story.py` (AC: #1)
-  - [ ] 1.1 Add a `check_ci_status(pr_number)` function that uses `gh pr checks` to verify all checks passed
-  - [ ] 1.2 Return structured result: list of checks with name, status, conclusion
-  - [ ] 1.3 If any check failed or is pending, the script reports but does NOT block (the skill decides)
-  - [ ] 1.4 Add `--skip-ci-check` flag for edge cases
+- [ ] Task 1: Add reusable workflow helpers to `utils.py` (AC: #1, #2, #3, #4, #5)
+  - [ ] 1.1 `auto_commit_and_push(message, paths)`: stage given paths (default: `custom_components/`, `tests/`, `_bmad-output/`, `_qsprocess/`, `scripts/`), skip junk (`.DS_Store`, `__pycache__/`), commit if changes exist, push. Return `{"committed": bool, "pushed": bool, "files": list}`
+  - [ ] 1.2 `find_pr_for_branch(branch)`: query `gh pr list --head <branch> --json number,url,state`. Return `{"pr_number": int, "url": str}` or `None`
+  - [ ] 1.3 `check_ci_status(pr_number)`: query `gh pr checks <N> --json name,state,conclusion`. Return `{"checks": list, "all_passed": bool, "pending": list, "failed": list}`
+  - [ ] 1.4 `ensure_issue_link(pr_number, issue_number)`: check PR body for `Closes #N`/`Fixes #N`, append if missing via `gh pr edit`. Return `{"linked": bool, "added": bool}`
+  - [ ] 1.5 `close_issue_if_open(issue_number, comment)`: check state via `gh issue view`, close if open. Return `{"closed": bool, "was_open": bool}`
+  - [ ] 1.6 `update_story_status(story_file, status)`: find `Status:` line in markdown, update in place. Return `{"updated": bool}`
+  - [ ] 1.7 `suggest_release(changed_files)`: return `"release"` if `custom_components/` in changed files, `"no-release"` otherwise
 
-- [ ] Task 2: Add PR approval and metadata validation to `finish_story.py` (AC: #2, #3)
-  - [ ] 2.1 Add `check_pr_approval(pr_number)` function: query `gh pr view --json reviews,reviewRequests`
-  - [ ] 2.2 Add `check_issue_link(pr_number)` function: verify PR body contains `Closes #N` or `Fixes #N` pattern
-  - [ ] 2.3 Add `add_issue_link(pr_number, issue_number)` function: append `Closes #N` to PR body if missing
+- [ ] Task 2: Refactor `create_pr.py` to use shared `find_pr_for_branch()` from utils (AC: #3)
+  - [ ] 2.1 Extract `get_changed_files()` from `create_pr.py` into `utils.py` (it's useful in multiple scripts)
+  - [ ] 2.2 `create_pr.py` uses `find_pr_for_branch()` to check before creating (prevent duplicates)
 
-- [ ] Task 3: Add post-merge issue closure verification to `finish_story.py` (AC: #4)
-  - [ ] 3.1 Add `verify_issue_closed(issue_number)` function: check issue state via `gh issue view`
-  - [ ] 3.2 Add `close_issue(issue_number, pr_number)` function: close with comment linking merged PR
-  - [ ] 3.3 Integrate into main flow after merge step
+- [ ] Task 3: Rewrite `finish_story.py` as zero-arg orchestrator (AC: #1, #2, #3, #4, #5, #6)
+  - [ ] 3.1 Auto-detect: `get_current_branch()` → `get_issue_from_branch()` → `find_story_file()` → `find_pr_for_branch()`
+  - [ ] 3.2 Phase 1 — Prepare: `auto_commit_and_push()`, then if no PR exists call `create_pr.py` (or inline using shared utils)
+  - [ ] 3.3 Phase 2 — Validate: run `doc_sync.py`, run `quality_gate.py`, `check_ci_status()`, `ensure_issue_link()`
+  - [ ] 3.4 Phase 3 — Merge: `merge_pr()` (existing), then `close_issue_if_open()`, `update_story_status()`, `update_epics()` (existing), `cleanup_worktree()` (existing), `update_main()` (existing)
+  - [ ] 3.5 Phase 4 — Report: structured JSON with every step's result, `suggest_release()`, recovery instructions on failure
+  - [ ] 3.6 All existing flags (`--pr`, `--story-key`, `--story-file`, `--skip-quality-gate`) become optional overrides
 
-- [ ] Task 4: Add story artifact status update to `finish_story.py` (AC: #5)
-  - [ ] 4.1 Add `update_story_status(story_file, status="done")` function: find `Status:` line and update
-  - [ ] 4.2 Accept story file path via `--story-file` argument (reuse `find_story_file()` from utils)
-  - [ ] 4.3 Stage the change for commit on main
+- [ ] Task 4: Slim down the skill file (AC: #7)
+  - [ ] 4.1 Rewrite `_qsprocess/skills/finish-story.md`: call `finish_story.py` (no args), present report, handle only the interactive doc-sync resolution (requires agent judgment)
+  - [ ] 4.2 Remove all mechanical steps from the skill — commit, push, PR create, merge, cleanup, issue close, story update, epics update are all in the script now
 
-- [ ] Task 5: Enhance delivery report in `finish_story.py` (AC: #6)
-  - [ ] 5.1 Restructure output JSON to include all step results in a consistent format
-  - [ ] 5.2 Add `suggest_release(changed_files)` logic: check if `custom_components/` files changed (suggests version bump) vs. only `_qsprocess/`/`scripts/` (no release needed)
-  - [ ] 5.3 Include summary counts (files changed, tests added, etc.) from PR stats
+- [ ] Task 5: Add tests for all new utils functions (AC: all)
+  - [ ] 5.1 Test `auto_commit_and_push()`: with changes, without changes, with junk files to exclude
+  - [ ] 5.2 Test `find_pr_for_branch()`: PR exists, no PR, gh error
+  - [ ] 5.3 Test `check_ci_status()`: all pass, some fail, pending, no checks
+  - [ ] 5.4 Test `ensure_issue_link()`: link present, link missing and added, edit failure
+  - [ ] 5.5 Test `close_issue_if_open()`: already closed, still open, close failure
+  - [ ] 5.6 Test `update_story_status()`: various status lines, missing status line
+  - [ ] 5.7 Test `suggest_release()`: production changes, process-only changes, mixed
 
-- [ ] Task 6: Improve error handling and recovery guidance (AC: #7)
-  - [ ] 6.1 Each step in `finish_story.py` captures its own success/failure and continues to report
-  - [ ] 6.2 On failure, include `recovery` field in JSON with specific instructions
-  - [ ] 6.3 Script exits with appropriate code but always outputs full JSON report
-
-- [ ] Task 7: Update `/finish-story` skill to use new script capabilities (AC: all)
-  - [ ] 7.1 Update `_qsprocess/skills/finish-story.md` to add pre-merge validation section (CI checks, approval, issue link)
-  - [ ] 7.2 Update post-merge section to include issue closure verification and story artifact update
-  - [ ] 7.3 Update report section to show the enhanced delivery report
-  - [ ] 7.4 Add recovery guidance instructions for when steps fail
-
-- [ ] Task 8: Add tests for new `finish_story.py` functions (AC: all)
-  - [ ] 8.1 Test `check_ci_status()` with passing, failing, and pending checks
-  - [ ] 8.2 Test `check_pr_approval()` with approved, no-review, and changes-requested states
-  - [ ] 8.3 Test `check_issue_link()` with present and missing issue references
-  - [ ] 8.4 Test `verify_issue_closed()` and `close_issue()` with open and closed states
-  - [ ] 8.5 Test `update_story_status()` with various story file formats
-  - [ ] 8.6 Test `suggest_release()` with production and process-only changes
-  - [ ] 8.7 Test error recovery JSON output on failures
+- [ ] Task 6: Add tests for rewritten `finish_story.py` orchestration (AC: all)
+  - [ ] 6.1 Test full happy path with mocked utils (all phases succeed)
+  - [ ] 6.2 Test auto-detect from branch (no args)
+  - [ ] 6.3 Test auto-create PR when none exists
+  - [ ] 6.4 Test failure paths: quality gate fails, CI fails, merge fails — verify recovery instructions
+  - [ ] 6.5 Test optional override flags still work
 
 ## Dev Notes
 
-### This is a hybrid process/code story
+### Architecture: reusable utils + thin orchestrator + minimal skill
 
-Modifies `scripts/qs/finish_story.py` (Python script, requires tests) and `_qsprocess/skills/finish-story.md` (skill definition, no tests). The script enhancements are the primary deliverable; the skill file updates wire them into the agent workflow.
+New functions go in `utils.py` so any workflow script can reuse them. `finish_story.py` becomes an orchestrator that calls utils. The skill file becomes a thin wrapper.
+
+```
+utils.py (reusable)          finish_story.py (orchestrator)     skill (thin)
+├─ auto_commit_and_push()    ├─ Phase 1: Prepare                ├─ Run doc-sync (agent judgment)
+├─ find_pr_for_branch()      │   auto_commit_and_push()         ├─ Call finish_story.py
+├─ check_ci_status()         │   find/create PR                 └─ Present report to user
+├─ ensure_issue_link()       ├─ Phase 2: Validate
+├─ close_issue_if_open()     │   doc_sync, quality_gate
+├─ update_story_status()     │   check_ci, ensure_issue_link
+├─ suggest_release()         ├─ Phase 3: Merge + post-merge
+├─ get_changed_files()       │   merge, close issue, story status
+└─ (existing: run_gh, etc.)  │   epics, cleanup, pull main
+                             └─ Phase 4: Report JSON
+```
 
 ### Files to modify
 
-- `scripts/qs/finish_story.py` — primary: add CI check, approval check, issue link, issue close, story status update, release suggestion, error recovery
-- `_qsprocess/skills/finish-story.md` — update skill to use new script capabilities and add pre/post merge validation steps
-- `tests/test_finish_story.py` — new: tests for all new functions (mock `gh` CLI calls)
+- `scripts/qs/utils.py` — **add 7 reusable functions** (auto_commit_and_push, find_pr_for_branch, check_ci_status, ensure_issue_link, close_issue_if_open, update_story_status, suggest_release) + move `get_changed_files()` from create_pr.py
+- `scripts/qs/finish_story.py` — **rewrite as orchestrator**: zero-arg auto-detect, 4-phase flow using utils
+- `scripts/qs/create_pr.py` — **refactor**: use shared `find_pr_for_branch()` and `get_changed_files()` from utils
+- `_qsprocess/skills/finish-story.md` — **slim down**: only doc-sync + script call + report
+- `tests/test_utils.py` or `tests/test_utils_workflow.py` — **new**: tests for all new utils functions
+- `tests/test_finish_story.py` — **new**: tests for orchestrator flow
 
 ### Existing patterns to follow
 
-- **`finish_story.py` current structure**: functions like `merge_pr()`, `cleanup_worktree()`, `update_epics()` that return dicts. New functions must follow same pattern: return a dict with success/failure + details.
-- **`utils.py` helpers**: use `run_gh()`, `run_git()`, `output_json()`, `find_story_file()`, `get_main_worktree()` — do not reinvent these.
-- **Error pattern**: `run_gh(args, check=False)` then inspect `returncode` and `stderr`. Never raise on gh failures — return structured error.
-- **Test pattern**: see `tests/test_quality_gate.py` or `tests/test_doc_sync.py` for how `scripts/qs/` scripts are tested. Use `monkeypatch` to mock `subprocess.run` calls.
-- **Skill file style**: see story 1.11's finish-story additions — concise, numbered steps, agent instructions not code.
-
-### Script is NOT in `custom_components/` — coverage rules differ
-
-`scripts/qs/` scripts are utility scripts, not production HA code. They are still covered by the project's 100% coverage requirement via pytest, but they test differently (mock `gh`/`git` subprocess calls, not HA entities).
+- **`utils.py` convention**: functions use `run_gh(args, check=False)`, inspect `returncode`/`stderr`, return dicts. Never raise on gh/git failures.
+- **`create_pr.py`**: already has `get_changed_files()` which should move to utils.
+- **`finish_story.py`**: existing functions (`merge_pr`, `cleanup_worktree`, `update_epics`, `update_main`) stay, new phases wrap them.
+- **Test pattern**: `monkeypatch` to mock `subprocess.run`. See `tests/test_doc_sync.py`.
 
 ### `gh` CLI commands reference
 
+- Find PR for branch: `gh pr list --head <branch> --json number,url`
+- Create PR: `gh pr create --title "..." --body "..." --base main`
 - CI checks: `gh pr checks <N> --json name,state,conclusion`
-- PR approval: `gh pr view <N> --json reviews,reviewRequests`
 - PR body: `gh pr view <N> --json body`
 - Edit PR body: `gh pr edit <N> --body "..."`
 - Issue state: `gh issue view <N> --json state`
 - Close issue: `gh issue close <N> --comment "..."`
-- PR merge stats: `gh pr view <N> --json additions,deletions,changedFiles`
+- Merge PR: `gh pr merge <N> --merge --delete-branch`
 
-### Design decisions
+### Auto-commit safety
 
-1. **Script does validation, skill decides action**: `finish_story.py` reports status; the agent (via the skill) decides whether to block, warn, or proceed. This keeps the script reusable and the policy in the skill.
-2. **Always output full JSON**: even on failure, output the complete report so the agent can show the user what happened.
-3. **Backwards compatible**: new flags (`--skip-ci-check`, `--story-file`) are optional. Existing invocations continue to work.
-4. **Issue closure is defensive**: check first, close only if still open. Handles both auto-close via PR and manual close gracefully.
+`auto_commit_and_push()` only stages files in known-safe paths: `custom_components/`, `tests/`, `_bmad-output/`, `_qsprocess/`, `scripts/`. Never `.DS_Store`, `venv/`, `config/`, `__pycache__/`, `.idea/`, `.vscode/`. Uses explicit `git add <paths>` not `git add -A`.
 
-### Previous story patterns (from 1.11)
+### Backwards compatibility
 
-Story 1.11 added the doc-sync gate and `doc_sync.py` script. It followed the same pattern: Python script with testable functions + skill file update. The script returns structured JSON; the skill interprets it. Use this same separation.
+Existing flags (`--pr`, `--story-key`, `--story-file`, `--skip-quality-gate`) remain as optional overrides. Zero-arg is the new default.
 
 ### References
 
+- [Source: scripts/qs/utils.py] — current utils (147 lines, 14 functions + constant)
 - [Source: scripts/qs/finish_story.py] — current script (149 lines, 5 functions + main)
-- [Source: _qsprocess/skills/finish-story.md] — current skill (5 steps + doc-sync gate)
-- [Source: scripts/qs/utils.py] — utility functions (find_story_file, run_gh, output_json)
-- [Source: scripts/qs/doc_sync.py] — pattern reference for new script functions
-- [Source: _bmad-output/implementation-artifacts/1-11-living-documentation-sync.md] — previous process/code story pattern
+- [Source: scripts/qs/create_pr.py] — PR creation (has `get_changed_files()` to extract)
+- [Source: scripts/qs/doc_sync.py] — pattern for structured JSON output
+- [Source: _qsprocess/skills/finish-story.md] — current skill to slim down
 
 ## Dev Agent Record
 
