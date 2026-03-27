@@ -1,82 +1,72 @@
 # /finish-story
 
-Final quality gate, merge PR, clean up worktree, update epics.
+Finish a story: doc-sync, quality gate, merge PR, cleanup — all automated.
 
 ## Input
 
-- `--pr N` (required): PR number
-- `--story-key X.Y` (optional): story key to mark as DONE in epics.md
-- `--story-file PATH` (optional): path to story artifact. If not given, auto-discover via `find_story_file(story_key)` from `scripts/qs/utils.py`, or find the most recent file in `_bmad-output/implementation-artifacts/`.
+No arguments required. The script auto-detects everything from the current branch.
+
+Optional overrides (rarely needed):
+- `--pr N`: PR number
+- `--issue N`: issue number
+- `--story-key X.Y`: story key for epics
+- `--story-file PATH`: path to story artifact
+- `--skip-quality-gate`: skip local quality gate
 
 ## Steps
 
-### 0.5. Mandatory doc-sync gate
+### 1. Mandatory doc-sync gate (agent judgment required)
 
-Before anything else, resolve `{{story_file}}`: use the `--story-file` argument if provided, otherwise auto-discover it from `--story-key` or the most recent artifact in `_bmad-output/implementation-artifacts/`. If no story file can be found, STOP and ask the user.
+Resolve the story file: auto-discover from `_bmad-output/implementation-artifacts/` or use the most recent artifact. If no story file can be found, STOP and ask the user.
 
-Then run the automated doc-sync check from the **feature branch worktree** (not from main):
+Run the automated doc-sync check from the **feature branch worktree**:
 
 ```bash
 python scripts/qs/doc_sync.py {{story_file}} --base-branch main --repo-path {{feature_worktree}}
 ```
 
-This compares the story artifact's tasks, acceptance criteria, and dev notes against the actual git diff. Review its output, then:
+Review its output, then:
 
 1. **For each discrepancy**: present it to the user with context
 2. **User resolves each**: update the doc, or explain why the discrepancy is acceptable
-3. **Apply approved changes** and stage them (`_bmad-output/` is included in the commit step)
+3. **Apply approved changes** — they will be auto-committed by the script
 
 Also do a manual read of the story artifact to catch anything the script can't — e.g., ACs whose intent doesn't match the implementation, or dev notes that are stale.
 
-This gate is **mandatory** — do NOT proceed to merge until all discrepancies are resolved.
+This gate is **mandatory** — do NOT proceed until all discrepancies are resolved.
 
-### 1. Final quality gate
-
-```bash
-python scripts/qs/quality_gate.py
-```
-
-If it fails, fix issues before proceeding. Do NOT skip.
-
-### 2. Push any remaining changes
+### 2. Run the finish-story script
 
 ```bash
-git add custom_components/ tests/ _bmad-output/ _qsprocess/ scripts/ && git status
+python scripts/qs/finish_story.py
 ```
 
-If there are uncommitted changes, ask the user to confirm, then commit and push:
-```bash
-git commit -m "fix: address review feedback"
-git push
-```
+The script handles everything automatically:
+- Auto-commits pending changes and pushes
+- Finds or creates the PR
+- Runs the quality gate
+- Checks CI status
+- Ensures issue link in PR body
+- Merges the PR (merge commit, not squash)
+- Closes the GitHub issue
+- Updates story artifact status to "done"
+- Updates epics.md
+- Cleans up the worktree
+- Pulls main
 
-### 3. Merge and clean up
+### 3. Present report
 
-```bash
-python scripts/qs/finish_story.py {{pr_number}} --story-key "{{story_key}}"
-```
+The script outputs structured JSON. Present to the user:
+- Success/failure status
+- Any recovery instructions (if failed)
+- Release suggestion: if `"release"`, suggest `/release`; if `"no-release"`, tell the user no release is needed
 
-This script handles:
-- Merging the PR (merge commit, not squash)
-- Deleting the remote branch
-- Cleaning up the worktree
-- Switching main to latest
-- Marking the story as DONE in epics.md
+### 4. Commit epics update (if applicable)
 
-### 4. Commit epics update
-
-If epics.md was updated:
+If the script updated epics.md on main:
 ```bash
 cd {{main_worktree}}
 git add _bmad-output/planning-artifacts/epics.md
 git commit -m "docs: mark story {{story_key}} as done"
 git push origin main
 ```
-
-### 5. Report
-
-Show the user:
-- PR merge status
-- Worktree cleanup status
-- Epics update status
-- Suggest `/release` if appropriate

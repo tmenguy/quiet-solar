@@ -1,6 +1,6 @@
 # Story 1.12: Systematic Finish-Story Workflow Enhancement
 
-Status: ready-for-dev
+Status: review
 
 issue: 51
 branch: "QS_51"
@@ -47,46 +47,46 @@ So that finishing a story is a single command that handles everything end-to-end
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add reusable workflow helpers to `utils.py` (AC: #1, #2, #3, #4, #5)
-  - [ ] 1.1 `auto_commit_and_push(message, paths)`: stage given paths (default: `custom_components/`, `tests/`, `_bmad-output/`, `_qsprocess/`, `scripts/`), skip junk (`.DS_Store`, `__pycache__/`), commit if changes exist, push. Return `{"committed": bool, "pushed": bool, "files": list}`
-  - [ ] 1.2 `find_pr_for_branch(branch)`: query `gh pr list --head <branch> --json number,url,state`. Return `{"pr_number": int, "url": str}` or `None`
-  - [ ] 1.3 `check_ci_status(pr_number)`: query `gh pr checks <N> --json name,state,conclusion`. Return `{"checks": list, "all_passed": bool, "pending": list, "failed": list}`
-  - [ ] 1.4 `ensure_issue_link(pr_number, issue_number)`: check PR body for `Closes #N`/`Fixes #N`, append if missing via `gh pr edit`. Return `{"linked": bool, "added": bool}`
-  - [ ] 1.5 `close_issue_if_open(issue_number, comment)`: check state via `gh issue view`, close if open. Return `{"closed": bool, "was_open": bool}`
-  - [ ] 1.6 `update_story_status(story_file, status)`: find `Status:` line in markdown, update in place. Return `{"updated": bool}`
-  - [ ] 1.7 `suggest_release(changed_files)`: return `"release"` if `custom_components/` in changed files, `"no-release"` otherwise
+- [x] Task 1: Add reusable workflow helpers to `utils.py` (AC: #1, #2, #3, #4, #5)
+  - [x] 1.1 `auto_commit_and_push(message, paths)`: stage given paths (default: `custom_components/`, `tests/`, `_bmad-output/`, `_qsprocess/`, `scripts/`), skip junk (`.DS_Store`, `__pycache__/`), commit if changes exist, push. Return `{"committed": bool, "pushed": bool, "files": list}`
+  - [x] 1.2 `find_pr_for_branch(branch)`: query `gh pr list --head <branch> --json number,url,state`. Return `{"pr_number": int, "url": str}` or `None`
+  - [x] 1.3 `check_ci_status(pr_number)`: query `gh pr checks <N> --json name,state,conclusion`. Return `{"checks": list, "all_passed": bool, "pending": list, "failed": list}`
+  - [x] 1.4 `ensure_issue_link(pr_number, issue_number)`: check PR body for `Closes #N`/`Fixes #N`, append if missing via `gh pr edit`. Return `{"linked": bool, "added": bool}`
+  - [x] 1.5 `close_issue_if_open(issue_number, comment)`: check state via `gh issue view`, close if open. Return `{"closed": bool, "was_open": bool}`
+  - [x] 1.6 `update_story_status(story_file, status)`: find `Status:` line in markdown, update in place. Return `{"updated": bool}`
+  - [x] 1.7 `suggest_release(changed_files)`: return `"release"` if `custom_components/` in changed files, `"no-release"` otherwise
 
-- [ ] Task 2: Refactor `create_pr.py` to use shared `find_pr_for_branch()` from utils (AC: #3)
-  - [ ] 2.1 Extract `get_changed_files()` from `create_pr.py` into `utils.py` (it's useful in multiple scripts)
-  - [ ] 2.2 `create_pr.py` uses `find_pr_for_branch()` to check before creating (prevent duplicates)
+- [x] Task 2: Refactor `create_pr.py` to use shared `find_pr_for_branch()` from utils (AC: #3)
+  - [x] 2.1 Extract `get_changed_files()` from `create_pr.py` into `utils.py` (it's useful in multiple scripts)
+  - [x] 2.2 `create_pr.py` uses `find_pr_for_branch()` to check before creating (prevent duplicates)
 
-- [ ] Task 3: Rewrite `finish_story.py` as zero-arg orchestrator (AC: #1, #2, #3, #4, #5, #6)
-  - [ ] 3.1 Auto-detect: `get_current_branch()` → `get_issue_from_branch()` → `find_story_file()` → `find_pr_for_branch()`
-  - [ ] 3.2 Phase 1 — Prepare: `auto_commit_and_push()`, then if no PR exists call `create_pr.py` (or inline using shared utils)
-  - [ ] 3.3 Phase 2 — Validate: run `doc_sync.py`, run `quality_gate.py`, `check_ci_status()`, `ensure_issue_link()`
-  - [ ] 3.4 Phase 3 — Merge: `merge_pr()` (existing), then `close_issue_if_open()`, `update_story_status()`, `update_epics()` (existing), `cleanup_worktree()` (existing), `update_main()` (existing)
-  - [ ] 3.5 Phase 4 — Report: structured JSON with every step's result, `suggest_release()`, recovery instructions on failure
-  - [ ] 3.6 All existing flags (`--pr`, `--story-key`, `--story-file`, `--skip-quality-gate`) become optional overrides
+- [x] Task 3: Rewrite `finish_story.py` as zero-arg orchestrator (AC: #1, #2, #3, #4, #5, #6)
+  - [x] 3.1 Auto-detect: `get_current_branch()` → `get_issue_from_branch()` → `find_story_file()` → `find_pr_for_branch()`
+  - [x] 3.2 Phase 1 — Prepare: `auto_commit_and_push()`, then if no PR exists call `create_pr.py` (or inline using shared utils)
+  - [x] 3.3 Phase 2 — Validate: run `doc_sync.py`, run `quality_gate.py`, `check_ci_status()`, `ensure_issue_link()`
+  - [x] 3.4 Phase 3 — Merge: `merge_pr()` (existing), then `close_issue_if_open()`, `update_story_status()`, `update_epics()` (existing), `cleanup_worktree()` (existing), `update_main()` (existing)
+  - [x] 3.5 Phase 4 — Report: structured JSON with every step's result, `suggest_release()`, recovery instructions on failure
+  - [x] 3.6 All existing flags (`--pr`, `--story-key`, `--story-file`, `--skip-quality-gate`) become optional overrides
 
-- [ ] Task 4: Slim down the skill file (AC: #7)
-  - [ ] 4.1 Rewrite `_qsprocess/skills/finish-story.md`: call `finish_story.py` (no args), present report, handle only the interactive doc-sync resolution (requires agent judgment)
-  - [ ] 4.2 Remove all mechanical steps from the skill — commit, push, PR create, merge, cleanup, issue close, story update, epics update are all in the script now
+- [x] Task 4: Slim down the skill file (AC: #7)
+  - [x] 4.1 Rewrite `_qsprocess/skills/finish-story.md`: call `finish_story.py` (no args), present report, handle only the interactive doc-sync resolution (requires agent judgment)
+  - [x] 4.2 Remove all mechanical steps from the skill — commit, push, PR create, merge, cleanup, issue close, story update, epics update are all in the script now
 
-- [ ] Task 5: Add tests for all new utils functions (AC: all)
-  - [ ] 5.1 Test `auto_commit_and_push()`: with changes, without changes, with junk files to exclude
-  - [ ] 5.2 Test `find_pr_for_branch()`: PR exists, no PR, gh error
-  - [ ] 5.3 Test `check_ci_status()`: all pass, some fail, pending, no checks
-  - [ ] 5.4 Test `ensure_issue_link()`: link present, link missing and added, edit failure
-  - [ ] 5.5 Test `close_issue_if_open()`: already closed, still open, close failure
-  - [ ] 5.6 Test `update_story_status()`: various status lines, missing status line
-  - [ ] 5.7 Test `suggest_release()`: production changes, process-only changes, mixed
+- [x] Task 5: Add tests for all new utils functions (AC: all)
+  - [x] 5.1 Test `auto_commit_and_push()`: with changes, without changes, with junk files to exclude
+  - [x] 5.2 Test `find_pr_for_branch()`: PR exists, no PR, gh error
+  - [x] 5.3 Test `check_ci_status()`: all pass, some fail, pending, no checks
+  - [x] 5.4 Test `ensure_issue_link()`: link present, link missing and added, edit failure
+  - [x] 5.5 Test `close_issue_if_open()`: already closed, still open, close failure
+  - [x] 5.6 Test `update_story_status()`: various status lines, missing status line
+  - [x] 5.7 Test `suggest_release()`: production changes, process-only changes, mixed
 
-- [ ] Task 6: Add tests for rewritten `finish_story.py` orchestration (AC: all)
-  - [ ] 6.1 Test full happy path with mocked utils (all phases succeed)
-  - [ ] 6.2 Test auto-detect from branch (no args)
-  - [ ] 6.3 Test auto-create PR when none exists
-  - [ ] 6.4 Test failure paths: quality gate fails, CI fails, merge fails — verify recovery instructions
-  - [ ] 6.5 Test optional override flags still work
+- [x] Task 6: Add tests for rewritten `finish_story.py` orchestration (AC: all)
+  - [x] 6.1 Test full happy path with mocked utils (all phases succeed)
+  - [x] 6.2 Test auto-detect from branch (no args)
+  - [x] 6.3 Test auto-create PR when none exists
+  - [x] 6.4 Test failure paths: quality gate fails, CI fails, merge fails — verify recovery instructions
+  - [x] 6.5 Test optional override flags still work
 
 ## Dev Notes
 
@@ -154,9 +154,25 @@ Existing flags (`--pr`, `--story-key`, `--story-file`, `--skip-quality-gate`) re
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None — clean implementation with no blocking issues.
 
 ### Completion Notes List
+- Added 8 reusable workflow functions to `utils.py` (auto_commit_and_push, find_pr_for_branch, check_ci_status, ensure_issue_link, close_issue_if_open, update_story_status, suggest_release, get_changed_files)
+- Refactored `create_pr.py` to use shared utils; added duplicate PR prevention via find_pr_for_branch
+- Rewrote `finish_story.py` as 4-phase zero-arg orchestrator: prepare → validate → merge → report
+- Slimmed `finish-story.md` skill: only doc-sync (agent judgment) + script call + report presentation
+- 31 tests for utils functions, 13 tests for orchestrator — 44 total, all passing
+- Quality gate: 100% coverage, ruff, mypy, translations all green
+- Cleaned up 5 pre-existing unused snapshots
 
 ### File List
+- `scripts/qs/utils.py` — added 8 workflow helper functions + constants
+- `scripts/qs/finish_story.py` — rewritten as zero-arg 4-phase orchestrator
+- `scripts/qs/create_pr.py` — refactored to use shared utils
+- `_qsprocess/skills/finish-story.md` — slimmed to thin skill wrapper
+- `tests/test_qs_utils.py` — new: 31 tests for workflow utils
+- `tests/test_qs_finish_story.py` — new: 13 tests for orchestrator
+- `tests/ha_tests/__snapshots__/test_sensor.ambr` — cleaned up 5 unused snapshots
