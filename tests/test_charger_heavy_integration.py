@@ -64,6 +64,9 @@ def create_mock_home(hass):
     home.get_best_tariff = MagicMock(return_value=0.10)
     home.force_next_solve = MagicMock()
     home.get_car_by_name = MagicMock(return_value=None)
+    home.get_home_max_available_production_power = MagicMock(return_value=12000.0)
+    home.get_current_maximum_production_output_power = MagicMock(return_value=12000.0)
+    home.solar_plant = None
     return home
 
 

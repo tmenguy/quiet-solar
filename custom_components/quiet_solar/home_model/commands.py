@@ -53,6 +53,15 @@ class LoadCommand:
     def is_like_one_of_cmds(self, cmds) -> bool:
         return any([self.is_like(cmd) for cmd in cmds])
 
+    def is_green(self) -> bool:
+        """Return True if this is a green (solar-only) command."""
+        return self.command in [
+            CMD_CST_AUTO_GREEN,
+            CMD_CST_AUTO_GREEN_CAP,
+            CMD_CST_GREEN_CHARGE_ONLY,
+            CMD_CST_AUTO_GREEN_CONSIGN,
+        ]
+
     def is_off_or_idle(self) -> bool:
         return self.command == "off" or self.command == "idle"
 

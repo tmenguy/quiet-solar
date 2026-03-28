@@ -2783,6 +2783,8 @@ async def test_charger_group_budgeting_algorithm_minimize_diffs() -> None:
         ]
     )
     home.get_home_max_available_production_power = MagicMock(return_value=2500.0)
+    home.get_current_maximum_production_output_power = MagicMock(return_value=2500.0)
+    home.solar_plant = None
 
     dynamic_group = create_test_dynamic_group_double(name="Group G", home=home)
     dynamic_group.is_current_acceptable = MagicMock(return_value=True)

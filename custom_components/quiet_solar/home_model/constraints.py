@@ -1285,7 +1285,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
 
-        use_production_limits = False
+        use_production_limits = self.support_auto and energy_delta >= 0.0
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
