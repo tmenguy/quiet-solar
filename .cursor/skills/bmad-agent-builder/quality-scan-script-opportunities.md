@@ -88,11 +88,9 @@ LLM instructions that compare two things for differences or verify consistency b
 **Signal phrases:** "compare", "diff", "match against", "cross-reference", "verify consistency", "check alignment"
 
 **Examples:**
-- Comparing manifest entries against actual files → Python script
 - Diffing two versions of a document → git diff or Python difflib
 - Cross-referencing prompt names against SKILL.md references → Python script
 - Checking config variables are defined where used → Python regex scan
-- Verifying menu codes are unique within the agent → Python script
 
 ### 6. Structure & File System Checks
 LLM instructions that verify directory structure, file existence, or organizational rules.
@@ -111,7 +109,7 @@ LLM instructions that trace references, imports, or relationships between files.
 **Signal phrases:** "dependency", "references", "imports", "relationship", "graph", "trace"
 
 **Examples:**
-- Building skill dependency graph from manifest → Python script
+- Building skill dependency graph → Python script
 - Tracing which resources are loaded by which prompts → Python regex
 - Detecting circular references → Python graph algorithm
 - Mapping capability → prompt file → resource file chains → Python script
@@ -136,7 +134,7 @@ Operations where a script could verify that LLM-generated output meets structura
 **Examples:**
 - Validating generated JSON against schema → Python jsonschema
 - Checking generated markdown has required sections → Python script
-- Verifying generated manifest has required fields → Python script
+- Verifying generated output has required fields → Python script
 
 ---
 
@@ -170,7 +168,7 @@ For each script opportunity found, also assess:
 | Dimension | Question |
 |-----------|----------|
 | **Pre-pass potential** | Could this script feed structured data to an existing LLM scanner? |
-| **Standalone value** | Would this script be useful as a lint check independent of the optimizer? |
+| **Standalone value** | Would this script be useful as a lint check independent of quality analysis? |
 | **Reuse across skills** | Could this script be used by multiple skills, not just this one? |
 | **--help self-documentation** | Prompts that invoke this script can use `--help` instead of inlining the interface — note the token savings |
 
@@ -186,77 +184,17 @@ For each script opportunity found, also assess:
 
 ---
 
-## Output Format
+## Output
 
-Output your findings using the universal schema defined in `references/universal-scan-schema.md`.
+Write your analysis as a natural document. Include:
 
-Use EXACTLY these field names: `file`, `line`, `severity`, `category`, `title`, `detail`, `action`. Do not rename, restructure, or add fields to findings.
+- **Existing scripts inventory** — what scripts already exist in the agent
+- **Assessment** — overall verdict on intelligence placement in 2-3 sentences
+- **Key findings** — deterministic operations found in prompts. Each with severity (high/medium/low based on LLM Tax: high = 500+ tokens, medium = 100-500, low = <100), affected file:line, what the LLM is currently doing, what a script would do instead, estimated token savings, and whether it could serve as a pre-pass
+- **Aggregate savings** — total estimated token savings across all opportunities
 
-Before writing output, verify: Is your array called `findings`? Does every item have `title`, `detail`, `action`? Is `assessments` an object, not items in the findings array?
+Be specific about file paths and line numbers. Think broadly about what scripts can accomplish. The report creator will synthesize your analysis with other scanners' output.
 
-You will receive `{skill-path}` and `{quality-report-dir}` as inputs.
+Write your analysis to: `{quality-report-dir}/script-opportunities-analysis.md`
 
-Write JSON findings to: `{quality-report-dir}/script-opportunities-temp.json`
-
-```json
-{
-  "scanner": "script-opportunities",
-  "skill_path": "{path}",
-  "findings": [
-    {
-      "file": "SKILL.md|{name}.md",
-      "line": 42,
-      "severity": "high|medium|low",
-      "category": "validation|extraction|transformation|counting|comparison|structure|graph|preprocessing|postprocessing",
-      "title": "What the LLM is currently doing",
-      "detail": "Determinism confidence: certain|high|moderate. Estimated token savings: N per invocation. Implementation complexity: trivial|moderate|complex. Language: python|bash|either. Could be prepass: yes/no. Feeds scanner: name if applicable. Reusable across skills: yes/no. Help pattern savings: additional prompt tokens saved by using --help instead of inlining interface.",
-      "action": "What a script would do instead"
-    }
-  ],
-  "assessments": {
-    "existing_scripts": ["list of scripts that already exist in the agent's scripts/ folder"]
-  },
-  "summary": {
-    "total_findings": 0,
-    "by_severity": {"high": 0, "medium": 0, "low": 0},
-    "by_category": {},
-    "assessment": "Brief assessment including total estimated token savings, the single highest-value opportunity, and how many findings could become pre-pass scripts for LLM scanners"
-  }
-}
-```
-
-## Process
-
-1. Check `scripts/` directory — inventory what scripts already exist (avoid suggesting duplicates)
-2. Read SKILL.md — check On Activation and inline operations for deterministic work
-3. Read all prompt files — for each instruction, apply the determinism test
-4. Read resource files — check if any resource content could be generated/validated by scripts
-5. For each finding: estimate LLM tax, assess implementation complexity, check pre-pass potential
-6. For each finding: consider the --help pattern — if a prompt currently inlines a script's interface, note the additional savings
-7. Write JSON to `{quality-report-dir}/script-opportunities-temp.json`
-8. Return only the filename: `script-opportunities-temp.json`
-
-## Critical After Draft Output
-
-Before finalizing, verify:
-
-### Determinism Accuracy
-- For each finding: Is this TRULY deterministic, or does it require judgment I'm underestimating?
-- Am I confusing "structured output" with "deterministic"? (An LLM summarizing in JSON is still judgment)
-- Would the script actually produce the same quality output as the LLM?
-
-### Creativity Check
-- Did I look beyond obvious validation? (Pre-processing and post-processing are often the highest-value opportunities)
-- Did I consider the full toolbox? (Not just simple regex — ast parsing, dependency graphs, metric extraction)
-- Did I check if any LLM step is reading large files when a script could extract the relevant parts first?
-
-### Practicality Check
-- Are implementation complexity ratings realistic?
-- Are token savings estimates reasonable?
-- Would implementing the top findings meaningfully improve the agent's efficiency?
-- Did I check for existing scripts to avoid duplicates?
-
-### Lane Check
-- Am I staying in my lane? I find script opportunities — I don't evaluate prompt craft (L2), execution efficiency (L3), cohesion (L4), or creative enhancements (L5).
-
-Only after verification, write final JSON and return filename.
+Return only the filename when complete.

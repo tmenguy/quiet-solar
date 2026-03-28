@@ -83,7 +83,7 @@ Don't read files in parent when you could delegate the reading.
 
 ```
 BAD: Load all memory
-1. Read all files in _bmad/_memory/{skillName}-sidecar/
+1. Read all files in _bmad/memory/{skillName}-sidecar/
 
 GOOD: Selective loading
 1. Read index.md for configuration
@@ -118,64 +118,17 @@ GOOD: Selective loading
 
 ---
 
-## Output Format
+## Output
 
-Output your findings using the universal schema defined in `references/universal-scan-schema.md`.
+Write your analysis as a natural document. Include:
 
-Use EXACTLY these field names: `file`, `line`, `severity`, `category`, `title`, `detail`, `action`. Do not rename, restructure, or add fields to findings.
+- **Assessment** — overall efficiency verdict in 2-3 sentences
+- **Key findings** — each with severity (critical/high/medium/low), affected file:line, current pattern, efficient alternative, and estimated savings. Critical = circular deps or subagent-from-subagent. High = parent-reads-before-delegating, sequential independent ops. Medium = missed batching, ordering issues. Low = minor opportunities.
+- **Optimization opportunities** — larger structural changes with estimated impact
+- **What's already efficient** — patterns worth preserving
 
-Before writing output, verify: Is your array called `findings`? Does every item have `title`, `detail`, `action`? Is `assessments` an object, not items in the findings array?
+Be specific about file paths, line numbers, and savings estimates. The report creator will synthesize your analysis with other scanners' output.
 
-You will receive `{skill-path}` and `{quality-report-dir}` as inputs.
+Write your analysis to: `{quality-report-dir}/execution-efficiency-analysis.md`
 
-Write JSON findings to: `{quality-report-dir}/execution-efficiency-temp.json`
-
-```json
-{
-  "scanner": "execution-efficiency",
-  "skill_path": "{path}",
-  "findings": [
-    {
-      "file": "SKILL.md|{name}.md",
-      "line": 42,
-      "severity": "critical|high|medium|low|medium-opportunity",
-      "category": "sequential-independent|parent-reads-first|missing-batch|no-output-spec|subagent-chain-violation|memory-loading|resource-loading|missing-delegation|parallelization|batching|delegation|memory-optimization|resource-optimization",
-      "title": "Brief description",
-      "detail": "What it does now, and estimated time/token savings",
-      "action": "What it should do instead"
-    }
-  ],
-  "summary": {
-    "total_findings": 0,
-    "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
-    "by_category": {}
-  }
-}
-```
-
-Merge all items into the single `findings[]` array:
-- Former `issues[]` items: map `issue` to `title`, merge `current_pattern`+`estimated_savings` into `detail`, map `efficient_alternative` to `action`
-- Former `opportunities[]` items: map `description` to `title`, merge details into `detail`, map `recommendation` to `action`, use severity like `medium-opportunity`
-
-## Process
-
-1. Read pre-pass JSON at `{quality-report-dir}/execution-deps-prepass.json`
-2. Read SKILL.md for On Activation and operation flow patterns
-3. Read all prompt files for execution patterns
-4. Check memory loading strategy (selective vs all-at-once)
-5. Check for parent-reading-before-delegating patterns
-6. Verify subagent instructions have output specifications
-7. Identify sequential operations that could be parallel
-8. Check resource loading patterns
-9. Write JSON to `{quality-report-dir}/execution-efficiency-temp.json`
-10. Return only the filename: `execution-efficiency-temp.json`
-
-## Critical After Draft Output
-
-Before finalizing, verify:
-- Are "sequential-independent" findings truly independent?
-- Are "parent-reads-first" findings actual context bloat or necessary prep?
-- Are memory loading findings fair — does the agent actually load too much?
-- Would implementing suggestions significantly improve efficiency?
-
-Only after verification, write final JSON and return filename.
+Return only the filename when complete.

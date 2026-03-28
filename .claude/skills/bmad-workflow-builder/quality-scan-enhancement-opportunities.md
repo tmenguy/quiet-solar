@@ -29,7 +29,6 @@ Find and read:
 - `SKILL.md` — Understand the skill's purpose, audience, and flow
 - `*.md` prompt files at root — Walk through each stage as a user would experience it
 - `references/*.md` — Understand what supporting material exists
-- `references/*.json` — See what supporting schemas exist
 
 ## Creative Analysis Lenses
 
@@ -93,11 +92,11 @@ Every skill makes assumptions. Surface the ones that are most likely to be wrong
 | **Single-session completion** | Does the skill assume the workflow completes in one session? |
 | **Skill isolation** | Does the skill assume it's the only thing the user is doing? |
 
-### 5. Autonomous Potential
+### 5. Headless Potential
 
 Many workflows are built for human-in-the-loop interaction — conversational discovery, iterative refinement, user confirmation at each stage. But what if someone passed in a headless flag and a detailed prompt? Could this workflow just... do its job, create the artifact, and return the file path?
 
-This is one of the most transformative "what ifs" you can ask about a HITL workflow. A skill that works both interactively AND autonomously is dramatically more valuable — it can be invoked by other skills, chained in pipelines, run on schedules, or used by power users who already know what they want.
+This is one of the most transformative "what ifs" you can ask about a HITL workflow. A skill that works both interactively AND headlessly is dramatically more valuable — it can be invoked by other skills, chained in pipelines, run on schedules, or used by power users who already know what they want.
 
 **For each HITL interaction point, ask:**
 
@@ -108,14 +107,14 @@ This is one of the most transformative "what ifs" you can ask about a HITL workf
 | Is this clarification always needed, or only for ambiguous input? | "Did you mean X or Y?" → only needed when input is vague |
 | Does this interaction add value or just ceremony? | Some confirmations exist because the builder assumed interactivity, not because they're necessary |
 
-**Assess the skill's autonomous potential:**
+**Assess the skill's headless potential:**
 
 | Level | What It Means |
 |-------|--------------|
-| **Headless-ready** | Could work autonomously today with minimal changes — just needs a flag to skip confirmations |
+| **Headless-ready** | Could work headlessly today with minimal changes — just needs a flag to skip confirmations |
 | **Easily adaptable** | Most interaction points could accept pre-supplied parameters; needs a headless path added to 2-3 stages |
-| **Partially adaptable** | Core artifact creation could be autonomous, but discovery/interview stages are fundamentally interactive — suggest a "skip to build" entry point |
-| **Fundamentally interactive** | The value IS the conversation (coaching, brainstorming, exploration) — autonomous mode wouldn't make sense, and that's OK |
+| **Partially adaptable** | Core artifact creation could be headless, but discovery/interview stages are fundamentally interactive — suggest a "skip to build" entry point |
+| **Fundamentally interactive** | The value IS the conversation (coaching, brainstorming, exploration) — headless mode wouldn't make sense, and that's OK |
 
 **When the skill IS adaptable, suggest the output contract:**
 - What would a headless invocation return? (file path, JSON summary, status code)
@@ -163,111 +162,19 @@ For each journey, note:
 
 4. **Stay in your lane.** Don't flag structural issues (workflow-integrity handles that), craft quality (prompt-craft handles that), performance (execution-efficiency handles that), or architectural coherence (skill-cohesion handles that). Your findings should be things *only a creative thinker would notice*.
 
-## Output Format
+## Output
 
-You will receive `{skill-path}` and `{quality-report-dir}` as inputs.
+Write your analysis as a natural document. Include:
 
-Write JSON findings to: `{quality-report-dir}/enhancement-opportunities-temp.json`
+- **Skill understanding** — purpose, primary user, key assumptions (2-3 sentences)
+- **User journeys** — for each archetype (first-timer, expert, confused, edge-case, hostile-environment, automator): a brief narrative, friction points, and bright spots
+- **Headless assessment** — potential level (headless-ready/easily-adaptable/partially-adaptable/fundamentally-interactive), which interaction points could auto-resolve, what a headless invocation would need
+- **Key findings** — edge cases, experience gaps, delight opportunities. Each with severity (high-opportunity/medium-opportunity/low-opportunity), affected area, what you noticed, and a concrete suggestion
+- **Top insights** — the 2-3 most impactful creative observations, distilled
+- **Facilitative patterns check** — which of the 7 patterns are present/missing and which would be most valuable to add
 
-Output your findings using the universal schema defined in `references/universal-scan-schema.md`.
+Go wild first, then temper. Prioritize by user impact. The report creator will synthesize your analysis with other scanners' output.
 
-Use EXACTLY these field names: `file`, `line`, `severity`, `category`, `title`, `detail`, `action`. Do not rename, restructure, or add fields to findings.
+Write your analysis to: `{quality-report-dir}/enhancement-opportunities-analysis.md`
 
-**Field mapping for this scanner:**
-- `title` — The specific situation or user story (was `scenario`)
-- `detail` — What you noticed, why it matters, and user impact combined (merges `insight` + `user_impact`)
-- `action` — Concrete, actionable improvement (was `suggestion`)
-
-```json
-{
-  "scanner": "enhancement-opportunities",
-  "skill_path": "{path}",
-  "findings": [
-    {
-      "file": "SKILL.md",
-      "severity": "high-opportunity",
-      "category": "experience-gap",
-      "title": "First-time user with no project config hits a dead end at stage 2",
-      "detail": "Stage 2 assumes bmad-init has been run and a config exists. A first-timer who invokes this skill directly gets a cryptic error with no guidance on how to recover. This would frustrate new users and create abandonment.",
-      "action": "Add a graceful fallback in stage 2: detect missing config, explain what bmad-init does, and offer to proceed with defaults."
-    }
-  ],
-  "assessments": {
-    "skill_understanding": {
-      "purpose": "What this skill is trying to do",
-      "primary_user": "Who this skill is for",
-      "key_assumptions": ["assumption 1", "assumption 2"]
-    },
-    "user_journeys": [
-      {
-        "archetype": "first-timer|expert|confused|edge-case|hostile-environment|automator",
-        "summary": "Brief narrative of this user's experience with the skill",
-        "friction_points": ["moment 1", "moment 2"],
-        "bright_spots": ["what works well for this user"]
-      }
-    ],
-    "autonomous_assessment": {
-      "potential": "headless-ready|easily-adaptable|partially-adaptable|fundamentally-interactive",
-      "hitl_points": 0,
-      "auto_resolvable": 0,
-      "needs_input": 0,
-      "suggested_output_contract": "What a headless invocation would return",
-      "required_inputs": ["parameters needed upfront for headless mode"],
-      "notes": "Brief assessment of autonomous viability"
-    },
-    "top_insights": [
-      {
-        "title": "The single most impactful creative observation",
-        "detail": "The user experience impact",
-        "action": "What to do about it"
-      }
-    ]
-  },
-  "summary": {
-    "total_findings": 0,
-    "by_severity": {"high-opportunity": 0, "medium-opportunity": 0, "low-opportunity": 0},
-    "assessment": "Brief creative assessment of the skill's user experience, including the boldest practical idea"
-  }
-}
-```
-
-Before writing output, verify: Is your array called `findings`? Does every item have `title`, `detail`, `action`? Is `assessments` an object, not items in the findings array?
-
-## Process
-
-1. **Parallel read batch:** Read SKILL.md, all prompt files, and resource files — in a single parallel batch
-2. Deeply understand purpose, audience, and intent from SKILL.md
-3. Walk through each stage mentally as a user
-4. Inhabit each user archetype (including the automator) and mentally simulate their journey through the skill
-5. Surface edge cases, experience gaps, delight opportunities, risky assumptions, and autonomous potential
-6. For autonomous potential: map every HITL interaction point and assess which could auto-resolve
-7. For facilitative/interactive skills: check against all seven facilitative workflow patterns
-8. Go wild with ideas, then temper each to a concrete suggestion
-9. Prioritize by user impact
-10. Write JSON to `{quality-report-dir}/enhancement-opportunities-temp.json`
-11. Return only the filename: `enhancement-opportunities-temp.json`
-
-## Critical After Draft Output
-
-**Before finalizing, challenge your own findings:**
-
-### Creative Quality Check
-- Did I actually *inhabit* different user archetypes (including the automator), or did I just analyze from the builder's perspective?
-- Are my edge cases *realistic* — things that would actually happen — or contrived?
-- Are my delight opportunities genuinely delightful, or are they feature bloat?
-- Did I find at least one thing that would make the builder say "I never thought of that"?
-- Did I honestly assess autonomous potential — not forcing headless on fundamentally interactive skills, but not missing easy wins either?
-- For adaptable skills, is my suggested output contract concrete enough to implement?
-
-### Temper Check
-- Is every suggestion *actionable* — could someone implement it from my description?
-- Did I drop the impractical wild ideas instead of padding my findings?
-- Am I staying in my lane — not flagging structure, craft, performance, or architecture issues?
-- Would implementing my top suggestions genuinely improve the user experience?
-
-### Honesty Check
-- Did I note what the skill already does well? (Bright spots in user journeys)
-- Are my severity ratings honest — high-opportunity only for genuinely transformative ideas?
-- Is my `boldest_idea` actually bold, or is it safe and obvious?
-
-Only after this verification, write final JSON and return filename.
+Return only the filename when complete.
