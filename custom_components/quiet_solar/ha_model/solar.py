@@ -307,12 +307,13 @@ class QSSolar(HADeviceMixin, AbstractDevice):
 
         for name, provider in self.solar_forecast_providers.items():
             # Score using previously stored forecast vs last 24h actuals
-            provider.compute_score(time)
+            is_score_computed = provider.compute_score(time)
 
-            _LOGGER.debug(
-                "Scoring cycle for provider %s: score=%.2f",
+            _LOGGER.info(
+                "Scoring cycle for provider %s: score=%.2f is_score_computed=%s",
                 name,
                 provider.score if provider.score is not None else float("nan"),
+                is_score_computed,
             )
 
     def get_forecast(
@@ -521,16 +522,16 @@ class QSSolarProvider:
         """Clear scoring state (stored forecast + score)."""
         self.score = None
 
-    def compute_score(self, time: datetime) -> None:
+    def compute_score(self, time: datetime) -> bool:
         """Compute MAE score comparing stored forecast vs provided actuals."""
         if self.solar is None or self.solar.home is None:
-            return
-        forecast_handler = getattr(self.solar.home, "solar_and_consumption_forecast", None)
+            return False
+        forecast_handler = self.solar.home.solar_and_consumption_forecast
         if forecast_handler is None:
-            return
-        prod_history = getattr(forecast_handler, "solar_production_history", None)
+            return False
+        prod_history = forecast_handler.solar_production_history
         if prod_history is None:
-            return
+            return False
 
         actual_24_hours = prod_history.get_historical_data(time, past_hours=24)
 
@@ -562,9 +563,16 @@ class QSSolarProvider:
         aligned_forecast = past_forecast
 
         if not aligned_actuals or not aligned_forecast:
-            return
+            _LOGGER.warning(
+                "compute_score: missing data for provider %s, actuals=%d points, forecast=%d points",
+                self.provider_name,
+                len(aligned_actuals) if aligned_actuals else 0,
+                len(aligned_forecast) if aligned_forecast else 0,
+            )
+            return False
 
         self.score = self._compute_mae_from_aligned(aligned_forecast, aligned_actuals)
+        return True
 
     @staticmethod
     def _compute_mae_from_aligned(
