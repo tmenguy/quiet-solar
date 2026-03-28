@@ -7485,3 +7485,134 @@ class TestMultiChargerGreenCap:
             [cs1, cs2], 15000.0, 15000.0, False, now
         )
         assert success is True
+
+
+class TestPhantomSurplusTier2BelowThreshold:
+    """Cover line 1009: tier 2 phantom below min_threshold returns 0."""
+
+    def test_phantom_tier2_below_threshold(self):
+        """Tier 2 group sensor shows car nearly at expected power — phantom below threshold."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+        ch = _create_charger(hass, home, "Tier2Charger")
+        car = _make_real_car(hass, home, name="Tier2Car", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=16, num_phases=1)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 16
+        cs.current_active_phase_number = 1
+        cs.budgeted_amp = 16
+        cs.budgeted_num_phases = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        cs.possible_num_phases = [1]
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=3680)
+        cs.is_before_battery = True
+        cs.accurate_current_power = None  # No per-charger sensor → skip tier 1
+
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
+
+        # Expected ~3680W, group sensor 3200W → phantom=480W < threshold(690W) → return 0
+        phantom = group._compute_phantom_surplus([cs], current_real_cars_power=3200.0)
+        assert phantom == 0.0
+
+
+class TestGreenModeProductionCapBranches:
+    """Cover lines 1230, 1232, 1235-1237: production cap branch variations."""
+
+    def _setup(self, *, dynamic_cap=None, static_cap=None, solar_plant=None):
+        """Create green charger with independently controllable caps."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        # Override caps independently
+        home.get_home_max_available_production_power = MagicMock(return_value=dynamic_cap)
+        home.get_current_maximum_production_output_power = MagicMock(return_value=static_cap)
+        home.solar_plant = solar_plant
+        # No home load sensor → triggers conservative fallback capping
+        home.get_device_power_values = MagicMock(return_value=None)
+
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+        ch = _create_charger(hass, home, "CapCharger")
+        car = _make_real_car(hass, home, name="CapCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=16, num_phases=1)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 16
+        cs.current_active_phase_number = 1
+        cs.budgeted_amp = 16
+        cs.budgeted_num_phases = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        cs.possible_num_phases = [1]
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=3680)
+        cs.is_before_battery = True
+
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
+        group.get_budget_diffs = MagicMock(return_value=(0.0, [16.0, 0.0, 0.0], [16.0, 0.0, 0.0]))
+
+        return group, cs, now
+
+    @pytest.mark.asyncio
+    async def test_dynamic_cap_only(self):
+        """Line 1230: only dynamic_cap available, static_cap is None."""
+        group, cs, now = self._setup(dynamic_cap=8000.0, static_cap=None)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
+            [cs], 15000.0, 15000.0, False, now
+        )
+        assert success is True
+
+    @pytest.mark.asyncio
+    async def test_static_cap_only(self):
+        """Line 1232: only static_cap available, dynamic_cap is None."""
+        group, cs, now = self._setup(dynamic_cap=None, static_cap=9000.0)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
+            [cs], 15000.0, 15000.0, False, now
+        )
+        assert success is True
+
+    @pytest.mark.asyncio
+    async def test_solar_plant_fallback(self):
+        """Lines 1235-1237: both caps None, fallback to solar_plant max output."""
+        plant = SimpleNamespace(solar_max_output_power_value=6000.0)
+        group, cs, now = self._setup(dynamic_cap=None, static_cap=None, solar_plant=plant)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
+            [cs], 15000.0, 15000.0, False, now
+        )
+        assert success is True

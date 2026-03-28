@@ -61,6 +61,10 @@ def create_mock_home(hass):
     home.battery_can_discharge = MagicMock(return_value=True)
     home.get_tariff = MagicMock(return_value=0.15)
     home.get_best_tariff = MagicMock(return_value=0.10)
+    home.is_off_grid = MagicMock(return_value=False)
+    home.get_home_max_available_production_power = MagicMock(return_value=3000.0)
+    home.get_current_maximum_production_output_power = MagicMock(return_value=3000.0)
+    home.solar_plant = None
     return home
 
 
