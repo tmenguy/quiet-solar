@@ -136,9 +136,9 @@ def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str 
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
     cmd = (
-        f'printf "\\e]0;%s\\a" {safe_title} && '
-        f'cd {safe_dir} && '
-        f'claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}'
+        f"printf '\\033]0;%s\\007' {safe_title} && "
+        f"cd {safe_dir} && "
+        f"claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}"
     )
     if prompt is not None:
         cmd += f' {shlex.quote(prompt)}'

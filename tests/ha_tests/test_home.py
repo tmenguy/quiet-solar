@@ -2101,6 +2101,84 @@ async def test_home_power_helpers(
     assert home.get_current_maximum_production_output_power() == 500.0
 
 
+async def test_home_max_available_production_dc_coupled(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """DC-coupled battery: production capped at solar inverter max."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
+    home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="solar")
+    home.physical_solar_plant.solar_production = 8000.0
+    home.physical_solar_plant.solar_max_output_power_value = 12000.0
+
+    battery = SimpleNamespace(
+        is_dc_coupled=True,
+        battery_can_discharge=MagicMock(return_value=True),
+        get_max_discharging_power=MagicMock(return_value=5000.0),
+    )
+    home.physical_battery = battery
+
+    result = home.get_home_max_available_production_power()
+    # DC: solar(8000) + battery(5000) = 13000 → capped at inverter max 12000
+    assert result == 12000.0
+
+
+async def test_home_max_available_production_ac_coupled(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC-coupled battery: battery adds on top of solar inverter."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
+    home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="solar")
+    home.physical_solar_plant.solar_production = 8000.0
+    home.physical_solar_plant.solar_max_output_power_value = 12000.0
+
+    battery = SimpleNamespace(
+        is_dc_coupled=False,
+        battery_can_discharge=MagicMock(return_value=True),
+        get_max_discharging_power=MagicMock(return_value=5000.0),
+    )
+    home.physical_battery = battery
+
+    result = home.get_home_max_available_production_power()
+    # AC: min(solar 8000, max 12000) + battery 5000 = 13000 (not capped at 12000!)
+    assert result == 13000.0
+
+
+async def test_home_max_available_production_no_battery(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """No battery: production equals solar only, capped at inverter max."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
+    home.physical_solar_plant = QSSolar(hass=hass, config_entry={}, name="solar")
+    home.physical_solar_plant.solar_production = 15000.0
+    home.physical_solar_plant.solar_max_output_power_value = 12000.0
+    home.physical_battery = None
+
+    result = home.get_home_max_available_production_power()
+    # No battery, solar capped at inverter max
+    assert result == 12000.0
+
+
 async def test_home_forecast_getters_without_sources(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,

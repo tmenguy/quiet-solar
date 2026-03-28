@@ -5,6 +5,12 @@ from __future__ import annotations
 from custom_components.quiet_solar.home_model.commands import (
     CMD_CST_AUTO_CONSIGN,
     CMD_CST_AUTO_GREEN,
+    CMD_CST_AUTO_GREEN_CAP,
+    CMD_CST_AUTO_GREEN_CONSIGN,
+    CMD_CST_AUTO_PRICE,
+    CMD_CST_FORCE_CHARGE,
+    CMD_CST_GREEN_CHARGE_ONLY,
+    CMD_CST_IDLE,
     CMD_CST_OFF,
     CMD_CST_ON,
     LoadCommand,
@@ -53,3 +59,31 @@ def test_copy_command_variants() -> None:
     changed = copy_command_and_change_type(cmd, CMD_CST_AUTO_GREEN)
     assert changed.command == CMD_CST_AUTO_GREEN
     assert changed.power_consign == cmd.power_consign
+
+
+def test_is_green_returns_true_for_green_commands() -> None:
+    """All green commands should be identified as green."""
+    green_cmds = [
+        CMD_CST_AUTO_GREEN,
+        CMD_CST_AUTO_GREEN_CAP,
+        CMD_CST_GREEN_CHARGE_ONLY,
+        CMD_CST_AUTO_GREEN_CONSIGN,
+    ]
+    for cmd_str in green_cmds:
+        cmd = LoadCommand(command=cmd_str, power_consign=1000.0)
+        assert cmd.is_green() is True, f"{cmd_str} should be green"
+
+
+def test_is_green_returns_false_for_non_green_commands() -> None:
+    """Non-green commands must not be identified as green."""
+    non_green = [
+        CMD_CST_ON,
+        CMD_CST_OFF,
+        CMD_CST_IDLE,
+        CMD_CST_AUTO_CONSIGN,
+        CMD_CST_AUTO_PRICE,
+        CMD_CST_FORCE_CHARGE,
+    ]
+    for cmd_str in non_green:
+        cmd = LoadCommand(command=cmd_str, power_consign=1000.0)
+        assert cmd.is_green() is False, f"{cmd_str} should not be green"

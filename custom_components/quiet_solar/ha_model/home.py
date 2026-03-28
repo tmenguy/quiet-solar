@@ -1152,18 +1152,38 @@ class QSHome(QSDynamicGroup):
         return static_amp
 
     def get_home_max_available_production_power(self):
+        """Return the maximum power currently available from production sources.
 
-        available_production_w = 0
+        Uses current solar production + battery discharge capacity, capped by
+        inverter limits. For DC-coupled batteries the cap is the solar inverter
+        rating; for AC-coupled, the battery inverter adds on top.
+        """
+        available_production_w = 0.0
         if self.solar_plant is not None:
             available_production_w = self.solar_plant.solar_production
 
+        battery_discharge = 0.0
+        is_dc_coupled = False
         if self.battery is not None and self.battery.battery_can_discharge():
             max_discharge_power = self.battery.get_max_discharging_power()
             if max_discharge_power is not None:
-                available_production_w += self.battery.get_max_discharging_power()  # self.battery.max_discharge_number
+                battery_discharge = max_discharge_power
+                available_production_w += battery_discharge
+            is_dc_coupled = self.battery.is_dc_coupled
 
         if self.solar_plant:
-            available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
+            if is_dc_coupled:
+                # DC-coupled: solar + battery share one inverter
+                available_production_w = min(
+                    available_production_w, self.solar_plant.solar_max_output_power_value
+                )
+            else:
+                # AC-coupled: battery has its own inverter, cap each independently
+                solar_capped = min(
+                    self.solar_plant.solar_production,
+                    self.solar_plant.solar_max_output_power_value,
+                )
+                available_production_w = solar_capped + battery_discharge
 
         return available_production_w
 

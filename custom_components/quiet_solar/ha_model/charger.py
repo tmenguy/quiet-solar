@@ -912,7 +912,8 @@ class QSChargerGroup:
                     allow_budget_reset = True
 
                 success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(
-                    actionable_chargers, full_available_home_power, grid_available_home_power, allow_budget_reset, time
+                    actionable_chargers, full_available_home_power, grid_available_home_power, allow_budget_reset, time,
+                    current_real_cars_power=current_real_cars_power,
                 )
                 if done_reset_budget:
                     self._last_time_reset_budget_done = time
@@ -946,6 +947,69 @@ class QSChargerGroup:
         else:
             return False, False
 
+    def _compute_phantom_surplus(
+        self,
+        actionable_chargers,
+        current_real_cars_power: float | None,
+    ) -> float:
+        """Compute phantom surplus: expected charger power minus actual measured power.
+
+        Uses tiered detection:
+        - Tier 1: per-charger accurate_current_power vs expected power from stored amps
+        - Tier 2: group current_real_cars_power vs sum of expected powers
+        - Tier 3: no data, returns 0
+        """
+        total_expected = 0.0
+        tier1_actual = 0.0
+        tier1_available = True
+
+        for cs in actionable_chargers:
+            if cs.budgeted_amp is None or cs.budgeted_amp <= 0:
+                continue
+            car = cs.charger.car
+            if car is None:
+                continue
+
+            try:
+                expected = car._get_power_from_stored_amps(
+                    cs.budgeted_amp, cs.budgeted_num_phases or 1
+                )
+            except (AttributeError, KeyError, IndexError):
+                continue
+            if expected is None or expected <= 0:
+                continue
+            total_expected += expected
+
+            if cs.accurate_current_power is not None:
+                tier1_actual += cs.accurate_current_power
+            else:
+                tier1_available = False
+
+        if total_expected <= 0:
+            return 0.0
+
+        # Tier 1: per-charger sensors
+        if tier1_available:
+            phantom = max(0.0, total_expected - tier1_actual)
+            _LOGGER.debug(
+                "phantom surplus tier 1: expected %sW, actual %sW, phantom %sW",
+                total_expected, tier1_actual, phantom,
+            )
+            return phantom
+
+        # Tier 2: group-level sensor
+        if current_real_cars_power is not None:
+            phantom = max(0.0, total_expected - current_real_cars_power)
+            _LOGGER.debug(
+                "phantom surplus tier 2: expected %sW, group actual %sW, phantom %sW",
+                total_expected, current_real_cars_power, phantom,
+            )
+            return phantom
+
+        # Tier 3: no sensors available
+        _LOGGER.debug("phantom surplus tier 3: no sensors available, returning 0")
+        return 0.0
+
     async def budgeting_algorithm_minimize_diffs(
         self,
         actionable_chargers,
@@ -953,6 +1017,7 @@ class QSChargerGroup:
         grid_available_home_power,
         allow_budget_reset,
         time: datetime,
+        current_real_cars_power: float | None = None,
     ) -> tuple[bool, bool, bool]:
 
         actionable_chargers = sorted(actionable_chargers, key=lambda cs: cs.charge_score, reverse=True)
@@ -1113,7 +1178,25 @@ class QSChargerGroup:
                     initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
                     break
 
-        # check if we are already over power budget (for the inverter and battery capabililties)
+        # check if we are already over power budget (for the inverter and battery capabilities)
+        has_green_charger = any(cs.command.is_green() for cs in actionable_chargers)
+        budget_is_numeric = isinstance(initial_power_budget, (int, float))
+        diff_is_numeric = isinstance(diff_power_budget, (int, float))
+
+        # Phantom surplus: detect expected-but-not-yet-drawn charger power
+        phantom_surplus = 0.0
+        if has_green_charger and budget_is_numeric:
+            phantom_surplus = self._compute_phantom_surplus(
+                actionable_chargers, current_real_cars_power,
+            )
+            if phantom_surplus > 0:
+                initial_power_budget -= phantom_surplus
+                _LOGGER.info(
+                    "budgeting: subtracting phantom surplus %sW from green budget, "
+                    "adjusted budget %sW",
+                    phantom_surplus, initial_power_budget,
+                )
+
         home_load_power_value = None
         home_max_available_production_power = None
 
@@ -1122,15 +1205,49 @@ class QSChargerGroup:
         )
 
         if home_load_powers is not None and len(home_load_powers) > 0:
-            home_load_power_value = self._extracts_power_value_from_data(home_load_powers, time)
-            home_max_available_production_power = self.home.get_home_max_available_production_power()
+            hlpv = self._extracts_power_value_from_data(home_load_powers, time)
+            if isinstance(hlpv, (int, float)):
+                home_load_power_value = hlpv
 
-        if home_load_power_value is not None and home_max_available_production_power is not None:
-            # we can do something to go as low as possible for our power budget
+        # Compute robust production cap: min(dynamic, static) for the tightest bound
+        if has_green_charger:
+            try:
+                dynamic_cap = self.home.get_home_max_available_production_power()
+                if not isinstance(dynamic_cap, (int, float)) or dynamic_cap <= 0:
+                    dynamic_cap = None
+            except (TypeError, AttributeError):
+                dynamic_cap = None
+            try:
+                static_cap = self.home.get_current_maximum_production_output_power()
+                if not isinstance(static_cap, (int, float)) or static_cap <= 0:
+                    static_cap = None
+            except (TypeError, AttributeError):
+                static_cap = None
 
-            # We will check if with the current budget we are already over the max available production power,
-            # we may consume from the grid for nothing instead of consuming from the battery,
-            # so it is better to try to reduce the budget to go under the max available production power if we are already over it,
+            if dynamic_cap is not None and static_cap is not None:
+                home_max_available_production_power = min(dynamic_cap, static_cap)
+            elif dynamic_cap is not None:
+                home_max_available_production_power = dynamic_cap
+            elif static_cap is not None:
+                home_max_available_production_power = static_cap
+            elif self.home.solar_plant is not None:
+                # Conservative fallback: solar inverter max only
+                fallback = self.home.solar_plant.solar_max_output_power_value
+                if isinstance(fallback, (int, float)) and fallback > 0:
+                    home_max_available_production_power = fallback
+
+            # When home_load_power_value is None, use conservative fallback
+            if home_load_power_value is None and home_max_available_production_power is not None and budget_is_numeric:
+                # Cap budget to production capacity directly (conservative)
+                initial_power_budget = min(initial_power_budget, home_max_available_production_power)
+                _LOGGER.debug(
+                    "budgeting: green mode with no home load sensor, "
+                    "capping budget to production cap %sW",
+                    home_max_available_production_power,
+                )
+
+        if has_green_charger and home_load_power_value is not None and home_max_available_production_power is not None and budget_is_numeric and diff_is_numeric:
+            # For green mode chargers, ensure total home consumption stays within production limits
 
             new_home_power_consumption = home_load_power_value + diff_power_budget + initial_power_budget
 
@@ -1138,9 +1255,13 @@ class QSChargerGroup:
                 initial_effective_available_budget_with_no_diff_budget = initial_power_budget + diff_power_budget
 
                 if do_reset_allocation is False and allow_budget_reset is True:
-                    # we are already over the max available production power, so we can try to reduce the budget to go under it
                     _LOGGER.info(
-                        f"budgeting_algorithm_minimize_diffs: we are already over the max available production power with the current budget, try budget reset, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W"
+                        "budgeting: over production cap with green chargers, try budget reset, "
+                        "home_load %sW, production_cap %sW, diff %sW, total %sW",
+                        home_load_power_value,
+                        home_max_available_production_power,
+                        diff_power_budget,
+                        new_home_power_consumption,
                     )
 
                     do_reset_allocation = True
@@ -1157,16 +1278,24 @@ class QSChargerGroup:
 
                     if new_home_power_consumption >= home_max_available_production_power:
                         _LOGGER.info(
-                            f"budgeting_algorithm_minimize_diffs: we are still over the max available production power after reset, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W"
+                            "budgeting: still over production cap after reset, "
+                            "home_load %sW, production_cap %sW, diff %sW, total %sW",
+                            home_load_power_value,
+                            home_max_available_production_power,
+                            diff_power_budget,
+                            new_home_power_consumption,
                         )
 
                 if new_home_power_consumption >= home_max_available_production_power:
                     _LOGGER.warning(
-                        f"budgeting_algorithm_minimize_diffs: we are over the max available production power, try to reduce budget if possible, home_load_power_value {home_load_power_value}W, home_max_available_production_power {home_max_available_production_power}W, diff_power_budget {diff_power_budget}W, new_home_power_consumption {new_home_power_consumption}W"
+                        "budgeting: capping budget to production limit for green chargers, "
+                        "home_load %sW, production_cap %sW, diff %sW, total %sW",
+                        home_load_power_value,
+                        home_max_available_production_power,
+                        diff_power_budget,
+                        new_home_power_consumption,
                     )
 
-                    # new_h_p = home_load_power_value + diff_power_budget + initial_power_budget
-                    # if new_h_p == home_max_available_production_power
                     initial_power_budget = min(
                         initial_power_budget,
                         home_max_available_production_power - home_load_power_value - diff_power_budget,

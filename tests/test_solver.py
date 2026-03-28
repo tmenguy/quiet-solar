@@ -2,9 +2,11 @@ import asyncio
 from datetime import datetime, timedelta
 from unittest import TestCase
 
+import numpy as np
 import pytz
 
 from custom_components.quiet_solar.const import (
+    CONF_IS_3P,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
@@ -29,6 +31,7 @@ from custom_components.quiet_solar.home_model.constraints import (
 )
 from custom_components.quiet_solar.home_model.load import TestLoad
 from custom_components.quiet_solar.home_model.solver import PeriodSolver
+from tests.factories import MinimalTestHome, MinimalTestLoad, TestDynamicGroupDouble
 
 
 def _util_constraint_save_dump(time, cs):
@@ -2373,3 +2376,184 @@ def test_battery_get_charging_power_returns_seven_tuple():
     assert len(battery_commands) == len(solver._available_power)
     assert isinstance(remaining_grid, (int, float))
     assert isinstance(excess_solar, (int, float))
+
+
+# =============================================================================
+# Green mode production limit tests (Bug #62)
+# =============================================================================
+
+
+def _make_3p_load_with_production_budget(
+    production_amps_per_phase: float,
+    consumption_amps_per_phase: float = 32.0,
+    num_slots: int = 4,
+) -> MinimalTestLoad:
+    """Create a 3-phase load with separate consumption and production amp budgets."""
+    home = MinimalTestHome(voltage=230.0, is_3p=True)
+    load = MinimalTestLoad(
+        name="charger",
+        power=22080.0,
+        voltage=230.0,
+        **{CONF_IS_3P: True},
+        home=home,
+    )
+    group = TestDynamicGroupDouble(
+        max_amps=[consumption_amps_per_phase] * 3,
+        max_production_amps=[production_amps_per_phase] * 3,
+        num_slots=num_slots,
+        home=home,
+    )
+    load.father_device = group
+    return load
+
+
+def _make_3p_power_steps(min_a: int = 6, max_a: int = 32) -> list[LoadCommand]:
+    """Create power steps for a 3-phase charger at 230V."""
+    return [
+        copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 3 * 230)
+        for a in range(min_a, max_a + 1)
+    ]
+
+
+def test_adapt_power_steps_budgeting_uses_production_limits():
+    """When use_production_limits=True, power steps must be capped to production budget."""
+    # Production limit: 17A/phase → ~11,730W for 3-phase
+    # Consumption limit: 32A/phase → ~22,080W for 3-phase
+    load = _make_3p_load_with_production_budget(
+        production_amps_per_phase=17.0,
+        consumption_amps_per_phase=32.0,
+    )
+    steps = _make_3p_power_steps(min_a=6, max_a=32)
+    time = datetime.now(pytz.UTC)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        target_value=50000,
+        power_steps=steps,
+        support_auto=True,
+    )
+    load.push_live_constraint(time, constraint)
+
+    # With production limits: should cap to <= 17A/phase = 11,730W
+    capped_cmds = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, use_production_limits=True
+    )
+    if capped_cmds:
+        max_power = max(c.power_consign for c in capped_cmds)
+        assert max_power <= 17 * 3 * 230, (
+            f"Production-limited power {max_power}W exceeds 17A*3*230={17*3*230}W"
+        )
+
+    # Without production limits: should allow up to 32A/phase = 22,080W
+    uncapped_cmds = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0, use_production_limits=False
+    )
+    assert len(uncapped_cmds) == len(steps), "All steps should be available with consumption limits"
+
+
+def test_adapt_repartition_green_consign_capped_by_production():
+    """Green consign cannot increase beyond production limit, even when surplus exists.
+
+    Budget convention: available_amps_*_for_group represents REMAINING group capacity
+    after existing allocations. When adapt_power_steps_budgeting_low_level runs, it
+    adds existing_amps back to get effective limit.
+    """
+    # Total production: 17A/phase. Existing: 16A. Remaining: 1A.
+    # Effective limit = 1 + 16 = 17A → max step at 17A.
+    load = _make_3p_load_with_production_budget(
+        production_amps_per_phase=1.0,  # remaining after 16A existing
+        consumption_amps_per_phase=16.0,  # remaining after 16A existing
+    )
+    steps = _make_3p_power_steps(min_a=6, max_a=32)
+    time = datetime.now(pytz.UTC)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        target_value=50000,
+        power_steps=steps,
+        support_auto=True,
+    )
+    load.push_live_constraint(time, constraint)
+
+    num_slots = 4
+    slot_durations = np.array([900.0] * num_slots)
+    # Pre-fill at 16A (1A below effective production limit of 17A)
+    existing_at_16a = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=16 * 3 * 230)
+    existing_commands = [existing_at_16a] * num_slots
+
+    # Large surplus — would go to 32A without production cap
+    _, _, _, _, out_commands, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=num_slots - 1,
+        energy_delta=50000.0,
+        power_slots_duration_s=slot_durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=time,
+    )
+
+    max_prod_power = 17 * 3 * 230  # 11,730W (effective: remaining 1A + existing 16A)
+    for i, cmd in enumerate(out_commands):
+        if cmd is not None and cmd.power_consign > 0:
+            assert cmd.power_consign <= max_prod_power, (
+                f"Slot {i}: green consign {cmd.power_consign}W exceeds "
+                f"production limit {max_prod_power}W"
+            )
+
+
+def test_adapt_repartition_non_auto_exceeds_production_limit():
+    """Non-auto constraints use consumption limits (higher), not production limits."""
+    # Same remaining budgets, but consumption remaining (16A) >> production remaining (1A)
+    load = _make_3p_load_with_production_budget(
+        production_amps_per_phase=1.0,  # remaining after 16A existing
+        consumption_amps_per_phase=16.0,  # remaining after 16A existing
+    )
+    steps = [
+        LoadCommand(command="on", power_consign=a * 3 * 230)
+        for a in range(6, 33)
+    ]
+    time = datetime.now(pytz.UTC)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time + timedelta(hours=2),
+        initial_value=0,
+        target_value=50000,
+        power_steps=steps,
+        support_auto=False,
+    )
+    load.push_live_constraint(time, constraint)
+
+    num_slots = 4
+    slot_durations = np.array([900.0] * num_slots)
+    # Pre-fill at 16A — at production limit but well below consumption limit
+    existing_at_16a = LoadCommand(command="on", power_consign=16 * 3 * 230)
+    existing_commands = [existing_at_16a] * num_slots
+
+    _, _, _, _, out_commands, _ = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=num_slots - 1,
+        energy_delta=50000.0,
+        power_slots_duration_s=slot_durations,
+        existing_commands=existing_commands,
+        allow_change_state=True,
+        time=time,
+    )
+
+    # Non-auto: consumption limit allows 16+16=32A. Should go above 17A production limit.
+    max_power = 0.0
+    for cmd in out_commands:
+        if cmd is not None:
+            max_power = max(max_power, cmd.power_consign)
+
+    max_prod_power = 17 * 3 * 230  # effective production limit
+    assert max_power > max_prod_power, (
+        f"Non-auto constraint should exceed production limit "
+        f"({max_prod_power}W), but max was {max_power}W"
+    )

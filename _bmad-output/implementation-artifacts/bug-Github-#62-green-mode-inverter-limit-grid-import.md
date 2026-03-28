@@ -1,6 +1,6 @@
 # Bug #62: Green Mode Charger Consign Exceeds Inverter AC Output Limit
 
-Status: ready-for-dev
+Status: dev-complete
 issue: 62
 branch: "QS_62"
 
@@ -274,9 +274,24 @@ The `is_dc_coupled` flag is stored on the battery model (`home_model/battery.py`
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
 
 ### Completion Notes List
+- Task 1: Added `is_green()` method to `LoadCommand`; set `use_production_limits = True` for green commands with `energy_delta >= 0` in `adapt_repartition()`
+- Task 2: Fixed `get_home_max_available_production_power()` to handle AC-coupled batteries correctly (battery adds on top of solar inverter cap)
+- Task 3: Added production cap in `budgeting_algorithm_minimize_diffs()` using `min(dynamic_cap, static_cap)` for tightest bound; caps green budget to production minus home load
+- Task 4: Created `_compute_phantom_surplus()` with 3-tier detection (per-charger sensor, group sensor, no data); subtracts phantom from green budget to prevent runaway ramp-up
+- Task 5: Verified multi-charger combined cap via shared `initial_power_budget`; added integration test with 2 green chargers
+- Task 6: All 4193 tests pass (37 pre-existing failures in hungarian/qs_scripts unrelated). Added `isinstance` guards for defensive handling of MagicMock in test doubles
 
 ### File List
+- `custom_components/quiet_solar/home_model/commands.py` — added `is_green()` method
+- `custom_components/quiet_solar/home_model/constraints.py` — set `use_production_limits` dynamically for green commands
+- `custom_components/quiet_solar/ha_model/home.py` — fixed `get_home_max_available_production_power()` for AC-coupled batteries
+- `custom_components/quiet_solar/ha_model/charger.py` — added `_compute_phantom_surplus()`, production cap in budgeting, phantom surplus subtraction, defensive type checks
+- `tests/test_commands.py` — tests for `is_green()`
+- `tests/test_solver.py` — tests for production limits in solver
+- `tests/ha_tests/test_home.py` — tests for DC/AC-coupled production power
+- `tests/test_charger_coverage_deep.py` — `TestGreenModeProductionCap`, `TestPhantomSurplus`, `TestMultiChargerGreenCap` test classes
