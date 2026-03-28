@@ -134,37 +134,37 @@ Subtract the detected phantom surplus from `initial_power_budget` for green comm
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Solver-level power step capping for green commands (AC: #1)
-  - [ ] 1.1: In `adapt_repartition()` (`constraints.py` line 1288), set `use_production_limits = True` when the constraint's command is a green command and `energy_delta >= 0`. This limits the power steps the solver can assign, preventing green consign amps from exceeding production capacity before budgeting even runs
-  - [ ] 1.2: Verify `available_amps_production_for_group` is properly initialized with inverter-aware limits in `prepare_slots_for_amps_budget()` (solver.py / dynamic_group.py) — check `dyn_group_max_production_phase_current_for_budget` (home.py line 1222)
-  - [ ] 1.3: Add tests for solver respecting production limits on green commands
+- [x] Task 1: Solver-level power step capping for green commands (AC: #1)
+  - [x] 1.1: In `adapt_repartition()` (`constraints.py` line 1288), set `use_production_limits = True` when the constraint's command is a green command and `energy_delta >= 0`. This limits the power steps the solver can assign, preventing green consign amps from exceeding production capacity before budgeting even runs
+  - [x] 1.2: Verify `available_amps_production_for_group` is properly initialized with inverter-aware limits in `prepare_slots_for_amps_budget()` (solver.py / dynamic_group.py) — check `dyn_group_max_production_phase_current_for_budget` (home.py line 1222)
+  - [x] 1.3: Add tests for solver respecting production limits on green commands
 
-- [ ] Task 2: Fix `get_home_max_available_production_power()` for AC-coupled batteries (AC: #2, #4)
-  - [ ] 2.1: Fix `get_home_max_available_production_power()` (home.py:1154) — when battery is NOT DC-coupled, the cap at line 1165-1166 should be `solar_max_output_power_value + battery_max_discharge` instead of just `solar_max_output_power_value`. Mirror the DC/AC logic from `get_current_maximum_production_output_power()` (home.py:1705)
-  - [ ] 2.2: Add tests for both DC-coupled and AC-coupled battery scenarios
+- [x] Task 2: Fix `get_home_max_available_production_power()` for AC-coupled batteries (AC: #2, #4)
+  - [x] 2.1: Fix `get_home_max_available_production_power()` (home.py:1154) — when battery is NOT DC-coupled, the cap at line 1165-1166 should be `solar_max_output_power_value + battery_max_discharge` instead of just `solar_max_output_power_value`. Mirror the DC/AC logic from `get_current_maximum_production_output_power()` (home.py:1705)
+  - [x] 2.2: Add tests for both DC-coupled and AC-coupled battery scenarios
 
-- [ ] Task 3: Budgeting algorithm production cap for ALL green modes (AC: #2, #4)
-  - [ ] 3.1: For green mode chargers, cap `initial_power_budget` to production limits in BOTH the normal case (line 1087) and the battery discharge boost case (line 1113). The cap should apply whenever we don't want to consume from the grid — i.e., all green command types
-  - [ ] 3.2: Compute robust production cap as `min(get_home_max_available_production_power(), get_current_maximum_production_output_power())` when both return values. If one is None, use the other. This gives the tightest bound
-  - [ ] 3.3: Handle None fallback — when both are unavailable, use `solar_max_output_power_value` as conservative default rather than skipping the check
-  - [ ] 3.4: Add tests for budget capping in both normal and battery discharge cases
+- [x] Task 3: Budgeting algorithm production cap for ALL green modes (AC: #2, #4)
+  - [x] 3.1: For green mode chargers, cap `initial_power_budget` to production limits in BOTH the normal case (line 1087) and the battery discharge boost case (line 1113). The cap should apply whenever we don't want to consume from the grid — i.e., all green command types
+  - [x] 3.2: Compute robust production cap as `min(get_home_max_available_production_power(), get_current_maximum_production_output_power())` when both return values. If one is None, use the other. This gives the tightest bound
+  - [x] 3.3: Handle None fallback — when both are unavailable, use `solar_max_output_power_value` as conservative default rather than skipping the check
+  - [x] 3.4: Add tests for budget capping in both normal and battery discharge cases
 
-- [ ] Task 4: Phantom surplus detection and budget correction (AC: #5, #6, #7)
-  - [ ] 4.1: Create helper method `_compute_phantom_surplus(actionable_chargers, current_real_cars_power, time) -> float` on `QSChargerGroup` using tiered detection: Tier 1 = per-charger `cs.accurate_current_power` vs `car._get_power_from_stored_amps(cs.budgeted_amp, cs.budgeted_num_phases)`. Tier 2 = group `current_real_cars_power` (from `dyn_handle` line 698) vs sum of expected powers. Tier 3 = home consumption heuristic
-  - [ ] 4.2: Pass `current_real_cars_power` from `dyn_handle` (line 914) into `budgeting_algorithm_minimize_diffs` — add parameter to method signature
-  - [ ] 4.3: For green commands, subtract phantom surplus from `initial_power_budget` after all budget computations (including battery boost)
-  - [ ] 4.4: In the existing production cap check (lines 1128-1173), use `effective_home_load = home_load_power_value + phantom_surplus` so it accounts for expected-but-not-yet-drawn charger power
-  - [ ] 4.5: Add logging for phantom surplus detection: tier used, computed value, cap trigger
-  - [ ] 4.6: Add tests for all 3 tiers: car not drawing (phantom detected), car drawing normally (phantom ~0), multiple chargers (partial phantom)
+- [x] Task 4: Phantom surplus detection and budget correction (AC: #5, #6, #7)
+  - [x] 4.1: Create helper method `_compute_phantom_surplus(actionable_chargers, current_real_cars_power, time) -> float` on `QSChargerGroup` using tiered detection: Tier 1 = per-charger `cs.accurate_current_power` vs `car._get_power_from_stored_amps(cs.budgeted_amp, cs.budgeted_num_phases)`. Tier 2 = group `current_real_cars_power` (from `dyn_handle` line 698) vs sum of expected powers. Tier 3 = home consumption heuristic
+  - [x] 4.2: Pass `current_real_cars_power` from `dyn_handle` (line 914) into `budgeting_algorithm_minimize_diffs` — add parameter to method signature
+  - [x] 4.3: For green commands, subtract phantom surplus from `initial_power_budget` after all budget computations (including battery boost)
+  - [x] 4.4: In the existing production cap check (lines 1128-1173), use `effective_home_load = home_load_power_value + phantom_surplus` so it accounts for expected-but-not-yet-drawn charger power
+  - [x] 4.5: Add logging for phantom surplus detection: tier used, computed value, cap trigger
+  - [x] 4.6: Add tests for all 3 tiers: car not drawing (phantom detected), car drawing normally (phantom ~0), multiple chargers (partial phantom)
 
-- [ ] Task 5: Multi-charger combined cap (AC: #3)
-  - [ ] 5.1: Verify the existing budget loop respects the cap across all chargers in green mode
-  - [ ] 5.2: Add test scenario with 2+ chargers both in green mode, total must stay under production capacity
+- [x] Task 5: Multi-charger combined cap (AC: #3)
+  - [x] 5.1: Verify the existing budget loop respects the cap across all chargers in green mode
+  - [x] 5.2: Add test scenario with 2+ chargers both in green mode, total must stay under production capacity
 
-- [ ] Task 6: Regression protection (AC: #8)
-  - [ ] 6.1: Verify all existing charger budgeting tests still pass
-  - [ ] 6.2: Verify non-green commands (auto_consign, force_charge, auto_price) are NOT affected by new limits — these are allowed to use the grid
-  - [ ] 6.3: Add explicit regression test: non-green charger can exceed inverter limit (it uses grid deliberately)
+- [x] Task 6: Regression protection (AC: #8)
+  - [x] 6.1: Verify all existing charger budgeting tests still pass
+  - [x] 6.2: Verify non-green commands (auto_consign, force_charge, auto_price) are NOT affected by new limits — these are allowed to use the grid
+  - [x] 6.3: Add explicit regression test: non-green charger can exceed inverter limit (it uses grid deliberately)
 
 ## Dev Notes
 
