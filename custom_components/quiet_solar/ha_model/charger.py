@@ -1216,7 +1216,7 @@ class QSChargerGroup:
             home_load_power_value = self._extracts_power_value_from_data(home_load_powers, time)
 
         # Compute robust production cap: min(dynamic, static) for the tightest bound
-        if has_green_charger:
+        if has_green_charger or self.home.is_off_grid():
             dynamic_cap = self.home.get_home_max_available_production_power()
             if dynamic_cap is None or dynamic_cap <= 0:
                 dynamic_cap = None
@@ -1245,7 +1245,7 @@ class QSChargerGroup:
                     home_max_available_production_power,
                 )
 
-        if has_green_charger and home_load_power_value is not None and home_max_available_production_power is not None:
+        if home_load_power_value is not None and home_max_available_production_power is not None:
             # For green mode chargers, ensure total home consumption stays within production limits
 
             new_home_power_consumption = home_load_power_value + diff_power_budget + initial_power_budget
