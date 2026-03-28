@@ -1174,9 +1174,7 @@ class QSHome(QSDynamicGroup):
         if self.solar_plant:
             if is_dc_coupled:
                 # DC-coupled: solar + battery share one inverter
-                available_production_w = min(
-                    available_production_w, self.solar_plant.solar_max_output_power_value
-                )
+                available_production_w = min(available_production_w, self.solar_plant.solar_max_output_power_value)
             else:
                 # AC-coupled: battery has its own inverter, cap each independently
                 solar_capped = min(
