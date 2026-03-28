@@ -968,11 +968,12 @@ class QSChargerGroup:
         tier1_available = True
 
         for cs in actionable_chargers:
-            if cs.budgeted_amp is None or cs.budgeted_amp <= 0:
+            if cs.current_real_max_charging_amp is None or cs.current_real_max_charging_amp <= 0:
                 continue
 
             num_phases = 3 if cs.charger.physical_3p else 1
-            expected = cs.get_diff_power(0, num_phases, cs.budgeted_amp, cs.budgeted_num_phases or num_phases)
+            current_phases = cs.current_active_phase_number or num_phases
+            expected = cs.get_diff_power(0, num_phases, cs.current_real_max_charging_amp, current_phases)
             if expected is None or expected <= 0:
                 continue
             total_expected += expected

@@ -7378,6 +7378,8 @@ class TestPhantomSurplus:
 
         # Ch1: drawing normally (accurate = expected)
         cs1 = QSChargerStatus(ch1)
+        cs1.current_real_max_charging_amp = 16
+        cs1.current_active_phase_number = 1
         cs1.budgeted_amp = 16
         cs1.budgeted_num_phases = 1
         cs1.accurate_current_power = 3680.0  # 230*16 = 3680, drawing normally
@@ -7385,6 +7387,8 @@ class TestPhantomSurplus:
 
         # Ch2: not drawing yet (phantom)
         cs2 = QSChargerStatus(ch2)
+        cs2.current_real_max_charging_amp = 10
+        cs2.current_active_phase_number = 1
         cs2.budgeted_amp = 10
         cs2.budgeted_num_phases = 1
         cs2.accurate_current_power = 22.0  # barely anything
