@@ -521,7 +521,7 @@ class QSSolarProvider:
         """Clear scoring state (stored forecast + score)."""
         self.score = None
 
-    def /(self, time: datetime) -> None:
+    def compute_score(self, time: datetime) -> None:
         """Compute MAE score comparing stored forecast vs provided actuals."""
         if self.solar is None or self.solar.home is None:
             return
