@@ -345,6 +345,8 @@ def run_finish_story(
     *,
     pr_number: int | None = None,
     issue_number: int | None = None,
+    story_file: str | None = None,
+    story_key: str | None = None,
     skip_quality_gate: bool = False,
 ) -> dict:
     """Run the full finish-story orchestration.
@@ -360,13 +362,13 @@ def run_finish_story(
     if issue_number is None:
         return phase_report(steps, failed_phase="prepare")
 
-    # Auto-discover story file by issue number
-    found = find_story_file(issue_number)
-    story_file = str(found) if found else ""
+    # Auto-discover story file by issue number (unless overridden)
+    if story_file is None:
+        found = find_story_file(issue_number)
+        story_file = str(found) if found else ""
 
-    # Extract story key from filename
-    story_key: str | None = None
-    if story_file:
+    # Extract story key from filename (unless overridden)
+    if story_key is None and story_file:
         # "1-12-Github-#51-systematic-finish-story-enhancement.md" -> "1.12"
         name = Path(story_file).stem
         key_match = re.match(r"^(\d+)-(\d+)", name)

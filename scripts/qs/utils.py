@@ -361,8 +361,10 @@ def update_story_status(story_file: str, status: str) -> dict:
 
     Returns {"updated": bool}.
     """
+    if not story_file:
+        return {"updated": False, "detail": "no story file"}
     path = Path(story_file)
-    if not path.exists():
+    if not path.is_file():
         return {"updated": False, "detail": "file not found"}
 
     content = path.read_text()
