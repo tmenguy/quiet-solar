@@ -747,6 +747,7 @@ class TestChargerDouble:
         self.min_charge = min_charge
         self.max_charge = max_charge
         self.car = car
+        self.physical_3p = kwargs.pop("physical_3p", False)
         self.charger_default_idle_charge = min_charge
         self.num_on_off = 0
         self.qs_enable_device = True

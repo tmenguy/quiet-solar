@@ -1216,17 +1216,11 @@ class QSChargerGroup:
 
         # Compute robust production cap: min(dynamic, static) for the tightest bound
         if has_green_charger:
-            try:
-                dynamic_cap = self.home.get_home_max_available_production_power()
-                if dynamic_cap is None or dynamic_cap <= 0:
-                    dynamic_cap = None
-            except TypeError, AttributeError:
+            dynamic_cap = self.home.get_home_max_available_production_power()
+            if dynamic_cap is None or dynamic_cap <= 0:
                 dynamic_cap = None
-            try:
-                static_cap = self.home.get_current_maximum_production_output_power()
-                if static_cap is None or static_cap <= 0:
-                    static_cap = None
-            except TypeError, AttributeError:
+            static_cap = self.home.get_current_maximum_production_output_power()
+            if static_cap is None or static_cap <= 0:
                 static_cap = None
 
             if dynamic_cap is not None and static_cap is not None:
