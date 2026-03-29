@@ -42,8 +42,10 @@ def main() -> None:
     run_git(["pull"], cwd=str(main_dir))
 
     if args.no_worktree:
-        # Simple branch mode
-        run_git(["checkout", "-b", branch], cwd=str(main_dir))
+        # Simple branch mode — create or checkout existing branch
+        result = run_git(["checkout", "-b", branch], cwd=str(main_dir), check=False)
+        if result.returncode != 0:
+            run_git(["checkout", branch], cwd=str(main_dir))
         work_dir = str(main_dir)
     else:
         # Worktree mode — use existing setup script
