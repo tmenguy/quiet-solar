@@ -1140,12 +1140,13 @@ class QSHome(QSDynamicGroup):
         """Return the voltage of the home."""
         return self._voltage
 
-    def get_home_max_static_phase_amps(self) -> int:
+    def _get_home_max_production_phase_amps_for_budget(self) -> int:
+        """Return max per-phase amps for production-budget calculations.
 
+        Always caps by inverter limit (solar_max_phase_amps) when a solar
+        plant is configured, regardless of on-grid/off-grid state.
+        """
         static_amp = self.dyn_group_max_phase_current_conf
-        if not self.is_off_grid():
-            return static_amp
-
         if self.solar_plant:
             static_amp = min(static_amp, self.solar_plant.solar_max_phase_amps)
 
@@ -1241,7 +1242,7 @@ class QSHome(QSDynamicGroup):
 
         static_amps = super().dyn_group_max_phase_current_for_budget
 
-        prod_max_amps = self.get_home_max_static_phase_amps()
+        prod_max_amps = self._get_home_max_production_phase_amps_for_budget()
 
         if self.physical_3p:
             dyn_group_max_phase_current_for_budget = [prod_max_amps, prod_max_amps, prod_max_amps]

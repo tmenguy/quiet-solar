@@ -26,9 +26,17 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 SRC_DIR = REPO_ROOT / "custom_components" / "quiet_solar"
 TESTS_DIR = REPO_ROOT / "tests"
-VENV_ACTIVATE = REPO_ROOT / "venv" / "bin" / "activate"
+VENV_BIN = REPO_ROOT / "venv" / "bin"
 STRINGS_JSON = SRC_DIR / "strings.json"
 TRANSLATIONS_EN = SRC_DIR / "translations" / "en.json"
+
+
+VENV_PYTHON = str(VENV_BIN / "python")
+
+
+def _venv_tool(name: str) -> str:
+    """Return the absolute path to a tool inside the venv."""
+    return str(VENV_BIN / name)
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -38,7 +46,7 @@ def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[
 def check_pytest() -> dict:
     """Run pytest with 100% coverage check."""
     cmd = [
-        sys.executable, "-m", "pytest", str(TESTS_DIR),
+        VENV_PYTHON, "-m", "pytest", str(TESTS_DIR),
         f"--cov={SRC_DIR}",
         "--cov-report=term-missing",
         "--cov-fail-under=100",
@@ -70,7 +78,7 @@ def check_pytest() -> dict:
 
 def check_ruff_lint(fix: bool = False) -> dict:
     """Run ruff check."""
-    cmd = ["ruff", "check", str(SRC_DIR)]
+    cmd = [_venv_tool("ruff"), "check", str(SRC_DIR)]
     if fix:
         cmd.append("--fix")
     result = _run(cmd)
@@ -84,9 +92,9 @@ def check_ruff_lint(fix: bool = False) -> dict:
 def check_ruff_format(fix: bool = False) -> dict:
     """Run ruff format check."""
     if fix:
-        cmd = ["ruff", "format", str(SRC_DIR)]
+        cmd = [_venv_tool("ruff"), "format", str(SRC_DIR)]
     else:
-        cmd = ["ruff", "format", "--check", str(SRC_DIR)]
+        cmd = [_venv_tool("ruff"), "format", "--check", str(SRC_DIR)]
     result = _run(cmd)
     return {
         "name": "ruff_format",
@@ -97,7 +105,7 @@ def check_ruff_format(fix: bool = False) -> dict:
 
 def check_mypy() -> dict:
     """Run mypy."""
-    cmd = [sys.executable, "-m", "mypy", str(SRC_DIR)]
+    cmd = [VENV_PYTHON, "-m", "mypy", str(SRC_DIR)]
     result = _run(cmd)
     passed = result.returncode == 0
     return {

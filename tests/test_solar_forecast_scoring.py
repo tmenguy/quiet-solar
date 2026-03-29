@@ -23,24 +23,21 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
-    QSForecastSolarSensors,
     SOLCAST_SOLAR_DOMAIN,
+    QSForecastSolarSensors,
 )
 from custom_components.quiet_solar.ha_model.home import (
-    QSHomeSolarAndConsumptionHistoryAndForecast,
-    QSSolarHistoryVals,
-    BEGINING_OF_TIME,
     BUFFER_SIZE_IN_INTERVALS,
     INTERVALS_MN,
     NUM_INTERVAL_PER_HOUR,
-    NUM_INTERVALS_PER_DAY,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
+    QSSolarHistoryVals,
 )
 from custom_components.quiet_solar.ha_model.solar import (
     QSSolar,
     QSSolarProvider,
 )
-from tests.conftest import FakeConfigEntry, FakeHass
-
+from tests.conftest import FakeConfigEntry
 
 # ============================================================================
 # Helpers
@@ -208,9 +205,7 @@ class TestComputeScore:
 
         mock_fc = MagicMock(spec=QSSolarHistoryVals)
         mock_fc.get_historical_data.return_value = fc_data
-        forecast_handler.solar_forecast_history_per_provider = {
-            "prov": {sensor_name: mock_fc}
-        }
+        forecast_handler.solar_forecast_history_per_provider = {"prov": {sensor_name: mock_fc}}
 
         solar_mock.home.solar_and_consumption_forecast = forecast_handler
         provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
@@ -293,9 +288,7 @@ class TestComputeScore:
         mock_4h.get_historical_data.return_value = fc_data
 
         handler.solar_production_history = mock_prod
-        handler.solar_forecast_history_per_provider = {
-            "prov": {"qs_solar_forecast_4h": mock_4h}
-        }
+        handler.solar_forecast_history_per_provider = {"prov": {"qs_solar_forecast_4h": mock_4h}}
         solar_mock.home.solar_and_consumption_forecast = handler
         provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
         provider.compute_score(t0)
@@ -338,9 +331,7 @@ class TestUpdateForecastProbers:
         # Set a forecast on the active provider so probers can read it
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider = solar.solar_forecast_providers["Solcast"]
-        provider.solar_forecast = [
-            (t0 + timedelta(hours=h), 500.0 + h * 10) for h in range(25)
-        ]
+        provider.solar_forecast = [(t0 + timedelta(hours=h), 500.0 + h * 10) for h in range(25)]
 
         # Also set the aggregate forecast on QSSolar
         solar.solar_forecast = provider.solar_forecast
@@ -360,9 +351,7 @@ class TestUpdateForecastProbers:
 
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         provider = solar.solar_forecast_providers["Solcast"]
-        provider.solar_forecast = [
-            (t0 + timedelta(hours=h), 500.0 + h * 10) for h in range(25)
-        ]
+        provider.solar_forecast = [(t0 + timedelta(hours=h), 500.0 + h * 10) for h in range(25)]
         solar.solar_forecast = provider.solar_forecast
 
         await solar.update_forecast_probers(t0)
@@ -527,9 +516,7 @@ class TestUpdateConsumptionAndForecastHistory:
         mock_pfc = MagicMock(spec=QSSolarHistoryVals)
         mock_pfc.add_value.return_value = True
         mock_pfc.save_values = AsyncMock()
-        forecast.solar_forecast_history_per_provider = {
-            "Solcast": {"qs_solar_forecast_8h": mock_pfc}
-        }
+        forecast.solar_forecast_history_per_provider = {"Solcast": {"qs_solar_forecast_8h": mock_pfc}}
 
         forecast.init_forecasts = AsyncMock(return_value=True)
 
@@ -580,9 +567,7 @@ class TestEndToEndScoring:
 
         mock_fc = MagicMock(spec=QSSolarHistoryVals)
         mock_fc.get_historical_data.return_value = forecasts
-        handler.solar_forecast_history_per_provider = {
-            "solcast": {"qs_solar_forecast_8h": mock_fc}
-        }
+        handler.solar_forecast_history_per_provider = {"solcast": {"qs_solar_forecast_8h": mock_fc}}
 
         solar_mock.home.solar_and_consumption_forecast = handler
         provider = _TestProvider(solar=solar_mock, domain="test", provider_name="solcast")
@@ -685,12 +670,18 @@ class TestComputeMaeFromAligned:
         t = datetime.datetime(2024, 6, 15, 0, 0, tzinfo=pytz.UTC)
         # 3 night (both 0), 2 day (offset 100)
         fc = [
-            (t, 0.0), (t + timedelta(hours=1), 0.0), (t + timedelta(hours=2), 0.0),
-            (t + timedelta(hours=6), 500.0), (t + timedelta(hours=7), 600.0),
+            (t, 0.0),
+            (t + timedelta(hours=1), 0.0),
+            (t + timedelta(hours=2), 0.0),
+            (t + timedelta(hours=6), 500.0),
+            (t + timedelta(hours=7), 600.0),
         ]
         ac = [
-            (t, 0.0), (t + timedelta(hours=1), 0.0), (t + timedelta(hours=2), 0.0),
-            (t + timedelta(hours=6), 400.0), (t + timedelta(hours=7), 500.0),
+            (t, 0.0),
+            (t + timedelta(hours=1), 0.0),
+            (t + timedelta(hours=2), 0.0),
+            (t + timedelta(hours=6), 400.0),
+            (t + timedelta(hours=7), 500.0),
         ]
         result = QSSolarProvider._compute_mae_from_aligned(fc, ac)
         assert result is not None
@@ -744,7 +735,9 @@ class TestDumpForDebugSolarHistories:
     async def test_dumps_all_solar_histories(self, tmp_path):
         from types import SimpleNamespace
 
-        handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=SimpleNamespace(hass=None), storage_path=str(tmp_path))
+        handler = QSHomeSolarAndConsumptionHistoryAndForecast(
+            home=SimpleNamespace(hass=None), storage_path=str(tmp_path)
+        )
 
         mock_consumption = MagicMock()
         mock_consumption.file_name = "consumption.npy"
@@ -764,9 +757,7 @@ class TestDumpForDebugSolarHistories:
         mock_pfc = MagicMock()
         mock_pfc.file_name = "prov_fc_8h.npy"
         mock_pfc.save_values = AsyncMock()
-        handler.solar_forecast_history_per_provider = {
-            "Solcast": {"qs_solar_forecast_8h": mock_pfc}
-        }
+        handler.solar_forecast_history_per_provider = {"Solcast": {"qs_solar_forecast_8h": mock_pfc}}
 
         await handler.dump_for_debug(str(tmp_path))
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -423,16 +423,12 @@ class TestAccuracyScoring:
         t0 = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
         # Mock solar production history returning actuals at 800W
         mock_prod_history = MagicMock(spec=QSSolarHistoryVals)
-        mock_prod_history.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 800.0) for h in range(12)
-        ]
+        mock_prod_history.get_historical_data.return_value = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
         forecast_handler.solar_production_history = mock_prod_history
 
         # Mock forecast history for provider with 8h lookahead returning 1000W
         mock_fc_history = MagicMock(spec=QSSolarHistoryVals)
-        mock_fc_history.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 1000.0) for h in range(12)
-        ]
+        mock_fc_history.get_historical_data.return_value = [(t0 + timedelta(hours=h), 1000.0) for h in range(12)]
         forecast_handler.solar_forecast_history_per_provider = {
             "test_provider": {"qs_solar_forecast_8h": mock_fc_history}
         }
@@ -638,19 +634,13 @@ class TestComputeScoreEdgeCases:
 
         forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         mock_prod = MagicMock(spec=QSSolarHistoryVals)
-        mock_prod.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 800.0) for h in range(12)
-        ]
+        mock_prod.get_historical_data.return_value = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
         forecast_handler.solar_production_history = mock_prod
 
         # Only provide a 12h lookahead sensor (>= 8h)
         mock_12h = MagicMock(spec=QSSolarHistoryVals)
-        mock_12h.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 1000.0) for h in range(12)
-        ]
-        forecast_handler.solar_forecast_history_per_provider = {
-            "prov": {"qs_solar_forecast_12h": mock_12h}
-        }
+        mock_12h.get_historical_data.return_value = [(t0 + timedelta(hours=h), 1000.0) for h in range(12)]
+        forecast_handler.solar_forecast_history_per_provider = {"prov": {"qs_solar_forecast_12h": mock_12h}}
 
         solar_mock.home.solar_and_consumption_forecast = forecast_handler
         provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
@@ -670,19 +660,13 @@ class TestComputeScoreEdgeCases:
 
         forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         mock_prod = MagicMock(spec=QSSolarHistoryVals)
-        mock_prod.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 500.0) for h in range(12)
-        ]
+        mock_prod.get_historical_data.return_value = [(t0 + timedelta(hours=h), 500.0) for h in range(12)]
         forecast_handler.solar_production_history = mock_prod
 
         # Only provide 4h lookahead (< 8h, so not preferred)
         mock_4h = MagicMock(spec=QSSolarHistoryVals)
-        mock_4h.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 700.0) for h in range(12)
-        ]
-        forecast_handler.solar_forecast_history_per_provider = {
-            "prov": {"qs_solar_forecast_4h": mock_4h}
-        }
+        mock_4h.get_historical_data.return_value = [(t0 + timedelta(hours=h), 700.0) for h in range(12)]
+        forecast_handler.solar_forecast_history_per_provider = {"prov": {"qs_solar_forecast_4h": mock_4h}}
 
         solar_mock.home.solar_and_consumption_forecast = forecast_handler
         provider = _TestProvider(solar=solar_mock, domain="test", provider_name="prov")
@@ -702,9 +686,7 @@ class TestComputeScoreEdgeCases:
 
         forecast_handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=None, storage_path="/tmp")
         mock_prod = MagicMock(spec=QSSolarHistoryVals)
-        mock_prod.get_historical_data.return_value = [
-            (t0 + timedelta(hours=h), 800.0) for h in range(12)
-        ]
+        mock_prod.get_historical_data.return_value = [(t0 + timedelta(hours=h), 800.0) for h in range(12)]
         forecast_handler.solar_production_history = mock_prod
         forecast_handler.solar_forecast_history_per_provider = {}
 
@@ -1120,4 +1102,3 @@ class TestGuardClauses:
         assert s_afternoon == 1
         assert s_midnight == 0
         assert d_midnight > d_morning
-

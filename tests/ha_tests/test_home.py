@@ -44,8 +44,8 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_IN_INTERVALS,
     NUM_INTERVALS_PER_DAY,
     QSforecastValueSensor,
-    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSHomeMode,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSSolarHistoryVals,
     _segments_strong_overlap,
     _segments_weak_sub_on_main_overlap,
@@ -1498,9 +1498,7 @@ async def test_home_update_forecast_probers_flow(
     home.home_non_controlled_power_forecast_sensor_values_providers = {
         "now": SimpleNamespace(push_and_get=MagicMock(return_value=1.0))
     }
-    home.home_solar_forecast_sensor_values_probers = {
-        "now": SimpleNamespace(push_and_get=MagicMock(return_value=2.0))
-    }
+    home.home_solar_forecast_sensor_values_probers = {"now": SimpleNamespace(push_and_get=MagicMock(return_value=2.0))}
     home.home_non_controlled_power_forecast_sensor_values = {}
     home.home_solar_forecast_sensor_values = {}
 

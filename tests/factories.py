@@ -756,6 +756,7 @@ class TestChargerDouble:
         self._expected_charge_state = QSStateCmd()
         self._expected_amperage = QSStateCmd()
         self._expected_num_active_phases = QSStateCmd()
+        self._last_amp_change_time: datetime | None = None
 
         # Apply any additional kwargs as attributes
         for key, value in kwargs.items():

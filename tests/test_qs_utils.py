@@ -22,7 +22,6 @@ from utils import (
     update_story_status,
 )
 
-
 # --- auto_commit_and_push tests ---
 
 
@@ -47,6 +46,7 @@ def test_auto_commit_and_push_with_changes(monkeypatch):
 
 def test_auto_commit_and_push_no_changes(monkeypatch):
     """Does nothing when there are no changes to commit."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stdout="", stderr="")
         # git add returns ok but no changes staged
@@ -103,6 +103,7 @@ def test_auto_commit_and_push_custom_paths(monkeypatch):
 
 def test_auto_commit_and_push_push_fails(monkeypatch):
     """Reports push failure but commit still succeeded."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stdout="", stderr="")
         if cmd[:3] == ["git", "diff", "--cached"]:
@@ -120,6 +121,7 @@ def test_auto_commit_and_push_push_fails(monkeypatch):
 
 def test_auto_commit_and_push_commit_fails(monkeypatch):
     """Reports commit failure when git commit returns non-zero."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stdout="", stderr="")
         if cmd[:3] == ["git", "diff", "--cached"]:
@@ -141,6 +143,7 @@ def test_auto_commit_and_push_commit_fails(monkeypatch):
 
 def test_find_pr_for_branch_found(monkeypatch):
     """Returns PR info when a PR exists for the branch."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         result.stdout = json.dumps([{"number": 42, "url": "https://github.com/org/repo/pull/42", "state": "OPEN"}])
@@ -155,6 +158,7 @@ def test_find_pr_for_branch_found(monkeypatch):
 
 def test_find_pr_for_branch_not_found(monkeypatch):
     """Returns None when no PR exists."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         result.stdout = "[]"
@@ -167,6 +171,7 @@ def test_find_pr_for_branch_not_found(monkeypatch):
 
 def test_find_pr_for_branch_gh_error(monkeypatch):
     """Returns None on gh CLI error."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=1, stdout="", stderr="not found")
         return result
@@ -235,6 +240,7 @@ def test_check_ci_status_pending(monkeypatch):
 
 def test_check_ci_status_no_checks(monkeypatch):
     """Handles no CI checks gracefully."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         result.stdout = "[]"
@@ -248,6 +254,7 @@ def test_check_ci_status_no_checks(monkeypatch):
 
 def test_check_ci_status_gh_error(monkeypatch):
     """Handles gh CLI error."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=1, stdout="", stderr="error")
         return result
@@ -263,6 +270,7 @@ def test_check_ci_status_gh_error(monkeypatch):
 
 def test_ensure_issue_link_already_present(monkeypatch):
     """Does nothing when issue link already in PR body."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -296,6 +304,7 @@ def test_ensure_issue_link_missing_and_added(monkeypatch):
 
 def test_ensure_issue_link_closes_variant(monkeypatch):
     """Detects Closes #N variant."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -310,6 +319,7 @@ def test_ensure_issue_link_closes_variant(monkeypatch):
 
 def test_ensure_issue_link_edit_failure(monkeypatch):
     """Reports failure when gh pr edit fails."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -330,6 +340,7 @@ def test_ensure_issue_link_edit_failure(monkeypatch):
 
 def test_close_issue_if_open_closes(monkeypatch):
     """Closes an open issue."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -344,6 +355,7 @@ def test_close_issue_if_open_closes(monkeypatch):
 
 def test_close_issue_if_open_already_closed(monkeypatch):
     """Does nothing when issue is already closed."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -376,6 +388,7 @@ def test_close_issue_if_open_with_comment(monkeypatch):
 
 def test_close_issue_if_open_close_fails(monkeypatch):
     """Reports failure when gh issue close fails."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         if "view" in cmd:
@@ -454,6 +467,7 @@ def test_suggest_release_empty():
 
 def test_get_changed_files_success(monkeypatch):
     """Returns list of changed files."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         result.stdout = "custom_components/quiet_solar/foo.py\ntests/test_foo.py\n"
@@ -466,6 +480,7 @@ def test_get_changed_files_success(monkeypatch):
 
 def test_get_changed_files_empty(monkeypatch):
     """Returns empty list when no changes."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=0, stderr="")
         result.stdout = ""
@@ -478,6 +493,7 @@ def test_get_changed_files_empty(monkeypatch):
 
 def test_get_changed_files_git_error(monkeypatch):
     """Returns empty list on git error."""
+
     def fake_run(cmd, **kwargs):
         result = MagicMock(returncode=1, stdout="", stderr="error")
         return result

@@ -14,9 +14,11 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "qs"
 # claude_launch_command tests
 # ---------------------------------------------------------------------------
 
+
 def _import_utils():
     """Import utils from scripts/qs/ by manipulating sys.path."""
     import importlib
+
     old_path = sys.path[:]
     sys.path.insert(0, str(SCRIPTS_DIR))
     try:
@@ -59,7 +61,9 @@ class TestClaudeLaunchCommand:
     def test_prompt_with_special_characters(self):
         """Prompt with special shell characters is properly escaped."""
         utils = _import_utils()
-        cmd = utils.claude_launch_command("/tmp/work", 42, "Fix bug", prompt='/implement-story --issue 42 --story-file "path with spaces"')
+        cmd = utils.claude_launch_command(
+            "/tmp/work", 42, "Fix bug", prompt='/implement-story --issue 42 --story-file "path with spaces"'
+        )
         # Should not raise and should contain escaped content
         assert "claude" in cmd
         assert "implement-story" in cmd
@@ -68,6 +72,7 @@ class TestClaudeLaunchCommand:
 # ---------------------------------------------------------------------------
 # next_step.py tests
 # ---------------------------------------------------------------------------
+
 
 class TestNextStep:
     """Tests for next_step.py script."""
@@ -85,13 +90,20 @@ class TestNextStep:
 
     def test_review_story_transition(self):
         """Generate next-step for implement -> review transition."""
-        data = self._run_next_step([
-            "--skill", "review-story",
-            "--issue", "42",
-            "--pr", "5",
-            "--work-dir", "/tmp/work",
-            "--title", "Fix bug",
-        ])
+        data = self._run_next_step(
+            [
+                "--skill",
+                "review-story",
+                "--issue",
+                "42",
+                "--pr",
+                "5",
+                "--work-dir",
+                "/tmp/work",
+                "--title",
+                "Fix bug",
+            ]
+        )
         assert "same_context" in data
         assert "new_context" in data
         assert "/review-story" in data["same_context"]
@@ -101,13 +113,20 @@ class TestNextStep:
 
     def test_implement_story_transition(self):
         """Generate next-step for setup -> implement transition."""
-        data = self._run_next_step([
-            "--skill", "implement-story",
-            "--issue", "42",
-            "--story-file", "path/to/story.md",
-            "--work-dir", "/tmp/work",
-            "--title", "Fix bug",
-        ])
+        data = self._run_next_step(
+            [
+                "--skill",
+                "implement-story",
+                "--issue",
+                "42",
+                "--story-file",
+                "path/to/story.md",
+                "--work-dir",
+                "/tmp/work",
+                "--title",
+                "Fix bug",
+            ]
+        )
         assert "/implement-story" in data["same_context"]
         assert "--issue 42" in data["same_context"]
         assert "--story-file path/to/story.md" in data["same_context"]
@@ -115,13 +134,20 @@ class TestNextStep:
 
     def test_finish_story_transition(self):
         """Generate next-step for review -> finish transition."""
-        data = self._run_next_step([
-            "--skill", "finish-story",
-            "--pr", "5",
-            "--story-key", "3.2",
-            "--work-dir", "/tmp/work",
-            "--title", "Fix bug",
-        ])
+        data = self._run_next_step(
+            [
+                "--skill",
+                "finish-story",
+                "--pr",
+                "5",
+                "--story-key",
+                "3.2",
+                "--work-dir",
+                "/tmp/work",
+                "--title",
+                "Fix bug",
+            ]
+        )
         assert "/finish-story" in data["same_context"]
         assert "--pr 5" in data["same_context"]
         assert "--story-key 3.2" in data["same_context"]
@@ -133,8 +159,7 @@ class TestNextStep:
     def test_missing_required_args(self):
         """Missing --skill should fail."""
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS_DIR / "next_step.py"),
-             "--work-dir", "/tmp", "--title", "X"],
+            [sys.executable, str(SCRIPTS_DIR / "next_step.py"), "--work-dir", "/tmp", "--title", "X"],
             capture_output=True,
             text=True,
             cwd=str(SCRIPTS_DIR),
