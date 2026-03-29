@@ -3678,6 +3678,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # and be after battery, lowest priority
                         type = CONSTRAINT_TYPE_FILLER
                         target_charge = max_target_charge
+                        if realized_charge_target >= target_charge:
+                            # already fully charged — skip filler to avoid push-remove-push loop
+                            type = None
 
                 if type is not None:
                     car_charge_best_effort = ConstraintClass(

@@ -179,7 +179,11 @@ def bistate_check_load_device(hass: HomeAssistant, bistate_setup) -> ConcreteBiS
     )
     device.load_is_auto_to_be_boosted = False
     device._constraints = []
-    device.constraint_reset_and_reset_commands_if_needed = MagicMock()
+
+    def _mock_constraint_reset(**kwargs):
+        device._constraints = []
+
+    device.constraint_reset_and_reset_commands_if_needed = MagicMock(side_effect=_mock_constraint_reset)
     device.power_use = 1000.0
     return device
 
