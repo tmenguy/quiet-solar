@@ -21,10 +21,7 @@ Read `_bmad-output/project-context.md` for coding rules. Do NOT load project-rul
 
 ### 2. Implement using BMad dev-story
 
-Run the BMad dev-story skill which handles the full TDD cycle:
-```
-/bmad-dev-story
-```
+Follow the **bmad-dev-story** skill, which handles the full TDD cycle.
 
 When it asks for the story file, provide the path found by `find_story_file(issue_number)`.
 
@@ -96,14 +93,16 @@ Run `next_step.py` to generate both command options:
 python scripts/qs/next_step.py --skill review-story --issue {{issue_number}} --pr {{pr_number}} --work-dir {{worktree_path}} --title "{{title}}"
 ```
 
-Parse the JSON output and tell the user:
+Parse the JSON output (which includes `tool`, `same_context`, `new_context`) and tell the user:
 
 ```
 Implementation complete. PR #{{pr_number}} created: {{url}}
 
-**Option A — New context (copy-paste this single command):**
+**Option A — New context:**
   {{new_context}}
 
 **Option B — Same context:**
   {{same_context}}
 ```
+
+For Cursor users, `new_context` will be instructions to open the worktree as a new workspace. For Claude Code, it will be a bash launch script. The user can also continue in the same session with **Option B**.

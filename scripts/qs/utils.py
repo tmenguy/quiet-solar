@@ -131,6 +131,23 @@ def find_story_file(issue_number: int) -> Path | None:
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
 
 
+def detect_tool() -> str:
+    """Detect which AI tool is driving the session.
+
+    Returns "cursor" or "claude" (default).
+    Checks, in order: --tool CLI flag (handled by caller), QS_TOOL env var,
+    CURSOR_TRACE_ID env var (set by Cursor IDE terminals).
+    """
+    import os
+
+    tool = os.environ.get("QS_TOOL", "").lower()
+    if tool in ("cursor", "claude"):
+        return tool
+    if os.environ.get("CURSOR_TRACE_ID"):
+        return "cursor"
+    return "claude"
+
+
 def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str | None = None) -> str:
     """Build a short launch command that delegates to a temp script.
 
@@ -154,6 +171,40 @@ def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str 
     script_path.chmod(0o755)
 
     return str(script_path)
+
+
+def build_next_step(
+    work_dir: str,
+    issue: int,
+    title: str,
+    *,
+    skill_prompt: str,
+    tool: str | None = None,
+) -> dict:
+    """Build tool-appropriate next-step instructions.
+
+    Returns a dict with keys: same_context, new_context, tool.
+    - For Claude Code: new_context is a bash launch script path.
+    - For Cursor: new_context is human-readable instructions to open a
+      new Cursor workspace at the worktree and run the skill.
+    """
+    detected = tool or detect_tool()
+
+    if detected == "cursor":
+        new_context = (
+            f"Open folder `{work_dir}` as a new Cursor workspace, then type:\n"
+            f"  {skill_prompt}"
+        )
+    else:
+        new_context = claude_launch_command(
+            work_dir, issue, title, prompt=skill_prompt,
+        )
+
+    return {
+        "same_context": skill_prompt,
+        "new_context": new_context,
+        "tool": detected,
+    }
 
 
 def detect_risk_level(changed_files: list[str]) -> list[str]:

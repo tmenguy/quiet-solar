@@ -4,14 +4,14 @@
 Usage:
     python scripts/qs/next_step.py --skill review-story --issue 42 [--pr 5] --work-dir DIR --title TITLE
 
-Output: JSON with same_context and new_context commands.
+Output: JSON with same_context, new_context, and detected tool.
 """
 
 from __future__ import annotations
 
 import argparse
 
-from utils import claude_launch_command, output_json
+from utils import build_next_step, output_json
 
 
 def build_skill_prompt(
@@ -44,12 +44,12 @@ def main() -> None:
     parser.add_argument("--story-key", default=None, help="Story key (e.g., 3.2)")
     parser.add_argument("--work-dir", required=True, help="Worktree directory path")
     parser.add_argument("--title", required=True, help="Issue/story title for display")
+    parser.add_argument("--tool", default=None, choices=["cursor", "claude"], help="Override tool detection")
     args = parser.parse_args()
 
-    # Use issue or PR for the tab title; prefer issue, fall back to PR
     issue = args.issue or args.pr or 0
 
-    same_context = build_skill_prompt(
+    skill_prompt = build_skill_prompt(
         args.skill,
         issue=args.issue,
         pr=args.pr,
@@ -57,14 +57,13 @@ def main() -> None:
         story_key=args.story_key,
     )
 
-    new_context = claude_launch_command(
-        args.work_dir, issue, args.title, prompt=same_context,
+    result = build_next_step(
+        args.work_dir, issue, args.title,
+        skill_prompt=skill_prompt,
+        tool=args.tool,
     )
 
-    output_json({
-        "same_context": same_context,
-        "new_context": new_context,
-    })
+    output_json(result)
 
 
 if __name__ == "__main__":

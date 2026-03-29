@@ -17,12 +17,7 @@ python scripts/qs/review_pr.py {{pr_number}} --trigger-copilot
 
 ### 2. Run adversarial code review
 
-Run the BMad adversarial code review skill:
-```
-/bmad-code-review
-```
-
-This executes parallel review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) and triages findings into actionable categories. It is the primary local review mechanism — do NOT skip it.
+Follow the **bmad-code-review** skill. This executes parallel review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) and triages findings into actionable categories. It is the primary local review mechanism — do NOT skip it.
 
 When adversarial findings reveal impacts beyond the code fix (e.g., a missing acceptance criterion, an architecture gap, or a rule that should be added), flag the doc impact alongside the code finding so the user can choose "doc-update" when processing the comment.
 
@@ -77,14 +72,16 @@ Run `next_step.py` to generate both command options:
 python scripts/qs/next_step.py --skill finish-story --issue {{issue_number}} --pr {{pr_number}} --work-dir {{worktree_path}} --title "{{title}}"
 ```
 
-Parse the JSON output and tell the user:
+Parse the JSON output (which includes `tool`, `same_context`, `new_context`) and tell the user:
 
 ```
 Review complete.
 
-**Option A — New context (copy-paste this single command):**
+**Option A — New context:**
   {{new_context}}
 
 **Option B — Same context:**
   {{same_context}}
 ```
+
+For Cursor users, `new_context` will be instructions to open the worktree as a new workspace. For Claude Code, it will be a bash launch script. The user can also continue in the same session with **Option B**.

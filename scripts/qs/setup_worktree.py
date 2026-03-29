@@ -13,7 +13,7 @@ import argparse
 import subprocess
 import sys
 
-from utils import claude_launch_command, find_story_file, get_main_worktree, get_worktree_dir, output_json, run_git
+from utils import build_next_step, find_story_file, get_main_worktree, get_worktree_dir, output_json, run_git
 
 
 def main() -> None:
@@ -63,17 +63,17 @@ def main() -> None:
 
     title = args.title or f"Issue #{issue}"
 
-    # Build next-step commands — only pass issue number
     implement_prompt = f"/implement-story --issue {issue}"
-    new_context = claude_launch_command(work_dir, issue, title, prompt=implement_prompt)
+    next_step = build_next_step(
+        work_dir, issue, title, skill_prompt=implement_prompt,
+    )
 
     output_json({
         "issue_number": issue,
         "branch": branch,
         "worktree_path": work_dir,
         "story_file": story_file_rel,
-        "same_context": implement_prompt,
-        "new_context": new_context,
+        **next_step,
     })
 
 

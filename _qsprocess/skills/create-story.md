@@ -39,10 +39,7 @@ This key becomes the filename: `_bmad-output/implementation-artifacts/{{story_ke
 
 ### 4. Write the story file using BMad
 
-Run the BMad create-story skill:
-```
-/bmad-create-story
-```
+Follow the **bmad-create-story** skill to generate the story file.
 
 When bmad-create-story asks which story, provide the **full story key from step 3** (e.g., `1-14-Github-#60-robust-story-naming-retrieval`). This ensures the output file already has `Github-#N` in its name — no rename needed.
 
