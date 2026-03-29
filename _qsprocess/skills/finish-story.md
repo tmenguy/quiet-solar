@@ -58,7 +58,7 @@ The script handles everything automatically:
 The script outputs structured JSON. Present to the user:
 - Success/failure status
 - Any recovery instructions (if failed)
-- Release suggestion: if `"release"`, suggest `/release`; if `"no-release"`, tell the user no release is needed
+- Release suggestion: if `"release"`, tell the user to run `/release` **from the main worktree** (the worktree has been cleaned up at this point, so the current directory no longer exists); if `"no-release"`, tell the user no release is needed
 
 ### 4. Commit epics update (if applicable)
 
