@@ -48,6 +48,7 @@ from custom_components.quiet_solar.ha_model.charger import (
     CHARGER_ADAPTATION_WINDOW_S,
     CHARGER_BOOT_TIME_DATA_EXPIRATION_S,
     CHARGER_CHECK_STATE_WINDOW_S,
+    CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S,
     QSChargerGeneric,
     QSChargerGroup,
     QSChargerStates,
@@ -7926,3 +7927,430 @@ class TestGreenModeProductionCapBranches:
         group, cs, now = self._setup(dynamic_cap=None, static_cap=None, solar_plant=plant)
         success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
+
+
+# =============================================================================
+# Bug #72: Group sensor fallback and car charged detection
+# =============================================================================
+
+
+class TestCanUseGroupPowerSensor:
+    """Tests for _can_use_group_power_sensor() helper (Task 0)."""
+
+    def _setup_charger_with_group(
+        self,
+        charger_has_sensor=False,
+        father_is_home=False,
+        father_has_sensor=True,
+        group_chargers_only=True,
+    ):
+        """Create a charger with configurable group sensor eligibility."""
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="GrpCh")
+        _init_charger_states(ch)
+
+        if charger_has_sensor:
+            ch.accurate_power_sensor = "sensor.charger_power"
+        else:
+            ch.accurate_power_sensor = None
+
+        # Set up the group
+        group = _make_charger_group(home, [ch])
+
+        if father_is_home:
+            ch.father_device = home
+        else:
+            ch.father_device = group.dynamic_group
+
+        if father_has_sensor:
+            ch.father_device.accurate_power_sensor = "sensor.group_power"
+        else:
+            ch.father_device.accurate_power_sensor = None
+
+        group.dync_group_chargers_only = group_chargers_only
+        ch.father_device.charger_group = group
+
+        return ch
+
+    def test_eligible_returns_true(self):
+        """All conditions met: no own sensor, father not home, father has sensor, chargers only."""
+        ch = self._setup_charger_with_group(
+            charger_has_sensor=False,
+            father_is_home=False,
+            father_has_sensor=True,
+            group_chargers_only=True,
+        )
+        assert ch._can_use_group_power_sensor() is True
+
+    def test_charger_has_own_sensor_returns_false(self):
+        """Charger has its own power sensor — no need for group fallback."""
+        ch = self._setup_charger_with_group(charger_has_sensor=True)
+        assert ch._can_use_group_power_sensor() is False
+
+    def test_father_is_home_returns_false(self):
+        """Father device is home — group measures entire house, not just charger."""
+        ch = self._setup_charger_with_group(father_is_home=True)
+        assert ch._can_use_group_power_sensor() is False
+
+    def test_father_has_no_sensor_returns_false(self):
+        """Father device has no power sensor."""
+        ch = self._setup_charger_with_group(father_has_sensor=False)
+        assert ch._can_use_group_power_sensor() is False
+
+    def test_group_not_chargers_only_returns_false(self):
+        """Group has non-charger children — power reading polluted."""
+        ch = self._setup_charger_with_group(group_chargers_only=False)
+        assert ch._can_use_group_power_sensor() is False
+
+    def test_father_device_none_returns_false(self):
+        """Father device is None."""
+        ch = self._setup_charger_with_group()
+        ch.father_device = None
+        assert ch._can_use_group_power_sensor() is False
+
+
+class TestComputeAddedChargeGroupFallback:
+    """Tests for _compute_added_charge_update group sensor fallback (Task 1)."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="NrjCh")
+        car = _make_real_car(hass, home, name="NrjCar", battery_capacity=50000)
+        _init_charger_states(ch)
+        _plug_car(ch, car, datetime.now(pytz.UTC))
+        return ch, car
+
+    def test_fallback_to_group_energy_when_eligible(self):
+        """When charger has no energy data but group does, use group energy."""
+        ch, car = self._setup()
+        now = datetime.now(pytz.UTC)
+        start = now - timedelta(hours=1)
+
+        # Charger returns None (no own sensor)
+        ch.get_device_real_energy = MagicMock(return_value=None)
+        # Enable group fallback
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        # No other charger is charging
+        other_ch = MagicMock()
+        other_ch.is_charge_enabled = MagicMock(return_value=False)
+        ch.charger_group._chargers = [ch, other_ch]
+        # Group (father) returns energy
+        ch.father_device.get_device_real_energy = MagicMock(return_value=5000.0)
+
+        result = ch._compute_added_charge_update(start, now, is_target_percent=True)
+        # 5000 Wh / efficiency / 50000 Wh capacity * 100
+        assert result is not None
+        assert result > 0
+
+    def test_no_fallback_when_other_charger_charging(self):
+        """When another charger in group is charging, don't use group energy."""
+        ch, car = self._setup()
+        now = datetime.now(pytz.UTC)
+        start = now - timedelta(hours=1)
+
+        ch.get_device_real_energy = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        # Other charger IS charging
+        other_ch = MagicMock()
+        other_ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.charger_group._chargers = [ch, other_ch]
+        ch.father_device.get_device_real_energy = MagicMock(return_value=5000.0)
+
+        result = ch._compute_added_charge_update(start, now, is_target_percent=True)
+        assert result is None
+
+    def test_no_fallback_when_not_eligible(self):
+        """When group fallback not eligible, return None as before."""
+        ch, car = self._setup()
+        now = datetime.now(pytz.UTC)
+        start = now - timedelta(hours=1)
+
+        ch.get_device_real_energy = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=False)
+
+        result = ch._compute_added_charge_update(start, now, is_target_percent=True)
+        assert result is None
+
+    def test_charger_own_energy_used_as_fallback(self):
+        """When group not eligible, charger's own energy data is used as fallback."""
+        ch, car = self._setup()
+        now = datetime.now(pytz.UTC)
+        start = now - timedelta(hours=1)
+
+        ch.get_device_real_energy = MagicMock(return_value=3000.0)
+        ch._can_use_group_power_sensor = MagicMock(return_value=False)
+
+        result = ch._compute_added_charge_update(start, now, is_target_percent=True)
+        assert result is not None
+        ch.get_device_real_energy.assert_called_once()
+
+    def test_fallback_energy_mode_wh(self):
+        """Group fallback works in Wh mode too."""
+        ch, car = self._setup()
+        now = datetime.now(pytz.UTC)
+        start = now - timedelta(hours=1)
+
+        ch.get_device_real_energy = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        ch.charger_group._chargers = [ch]  # solo charger
+        ch.father_device.get_device_real_energy = MagicMock(return_value=7000.0)
+
+        result = ch._compute_added_charge_update(start, now, is_target_percent=False)
+        # Returns real_car_added_nrj = 7000 / efficiency_factor
+        assert result is not None
+        assert result > 0
+
+
+class TestIsChargingPowerZeroGroupFallback:
+    """Tests for is_charging_power_zero group sensor fallback (Task 2)."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="PwrCh")
+        car = _make_real_car(hass, home, name="PwrCar")
+        _init_charger_states(ch)
+        now = datetime.now(pytz.UTC)
+        _plug_car(ch, car, now)
+        return ch, now
+
+    def test_own_sensor_zero_returns_true(self):
+        """Charger's own sensor shows zero power — returns True."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=10.0)  # below charger_consumption_W (70)
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is True
+
+    def test_own_sensor_nonzero_returns_false(self):
+        """Charger's own sensor shows power — returns False."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=3000.0)
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is False
+
+    def test_group_zero_when_own_none(self):
+        """Own sensor None, group shows zero → True."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        ch.is_charger_group_power_zero = MagicMock(return_value=True)
+
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is True
+
+    def test_group_nonzero_solo_charger_returns_false(self):
+        """Own sensor None, group shows power, no other charger charging → False."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        ch.is_charger_group_power_zero = MagicMock(return_value=False)
+        # Solo charger in group
+        ch.charger_group._chargers = [ch]
+
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is False
+
+    def test_group_nonzero_other_charging_returns_none(self):
+        """Own sensor None, group shows power, other charger also charging → None."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        ch.is_charger_group_power_zero = MagicMock(return_value=False)
+        # Other charger IS charging
+        other = MagicMock()
+        other.is_charge_enabled = MagicMock(return_value=True)
+        ch.charger_group._chargers = [ch, other]
+
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is None
+
+    def test_not_eligible_returns_none(self):
+        """Own sensor None and not eligible for group → None."""
+        ch, now = self._setup()
+        ch.get_average_power = MagicMock(return_value=None)
+        ch._can_use_group_power_sensor = MagicMock(return_value=False)
+
+        result = ch.is_charging_power_zero(now, for_duration=600)
+        assert result is None
+
+
+class TestIsCarChargedCombinedEscape:
+    """Tests for is_car_charged combined escape hatch at 100% target (Task 3)."""
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home, name="EscCh")
+        car = _make_real_car(hass, home, name="EscCar")
+        _init_charger_states(ch)
+        now = datetime.now(pytz.UTC)
+        _plug_car(ch, car, now)
+        ch.is_car_stopped_asking_current = MagicMock(return_value=False)
+        return ch, now
+
+    def test_all_three_signals_agree_returns_charged(self):
+        """result_calculus>=100, current>=99, power_zero=True → charged."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=99,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        assert is_charged is True
+        assert result == 100
+
+    def test_calculus_none_stays_capped(self):
+        """No result_calculus → old behavior, capped at 99."""
+        ch, now = self._setup()
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=99,
+            target_charge=100,
+            is_target_percent=True,
+        )
+        assert is_charged is False
+        assert result == 99
+
+    def test_calculus_below_target_but_current_high_still_escapes(self):
+        """result_calculus < 100 but current >= 98 + power_zero → charged via sensor path."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=99,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=95.0,
+        )
+        # current >= 98 OR path triggers with power_zero=True
+        assert is_charged is True
+        assert result == 100
+
+    def test_calculus_below_target_and_current_low_stays_capped(self):
+        """result_calculus < 100 and current < 95 → both paths fail, stay capped."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=90,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=95.0,
+        )
+        assert is_charged is False
+        assert result == 90
+
+    def test_current_at_95_with_calculus_escapes(self):
+        """current_charge=95, calculus>=100, power_zero=True → charged via calculus path."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=95,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        # (calculus>=100 and current>=95) path triggers
+        assert is_charged is True
+        assert result == 100
+
+    def test_current_below_95_without_high_calculus_stays_capped(self):
+        """current_charge=94, calculus>=100, power_zero=True → below both thresholds."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=94,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        # current < 95 (calculus path) and < 98 (sensor path)
+        assert is_charged is False
+        assert result == 94
+
+    def test_power_not_zero_stays_capped(self):
+        """Power still flowing → stay capped."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=False)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=99,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        assert is_charged is False
+        assert result == 99
+
+    def test_power_none_stays_capped(self):
+        """Power unknown → conservative, stay capped."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=None)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=99,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        assert is_charged is False
+        assert result == 99
+
+    def test_other_call_sites_unaffected(self):
+        """Without result_calculus, 100% target still caps at 99 (backward compat)."""
+        ch, now = self._setup()
+
+        # Simulate the check_load_activity call pattern (no result_calculus)
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=100,
+            target_charge=100,
+            is_target_percent=True,
+        )
+        # Without result_calculus, should cap at 99
+        assert is_charged is False
+        assert result == 99
+
+    def test_stopped_asking_current_still_overrides(self):
+        """is_car_stopped_asking_current=True still forces charged regardless of result_calculus."""
+        ch, now = self._setup()
+        ch.is_car_stopped_asking_current = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=95,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=None,
+        )
+        assert is_charged is True
+        assert result == 100
+
+    def test_non_100_target_unaffected_by_result_calculus(self):
+        """For targets < 100, result_calculus param has no effect."""
+        ch, now = self._setup()
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=80,
+            target_charge=80,
+            is_target_percent=True,
+            result_calculus=85.0,
+        )
+        assert is_charged is True
+        assert result == 80
