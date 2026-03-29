@@ -2,7 +2,7 @@
 
 issue: 72
 branch: "QS_72"
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -147,14 +147,14 @@ Tasks must be implemented in order:
 
 ## Acceptance Criteria
 
-- [ ] `_can_use_group_power_sensor()` returns True only when charger has no own sensor, father is not home, father has a sensor, and group is chargers-only
-- [ ] `_compute_added_charge_update` falls back to group sensor energy when eligible and no other charger is charging
-- [ ] `is_charging_power_zero` returns conclusive True/False via group sensor when eligible
-- [ ] `update_value_callback` inline group logic replaced by single `is_charging_power_zero` call
-- [ ] `is_car_charged` detects 100% completion when all three signals (calculus, sensor, power-zero) agree
-- [ ] Other `is_car_charged` call sites unaffected (no `result_calculus` available, default None)
-- [ ] All existing tests pass
-- [ ] New tests cover group sensor fallback paths and combined escape hatch
+- [x] `_can_use_group_power_sensor()` returns True only when charger has no own sensor, father is not home, father has a sensor, and group is chargers-only
+- [x] `_compute_added_charge_update` falls back to group sensor energy when eligible and no other charger is charging
+- [x] `is_charging_power_zero` returns conclusive True/False via group sensor when eligible
+- [x] `update_value_callback` inline group logic replaced by single `is_charging_power_zero` call
+- [x] `is_car_charged` detects 100% completion when all three signals (calculus, sensor, power-zero) agree
+- [x] Other `is_car_charged` call sites unaffected (no `result_calculus` available, default None)
+- [x] All existing tests pass
+- [x] New tests cover group sensor fallback paths and combined escape hatch
 
 ## References
 
