@@ -6,12 +6,15 @@ Set up a worktree for story implementation and output the launch command.
 
 The user provides: issue number (e.g., `42`).
 
+Optional flags:
+- `--no-worktree`: work directly on the branch in the main repo instead of creating a worktree.
+
 ## Steps
 
 ### 1. Run setup script
 
 ```bash
-python scripts/qs/setup_worktree.py {{issue_number}} --title "{{title}}"
+python scripts/qs/setup_worktree.py {{issue_number}} --title "{{title}}" [--no-worktree]
 ```
 
 ### 2. Display results
