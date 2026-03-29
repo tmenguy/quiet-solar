@@ -62,10 +62,10 @@ class QSPool(QSOnOffDuration):
         run_s = 0.0
 
         ct_to_probe = []
-        if self._last_completed_constraint is not None:
-            ct_to_probe.append(self._last_completed_constraint)
         if self._constraints:
             ct_to_probe.extend(self._constraints)
+        elif self._last_completed_constraint is not None:
+            ct_to_probe.append(self._last_completed_constraint)
 
         # keep only the one for the current day
         for ct in ct_to_probe:

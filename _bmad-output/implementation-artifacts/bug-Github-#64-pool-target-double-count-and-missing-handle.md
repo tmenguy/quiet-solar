@@ -2,7 +2,7 @@
 
 issue: 64
 branch: "QS_64"
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 
@@ -64,17 +64,17 @@ After reset, `qs_bistate_current_duration_h` becomes 0, so `targetHours = 0`, so
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `update_current_metrics` in pool.py (AC: #1, #2)
-  - [ ] When `self._constraints` is non-empty, skip `_last_completed_constraint` in the sum
-  - [ ] When `self._constraints` is empty, continue using `_last_completed_constraint` (completed state display)
-- [ ] Task 2: Fix handle visibility in qs-pool-card.js (AC: #3, #4)
-  - [ ] Change `hasValidTarget` to `isEnabled` (remove `targetHours > 0` condition)
-- [ ] Task 3: Update existing test `test_pool_update_current_metrics_with_last_completed_constraint` (AC: #5)
-  - [ ] Existing test asserts double-counting behavior — update to assert only active constraint values when both exist
-- [ ] Task 4: Add new tests (AC: #6)
-  - [ ] Test: completed constraint only (no active) — should show completed values
-  - [ ] Test: completed + active constraints — should show only active values
-  - [ ] Test: after reset (no constraints, no completed) — metrics are zero
+- [x] Task 1: Fix `update_current_metrics` in pool.py (AC: #1, #2)
+  - [x] When `self._constraints` is non-empty, skip `_last_completed_constraint` in the sum
+  - [x] When `self._constraints` is empty, continue using `_last_completed_constraint` (completed state display)
+- [x] Task 2: Fix handle visibility in qs-pool-card.js (AC: #3, #4)
+  - [x] Change `hasValidTarget` to `isEnabled` (remove `targetHours > 0` condition)
+- [x] Task 3: Update existing test `test_pool_update_current_metrics_with_last_completed_constraint` (AC: #5)
+  - [x] Existing test asserts double-counting behavior — update to assert only active constraint values when both exist
+- [x] Task 4: Add new tests (AC: #6)
+  - [x] Test: completed constraint only (no active) — should show completed values
+  - [x] Test: completed + active constraints — should show only active values
+  - [x] Test: after reset (no constraints, no completed) — metrics are zero
 
 ## Dev Notes
 
@@ -110,9 +110,16 @@ After reset, `qs_bistate_current_duration_h` becomes 0, so `targetHours = 0`, so
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- All quality gates pass (ruff format, ruff lint, mypy, translations, pytest 100% coverage)
+- No scope changes from original story
 
 ### File List
+- `custom_components/quiet_solar/ha_model/pool.py` — exclude completed constraint when active constraints exist
+- `custom_components/quiet_solar/ui/resources/qs-pool-card.js` — show handle when enabled regardless of target value
+- `tests/test_ha_pool.py` — updated existing test, added 2 new tests (completed-only, after-reset)

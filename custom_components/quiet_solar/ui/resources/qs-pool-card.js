@@ -215,7 +215,7 @@ class QsPoolCard extends HTMLElement {
       const progressEndDeg = pctToDeg(progressPct);
       
       // Handle: target hours (only show if enabled and valid)
-      const hasValidTarget = isEnabled && targetHours > 0;
+      const hasValidTarget = isEnabled;
       const handlePct = this._targetDragPct != null ? this._targetDragPct : 
                         (this._localTargetPct != null ? this._localTargetPct : hoursToPct(targetHours));
       const handleDeg = pctToDeg(handlePct);
