@@ -2,7 +2,7 @@
 
 issue: 66
 branch: "QS_66"
-Status: draft
+Status: done
 
 ## Story
 
@@ -171,25 +171,25 @@ Then use `adjusted_home_load` in place of `home_load_power_value` in the product
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix E -- Cap solver production amp budget by inverter limit (AC: #1)
-  - [ ] Rename `get_home_max_static_phase_amps` -> `_get_home_max_production_phase_amps_for_budget`
-  - [ ] Remove off-grid guard so `solar_max_phase_amps` always applies
-  - [ ] Update call site at line 1244
-  - [ ] Add test: production amp budget reflects inverter limit when on-grid
-- [ ] Task 2: Fix A -- Cap battery discharge budget by inverter headroom (AC: #2)
-  - [ ] Add inverter headroom cap at production cap check point (~line 1248)
-  - [ ] Add test: battery discharge budget does not exceed inverter headroom
-- [ ] Task 3: Fix B -- Limit green consign to 1-step increase (AC: #3)
-  - [ ] Remove `CMD_AUTO_GREEN_CONSIGN` from `stop_on_first_change=False` block
-  - [ ] Add test: green consign increases by at most 1 step per cycle
-- [ ] Task 4: Fix C -- Add phantom surplus to home_load before production cap (AC: #4)
-  - [ ] Add `phantom_surplus` to `home_load_power_value` before production cap check
-  - [ ] Add test: transient dip does not create artificial headroom
-- [ ] Task 5: Fix D -- Per-charger amp-change cooldown (AC: #5)
-  - [ ] Add `_last_amp_change_time` to `QSChargerGeneric`
-  - [ ] Set timestamp on amp change in `_ensure_correct_state`
-  - [ ] Skip budgeting in `dyn_handle` if cooldown not elapsed
-  - [ ] Add test: charger is skipped during cooldown period
+- [x] Task 1: Fix E -- Cap solver production amp budget by inverter limit (AC: #1)
+  - [x] Rename `get_home_max_static_phase_amps` -> `_get_home_max_production_phase_amps_for_budget`
+  - [x] Remove off-grid guard so `solar_max_phase_amps` always applies
+  - [x] Update call site at line 1244
+  - [x] Add test: production amp budget reflects inverter limit when on-grid
+- [x] Task 2: Fix A -- Cap battery discharge budget by inverter headroom (AC: #2)
+  - [x] Add inverter headroom cap at production cap check point (~line 1248)
+  - [x] Add test: battery discharge budget does not exceed inverter headroom
+- [x] Task 3: Fix B -- Limit green consign to 1-step increase (AC: #3)
+  - [x] Remove `CMD_AUTO_GREEN_CONSIGN` from `stop_on_first_change=False` block
+  - [x] Add test: green consign increases by at most 1 step per cycle
+- [x] Task 4: Fix C -- Add phantom surplus to home_load before production cap (AC: #4)
+  - [x] Add `phantom_surplus` to `home_load_power_value` before production cap check
+  - [x] Add test: transient dip does not create artificial headroom
+- [x] Task 5: Fix D -- Per-charger amp-change cooldown (AC: #5)
+  - [x] Add `_last_amp_change_time` to `QSChargerGeneric`
+  - [x] Set timestamp on amp change in `_ensure_correct_state`
+  - [x] Skip budgeting in `dyn_handle` if cooldown not elapsed
+  - [x] Add test: charger is skipped during cooldown period
 
 ## Technical Notes
 
@@ -206,6 +206,9 @@ Then use `adjusted_home_load` in place of `home_load_power_value` in the product
 
 ### Deferred: Person constraint `CMD_AUTO_FROM_CONSIGN` locking
 Issue 1 (Zoe at 19kW) is partially by design -- person constraints force fast charging. However, `CMD_AUTO_FROM_CONSIGN` locking `possible_amps` to only `[max]` prevents any dynamic budget reduction even when the deadline has passed. This is a separate issue to address after the oscillation fixes.
+
+### Review finding: `_reset_state_machine` must clear cooldown
+During code review, Cursor flagged that `_reset_state_machine()` did not clear `_last_amp_change_time`. A stale cooldown timer after reboot could block budgeting for up to 45s. Fixed by adding `self._last_amp_change_time = None` to `_reset_state_machine()`.
 
 ### Risk Assessment
 - Fix E is low risk, high impact -- single method rename + guard removal, only affects production budget path
