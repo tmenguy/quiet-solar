@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -131,18 +132,28 @@ CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
 
 
 def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str | None = None) -> str:
-    """Build the full claude launch command with terminal title and standard options."""
+    """Build a short launch command that delegates to a temp script.
+
+    The full command is written to a temp .sh file so that the returned
+    string is always a short ``bash /tmp/...`` one-liner safe for
+    copy-paste across terminals (no line-wrap issues).
+    """
     tab_title = f"QS_{issue}: {title}"
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
-    cmd = (
+    full_cmd = (
         f"printf '\\033]0;%s\\007' {safe_title} && "
         f"cd {safe_dir} && "
         f"claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}"
     )
     if prompt is not None:
-        cmd += f' {shlex.quote(prompt)}'
-    return cmd
+        full_cmd += f' {shlex.quote(prompt)}'
+
+    script_path = Path(tempfile.gettempdir()) / f"qs_launch_{issue}.sh"
+    script_path.write_text(f"#!/usr/bin/env bash\n{full_cmd}\n")
+    script_path.chmod(0o755)
+
+    return f"bash {script_path}"
 
 
 def detect_risk_level(changed_files: list[str]) -> list[str]:
