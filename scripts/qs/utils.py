@@ -152,7 +152,7 @@ def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str 
     """Build a short launch command that delegates to a temp script.
 
     The full command is written to a temp .sh file so that the returned
-    string is always a short ``bash /tmp/...`` one-liner safe for
+    string is always a short ``sh /tmp/...`` one-liner safe for
     copy-paste across terminals (no line-wrap issues).
     """
     tab_title = f"QS_{issue}: {title}"
@@ -184,7 +184,7 @@ def build_next_step(
     """Build tool-appropriate next-step instructions.
 
     Returns a dict with keys: same_context, new_context, tool.
-    - For Claude Code: new_context is a bash launch script path.
+    - For Claude Code: new_context is a sh launch script path.
     - For Cursor: new_context is human-readable instructions to open a
       new Cursor workspace at the worktree and run the skill.
     """

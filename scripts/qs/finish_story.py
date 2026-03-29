@@ -57,25 +57,31 @@ def merge_pr(pr_number: int) -> dict:
 
 
 def cleanup_worktree(issue_number: int) -> dict:
-    """Clean up worktree and local branch."""
+    """Clean up worktree, local branch, and remote branch."""
     main_dir = get_main_worktree()
+    branch = f"QS_{issue_number}"
     cleanup_script = main_dir / "scripts" / "worktree-cleanup.sh"
 
-    if not cleanup_script.exists():
-        return {"cleaned": False, "detail": "cleanup script not found"}
+    if cleanup_script.exists():
+        result = subprocess.run(
+            ["bash", str(cleanup_script), str(issue_number)],
+            capture_output=True, text=True, cwd=str(main_dir),
+            input="\n",  # Auto-confirm any prompts
+        )
+        if result.returncode != 0:
+            # Worktree might not exist (no-worktree mode)
+            # Try deleting local branch directly
+            run_git(["branch", "-d", branch], check=False, cwd=str(main_dir))
+    else:
+        run_git(["branch", "-d", branch], check=False, cwd=str(main_dir))
 
-    result = subprocess.run(
-        ["bash", str(cleanup_script), str(issue_number)],
-        capture_output=True, text=True, cwd=str(main_dir),
-        input="\n",  # Auto-confirm any prompts
+    # Always delete remote branch after merge
+    remote_result = run_git(
+        ["push", "origin", "--delete", branch], check=False, cwd=str(main_dir),
     )
-    if result.returncode != 0:
-        # Worktree might not exist (no-worktree mode)
-        # Try deleting local branch directly
-        run_git(["branch", "-d", f"QS_{issue_number}"], check=False, cwd=str(main_dir))
-        return {"cleaned": True, "detail": "no worktree, deleted local branch"}
+    remote_deleted = remote_result.returncode == 0
 
-    return {"cleaned": True}
+    return {"cleaned": True, "remote_deleted": remote_deleted}
 
 
 def update_main() -> dict:
@@ -319,6 +325,18 @@ def phase_report(
     release suggestion, and recovery instructions on failure.
     """
     release = suggest_release(changed_files or [])
+    main_dir = str(get_main_worktree())
+
+    release_info: dict = {"suggestion": release}
+    if release == "release":
+        release_info["command"] = (
+            f"cd {main_dir} && claude --dangerously-skip-permissions"
+            f" --model opus --effort max '/release'"
+        )
+        release_info["instructions"] = (
+            f"Run from the main repo ({main_dir}):"
+            f"\n  cd {main_dir} && claude '/release'"
+        )
 
     if failed_phase:
         recovery_map = {
@@ -332,12 +350,14 @@ def phase_report(
             "steps": steps,
             "recovery": recovery_map.get(failed_phase, "Check the error details and retry"),
             "release_suggestion": release,
+            "release": release_info,
         }
 
     return {
         "success": True,
         "steps": steps,
         "release_suggestion": release,
+        "release": release_info,
     }
 
 

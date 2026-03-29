@@ -37,7 +37,7 @@ Worktree ready at {{worktree_path}}
 
 #### Tool-specific behavior
 
-- **Claude Code**: `new_context` is a bash script that opens a new Claude session in the worktree with the implement skill pre-loaded. The user copy-pastes it into a terminal.
+- **Claude Code**: `new_context` is a sh script that opens a new Claude session in the worktree with the implement skill pre-loaded. The user copy-pastes it into a terminal.
 - **Cursor**: `new_context` is a human-readable instruction to open the worktree folder as a new Cursor workspace. The user should: (1) File > Open Folder > select the worktree path, (2) type the skill command shown. Alternatively, the user can stay in the same window and use **Option B**.
 
 #### `--no-worktree` mode

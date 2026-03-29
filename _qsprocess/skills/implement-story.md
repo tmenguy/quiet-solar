@@ -105,4 +105,4 @@ Implementation complete. PR #{{pr_number}} created: {{url}}
   {{same_context}}
 ```
 
-For Cursor users, `new_context` will be instructions to open the worktree as a new workspace. For Claude Code, it will be a bash launch script. The user can also continue in the same session with **Option B**.
+For Cursor users, `new_context` will be instructions to open the worktree as a new workspace. For Claude Code, it will be a sh launch script. The user can also continue in the same session with **Option B**.
