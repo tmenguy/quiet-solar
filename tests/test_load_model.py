@@ -2580,8 +2580,8 @@ class TestPushLiveConstraint:
 
         assert result is True
 
-    def test_push_live_constraint_does_not_carry_current_value_on_target_change(self):
-        """Test that current_value is NOT carried when user changes the target."""
+    def test_push_live_constraint_carries_current_value_on_target_change(self):
+        """Test that current_value is carried when replacing constraint with different target."""
         load = self.create_load()
 
         existing = self.create_constraint(
@@ -2593,7 +2593,7 @@ class TestPushLiveConstraint:
         new_ct = self.create_constraint(
             load,
             datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
-            target_value=200.0,  # Different target = user changed goal
+            target_value=200.0,  # Different target
             current_value=0.0,
             from_user=True,
         )
@@ -2601,10 +2601,10 @@ class TestPushLiveConstraint:
         time_now = datetime.now(tz=pytz.UTC)
         load.push_live_constraint(time_now, new_ct)
 
-        # current_value should NOT be carried from old constraint (different target)
+        # current_value is carried from old constraint (capped at new target)
         pushed = [c for c in load._constraints if c is not None]
         assert len(pushed) == 1
-        assert pushed[0].current_value == 0.0
+        assert pushed[0].current_value == 80.0
 
     def test_push_live_constraint_carries_current_value_on_same_target(self):
         """Test that current_value IS carried when target matches (rebuild, not user change)."""
@@ -2631,8 +2631,8 @@ class TestPushLiveConstraint:
         assert len(pushed) == 1
         assert pushed[0].current_value == 50.0  # Carried from old
 
-    def test_disable_device_preserves_last_completed_constraint(self):
-        """Test that _last_completed_constraint is preserved when device is disabled."""
+    def test_disable_device_clears_last_completed_constraint(self):
+        """Test that _last_completed_constraint is cleared when device is disabled (reset)."""
         load = self.create_load()
         load._enabled = True
 
@@ -2643,8 +2643,8 @@ class TestPushLiveConstraint:
 
         load.qs_enable_device = False
 
-        # Completed constraint should be preserved for display during disable
-        assert load._last_completed_constraint is completed
+        # Reset clears completed constraint
+        assert load._last_completed_constraint is None
 
     def test_enable_device_clears_last_completed_constraint(self):
         """Test that _last_completed_constraint is cleared on re-enable (fresh start)."""
