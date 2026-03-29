@@ -19,8 +19,8 @@ from custom_components.quiet_solar.ha_model.home import (
     BUFFER_SIZE_IN_INTERVALS,
     FULL_HA_SENSOR_HOME_NON_CONTROLLED_CONSUMPTION_POWER,
     INTERVALS_MN,
-    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSHomeMode,
+    QSHomeSolarAndConsumptionHistoryAndForecast,
     QSSolarHistoryVals,
 )
 from custom_components.quiet_solar.home_model.home_utils import get_average_time_series

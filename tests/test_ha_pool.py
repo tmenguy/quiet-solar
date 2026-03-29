@@ -283,7 +283,6 @@ def test_pool_update_current_metrics_partial_completion():
 def test_pool_update_current_metrics_day_boundary_excludes_old():
     """Test that constraints outside the current day window are excluded."""
     from custom_components.quiet_solar.ha_model.pool import QSPool
-    from custom_components.quiet_solar.home_model.constraints import DATETIME_MIN_UTC
 
     now = datetime.now(tz=pytz.UTC)
     end_day = now + timedelta(hours=12)

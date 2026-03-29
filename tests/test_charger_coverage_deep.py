@@ -7153,9 +7153,7 @@ class TestGreenModeProductionCap:
 
         if battery_charge != 0:
             home.battery = SimpleNamespace(
-                get_current_battery_asked_change_for_outside_production_system=MagicMock(
-                    return_value=battery_charge
-                ),
+                get_current_battery_asked_change_for_outside_production_system=MagicMock(return_value=battery_charge),
             )
             home.battery_can_discharge = MagicMock(return_value=(battery_charge < 0))
 
@@ -7171,21 +7169,15 @@ class TestGreenModeProductionCap:
         # Budget should be at most 12000 - 2000 = 10000W
         group, cs, now = self._setup_green_charger(home_load=2000.0, max_prod=12000.0)
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
     async def test_green_budget_with_battery_discharge_boost(self):
         """Battery discharge boost still gets capped by production limit."""
-        group, cs, now = self._setup_green_charger(
-            home_load=2000.0, max_prod=12000.0, battery_charge=-3000.0
-        )
+        group, cs, now = self._setup_green_charger(home_load=2000.0, max_prod=12000.0, battery_charge=-3000.0)
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -7198,9 +7190,7 @@ class TestGreenModeProductionCap:
         group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
         group.get_budget_diffs = MagicMock(return_value=(0.0, [16.0, 0.0, 0.0], [16.0, 0.0, 0.0]))
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -7210,9 +7200,7 @@ class TestGreenModeProductionCap:
         # Remove home load power sensor data
         group.home.get_device_power_values = MagicMock(return_value=None)
 
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
 
@@ -7220,8 +7208,13 @@ class TestPhantomSurplus:
     """Tests for phantom surplus detection and budget correction (Task 4)."""
 
     def _setup_green_charger_with_phantom(
-        self, *, accurate_power=None, budgeted_amp=16, budgeted_phases=1,
-        home_load=2000.0, max_prod=12000.0,
+        self,
+        *,
+        accurate_power=None,
+        budgeted_amp=16,
+        budgeted_phases=1,
+        home_load=2000.0,
+        max_prod=12000.0,
     ):
         """Create a green charger with configurable accurate_current_power."""
         hass = _make_hass()
@@ -7266,7 +7259,9 @@ class TestPhantomSurplus:
         cs.accurate_current_power = accurate_power
 
         group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
-        group.get_budget_diffs = MagicMock(return_value=(0.0, [float(budgeted_amp), 0.0, 0.0], [float(budgeted_amp), 0.0, 0.0]))
+        group.get_budget_diffs = MagicMock(
+            return_value=(0.0, [float(budgeted_amp), 0.0, 0.0], [float(budgeted_amp), 0.0, 0.0])
+        )
 
         # Expected power: 230V * 16A * 1phase = 3680W
         return group, cs, now, car
@@ -7274,7 +7269,9 @@ class TestPhantomSurplus:
     def test_phantom_tier1_car_not_drawing(self):
         """Tier 1: per-charger sensor shows car not drawing — phantom detected."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=22.0, budgeted_amp=16, budgeted_phases=1,
+            accurate_power=22.0,
+            budgeted_amp=16,
+            budgeted_phases=1,
         )
         # Expected power at 16A/1ph = 230*16 = 3680W, actual = 22W
         phantom = group._compute_phantom_surplus([cs], current_real_cars_power=None)
@@ -7283,7 +7280,9 @@ class TestPhantomSurplus:
     def test_phantom_tier1_car_drawing_normally(self):
         """Tier 1: car drawing at expected level — phantom ~0, no false positive."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=3680.0, budgeted_amp=16, budgeted_phases=1,
+            accurate_power=3680.0,
+            budgeted_amp=16,
+            budgeted_phases=1,
         )
         phantom = group._compute_phantom_surplus([cs], current_real_cars_power=None)
         assert phantom == pytest.approx(0.0, abs=1.0)
@@ -7291,7 +7290,9 @@ class TestPhantomSurplus:
     def test_phantom_tier2_group_sensor(self):
         """Tier 2: no per-charger sensor, group sensor shows car not drawing."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=None, budgeted_amp=16, budgeted_phases=1,
+            accurate_power=None,
+            budgeted_amp=16,
+            budgeted_phases=1,
         )
         # Group sees only 50W, expected is 3680W
         phantom = group._compute_phantom_surplus([cs], current_real_cars_power=50.0)
@@ -7300,7 +7301,9 @@ class TestPhantomSurplus:
     def test_phantom_tier3_no_sensors(self):
         """Tier 3: no sensors at all — returns 0."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=None, budgeted_amp=16, budgeted_phases=1,
+            accurate_power=None,
+            budgeted_amp=16,
+            budgeted_phases=1,
         )
         phantom = group._compute_phantom_surplus([cs], current_real_cars_power=None)
         assert phantom == 0.0
@@ -7308,7 +7311,9 @@ class TestPhantomSurplus:
     def test_phantom_zero_budgeted_amp(self):
         """Charger with 0 budgeted amp should not contribute to phantom."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=0.0, budgeted_amp=0, budgeted_phases=1,
+            accurate_power=0.0,
+            budgeted_amp=0,
+            budgeted_phases=1,
         )
         phantom = group._compute_phantom_surplus([cs], current_real_cars_power=None)
         assert phantom == 0.0
@@ -7317,14 +7322,21 @@ class TestPhantomSurplus:
     async def test_phantom_surplus_reduces_green_budget(self):
         """Integration: phantom surplus is subtracted from green budget."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=22.0, budgeted_amp=16, budgeted_phases=1,
-            home_load=2000.0, max_prod=12000.0,
+            accurate_power=22.0,
+            budgeted_amp=16,
+            budgeted_phases=1,
+            home_load=2000.0,
+            max_prod=12000.0,
         )
         # Expected phantom = 3680 - 22 = 3658W
         # Budget starts at full_available_home_power (5000) - diff (0) = 5000
         # After phantom subtraction: 5000 - 3658 = 1342
         success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 5000.0, 5000.0, False, now,
+            [cs],
+            5000.0,
+            5000.0,
+            False,
+            now,
             current_real_cars_power=None,
         )
         assert success is True
@@ -7333,8 +7345,11 @@ class TestPhantomSurplus:
     async def test_phantom_no_effect_on_non_green(self):
         """Phantom surplus should NOT affect non-green charger budgets."""
         group, cs, now, car = self._setup_green_charger_with_phantom(
-            accurate_power=22.0, budgeted_amp=16, budgeted_phases=1,
-            home_load=2000.0, max_prod=12000.0,
+            accurate_power=22.0,
+            budgeted_amp=16,
+            budgeted_phases=1,
+            home_load=2000.0,
+            max_prod=12000.0,
         )
         # Switch to non-green command
         cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=3680)
@@ -7342,7 +7357,11 @@ class TestPhantomSurplus:
         group.get_budget_diffs = MagicMock(return_value=(0.0, [16.0, 0.0, 0.0], [16.0, 0.0, 0.0]))
 
         success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 5000.0, 5000.0, False, now,
+            [cs],
+            5000.0,
+            5000.0,
+            False,
+            now,
             current_real_cars_power=None,
         )
         assert success is True
@@ -7478,13 +7497,296 @@ class TestMultiChargerGreenCap:
         # Max allowable combined charger = 8000 - 2000 = 6000W
         # diff = 4600W, so initial budget is capped at 6000 - 4600 = 1400W
         group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs1, cs2], True, False))
-        group.get_budget_diffs = MagicMock(return_value=(0.0, [10.0, 0.0, 0.0, 10.0, 0.0, 0.0], [10.0, 0.0, 0.0, 10.0, 0.0, 0.0]))
+        group.get_budget_diffs = MagicMock(
+            return_value=(0.0, [10.0, 0.0, 0.0, 10.0, 0.0, 0.0], [10.0, 0.0, 0.0, 10.0, 0.0, 0.0])
+        )
 
         # Feed high surplus (15kW) — without cap this would ramp up both chargers
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs1, cs2], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs1, cs2], 15000.0, 15000.0, False, now)
         assert success is True
+
+
+class TestAmpChangeCooldown:
+    """Fix D: charger is skipped during amp-change cooldown period."""
+
+    async def test_charger_skipped_during_cooldown(self):
+        """Charger with recent amp change is excluded from budgeting."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        ch = _create_charger(hass, home, "CooldownCh")
+        car = _make_real_car(hass, home, name="CooldownCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        # Set last amp change to 10 seconds ago — within cooldown window
+        ch._last_amp_change_time = now - timedelta(seconds=10)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = 10
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=3680)
+        cs.is_before_battery = True
+        cs.accurate_current_power = 2300.0
+
+        vtime = now - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 10)
+        group.ensure_correct_state = AsyncMock(return_value=([cs], vtime))
+        group.dynamic_group.get_median_sensor = MagicMock(return_value=2300.0)
+        pv = [(now - timedelta(seconds=i), 5000.0) for i in range(10)]
+        home.get_available_power_values = MagicMock(return_value=pv)
+        home.get_grid_consumption_power_values = MagicMock(return_value=pv)
+
+        group.budgeting_algorithm_minimize_diffs = AsyncMock(return_value=(True, False, False))
+        group.apply_budget_strategy = AsyncMock()
+        await group.dyn_handle(now)
+
+        # Charger should be filtered out during cooldown — budgeting should NOT be called
+        group.budgeting_algorithm_minimize_diffs.assert_not_called()
+
+    async def test_charger_allowed_after_cooldown(self):
+        """Charger with expired cooldown is included in budgeting."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        ch = _create_charger(hass, home, "PostCoolCh")
+        car = _make_real_car(hass, home, name="PostCoolCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=10, num_phases=1)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        # Set last amp change to 60 seconds ago — beyond cooldown window (45s)
+        ch._last_amp_change_time = now - timedelta(seconds=60)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 10
+        cs.current_active_phase_number = 1
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        cs.possible_num_phases = [1]
+        cs.budgeted_amp = 10
+        cs.budgeted_num_phases = 1
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=3680)
+        cs.is_before_battery = True
+        cs.accurate_current_power = 2300.0
+
+        vtime = now - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 10)
+        group.ensure_correct_state = AsyncMock(return_value=([cs], vtime))
+        group.dynamic_group.get_median_sensor = MagicMock(return_value=2300.0)
+        pv = [(now - timedelta(seconds=i), 5000.0) for i in range(10)]
+        home.get_available_power_values = MagicMock(return_value=pv)
+        home.get_grid_consumption_power_values = MagicMock(return_value=pv)
+
+        group.budgeting_algorithm_minimize_diffs = AsyncMock(return_value=(True, False, False))
+        group.apply_budget_strategy = AsyncMock()
+        await group.dyn_handle(now)
+
+        # Charger cooldown expired — budgeting should be called
+        group.budgeting_algorithm_minimize_diffs.assert_called_once()
+
+
+class TestGreenConsignSingleStepIncrease:
+    """Fix B: green consign increases by at most 1 amp step per budget cycle."""
+
+    async def test_green_consign_single_step_increase(self):
+        """Green consign with large budget only increases by 1 step, not multi-step."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        ch = _create_charger(hass, home, "GreenStep")
+        car = _make_real_car(hass, home, name="GreenStepCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=8, num_phases=3)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 8
+        cs.current_active_phase_number = 3
+        cs.budgeted_amp = 8
+        cs.budgeted_num_phases = 3
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        cs.possible_num_phases = [3]
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=5520)
+        cs.is_before_battery = True
+
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
+        group.get_budget_diffs = MagicMock(return_value=(0.0, [8.0, 8.0, 8.0], [8.0, 8.0, 8.0]))
+
+        # Feed 8000W surplus — enough to jump multiple steps, but green should only go +1
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 8000.0, 8000.0, False, now)
+        assert success is True
+        # With stop_on_first_change=True for green, should only go from 8A to 9A
+        assert cs.budgeted_amp == 9
+
+
+class TestPhantomSurplusCorrectsHomeLoadForProductionCap:
+    """Fix C: phantom surplus added to home_load prevents transient dips from inflating budget."""
+
+    async def test_transient_dip_does_not_create_artificial_headroom(self):
+        """When charger drops power transiently, phantom surplus corrects home_load."""
+        hass = _make_hass()
+        # Production cap 12000W, but real home_load appears low (7000W) due to transient dip
+        # Without correction: headroom = 12000 - 7000 = 5000W (too generous)
+        # With phantom surplus of 3000W: headroom = 12000 - 10000 = 2000W (correct)
+        home = _make_home(battery=None, home_load_power=7000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        ch = _create_charger(hass, home, "PhantomCh")
+        car = _make_real_car(hass, home, name="PhantomCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=11, num_phases=3)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        # Charger reports near-zero power during transition (transient dip)
+        ch.get_median_sensor = MagicMock(return_value=100.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 11
+        cs.current_active_phase_number = 3
+        cs.budgeted_amp = 11
+        cs.budgeted_num_phases = 3
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        cs.possible_num_phases = [3]
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=7590)
+        cs.is_before_battery = True
+
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
+        group.get_budget_diffs = MagicMock(return_value=(0.0, [11.0, 11.0, 11.0], [11.0, 11.0, 11.0]))
+
+        # Feed modest surplus; phantom surplus correction should prevent overshooting
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 3000.0, 3000.0, False, now)
+        assert success is True
+        # With phantom surplus correction, budget is tighter — should not jump to max
+        assert cs.budgeted_amp <= 12
+
+
+class TestBatteryDischargeBudgetCappedByInverterHeadroom:
+    """Fix A: battery discharge budget must not exceed inverter headroom."""
+
+    async def test_battery_discharge_budget_capped_by_inverter_headroom(self):
+        """Battery discharge inflates budget beyond inverter capacity; cap prevents grid import."""
+        hass = _make_hass()
+        # Inverter max = 12000W, home_load = 9000W → headroom = 3000W
+        battery = MagicMock()
+        battery.get_current_battery_asked_change_for_outside_production_system = MagicMock(return_value=-3787.0)
+        home = _make_home(battery=battery, home_load_power=9000.0, max_production_power=12000.0)
+        home.battery_can_discharge = MagicMock(return_value=True)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        ch = _create_charger(hass, home, "HeadroomCh")
+        car = _make_real_car(hass, home, name="HeadroomCar", max_charge=32)
+        _init_charger_states(ch, charge_state=True, amperage=8, num_phases=3)
+        ch._do_update_charger_state = AsyncMock()
+        ch.is_charger_unavailable = MagicMock(return_value=False)
+        ch.is_not_plugged = MagicMock(return_value=False)
+        ch.is_charge_enabled = MagicMock(return_value=True)
+        ch.is_charge_disabled = MagicMock(return_value=False)
+        ch.get_median_sensor = MagicMock(return_value=500.0)
+        ch.get_current_active_constraint = MagicMock(return_value=None)
+        ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        ch._expected_charge_state.last_change_asked = past
+        ch._expected_charge_state._num_set = 2
+        ch._expected_num_active_phases.last_change_asked = past
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        _plug_car(ch, car, past)
+
+        group = _make_charger_group(home, [ch])
+        ch.father_device.charger_group = group
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = 8
+        cs.current_active_phase_number = 3
+        cs.budgeted_amp = 8
+        cs.budgeted_num_phases = 3
+        cs.possible_amps = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        cs.possible_num_phases = [3]
+        cs.charge_score = 200
+        cs.can_be_started_and_stopped = True
+        cs.command = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=5520)
+        cs.is_before_battery = True
+
+        group._do_prepare_and_shave_budgets = AsyncMock(return_value=([cs], True, False))
+        group.get_budget_diffs = MagicMock(return_value=(0.0, [8.0, 8.0, 8.0], [8.0, 8.0, 8.0]))
+
+        # Feed 5000W surplus — battery discharge would inflate budget to ~8787W
+        # but inverter headroom is only 3000W (12000 - 9000)
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 5000.0, 5000.0, False, now)
+        assert success is True
+        # Budget should be capped — charger should NOT jump to max
+        assert cs.budgeted_amp <= 12
 
 
 class TestPhantomSurplusTier2BelowThreshold:
@@ -7593,18 +7895,14 @@ class TestGreenModeProductionCapBranches:
     async def test_dynamic_cap_only(self):
         """Line 1230: only dynamic_cap available, static_cap is None."""
         group, cs, now = self._setup(dynamic_cap=8000.0, static_cap=None)
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
     async def test_static_cap_only(self):
         """Line 1232: only static_cap available, dynamic_cap is None."""
         group, cs, now = self._setup(dynamic_cap=None, static_cap=9000.0)
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True
 
     @pytest.mark.asyncio
@@ -7612,7 +7910,5 @@ class TestGreenModeProductionCapBranches:
         """Lines 1235-1237: both caps None, fallback to solar_plant max output."""
         plant = SimpleNamespace(solar_max_output_power_value=6000.0)
         group, cs, now = self._setup(dynamic_cap=None, static_cap=None, solar_plant=plant)
-        success, _, _ = await group.budgeting_algorithm_minimize_diffs(
-            [cs], 15000.0, 15000.0, False, now
-        )
+        success, _, _ = await group.budgeting_algorithm_minimize_diffs([cs], 15000.0, 15000.0, False, now)
         assert success is True

@@ -2409,10 +2409,7 @@ def _make_3p_load_with_production_budget(
 
 def _make_3p_power_steps(min_a: int = 6, max_a: int = 32) -> list[LoadCommand]:
     """Create power steps for a 3-phase charger at 230V."""
-    return [
-        copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 3 * 230)
-        for a in range(min_a, max_a + 1)
-    ]
+    return [copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 3 * 230) for a in range(min_a, max_a + 1)]
 
 
 def test_adapt_power_steps_budgeting_uses_production_limits():
@@ -2437,19 +2434,13 @@ def test_adapt_power_steps_budgeting_uses_production_limits():
     load.push_live_constraint(time, constraint)
 
     # With production limits: should cap to <= 17A/phase = 11,730W
-    capped_cmds = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, use_production_limits=True
-    )
+    capped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, use_production_limits=True)
     if capped_cmds:
         max_power = max(c.power_consign for c in capped_cmds)
-        assert max_power <= 17 * 3 * 230, (
-            f"Production-limited power {max_power}W exceeds 17A*3*230={17*3*230}W"
-        )
+        assert max_power <= 17 * 3 * 230, f"Production-limited power {max_power}W exceeds 17A*3*230={17 * 3 * 230}W"
 
     # Without production limits: should allow up to 32A/phase = 22,080W
-    uncapped_cmds = constraint.adapt_power_steps_budgeting_low_level(
-        slot_idx=0, use_production_limits=False
-    )
+    uncapped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, use_production_limits=False)
     assert len(uncapped_cmds) == len(steps), "All steps should be available with consumption limits"
 
 
@@ -2500,8 +2491,7 @@ def test_adapt_repartition_green_consign_capped_by_production():
     for i, cmd in enumerate(out_commands):
         if cmd is not None and cmd.power_consign > 0:
             assert cmd.power_consign <= max_prod_power, (
-                f"Slot {i}: green consign {cmd.power_consign}W exceeds "
-                f"production limit {max_prod_power}W"
+                f"Slot {i}: green consign {cmd.power_consign}W exceeds production limit {max_prod_power}W"
             )
 
 
@@ -2512,10 +2502,7 @@ def test_adapt_repartition_non_auto_exceeds_production_limit():
         production_amps_per_phase=1.0,  # remaining after 16A existing
         consumption_amps_per_phase=16.0,  # remaining after 16A existing
     )
-    steps = [
-        LoadCommand(command="on", power_consign=a * 3 * 230)
-        for a in range(6, 33)
-    ]
+    steps = [LoadCommand(command="on", power_consign=a * 3 * 230) for a in range(6, 33)]
     time = datetime.now(pytz.UTC)
 
     constraint = MultiStepsPowerLoadConstraint(
@@ -2554,6 +2541,5 @@ def test_adapt_repartition_non_auto_exceeds_production_limit():
 
     max_prod_power = 17 * 3 * 230  # effective production limit
     assert max_power > max_prod_power, (
-        f"Non-auto constraint should exceed production limit "
-        f"({max_prod_power}W), but max was {max_power}W"
+        f"Non-auto constraint should exceed production limit ({max_prod_power}W), but max was {max_power}W"
     )

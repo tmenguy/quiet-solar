@@ -54,7 +54,9 @@ def test_phase_prepare_with_changes(monkeypatch, tmp_path):
         "git diff --cached": {"stdout": "scripts/qs/utils.py\n"},
         "git commit": {"returncode": 0},
         "git push": {"returncode": 0},
-        "gh pr list": {"stdout": json.dumps([{"number": 10, "url": "https://github.com/org/repo/pull/10", "state": "OPEN"}])},
+        "gh pr list": {
+            "stdout": json.dumps([{"number": 10, "url": "https://github.com/org/repo/pull/10", "state": "OPEN"}])
+        },
     }
     monkeypatch.setattr(subprocess, "run", _make_run(responses))
 
@@ -271,7 +273,9 @@ def test_phase_merge_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", _make_run(responses))
 
     monkeypatch.setattr("finish_story.resolve_story_file_to_main", lambda f: str(story_file))
-    monkeypatch.setattr("finish_story.commit_housekeeping", lambda k: {"committed": True, "pushed": True, "files": ["story.md"]})
+    monkeypatch.setattr(
+        "finish_story.commit_housekeeping", lambda k: {"committed": True, "pushed": True, "files": ["story.md"]}
+    )
     monkeypatch.setattr("finish_story.cleanup_worktree", lambda n: {"cleaned": True})
     monkeypatch.setattr("finish_story.update_epics", lambda k, **kw: {"updated": True})
 
@@ -390,7 +394,9 @@ def test_phase_merge_cleanup_runs_last_even_on_partial_failure(monkeypatch, tmp_
     monkeypatch.setattr("finish_story.update_story_status", lambda f, s: {"updated": False, "detail": "file not found"})
     monkeypatch.setattr("finish_story.update_epics", lambda k, **kw: {"updated": False, "detail": "not found"})
     monkeypatch.setattr("finish_story.commit_housekeeping", lambda k: {"committed": False, "detail": "no changes"})
-    monkeypatch.setattr("finish_story.cleanup_worktree", lambda n: (execution_order.append("cleanup"), {"cleaned": True})[1])
+    monkeypatch.setattr(
+        "finish_story.cleanup_worktree", lambda n: (execution_order.append("cleanup"), {"cleaned": True})[1]
+    )
 
     result = phase_merge(
         pr_number=10,

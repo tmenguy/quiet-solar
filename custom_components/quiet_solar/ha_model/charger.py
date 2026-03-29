@@ -911,14 +911,39 @@ class QSChargerGroup:
                 ):
                     allow_budget_reset = True
 
-                success, should_do_reset_allocation, done_reset_budget = await self.budgeting_algorithm_minimize_diffs(
-                    actionable_chargers,
-                    full_available_home_power,
-                    grid_available_home_power,
-                    allow_budget_reset,
-                    time,
-                    current_real_cars_power=current_real_cars_power,
-                )
+                # Fix D: filter out chargers in amp-change cooldown period
+                budget_chargers = []
+                for cs in actionable_chargers:
+                    if (
+                        cs.charger._last_amp_change_time is not None
+                        and (time - cs.charger._last_amp_change_time).total_seconds() < CHARGER_ADAPTATION_WINDOW_S
+                    ):
+                        _LOGGER.info(
+                            "dyn_handle: skipping %s for budgeting, amp change cooldown (%ss since last change)",
+                            cs.name,
+                            (time - cs.charger._last_amp_change_time).total_seconds(),
+                        )
+                    else:
+                        budget_chargers.append(cs)
+
+                if len(budget_chargers) == 0:
+                    _LOGGER.info("dyn_handle: all chargers in cooldown, skipping budgeting")
+                    success = False
+                    should_do_reset_allocation = False
+                    done_reset_budget = False
+                else:
+                    (
+                        success,
+                        should_do_reset_allocation,
+                        done_reset_budget,
+                    ) = await self.budgeting_algorithm_minimize_diffs(
+                        budget_chargers,
+                        full_available_home_power,
+                        grid_available_home_power,
+                        allow_budget_reset,
+                        time,
+                        current_real_cars_power=current_real_cars_power,
+                    )
                 if done_reset_budget:
                     self._last_time_reset_budget_done = time
                     self._last_time_should_reset_budget_received = None
@@ -1245,6 +1270,29 @@ class QSChargerGroup:
                     home_max_available_production_power,
                 )
 
+        # Fix C: correct home_load for transient charger power dips before production cap checks
+        if home_load_power_value is not None and phantom_surplus > 0:
+            home_load_power_value += phantom_surplus
+            _LOGGER.debug(
+                "budgeting: adjusted home_load by phantom surplus %sW, corrected home_load %sW",
+                phantom_surplus,
+                home_load_power_value,
+            )
+
+        # Fix A: cap battery-discharge portion of budget by actual inverter headroom
+        if home_load_power_value is not None and home_max_available_production_power is not None:
+            inverter_headroom = max(0, home_max_available_production_power - home_load_power_value)
+            if initial_power_budget > inverter_headroom:
+                _LOGGER.info(
+                    "budgeting: capping battery-discharge budget %sW to inverter headroom %sW "
+                    "(production_cap %sW, home_load %sW)",
+                    initial_power_budget,
+                    inverter_headroom,
+                    home_max_available_production_power,
+                    home_load_power_value,
+                )
+                initial_power_budget = inverter_headroom
+
         if home_load_power_value is not None and home_max_available_production_power is not None:
             # For green mode chargers, ensure total home consumption stays within production limits
 
@@ -1345,9 +1393,7 @@ class QSChargerGroup:
                         increase = True
                         stop_on_first_change = True
 
-                    if do_reset_allocation or cs.command.is_like_one_of_cmds(
-                        [CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]
-                    ):
+                    if do_reset_allocation or cs.command.is_like_one_of_cmds([CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]):
                         stop_on_first_change = False
 
                     if (increase is False and power_budget - global_diff_power >= 0) or (
@@ -1942,6 +1988,8 @@ class QSChargerGroup:
                     )
 
             if new_amp is not None:
+                if new_amp != init_amp:
+                    cs.charger._last_amp_change_time = time
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
             if new_num_phases is not None:
@@ -1989,6 +2037,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._last_charger_state_prob_time = None
 
         self._asked_for_reboot_at_time: datetime | None = None
+        self._last_amp_change_time: datetime | None = None
 
         self.minimum_reboot_duration_s = CHARGER_MIN_REBOOT_DURATION_S
 

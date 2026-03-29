@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
@@ -44,7 +44,6 @@ from tests.factories import (
     create_charge_percent_constraint,
     create_minimal_home_model,
 )
-
 
 # =============================================================================
 # Test Helpers
@@ -227,9 +226,7 @@ class TestAsapConstraintRealizedChargeTarget(unittest.IsolatedAsyncioTestCase):
 
         # No best-effort (filler) constraint should be pushed when ASAP target >= car_default_charge
         filler_pushes = [
-            c
-            for c in push_calls
-            if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
+            c for c in push_calls if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
         ]
         assert filler_pushes == [], (
             f"Best-effort constraint should NOT be pushed when ASAP target >= car_default_charge, "
@@ -285,9 +282,7 @@ class TestAsapConstraintRealizedChargeTarget(unittest.IsolatedAsyncioTestCase):
 
         # Best-effort SHOULD be pushed to top up from 75% to 100%
         filler_pushes = [
-            c
-            for c in push_calls
-            if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
+            c for c in push_calls if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
         ]
         assert len(filler_pushes) > 0, "Best-effort should be pushed when ASAP target < car_default_charge"
         # The filler should start from the ASAP target (75%), not from car_initial_value (70%)
@@ -650,9 +645,7 @@ class TestNormalChargingFlowRegression(unittest.IsolatedAsyncioTestCase):
 
         # Should have a filler/best-effort push
         filler_pushes = [
-            c
-            for c in push_calls
-            if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
+            c for c in push_calls if c._type in (CONSTRAINT_TYPE_FILLER, CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN)
         ]
         assert len(filler_pushes) > 0, "Best-effort should be created when no constraint exists"
 

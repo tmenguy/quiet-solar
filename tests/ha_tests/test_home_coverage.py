@@ -591,7 +591,9 @@ async def test_home_compute_non_controlled_forecast(
 
     time = datetime.now(tz=pytz.UTC)
 
-    with patch.object(home.solar_and_consumption_forecast, "init_forecasts", new_callable=AsyncMock, return_value=False):
+    with patch.object(
+        home.solar_and_consumption_forecast, "init_forecasts", new_callable=AsyncMock, return_value=False
+    ):
         result = await home.compute_non_controlled_forecast(time)
     assert isinstance(result, list)
 
