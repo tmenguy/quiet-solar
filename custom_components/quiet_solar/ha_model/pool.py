@@ -61,23 +61,30 @@ class QSPool(QSOnOffDuration):
         duration_s = 0.0
         run_s = 0.0
 
-        ct_to_probe = []
-        if self._last_completed_constraint is not None:
-            ct_to_probe.append(self._last_completed_constraint)
-        if self._constraints:
-            ct_to_probe.extend(self._constraints)
+        if end_day is not None:
+            # DST-safe: compute previous day boundary via local time, not raw 24h offset
+            start_day = self.get_next_time_from_hours(
+                local_hours=end_range,
+                time_utc_now=end_day - timedelta(hours=26),
+                output_in_utc=True,
+            )
 
-        # keep only the one for the current day
-        for ct in ct_to_probe:
-            if ct.end_of_constraint <= end_day or (
-                ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
-            ):
-                if ct.end_of_constraint > end_day - timedelta(hours=24) or (
-                    ct.start_of_constraint != DATETIME_MIN_UTC
-                    and ct.start_of_constraint > end_day - timedelta(hours=24)
+            ct_to_probe = []
+            if self._constraints:
+                ct_to_probe.extend(self._constraints)
+            elif self._last_completed_constraint is not None:
+                ct_to_probe.append(self._last_completed_constraint)
+
+            # keep only the one for the current day
+            for ct in ct_to_probe:
+                if ct.end_of_constraint <= end_day or (
+                    ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
                 ):
-                    duration_s += ct.target_value
-                    run_s += ct.current_value
+                    if ct.end_of_constraint > start_day or (
+                        ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint > start_day
+                    ):
+                        duration_s += ct.target_value
+                        run_s += ct.current_value
 
         self.qs_bistate_current_on_h = run_s / 3600.0
         self.qs_bistate_current_duration_h = duration_s / 3600.0

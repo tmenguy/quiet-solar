@@ -96,7 +96,8 @@ class QsPoolCard extends HTMLElement {
       
       // Get target hours and current run hours directly (in hours)
       const maxHours = 24;
-      const targetHours = Number(sDurationLimit?.state || 12);
+      const rawTarget = sDurationLimit ? Number(sDurationLimit.state) : null;
+      const targetHours = (rawTarget != null && !Number.isNaN(rawTarget)) ? rawTarget : 0;
       const hoursRun = Number(sCurrentDailyRunDuration?.state || 0);
       
       // Determine if pool is running (command state must be "on")
@@ -214,10 +215,12 @@ class QsPoolCard extends HTMLElement {
       const progressPct = hoursToPct(hoursRun);
       const progressEndDeg = pctToDeg(progressPct);
       
-      // Handle: target hours (only show if enabled and valid)
-      const hasValidTarget = isEnabled && targetHours > 0;
-      const handlePct = this._targetDragPct != null ? this._targetDragPct : 
-                        (this._localTargetPct != null ? this._localTargetPct : hoursToPct(targetHours));
+      // Handle: target hours (always show when enabled so user can drag from 0)
+      const hasValidTarget = isEnabled;
+      const handleTargetHours = targetHours > 0 ? targetHours
+          : (sDefaultOnDuration ? Number(sDefaultOnDuration.state) || 0 : 0);
+      const handlePct = this._targetDragPct != null ? this._targetDragPct :
+                        (this._localTargetPct != null ? this._localTargetPct : hoursToPct(handleTargetHours));
       const handleDeg = pctToDeg(handlePct);
       
       const center = {cx: 160, cy: 160};
@@ -443,6 +446,14 @@ class QsPoolCard extends HTMLElement {
       if (e.reset) {
           const resetBtn = ids('reset');
           const resetAction = async () => {
+              // Clear any stale drag/local target state before reset
+              this._localTargetPct = null;
+              this._targetDragPct = null;
+              this._targetDragValue = null;
+              if (this._pendingClearLocalTarget) {
+                  clearTimeout(this._pendingClearLocalTarget);
+                  this._pendingClearLocalTarget = null;
+              }
               showDialog({
                   title: 'Reset pool state',
                   message: 'This will reset internal state for the pool and cannot be undone.\nProceed?',
@@ -570,7 +581,9 @@ class QsPoolCard extends HTMLElement {
               this._targetDragValue = null;
               this._isInteractingTarget = false;
               this._upInProgress = false;
-              handle.style.cursor = 'grab';
+              // Re-render to pick up any hass updates skipped during interaction
+              // (don't touch handle.style — the DOM node may be detached after render)
+              this._render();
           };
 
           if (window.PointerEvent) {
