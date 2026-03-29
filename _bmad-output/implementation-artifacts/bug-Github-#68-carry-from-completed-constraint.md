@@ -2,7 +2,7 @@
 
 issue: 68
 branch: "QS_68"
-Status: ready
+Status: done
 
 ## Story
 
@@ -57,12 +57,9 @@ Insert between the identity check `return False` (L1329) and the active constrai
 
 No other production lines change.
 
-### 2. Fix stale test assertions in `tests/test_load_model.py`
+### 2. ~Fix stale test assertions~ (not needed)
 
-Two tests added by the QS_64 branch assert behavior of reverted `load.py` changes:
-
-1. **`test_push_live_constraint_does_not_carry_current_value_on_target_change`** -- asserts `current_value == 0.0` but the original code carries it (`80.0`). Carry between active constraints is correct (physical runtime happened). Update assertion to `80.0`.
-2. **`test_disable_device_preserves_last_completed_constraint`** -- asserts completed constraint is preserved on disable, but `reset()` correctly wipes everything. Update assertion to `None`.
+The two tests mentioned in the original plan already have correct assertions in the current codebase. No changes required.
 
 ### 3. Add new test for carry-from-completed scenario
 

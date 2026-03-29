@@ -2661,6 +2661,110 @@ class TestPushLiveConstraint:
         # On re-enable, reset should clear the completed constraint
         assert load._last_completed_constraint is None
 
+    def test_push_live_constraint_carries_from_completed_extend(self):
+        """Test extending a completed constraint carries current_value."""
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 23, 59, tzinfo=pytz.UTC)
+
+        # Simulate completed 4h constraint
+        completed = self.create_constraint(
+            load, end_time, target_value=14400.0, current_value=14400.0
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        # User extends to 7h — new constraint with higher target, same end date
+        new_ct = self.create_constraint(
+            load, end_time, target_value=25200.0, current_value=0.0
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        result = load.push_live_constraint(time_now, new_ct)
+
+        assert result is True
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        # current_value carried from completed (4h), not zero
+        assert pushed[0].current_value == 14400.0
+
+    def test_push_live_constraint_carries_from_completed_reduce(self):
+        """Test reducing below completed caps current_value at new target.
+
+        When current_value == target_value the constraint is immediately met,
+        so set_live_constraints removes it from _constraints.  Verify the carry
+        itself happened by checking the constraint object before it gets pruned.
+        """
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 23, 59, tzinfo=pytz.UTC)
+
+        completed = self.create_constraint(
+            load, end_time, target_value=14400.0, current_value=14400.0
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        # User reduces to 3h — new target < completed current_value
+        new_ct = self.create_constraint(
+            load, end_time, target_value=10800.0, current_value=0.0
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        result = load.push_live_constraint(time_now, new_ct)
+
+        assert result is True
+        # Carry capped at new target: min(14400, 10800) = 10800
+        assert new_ct.current_value == 10800.0
+        # Constraint is immediately met so set_live_constraints prunes it
+        assert load._constraints == []
+
+    def test_push_live_constraint_no_carry_from_completed_different_end(self):
+        """Test no carry when completed constraint has different end date."""
+        load = self.create_load()
+
+        completed = self.create_constraint(
+            load,
+            datetime(2026, 1, 21, 23, 59, tzinfo=pytz.UTC),  # Yesterday
+            target_value=14400.0,
+            current_value=14400.0,
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        new_ct = self.create_constraint(
+            load,
+            datetime(2026, 1, 22, 23, 59, tzinfo=pytz.UTC),  # Today
+            target_value=25200.0,
+            current_value=0.0,
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        load.push_live_constraint(time_now, new_ct)
+
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        # No carry — different end dates, different day cycle
+        assert pushed[0].current_value == 0.0
+
+    def test_push_live_constraint_no_carry_when_no_completed(self):
+        """Test no carry when _last_completed_constraint is None."""
+        load = self.create_load()
+        load._last_completed_constraint = None
+        load._constraints = []
+
+        new_ct = self.create_constraint(
+            load,
+            datetime(2026, 1, 22, 23, 59, tzinfo=pytz.UTC),
+            target_value=25200.0,
+            current_value=0.0,
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        load.push_live_constraint(time_now, new_ct)
+
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 0.0
+
 
 # =============================================================================
 # Test update_live_constraints

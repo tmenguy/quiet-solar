@@ -1328,6 +1328,22 @@ class AbstractLoad(AbstractDevice):
                 )
                 return False
 
+            # Carry current_value from completed constraint for same day cycle
+            # so that extending a completed target preserves accumulated runtime
+            if (
+                self._last_completed_constraint is not None
+                and type(self._last_completed_constraint) == type(constraint)
+                and self._last_completed_constraint.current_value > constraint.current_value
+                and (
+                    self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
+                    or self._last_completed_constraint.initial_end_of_constraint == constraint.end_of_constraint
+                )
+            ):
+                constraint.current_value = min(
+                    self._last_completed_constraint.current_value,
+                    constraint.target_value,
+                )
+
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):
                     c.carry_info_from_other_constraint(constraint)
