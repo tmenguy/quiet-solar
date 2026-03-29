@@ -4054,11 +4054,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         return result
 
     def is_charging_power_zero(self, time: datetime, for_duration: float) -> bool | None:
-        """Check if charging power is zero, with group sensor fallback."""
-        val = self.get_average_power(for_duration, time, use_fallback_command=False)
-        if val is not None:
-            return self.dampening_power_value_for_car_consumption(val) == 0.0
-
+        """Check if charging power is zero, preferring group sensor when eligible."""
         if self._can_use_group_power_sensor():
             father_is_zero = self.is_charger_group_power_zero(time=time, for_duration=for_duration)
             if father_is_zero is True:
@@ -4071,6 +4067,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 if not other_charger_charging:
                     return False
+
+        val = self.get_average_power(for_duration, time, use_fallback_command=False)
+        if val is not None:
+            return self.dampening_power_value_for_car_consumption(val) == 0.0
 
         return None
 
