@@ -150,10 +150,10 @@ def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str 
         full_cmd += f' {shlex.quote(prompt)}'
 
     script_path = Path(tempfile.gettempdir()) / f"qs_launch_{issue}.sh"
-    script_path.write_text(f"#!/usr/bin/env bash\n{full_cmd}\n")
+    script_path.write_text(f"#!/bin/sh\n{full_cmd}\n")
     script_path.chmod(0o755)
 
-    return f"bash {script_path}"
+    return str(script_path)
 
 
 def detect_risk_level(changed_files: list[str]) -> list[str]:
