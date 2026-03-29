@@ -33,40 +33,49 @@ def _import_utils():
 class TestClaudeLaunchCommand:
     """Tests for claude_launch_command() in utils.py."""
 
+    def _read_script(self, script_path: str) -> str:
+        """Read the generated launch script contents."""
+        from pathlib import Path
+
+        return Path(script_path).read_text()
+
     def test_without_prompt_unchanged(self):
-        """Existing behavior: no prompt arg produces command without positional arg."""
+        """No prompt arg produces script without positional arg."""
         utils = _import_utils()
-        cmd = utils.claude_launch_command("/tmp/work", 42, "Fix bug")
-        assert "claude" in cmd
-        assert "/tmp/work" in cmd
-        assert "QS_42" in cmd
+        script_path = utils.claude_launch_command("/tmp/work", 42, "Fix bug")
+        contents = self._read_script(script_path)
+        assert "claude" in contents
+        assert "/tmp/work" in contents
+        assert "QS_42" in contents
         # Should NOT contain a trailing quoted prompt
-        assert cmd.endswith(f"--name {__import__('shlex').quote('QS_42: Fix bug')}")
+        assert contents.strip().endswith(f"--name {__import__('shlex').quote('QS_42: Fix bug')}")
 
     def test_with_prompt_appended(self):
-        """When prompt is provided, it is appended as quoted positional arg."""
+        """When prompt is provided, it is appended in the script."""
         utils = _import_utils()
-        cmd = utils.claude_launch_command("/tmp/work", 42, "Fix bug", prompt="/review-story --pr 5")
-        assert "claude" in cmd
+        script_path = utils.claude_launch_command("/tmp/work", 42, "Fix bug", prompt="/review-story --pr 5")
+        contents = self._read_script(script_path)
+        assert "claude" in contents
         # The prompt should appear at the end, properly quoted
-        assert "'/review-story --pr 5'" in cmd or '"/review-story --pr 5"' in cmd
+        assert "'/review-story --pr 5'" in contents or '"/review-story --pr 5"' in contents
 
     def test_with_prompt_none_same_as_without(self):
         """Passing prompt=None is identical to not passing prompt."""
         utils = _import_utils()
-        cmd_without = utils.claude_launch_command("/tmp/work", 42, "Fix bug")
-        cmd_none = utils.claude_launch_command("/tmp/work", 42, "Fix bug", prompt=None)
-        assert cmd_without == cmd_none
+        path_without = utils.claude_launch_command("/tmp/work", 42, "Fix bug")
+        path_none = utils.claude_launch_command("/tmp/work", 42, "Fix bug", prompt=None)
+        assert self._read_script(path_without) == self._read_script(path_none)
 
     def test_prompt_with_special_characters(self):
         """Prompt with special shell characters is properly escaped."""
         utils = _import_utils()
-        cmd = utils.claude_launch_command(
+        script_path = utils.claude_launch_command(
             "/tmp/work", 42, "Fix bug", prompt='/implement-story --issue 42 --story-file "path with spaces"'
         )
+        contents = self._read_script(script_path)
         # Should not raise and should contain escaped content
-        assert "claude" in cmd
-        assert "implement-story" in cmd
+        assert "claude" in contents
+        assert "implement-story" in contents
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +96,13 @@ class TestNextStep:
         )
         assert result.returncode == 0, f"next_step.py failed: {result.stderr}"
         return json.loads(result.stdout)
+
+    def _read_new_context_script(self, data: dict) -> str:
+        """Read the launch script pointed to by new_context."""
+        from pathlib import Path
+
+        path = data["new_context"]
+        return Path(path).read_text()
 
     def test_review_story_transition(self):
         """Generate next-step for implement -> review transition."""
@@ -109,7 +125,8 @@ class TestNextStep:
         assert "/review-story" in data["same_context"]
         assert "--pr 5" in data["same_context"]
         assert "--issue 42" in data["same_context"]
-        assert "claude" in data["new_context"]
+        script = self._read_new_context_script(data)
+        assert "claude" in script
 
     def test_implement_story_transition(self):
         """Generate next-step for setup -> implement transition."""
@@ -130,7 +147,8 @@ class TestNextStep:
         assert "/implement-story" in data["same_context"]
         assert "--issue 42" in data["same_context"]
         assert "--story-file path/to/story.md" in data["same_context"]
-        assert "claude" in data["new_context"]
+        script = self._read_new_context_script(data)
+        assert "claude" in script
 
     def test_finish_story_transition(self):
         """Generate next-step for review -> finish transition."""
@@ -151,10 +169,11 @@ class TestNextStep:
         assert "/finish-story" in data["same_context"]
         assert "--pr 5" in data["same_context"]
         assert "--story-key 3.2" in data["same_context"]
-        assert "claude" in data["new_context"]
+        script = self._read_new_context_script(data)
+        assert "claude" in script
         # No --issue provided; tab title should use PR number, not 0
-        assert "QS_5" in data["new_context"]
-        assert "QS_0" not in data["new_context"]
+        assert "QS_5" in script
+        assert "QS_0" not in script
 
     def test_missing_required_args(self):
         """Missing --skill should fail."""
