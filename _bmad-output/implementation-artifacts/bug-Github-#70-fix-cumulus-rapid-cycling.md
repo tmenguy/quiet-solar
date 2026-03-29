@@ -1,6 +1,6 @@
 # Story: Fix cumulus rapid cycling caused by filler-constraint infinite loop and bistate metrics reset
 
-Status: draft
+Status: done
 
 issue: 70
 branch: "QS_70"
@@ -49,20 +49,20 @@ The solver running every 7 seconds generates new plans each time. Under marginal
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Skip filler constraint when already met (AC: #1)
-  - [ ] 1.1 In `charger.py` at line ~3670, after `target_charge = max_target_charge`, add guard: `if realized_charge_target >= target_charge: type = None`
-  - [ ] 1.2 Add unit test: fully-charged car plugged in does not push filler constraint
-  - [ ] 1.3 Add unit test: partially-charged car still pushes filler constraint as before
+- [x] Task 1: Skip filler constraint when already met (AC: #1)
+  - [x] 1.1 In `charger.py` at line ~3670, after `target_charge = max_target_charge`, add guard: `if realized_charge_target >= target_charge: type = None`
+  - [x] 1.2 Add unit test: fully-charged car plugged in does not push filler constraint
+  - [x] 1.3 Add unit test: partially-charged car still pushes filler constraint as before
 
-- [ ] Task 2: Bistate metrics fallback to completed constraint (AC: #2)
-  - [ ] 2.1 In `bistate_duration.py` `update_current_metrics`, add `end_range` parameter handling matching pool.py pattern
-  - [ ] 2.2 Build `ct_to_probe` list: extend with `_constraints`, elif fallback to `_last_completed_constraint`
-  - [ ] 2.3 Filter by current day window (start_day to end_day) before accumulating metrics
-  - [ ] 2.4 Add unit test: metrics show completed hours after constraint removal (via _last_completed_constraint)
-  - [ ] 2.5 Add unit test: metrics show active constraint hours when constraint is still live
+- [x] Task 2: Bistate metrics fallback to completed constraint (AC: #2)
+  - [x] 2.1 In `bistate_duration.py` `update_current_metrics`, add `end_range` parameter handling matching pool.py pattern
+  - [x] 2.2 Build `ct_to_probe` list: extend with `_constraints`, elif fallback to `_last_completed_constraint`
+  - [x] 2.3 Filter by current day window (start_day to end_day) before accumulating metrics
+  - [x] 2.4 Add unit test: metrics show completed hours after constraint removal (via _last_completed_constraint)
+  - [x] 2.5 Add unit test: metrics show active constraint hours when constraint is still live
 
-- [ ] Task 3: Quality gates (AC: #3)
-  - [ ] 3.1 Run `python scripts/qs/quality_gate.py` -- all checks pass
+- [x] Task 3: Quality gates (AC: #3)
+  - [x] 3.1 Run `python scripts/qs/quality_gate.py` -- all checks pass
 
 ## Key Files
 

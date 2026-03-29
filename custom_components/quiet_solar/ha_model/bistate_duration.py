@@ -10,7 +10,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_END_TIME
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
-from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
+from ..home_model.constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 
 bistate_modes = [
@@ -54,14 +54,43 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.qs_bistate_current_on_h: float = 0.0
 
     def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
+        """Update bistate UI metrics from active or last-completed constraint.
 
-        self.qs_bistate_current_on_h = 0
-        self.qs_bistate_current_duration_h = 0
+        Follows pool.py pattern: falls back to _last_completed_constraint when
+        the active constraint has been removed, filtered by current day window.
+        """
+        if end_range is None:
+            end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
 
-        if self._constraints:
-            ct = self._constraints[0]
-            self.qs_bistate_current_on_h = ct.convert_target_value_to_time(ct.current_value) / 3600.0
-            self.qs_bistate_current_duration_h = ct.convert_target_value_to_time(ct.target_value) / 3600.0
+        end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time, output_in_utc=True)
+        duration_s = 0.0
+        run_s = 0.0
+
+        if end_day is not None:
+            start_day = self.get_next_time_from_hours(
+                local_hours=end_range,
+                time_utc_now=end_day - timedelta(hours=26),
+                output_in_utc=True,
+            )
+
+            ct_to_probe = []
+            if self._constraints:
+                ct_to_probe.extend(self._constraints)
+            elif self._last_completed_constraint is not None:
+                ct_to_probe.append(self._last_completed_constraint)
+
+            for ct in ct_to_probe:
+                if ct.end_of_constraint <= end_day or (
+                    ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
+                ):
+                    if ct.end_of_constraint > start_day or (
+                        ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint > start_day
+                    ):
+                        duration_s += ct.target_value
+                        run_s += ct.current_value
+
+        self.qs_bistate_current_on_h = run_s / 3600.0
+        self.qs_bistate_current_duration_h = duration_s / 3600.0
 
     async def user_set_default_on_duration(self, float_value: float, for_init: bool = False):
         self.default_on_duration = float_value
