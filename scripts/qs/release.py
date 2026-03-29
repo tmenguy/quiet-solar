@@ -77,10 +77,12 @@ def main() -> None:
     # Bump manifest
     manifest_path = bump_manifest(version)
 
-    # Commit and push
+    # Commit and push (skip commit if manifest was already at this version)
     run_git(["add", str(manifest_path)])
-    run_git(["commit", "-m", f"bump version to {version}"])
-    run_git(["push", "origin", "main"])
+    diff_check = run_git(["diff", "--cached", "--quiet"], check=False)
+    if diff_check.returncode != 0:
+        run_git(["commit", "-m", f"bump version to {version}"])
+        run_git(["push", "origin", "main"])
 
     # Tag and push tag
     run_git(["tag", tag])
