@@ -16,18 +16,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from utils import get_main_worktree, get_current_branch, output_json, run_gh, run_git
+from utils import get_main_worktree, get_current_branch, output_json, run_git
 
 
 def determine_next_tag() -> str:
-    """Find the next release tag for today."""
+    """Find the next release tag for today using local git tags."""
     today = datetime.now().strftime("%Y.%m.%d")
 
-    result = run_gh(["release", "list", "--limit", "100", "--json", "tagName", "--jq", ".[].tagName"], check=False)
-    if result.returncode != 0:
-        return f"v{today}.0"
+    result = run_git(["tag", "--list", f"v{today}.*"], check=False)
 
-    # Find all tags for today
     existing = []
     for line in result.stdout.strip().split("\n"):
         tag = line.strip()
