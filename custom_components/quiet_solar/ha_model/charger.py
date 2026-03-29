@@ -4478,7 +4478,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             )
             if not other_charger_charging:
                 added_nrj = self.father_device.get_device_real_energy(
-                    start_time=start_time, end_time=end_time, clip_to_zero_under_power=self.charger_consumption_W
+                    start_time=start_time,
+                    end_time=end_time,
+                    clip_to_zero_under_power=self.charger_group.charger_consumption_W,
                 )
         added_percent = None
 
