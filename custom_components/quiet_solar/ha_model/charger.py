@@ -4469,11 +4469,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if self.car is None:
             return None
 
-        added_nrj = self.get_device_real_energy(
-            start_time=start_time, end_time=end_time, clip_to_zero_under_power=self.charger_consumption_W
-        )
+        added_nrj = None
 
-        if added_nrj is None and self._can_use_group_power_sensor():
+        if self._can_use_group_power_sensor():
             other_charger_charging = any(
                 c.is_charge_enabled(time=end_time, for_duration=(end_time - start_time).total_seconds()) is True
                 for c in self.charger_group._chargers
@@ -4485,6 +4483,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     end_time=end_time,
                     clip_to_zero_under_power=self.charger_group.charger_consumption_W,
                 )
+
+        if added_nrj is None:
+            added_nrj = self.get_device_real_energy(
+                start_time=start_time, end_time=end_time, clip_to_zero_under_power=self.charger_consumption_W
+            )
+
         added_percent = None
 
         real_car_added_nrj = None
@@ -4710,15 +4714,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             else:
                 if is_target_percent and target_charge >= 100:
                     if (
-                        result_calculus is not None
-                        and result_calculus >= target_charge
-                        and current_charge >= 99
-                        and self.is_charging_power_zero(
-                            time=time,
-                            for_duration=CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S,
-                        )
-                        is True
-                    ):
+                        (result_calculus is not None and result_calculus >= target_charge and current_charge >= 95)
+                        or (current_charge >= 98)
+                    ) and self.is_charging_power_zero(
+                        time=time,
+                        for_duration=CHARGER_CHECK_REAL_POWER_WINDOW_S,
+                    ) is True:
                         result = target_charge
                     else:
                         result = min(current_charge, 99)

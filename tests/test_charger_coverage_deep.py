@@ -8073,20 +8073,18 @@ class TestComputeAddedChargeGroupFallback:
         result = ch._compute_added_charge_update(start, now, is_target_percent=True)
         assert result is None
 
-    def test_charger_own_energy_used_when_available(self):
-        """When charger has its own energy data, use it directly (no fallback)."""
+    def test_charger_own_energy_used_as_fallback(self):
+        """When group not eligible, charger's own energy data is used as fallback."""
         ch, car = self._setup()
         now = datetime.now(pytz.UTC)
         start = now - timedelta(hours=1)
 
         ch.get_device_real_energy = MagicMock(return_value=3000.0)
-        # Even if eligible, should not be called since own data exists
-        ch._can_use_group_power_sensor = MagicMock(return_value=True)
+        ch._can_use_group_power_sensor = MagicMock(return_value=False)
 
         result = ch._compute_added_charge_update(start, now, is_target_percent=True)
         assert result is not None
-        # Should NOT have queried father
-        assert not hasattr(ch.father_device, "get_device_real_energy") or not ch.father_device.get_device_real_energy.called
+        ch.get_device_real_energy.assert_called_once()
 
     def test_fallback_energy_mode_wh(self):
         """Group fallback works in Wh mode too."""
@@ -8220,8 +8218,8 @@ class TestIsCarChargedCombinedEscape:
         assert is_charged is False
         assert result == 99
 
-    def test_calculus_below_target_stays_capped(self):
-        """result_calculus < 100 → not enough energy delivered, stay capped."""
+    def test_calculus_below_target_but_current_high_still_escapes(self):
+        """result_calculus < 100 but current >= 98 + power_zero → charged via sensor path."""
         ch, now = self._setup()
         ch.is_charging_power_zero = MagicMock(return_value=True)
 
@@ -8232,11 +8230,27 @@ class TestIsCarChargedCombinedEscape:
             is_target_percent=True,
             result_calculus=95.0,
         )
-        assert is_charged is False
-        assert result == 99
+        # current >= 98 OR path triggers with power_zero=True
+        assert is_charged is True
+        assert result == 100
 
-    def test_current_charge_below_99_stays_capped(self):
-        """current_charge < 99 → sensor not close enough, stay capped."""
+    def test_calculus_below_target_and_current_low_stays_capped(self):
+        """result_calculus < 100 and current < 95 → both paths fail, stay capped."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=90,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=95.0,
+        )
+        assert is_charged is False
+        assert result == 90
+
+    def test_current_at_95_with_calculus_escapes(self):
+        """current_charge=95, calculus>=100, power_zero=True → charged via calculus path."""
         ch, now = self._setup()
         ch.is_charging_power_zero = MagicMock(return_value=True)
 
@@ -8247,8 +8261,25 @@ class TestIsCarChargedCombinedEscape:
             is_target_percent=True,
             result_calculus=102.0,
         )
+        # (calculus>=100 and current>=95) path triggers
+        assert is_charged is True
+        assert result == 100
+
+    def test_current_below_95_without_high_calculus_stays_capped(self):
+        """current_charge=94, calculus>=100, power_zero=True → below both thresholds."""
+        ch, now = self._setup()
+        ch.is_charging_power_zero = MagicMock(return_value=True)
+
+        is_charged, result = ch.is_car_charged(
+            now,
+            current_charge=94,
+            target_charge=100,
+            is_target_percent=True,
+            result_calculus=102.0,
+        )
+        # current < 95 (calculus path) and < 98 (sensor path)
         assert is_charged is False
-        assert result == 95
+        assert result == 94
 
     def test_power_not_zero_stays_capped(self):
         """Power still flowing → stay capped."""
