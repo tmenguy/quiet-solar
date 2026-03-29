@@ -566,11 +566,13 @@ class HADeviceMixin:
         start_set = set()
 
         if event_start is not None:
-            event_start = datetime.fromisoformat(event_start)
-            event_start = event_start.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            if isinstance(event_start, str):
+                event_start = datetime.fromisoformat(event_start)
+            event_start = event_start.astimezone(tz=pytz.UTC)
         if event_end is not None:
-            event_end = datetime.fromisoformat(event_end)
-            event_end = event_end.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+            if isinstance(event_end, str):
+                event_end = datetime.fromisoformat(event_end)
+            event_end = event_end.astimezone(tz=pytz.UTC)
 
         if event_start is not None and event_end is not None:
             # Check if the event is within our search period
