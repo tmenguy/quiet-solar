@@ -2,7 +2,7 @@
 
 issue: 64
 branch: "QS_64"
-Status: dev-complete
+Status: done
 
 ## Story
 
@@ -75,6 +75,18 @@ After reset, `qs_bistate_current_duration_h` becomes 0, so `targetHours = 0`, so
   - [x] Test: completed constraint only (no active) — should show completed values
   - [x] Test: completed + active constraints — should show only active values
   - [x] Test: after reset (no constraints, no completed) — metrics are zero
+
+### Review Findings
+
+- [x] [Review][Defer] No test for partial completion (target_value != current_value) [tests/test_ha_pool.py] — deferred, pre-existing
+- [x] [Review][Defer] Day-boundary scenario untested with distinct constraint ends [tests/test_ha_pool.py] — deferred, pre-existing
+- [x] [Review][Defer] Multiple active constraints could double-count metrics [ha_model/pool.py:79] — deferred, pre-existing by design
+- [x] [Review][Defer] Stale _localTargetPct not cleared on Reset (5s window) [qs-pool-card.js] — deferred, pre-existing
+- [x] [Review][Defer] handle.style.cursor written to detached DOM node after re-render [qs-pool-card.js] — deferred, pre-existing
+- [x] [Review][Defer] _isInteractingTarget race with set hass re-render [qs-pool-card.js] — deferred, pre-existing
+- [x] [Review][Defer] end_range parameter of update_current_metrics never tested [tests/test_ha_pool.py] — deferred, pre-existing
+- [x] [Review][Defer] _last_completed_constraint wiped before reading in mode-off path [home_model/load.py] — deferred, pre-existing
+- [x] [Review][Defer] No JS/frontend test coverage for reset behavior — deferred, no JS test framework
 
 ## Dev Notes
 

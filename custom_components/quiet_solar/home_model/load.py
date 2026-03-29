@@ -317,7 +317,11 @@ class AbstractDevice:
     @qs_enable_device.setter
     def qs_enable_device(self, enabled: bool):
         if enabled != self._enabled:
+            saved_completed = getattr(self, "_last_completed_constraint", None)
             self.reset()
+            # Preserve completed constraint on disable so metrics display correctly
+            if not enabled and saved_completed is not None:
+                self._last_completed_constraint = saved_completed
             self._enabled = enabled
             if self.home is not None:
                 if enabled is False:
@@ -1346,8 +1350,13 @@ class AbstractLoad(AbstractDevice):
                         _LOGGER.info(
                             f"Constraint {constraint.name} replacing {c.name} one with same end date, different score (last one force replace the new one)"
                         )
-                        # the problem here is that we can loose .... the current value
-                        if type(c) == type(constraint) and c.current_value > constraint.current_value:
+                        # Only carry current_value when the user is NOT changing the target
+                        # (i.e., same requested_target_value means a rebuild, not a new goal)
+                        if (
+                            type(c) == type(constraint)
+                            and c.current_value > constraint.current_value
+                            and c.requested_target_value == constraint.requested_target_value
+                        ):
                             constraint.current_value = min(c.current_value, constraint.target_value)
 
             self._constraints.append(constraint)

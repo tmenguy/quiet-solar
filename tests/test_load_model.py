@@ -2580,6 +2580,87 @@ class TestPushLiveConstraint:
 
         assert result is True
 
+    def test_push_live_constraint_does_not_carry_current_value_on_target_change(self):
+        """Test that current_value is NOT carried when user changes the target."""
+        load = self.create_load()
+
+        existing = self.create_constraint(
+            load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0, current_value=80.0
+        )
+        load._constraints = [existing]
+        load._last_completed_constraint = None
+
+        new_ct = self.create_constraint(
+            load,
+            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
+            target_value=200.0,  # Different target = user changed goal
+            current_value=0.0,
+            from_user=True,
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        load.push_live_constraint(time_now, new_ct)
+
+        # current_value should NOT be carried from old constraint (different target)
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 0.0
+
+    def test_push_live_constraint_carries_current_value_on_same_target(self):
+        """Test that current_value IS carried when target matches (rebuild, not user change)."""
+        load = self.create_load()
+
+        existing = self.create_constraint(
+            load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0, current_value=50.0
+        )
+        load._constraints = [existing]
+        load._last_completed_constraint = None
+
+        new_ct = self.create_constraint(
+            load,
+            datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC),
+            target_value=100.0,  # Same target = rebuild
+            current_value=0.0,
+            from_user=True,  # Higher score to trigger replacement
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        load.push_live_constraint(time_now, new_ct)
+
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 50.0  # Carried from old
+
+    def test_disable_device_preserves_last_completed_constraint(self):
+        """Test that _last_completed_constraint is preserved when device is disabled."""
+        load = self.create_load()
+        load._enabled = True
+
+        completed = self.create_constraint(
+            load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0, current_value=100.0
+        )
+        load._last_completed_constraint = completed
+
+        load.qs_enable_device = False
+
+        # Completed constraint should be preserved for display during disable
+        assert load._last_completed_constraint is completed
+
+    def test_enable_device_clears_last_completed_constraint(self):
+        """Test that _last_completed_constraint is cleared on re-enable (fresh start)."""
+        load = self.create_load()
+        load._enabled = False
+
+        completed = self.create_constraint(
+            load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0, current_value=100.0
+        )
+        load._last_completed_constraint = completed
+
+        load.qs_enable_device = True
+
+        # On re-enable, reset should clear the completed constraint
+        assert load._last_completed_constraint is None
+
 
 # =============================================================================
 # Test update_live_constraints
