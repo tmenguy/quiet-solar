@@ -129,9 +129,12 @@ N/A
 
 ### Completion Notes List
 - All quality gates pass (ruff format, ruff lint, mypy, translations, pytest 100% coverage)
-- No scope changes from original story
+- All 9 deferred review findings addressed in this PR
+- Fixed pre-existing calendar datetime DST bug in device.py
 
 ### File List
-- `custom_components/quiet_solar/ha_model/pool.py` — exclude completed constraint when active constraints exist
-- `custom_components/quiet_solar/ui/resources/qs-pool-card.js` — show handle when enabled regardless of target value
-- `tests/test_ha_pool.py` — updated existing test, added 2 new tests (completed-only, after-reset)
+- `custom_components/quiet_solar/ha_model/pool.py` — exclude completed constraint when active exists, DST-safe day boundary
+- `custom_components/quiet_solar/ha_model/device.py` — fix calendar datetime parsing on DST transition days
+- `custom_components/quiet_solar/ui/resources/qs-pool-card.js` — hasValidTarget, || 12 fallback, handle position fallback, reset state cleanup, detached DOM fix, re-render after drag
+- `tests/test_ha_pool.py` — updated existing test, added tests for: completed-only, after-reset, partial completion, day boundary, multiple active, end_range, DST boundary
+- `tests/test_load_model.py` — added tests for: current_value carry behavior, mode-off path
