@@ -7623,6 +7623,20 @@ class TestAmpChangeCooldown:
         # Charger cooldown expired — budgeting should be called
         group.budgeting_algorithm_minimize_diffs.assert_called_once()
 
+    async def test_reset_state_machine_clears_cooldown(self):
+        """_reset_state_machine clears _last_amp_change_time so cooldown does not persist after reboot."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+
+        ch = _create_charger(hass, home, "ResetCh")
+        # Simulate a recent amp change
+        ch._last_amp_change_time = now - timedelta(seconds=5)
+        assert ch._last_amp_change_time is not None
+
+        ch._reset_state_machine()
+        assert ch._last_amp_change_time is None
+
 
 class TestGreenConsignSingleStepIncrease:
     """Fix B: green consign increases by at most 1 amp step per budget cycle."""

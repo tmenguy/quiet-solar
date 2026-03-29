@@ -2624,6 +2624,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_expected_charge_state = None
         self._inner_amperage = None
         self._inner_num_active_phases = None
+        self._last_amp_change_time = None
 
     def is_in_state_reset(self) -> bool:
         return (
