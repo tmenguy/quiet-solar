@@ -6,169 +6,190 @@ Status: draft
 
 ## Story
 
-As a Quiet Solar user with multiple EV chargers,
+As a Quiet Solar user with EV chargers,
 I want the charging system to respect the inverter AC output limit and avoid rapid power oscillation,
-so that I don't import from the grid when solar+battery should suffice and my charger hardware isn't damaged by rapid cycling.
+so that green charging never imports from the grid and my charger hardware isn't damaged by rapid cycling.
 
 ## Bug Description
 
-Three related issues observed on 2026-03-29 morning:
+Two issues observed on 2026-03-29:
 
-**Bug A -- Person constraint with past deadline forces max grid import (10:55-11:20)**
+**Issue 1: Zoe at ~11:00 -- 19kW from grid**
 
-After HA restart at 10:55, the person constraint for Magali (Zoe, wallbox 1) predicted departure at 09:00 UTC (11:00 CEST) which was already past. The system set `mandatory:True` + `use_available_only:False`, forcing `auto_consign` at 22,080W (32A x 3 phases). With inverter capped at 12kW and solar at ~5.5kW, the remaining ~10kW was pulled from the grid. `full_available_home_power` reached -10,499W.
+After HA restart at 10:55, the Zoe was charging at 32A/3-phase (19,148W) on wallbox 1 maison with `CMD_AUTO_FROM_CONSIGN`. Person constraint for Magali: next usage 09:00 UTC (11:00 local), car at 89% vs 100% target, `is_person_covered=False`. The solver assigned `CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE` resulting in `CMD_AUTO_FROM_CONSIGN` with max power. With `CMD_AUTO_FROM_CONSIGN`, `possible_amps = [32]` (only max), so the dynamic budgeting cannot reduce the charging at all. Grid import was -8,813W.
 
-**Bug B -- Solver consign oscillation between ~4.4kW and 22kW every ~7 seconds (12:58-13:10)**
+**Verdict**: Partially by design -- person constraints DO force fast charging from grid. However, `CMD_AUTO_FROM_CONSIGN` locking `possible_amps` to only `[max]` is too aggressive. The dynamic budget should still have room to reduce amps when the consign deadline has already passed (degraded mode).
 
-The wallbox 3 portail (Twingo) received alternating `auto_green_consign` commands: ~4,417W then 22,080W, repeating every ~7 seconds. During the 22kW phases, the budgeting algorithm raised amps from 8A to 11-12A. At 12A x 3 phases (~8.3kW) plus house loads, the combined draw exceeded the 12kW inverter AC output limit. The dynamic group check at 13:08:30 confirmed `phases_amps [12.0, 12.2, 12.0]`.
+**Issue 2: Twingo 13:04-13:10 -- oscillation exceeding 12kW inverter limit**
 
-**Bug C -- Dynamic group power drops to 0W without guard (12:40-13:10)**
+| Time     | Action     | home_load   | Comment                                                  |
+| -------- | ---------- | ----------- | -------------------------------------------------------- |
+| 13:03:21 | 8A -> 9A   | -           | budget 1982W                                             |
+| 13:04:17 | 9A -> 11A  | 10,580W     | Production cap fires, allows 1419W budget, jumps 2 steps |
+| 13:05:20 | 11A -> 9A  | **12,836W** | Over 12kW! Decrease triggered                            |
+| 13:06:30 | 9A -> 8A   | **12,161W** | Still over 12kW                                          |
+| 13:07:26 | 8A -> 11A  | 9,021W      | Low due to transition, jumps 3 steps!                    |
+| 13:08:16 | 11A -> 12A | -           | phantom_surplus=7147W, still allows increase             |
+| 13:09:12 | 12A -> 8A  | **14,901W** | Way over 12kW!                                           |
+| 13:10:01 | 8A -> 9A   | -           | Cycle continues                                          |
 
-The wallbox 3 portail received `auto_green 0.0W` (stop) commands with no minimum hold time. Drops to 0W occurred as frequently as every 7 seconds, with longer gaps of 6-14 minutes also appearing. The 20-minute on-to-off guard (`TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S`) was bypassed.
+**Issue 3: Power drops to 0 during transitions**
+
+At 13:10:01: `dampening simple case wallbox 3 portail/Twingo 22.223W for 8A #phases3`. The wallbox temporarily reports near-zero power during current changes. This is **normal wallbox hardware behavior**. The dampening code correctly detects and ignores it. But the `home_load_power_value` picks up the transient, feeding into Root Cause C.
 
 ## Root Cause Analysis
 
-### Bug A -- Missing past-deadline guard for person constraints
+### Root Cause A: Battery discharge inflates green budget
 
-**File:** `charger.py` lines 3456-3465 and 3539-3553
+**File:** `charger.py` lines 1177-1188
 
-`is_person_covered` (computed in `car.py:1063-1103`) is purely a battery-level check -- it does NOT consider whether `next_usage_time` is in the past. When `is_person_covered` is False, a `CONSTRAINT_TYPE_MANDATORY_END_TIME` constraint is created with the past deadline as `end_of_constraint`.
-
-Since `is_mandatory` is True (type 7), the solver sets `do_use_available_power_only=False` at `solver.py:715`, allowing grid draw. The constraint window collapses to "right now" (slot 0), meaning "charge at maximum power immediately from any source."
-
-**Key asymmetry:** Calendar/agenda events have a past-deadline guard at `charger.py:3398-3403`:
+When battery is discharging (`battery_asked_charge < 0`) and charger is `CMD_AUTO_GREEN_CONSIGN` + before battery:
 ```python
-if start_time is not None and time > start_time:
-    start_time = None  # passed it, skip
+initial_power_budget = full_available_home_power - battery_asked_charge - diff_power_budget
 ```
-No equivalent guard exists for person-based constraints.
 
-### Bug B -- Budgeting algorithm full-range oscillation (no damping)
+At 13:04:17: `full_available_home_power=0`, `battery_asked_charge=-3787W`, so budget = `0 - (-3787) = 3787W`. The code assumes the battery discharge can be redirected to the charger, but the inverter is already at capacity. The extra budget results in **grid import**, not battery power.
 
-**File:** `charger.py` lines 1338-1456 (budgeting loop) and 662-669 (power extraction)
+### Root Cause B: Multi-step amp jumps amplify oscillation
 
-The feedback loop:
+**File:** `charger.py` lines 1348-1351
 
-1. **Cycle A (charger at ~4.4kW):** Available power is high (~18kW surplus). `initial_power_budget` is large and positive. For `CMD_AUTO_GREEN_CONSIGN`, `stop_on_first_change=False` (line 1348-1351), so the loop ramps **all the way to 22kW** in one cycle.
+```python
+if do_reset_allocation or cs.command.is_like_one_of_cmds(
+    [CMD_AUTO_GREEN_CONSIGN, CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]
+):
+    stop_on_first_change = False
+```
 
-2. **Cycle B (charger at ~22kW):** The charger's own draw collapses available power to negative. `initial_power_budget` becomes ~-17kW. The loop ramps **all the way back down** to ~4.4kW.
+`stop_on_first_change=False` allows the algorithm to jump 8A->11A (3 steps) in one pass. This makes the system overshoot massively, triggering the oscillation cycle.
 
-Three compounding factors:
-- **No max step-size limit** on budget changes per cycle (lines 1361-1444)
-- **Feedback includes charger's own draw** -- `home_available_power = grid_consumption + battery_charge_clamped` (home.py:1658) reflects the charger's consumption, creating unity-gain negative feedback
-- **Pessimistic estimator** -- `min(last_half_mean, all_mean, last_half_median, all_median)` at line 662-669 amplifies transient states
+### Root Cause C: Production cap uses stale home_load during transitions
 
-The `CHARGER_ADAPTATION_WINDOW_S = 45s` guard at line 692 only gates new decisions, but `remaining_budget_to_apply` (line 682-688) executes deferred increases on every `dyn_handle` cycle (~14s), creating visible oscillation faster than the 45s window.
+**File:** `charger.py` lines 1248-1301
 
-### Bug C -- Shaving methods bypass on-to-off time guard
+The `home_load_power_value` is measured over the past `CHARGER_ADAPTATION_WINDOW_S` (45s). When the charger just dropped power (transition), `home_load` appears low (e.g., 9,021W at 13:07:26), creating artificial headroom under the 12kW cap. The `phantom_surplus` is already computed and subtracted from the budget (line 1201) but is NOT used to correct `home_load_power_value` before the production cap check.
 
-**File:** `charger.py` lines 1643-1673 and 1676-1745
+### Root Cause D: No cooldown between amp changes
 
-The 20-minute guard is properly checked in `get_stable_dynamic_charge_status` (line 2374-2392): when `can_change_state` is False, 0 is NOT added to `possible_amps`.
+After changing amps (e.g., at 13:07:26), the very next `dyn_handle` pass (7s later) can change amps again. The `CHARGER_ADAPTATION_WINDOW_S` check at line 690-692 only guards the first pass after a state change.
 
-However, two shaving paths bypass this:
-- `_shave_current_budgets` (line 1643): runs with `allow_state_change=True` on second iteration, forcing `budgeted_amp=0` via `can_change_budget` without checking `is_ok_to_set`
-- `_shave_mandatory_budgets` (line 1676): inserts 0 at the front of `possible_amps` (line 1717-1734) regardless of time guards
+### Root Cause E (highest priority): Solver does not cap green consign by inverter power limit
 
-`apply_budgets` (line 1929-1933) then applies `budgeted_amp=0` without re-checking the guard (by design, per the comment on line 1930-1932).
+**File:** `home.py` lines 1143-1152
+
+```python
+def get_home_max_static_phase_amps(self) -> int:
+    static_amp = self.dyn_group_max_phase_current_conf
+    if not self.is_off_grid():
+        return static_amp          # <-- BUG: returns subscription limit (52A)
+    if self.solar_plant:
+        static_amp = min(static_amp, self.solar_plant.solar_max_phase_amps)
+    return static_amp
+```
+
+`solar_max_phase_amps` (the inverter's per-phase current limit) is only applied when off-grid. When on-grid, the function returns the subscription limit (52A for a 36kVA contract). This means the solver's production amp budget allows 52A per phase, so the Twingo's full 32A power step (22,080W) passes filtering -- even though the inverter can only output 12kW (~17.4A per phase at 230V 3-phase).
+
+The solver's `_available_power` clamping limits total energy across all slots to the inverter cap, but `adapt_repartition` runs multiple iterations that each bump the per-slot power consign one step higher. Since the energy budget is large enough, the consign climbs all the way to 22,080W.
+
+This is called from `dyn_group_max_production_phase_current_for_budget` at line 1244. The consumption path (`dyn_group_max_phase_current_for_budget`) already guards with `if self.is_off_grid()`, so the change is safe.
 
 ## Fix Plan
 
-### Fix A: Add past-deadline guard for person constraints
+### Fix E (highest priority): Cap solver production amp budget by inverter limit
 
-**Where:** `charger.py` around line 3456-3465
+**Where:** `home.py` lines 1143-1152
 
-Add a check analogous to the agenda guard at line 3398:
-
-```python
-elif is_person_covered is False:
-    if next_usage_time is not None and next_usage_time <= time:
-        _LOGGER.info(
-            "check_load_activity_and_constraints: plugged car %s person %s "
-            "predicted departure %s already past (now: %s), skipping person constraint",
-            self.car.name, person.name, next_usage_time, time
-        )
-        person = None
-    else:
-        _LOGGER.warning(...)  # existing log
-```
-
-This prevents a past deadline from creating a mandatory "charge now from grid" emergency.
-
-### Fix B: Add damping / max step-size to budgeting algorithm
-
-**Where:** `charger.py` lines 1338-1456
-
-Two complementary changes:
-
-**B1. Limit maximum amp change per cycle.** After computing the target budget, clamp the actual change to at most N amps per cycle (e.g., 2-3A). This prevents full-range jumps:
+1. Rename `get_home_max_static_phase_amps` -> `_get_home_max_production_phase_amps_for_budget` (private, production-only scope)
+2. Remove the `if not self.is_off_grid(): return` early exit so `solar_max_phase_amps` is always applied
+3. Update the single call site at line 1244
 
 ```python
-# After determining next_possible_budgeted_amp in the while loop
-max_amp_change_per_cycle = 3  # configurable
-if abs(next_possible_budgeted_amp - cs.budgeted_amp) > max_amp_change_per_cycle:
-    break  # stop ramping, apply partial change
+def _get_home_max_production_phase_amps_for_budget(self) -> int:
+    static_amp = self.dyn_group_max_phase_current_conf
+    if self.solar_plant:
+        static_amp = min(static_amp, self.solar_plant.solar_max_phase_amps)
+    return static_amp
 ```
 
-**B2. Subtract charger's current draw from available power before budgeting.** In the budget computation (around line 1161), account for the charger's own current consumption to avoid the feedback loop:
+This caps the production amp budget at ~17.4A per phase (for 12kW inverter), limiting the highest power step the solver can assign for green charging. The private name and explicit "production/budget" scope prevent future misuse.
+
+### Fix A: Cap battery discharge budget by inverter headroom
+
+**Where:** `charger.py` around line 1248 (production cap check)
+
+After computing `new_home_power_consumption`, cap the battery-discharge portion of the budget by actual inverter headroom:
+```python
+if home_max_available_production_power is not None and home_load_power_value is not None:
+    inverter_headroom = max(0, home_max_available_production_power - home_load_power_value)
+    initial_power_budget = min(initial_power_budget, inverter_headroom)
+```
+
+Note: `home_max_available_production_power` and `home_load_power_value` are computed after the battery block (lines 1208+), so this cap must be applied at the production cap check point (line 1248), not at line 1187.
+
+### Fix B: Limit green consign to 1-step increase per cycle
+
+**Where:** `charger.py` lines 1348-1351
+
+Remove `CMD_AUTO_GREEN_CONSIGN` from the `stop_on_first_change=False` block:
 
 ```python
-# Compute budget relative to charger's current draw, not total available
-charger_current_draw = sum(cs.get_current_power() for cs in actionable_chargers)
-adjusted_available = full_available_home_power + charger_current_draw
-initial_power_budget = adjusted_available - diff_power_budget
+if do_reset_allocation or cs.command.is_like_one_of_cmds(
+    [CMD_AUTO_PRICE, CMD_AUTO_FROM_CONSIGN]
+):
+    stop_on_first_change = False
 ```
 
-This way, when the charger is drawing 22kW and available power is -10kW, the adjusted available becomes -10+22 = 12kW, which is the actual solar+battery capacity -- the correct target.
+This keeps `stop_on_first_change=True` for `CMD_AUTO_GREEN_CONSIGN` increases, preventing multi-step jumps. Only `CMD_AUTO_FROM_CONSIGN` and `CMD_AUTO_PRICE` retain multi-step (they have mandatory deadlines).
 
-### Fix C: Enforce time guard in shaving methods
+### Fix C: Add phantom surplus to home_load before production cap
 
-**Where:** `charger.py` lines 1643-1673 and 1676-1745
+**Where:** `charger.py` line 1248
 
-**C1. In `_shave_current_budgets`:** Before allowing `budgeted_amp=0`, check the time guard:
-
+Before the production cap check, correct `home_load_power_value` for transient charger power dips:
 ```python
-# Before setting cs.budgeted_amp = 0 in the shaving loop
-if next_possible_budgeted_amp == 0:
-    if not cs.charger._expected_charge_state.is_ok_to_set(
-        time, TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S
-    ):
-        continue  # skip this charger, try reducing another
+adjusted_home_load = home_load_power_value + phantom_surplus
 ```
+Then use `adjusted_home_load` in place of `home_load_power_value` in the production cap calculation. This prevents transient wallbox dips from creating artificial headroom.
 
-**C2. In `_shave_mandatory_budgets`:** Same guard before inserting 0 into `possible_amps`.
+### Fix D: Per-charger amp-change cooldown
 
-**Important:** The shaving methods exist to protect against exceeding the dynamic group amp limit. If the guard prevents stopping a charger AND the group limit is still exceeded, the method should reduce amps to `min_charge` instead of 0, maintaining the guard while still reducing load.
+**Where:** `charger.py` -- `QSChargerGeneric` class + `dyn_handle`
+
+1. Add `_last_amp_change_time` attribute to `QSChargerGeneric`
+2. Set it when amps are changed in `_ensure_correct_state`
+3. In `dyn_handle`, skip budgeting for a charger if its last amp change was less than `CHARGER_ADAPTATION_WINDOW_S` ago
 
 ## Acceptance Criteria
 
-1. After HA restart, if person constraint departure time is already past, the charger does NOT force maximum grid import -- it either charges from available solar only or skips the constraint
-2. The charger consign does not oscillate between min and max power on consecutive cycles -- amps change by at most N steps per budget cycle
-3. The combined charger + house power does not exceed the configured `max_inverter_dc_to_ac_power` (12kW) during normal green charging
-4. The dynamic group charger power does not drop to 0W unless the 20-minute on-to-off guard has elapsed
-5. When the shaving method needs to reduce power but the time guard blocks a full stop, the charger is reduced to `min_charge` instead
+1. The solver never assigns a green consign above the inverter's physical production limit (~12kW)
+2. Battery discharge budget is capped by actual inverter headroom -- no grid import when budget says "use battery discharge"
+3. The charger increases by at most 1 amp step per budget cycle in green consign mode
+4. Transient wallbox power dips do not create artificial headroom in the production cap calculation
+5. After an amp change, the same charger is not re-budgeted until `CHARGER_ADAPTATION_WINDOW_S` elapses
 6. All existing tests continue to pass
-7. New tests cover: past-deadline person constraint, budget damping, shaving with guard enforcement
+7. New tests cover: production cap with inverter limit, battery discharge headroom cap, single-step green increase, phantom surplus correction, amp-change cooldown
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix past-deadline person constraint guard (AC: #1)
-  - [ ] Add `next_usage_time <= time` check at charger.py:3456-3465
-  - [ ] Log the skip at info level
-  - [ ] Add test: person constraint with past deadline is skipped
-  - [ ] Add test: person constraint with future deadline still works
-- [ ] Task 2: Add damping to budgeting algorithm (AC: #2, #3)
-  - [ ] Introduce max amp change per cycle constant
-  - [ ] Clamp amp changes in the budgeting while loop
-  - [ ] Subtract charger's current draw when computing available power budget
-  - [ ] Add test: budget doesn't jump from min to max in one cycle
-  - [ ] Add test: budget correctly accounts for charger's own draw
-- [ ] Task 3: Enforce time guard in shaving methods (AC: #4, #5)
-  - [ ] Add `is_ok_to_set` check in `_shave_current_budgets` before setting amp to 0
-  - [ ] Add `is_ok_to_set` check in `_shave_mandatory_budgets` before inserting 0
-  - [ ] Fall back to `min_charge` when guard blocks full stop
-  - [ ] Add test: shaving respects on-to-off guard
-  - [ ] Add test: shaving falls back to min_charge when guard active
+- [ ] Task 1: Fix E -- Cap solver production amp budget by inverter limit (AC: #1)
+  - [ ] Rename `get_home_max_static_phase_amps` -> `_get_home_max_production_phase_amps_for_budget`
+  - [ ] Remove off-grid guard so `solar_max_phase_amps` always applies
+  - [ ] Update call site at line 1244
+  - [ ] Add test: production amp budget reflects inverter limit when on-grid
+- [ ] Task 2: Fix A -- Cap battery discharge budget by inverter headroom (AC: #2)
+  - [ ] Add inverter headroom cap at production cap check point (~line 1248)
+  - [ ] Add test: battery discharge budget does not exceed inverter headroom
+- [ ] Task 3: Fix B -- Limit green consign to 1-step increase (AC: #3)
+  - [ ] Remove `CMD_AUTO_GREEN_CONSIGN` from `stop_on_first_change=False` block
+  - [ ] Add test: green consign increases by at most 1 step per cycle
+- [ ] Task 4: Fix C -- Add phantom surplus to home_load before production cap (AC: #4)
+  - [ ] Add `phantom_surplus` to `home_load_power_value` before production cap check
+  - [ ] Add test: transient dip does not create artificial headroom
+- [ ] Task 5: Fix D -- Per-charger amp-change cooldown (AC: #5)
+  - [ ] Add `_last_amp_change_time` to `QSChargerGeneric`
+  - [ ] Set timestamp on amp change in `_ensure_correct_state`
+  - [ ] Skip budgeting in `dyn_handle` if cooldown not elapsed
+  - [ ] Add test: charger is skipped during cooldown period
 
 ## Technical Notes
 
@@ -180,14 +201,15 @@ if next_possible_budgeted_amp == 0:
 - `TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10` (10 min)
 
 ### Key Files
-- `custom_components/quiet_solar/ha_model/charger.py` -- primary fix target (all 3 bugs)
-- `custom_components/quiet_solar/ha_model/car.py` -- `is_person_covered` computation
-- `custom_components/quiet_solar/ha_model/person.py` -- departure prediction
-- `custom_components/quiet_solar/home_model/solver.py` -- constraint mandatory/available_only logic
-- `custom_components/quiet_solar/home_model/constraints.py` -- constraint types and repartition
-- `custom_components/quiet_solar/ha_model/dynamic_group.py` -- group amp accounting
+- `custom_components/quiet_solar/ha_model/home.py` -- Fix E (solver production amp budget)
+- `custom_components/quiet_solar/ha_model/charger.py` -- Fixes A, B, C, D (dynamic budgeting)
+
+### Deferred: Person constraint `CMD_AUTO_FROM_CONSIGN` locking
+Issue 1 (Zoe at 19kW) is partially by design -- person constraints force fast charging. However, `CMD_AUTO_FROM_CONSIGN` locking `possible_amps` to only `[max]` prevents any dynamic budget reduction even when the deadline has passed. This is a separate issue to address after the oscillation fixes.
 
 ### Risk Assessment
-- Fix A is low risk -- adds a guard that mirrors the existing agenda guard pattern
-- Fix B is medium risk -- changing the budgeting feedback loop affects all charger scenarios; thorough testing of green-only, green-consign, and price modes needed
-- Fix C is medium risk -- the shaving methods are safety mechanisms for amp limits; the fallback to min_charge must be verified to not cause sustained overcurrent
+- Fix E is low risk, high impact -- single method rename + guard removal, only affects production budget path
+- Fix B is low risk -- removes one command type from a list, keeps green-only behavior (already 1-step)
+- Fix C is low risk -- uses already-computed `phantom_surplus` value
+- Fix A is medium risk -- needs careful placement after production cap values are computed
+- Fix D is medium risk -- new state tracking, needs to not block legitimate rapid changes during shaving
