@@ -1,4 +1,4 @@
-# Refactor: Deduplicate pool and bistate update_current_metrics
+# Bug + Refactor: Fix exact-calendar metrics and deduplicate update_current_metrics
 
 issue: 74
 branch: "QS_74"
@@ -6,32 +6,62 @@ Status: ready-for-dev
 
 ## Story
 
-As a developer maintaining Quiet Solar,
-I want the `update_current_metrics()` logic to exist only in the `QSBiStateDuration` parent class,
-so that the pool inherits it instead of duplicating it, reducing maintenance burden and drift risk.
+As a Quiet Solar user with a calendar-driven bistate device (climate/cumulus),
+I want the UI card to correctly show the target duration for upcoming calendar constraints,
+so that I see "3h30" instead of "0h" when my next scheduled event is tomorrow morning.
 
-## Background
+## Bug Description
 
-In QS_68 (`bug-Github-#68-carry-from-completed-constraint`), the pool's `update_current_metrics` pattern (falling back to `_last_completed_constraint` when no active constraints exist, filtered by current day window) was adopted by `QSBiStateDuration`. Both implementations are now **100% identical** — same algorithm, same variables, same attribute access. The pool override should be removed so the logic lives in one place.
+A climate device in `bistate_mode_exact_calendar` has a calendar event for **tomorrow 6:30-10:00**. Current time is 10:23. The card shows **target = 0h** instead of **3h30**.
+
+### Root Cause
+
+`update_current_metrics` (bistate_duration.py:56-93) applies a **day-window filter** to ALL constraints, including active ones. The day window is bounded by `default_on_finish_time` (defaults to midnight):
+
+- `end_day` = next midnight from now = **tomorrow 00:00**
+- Constraint: `start_of_constraint` = tomorrow 06:30, `end_of_constraint` = tomorrow 10:00
+- Filter check: `end_of_constraint (10:00) <= end_day (00:00)` → **FALSE**
+- Filter check: `start_of_constraint (06:30) <= end_day (00:00)` → **FALSE**
+- **Result**: constraint excluded, target = 0h
+
+The day-window filter was copied from pool.py in QS_70, where it's correct because pool constraints always end at `default_on_finish_time` (== `end_day`). But for calendar-based modes, constraint boundaries come from calendar events and can exceed the day window.
+
+### Fix
+
+**Active constraints** (`_constraints`) should always be included in metrics — they are current/upcoming by definition. The **day-window filter should only apply to `_last_completed_constraint`** (to avoid showing stale metrics from a previous day cycle).
+
+This distinction is safe because:
+- Pool constraints always have `end_of_constraint` within the day window → no behavior change
+- Calendar constraints can exceed the window → now correctly included
+- `_last_completed_constraint` still needs filtering to avoid showing yesterday's completed hours
 
 ## Acceptance Criteria
 
-1. `QSPool` no longer overrides `update_current_metrics` — the method is deleted from `ha_model/pool.py`
-2. `QSBiStateDuration.update_current_metrics` remains the single implementation in `ha_model/bistate_duration.py`
-3. The unused import `DATETIME_MIN_UTC` is removed from `pool.py` (it was only needed by the deleted method)
-4. All existing tests pass with no changes (behavior is identical)
-5. Quality gate passes: `python scripts/qs/quality_gate.py`
+1. **Given** a bistate in exact_calendar mode with a constraint starting after the current day-window boundary, **When** `update_current_metrics` runs, **Then** the constraint's `target_value` and `current_value` are included in the displayed metrics
+2. **Given** active constraints exist, **When** `update_current_metrics` runs, **Then** all active constraints are summed without day-window filtering
+3. **Given** no active constraints but `_last_completed_constraint` exists, **When** `update_current_metrics` runs, **Then** the completed constraint is included only if it falls within the current day window (existing behavior preserved)
+4. `QSPool` no longer overrides `update_current_metrics` — deleted from `ha_model/pool.py`
+5. All existing tests pass; new tests cover the exact-calendar bug scenario
+6. Quality gate passes: `python scripts/qs/quality_gate.py`
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Remove `update_current_metrics` override from `pool.py` (AC: #1)
-  - [ ] Delete lines 55-90 in `ha_model/pool.py` (the entire `update_current_metrics` method)
-  - [ ] Remove the now-unused `DATETIME_MIN_UTC` import from `pool.py` (AC: #3)
-  - [ ] Remove `timedelta` import if no longer used in pool.py
-- [ ] Task 2: Verify parent implementation is correct (AC: #2)
-  - [ ] Confirm `QSBiStateDuration.update_current_metrics` at `bistate_duration.py:56-93` is unchanged
-- [ ] Task 3: Run quality gate (AC: #4, #5)
-  - [ ] Run `python scripts/qs/quality_gate.py` — all tests pass, ruff/mypy clean
+- [ ] Task 1: Fix `update_current_metrics` in `bistate_duration.py` (AC: #1, #2, #3)
+  - [ ] 1.1 Restructure the method: if `_constraints` exist, sum ALL of them (no day-window filter). Only apply day-window filter in the `elif _last_completed_constraint` branch.
+  - [ ] 1.2 The method signature and output attributes (`qs_bistate_current_on_h`, `qs_bistate_current_duration_h`) stay the same.
+
+- [ ] Task 2: Remove duplicate `update_current_metrics` from `pool.py` (AC: #4)
+  - [ ] 2.1 Delete the `update_current_metrics` override in `ha_model/pool.py` (lines 55-90)
+  - [ ] 2.2 Remove now-unused imports: `DATETIME_MIN_UTC`, `timedelta`
+
+- [ ] Task 3: Add tests for the exact-calendar bug (AC: #5)
+  - [ ] 3.1 Test: active constraint beyond day-window boundary → metrics show its target/current values
+  - [ ] 3.2 Test: active constraint within day-window → metrics still work (regression guard)
+  - [ ] 3.3 Test: no active constraints, last_completed within window → shows completed (existing behavior)
+  - [ ] 3.4 Test: no active constraints, last_completed outside window → shows 0 (existing behavior)
+
+- [ ] Task 4: Run quality gate (AC: #6)
+  - [ ] `python scripts/qs/quality_gate.py` — all checks pass
 
 ## Dev Notes
 
@@ -39,38 +69,59 @@ In QS_68 (`bug-Github-#68-carry-from-completed-constraint`), the pool's `update_
 
 ```
 QSBiStateDuration  (ha_model/bistate_duration.py)  ← update_current_metrics lives HERE
+  ├── QSClimateDuration  (ha_model/climate_controller.py)  ← triggers the bug in exact_calendar mode
   └── QSOnOffDuration  (ha_model/on_off_duration.py)
       └── QSPool  (ha_model/pool.py)  ← REMOVE the duplicate override
 ```
 
-### Duplicate Code Location
+### Fix Shape (bistate_duration.py)
 
-| File | Lines | Method |
-|------|-------|--------|
-| `ha_model/bistate_duration.py` | 56-93 | `update_current_metrics` (KEEP) |
-| `ha_model/pool.py` | 55-90 | `update_current_metrics` (DELETE) |
+Current logic (broken for calendar constraints):
+```python
+# builds ct_to_probe from _constraints OR _last_completed_constraint
+# then day-window-filters ALL of them  ← BUG: filters out future calendar constraints
+```
 
-The two implementations are byte-for-byte identical in logic. Only trivial comment differences exist. All attributes used (`_constraints`, `_last_completed_constraint`, `default_on_finish_time`, `qs_bistate_current_on_h`, `qs_bistate_current_duration_h`, `get_next_time_from_hours`) are inherited from `QSBiStateDuration` or its parents.
+Fixed logic:
+```python
+if self._constraints:
+    # Active constraints: always include ALL (they are current by definition)
+    for ct in self._constraints:
+        duration_s += ct.target_value
+        run_s += ct.current_value
+elif self._last_completed_constraint is not None:
+    # Fallback: day-window filter only the completed constraint
+    ct = self._last_completed_constraint
+    # ... existing day-window check ...
+    duration_s += ct.target_value
+    run_s += ct.current_value
+```
+
+### Why this doesn't break pool behavior
+
+Pool constraints always have `end_of_constraint = get_next_time_from_hours(default_on_finish_time, time)`, which equals `end_day` in the filter. They always pass the filter. Removing the filter for active constraints is a no-op for pools.
 
 ### Import Cleanup in pool.py
 
-After removing the method, `DATETIME_MIN_UTC` is no longer used in `pool.py` — remove it from the import line. Also check if `timedelta` is still used (it is NOT used elsewhere in pool.py, so remove it too).
+After removing the method, `DATETIME_MIN_UTC` and `timedelta` are no longer used in `pool.py` — remove both imports.
 
-### Test Coverage
+### Existing Test Coverage
 
-Tests in `tests/test_ha_pool.py` (lines 191-390) cover all `update_current_metrics` scenarios through the pool. They will continue to pass because the inherited parent method has identical behavior. No test changes should be needed.
+- `tests/test_ha_pool.py` (lines 191-390): pool metrics tests — call `QSPool.update_current_metrics` directly. These must be updated to NOT reference `QSPool.update_current_metrics` (method no longer exists on QSPool; use the inherited parent method).
+- `tests/test_bug_70_cumulus_rapid_cycling.py` (lines 265-375): bistate metrics fallback tests — already test the parent method.
 
 ### Architecture Constraints
 
-- Two-layer boundary: both files are in `ha_model/` — no boundary issues
-- No async code involved — `update_current_metrics` is synchronous
+- Two-layer boundary: all files in `ha_model/` — no boundary issues
+- `update_current_metrics` is synchronous — no async concerns
 - No config keys or translations affected
 
 ### References
 
-- [Source: ha_model/bistate_duration.py#update_current_metrics] — parent implementation (lines 56-93)
-- [Source: ha_model/pool.py#update_current_metrics] — duplicate to remove (lines 55-90)
-- [Source: bug-Github-#68-carry-from-completed-constraint.md] — QS_68 story that aligned the logic
+- [Source: ha_model/bistate_duration.py:56-93] — current (buggy) implementation
+- [Source: ha_model/pool.py:55-90] — duplicate to remove
+- [Source: bug-Github-#70-fix-cumulus-rapid-cycling.md] — QS_70 story that copied pool logic to bistate
+- [Source: deferred-work.md] — notes `end_range` param untested, `_last_completed_constraint` wipe risk
 
 ## Dev Agent Record
 
