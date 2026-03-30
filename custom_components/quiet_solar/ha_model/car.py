@@ -229,7 +229,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._was_car_api_stale: bool = False
         self._car_api_stale_since: datetime | None = None
         self._car_stale_mode_override: str = CAR_STALE_MODE_AUTO
-        self._car_api_stale_percent_mode: bool = False
+        self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
 
@@ -568,7 +568,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             time = datetime.now(tz=pytz.UTC)
 
         # Stale-percent mode: force percent mode on
-        if self._car_api_stale_percent_mode:
+        if self.car_api_stale_percent_mode:
             self._use_percent_mode = True
             return (time, "on", {})
 
@@ -644,11 +644,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # auto mode: raw stale detection
         return self._car_api_stale
 
-    @property
-    def is_in_stale_percent_mode(self) -> bool:
-        """Return True if the car is in stale-percent charging mode."""
-        return self._car_api_stale_percent_mode
-
     def _update_car_api_staleness(self, time: datetime) -> None:
         """Check and update car API staleness state. Called each state cycle."""
         raw_stale = self.is_car_api_stale(time)
@@ -658,7 +653,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._car_api_stale = raw_stale
 
         # Check if recovery from stale-percent mode is possible
-        if self._car_api_stale_percent_mode and self.can_exit_stale_percent_mode(time):
+        if self.car_api_stale_percent_mode and self.can_exit_stale_percent_mode(time):
             _LOGGER.info(
                 "Car %s API data recovered (was stale since %s)",
                 self.name,
@@ -685,7 +680,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             )
             # Activate stale-percent mode if car can use percent constraints
             if self.can_use_charge_percent_constraints_static():
-                self._car_api_stale_percent_mode = True
+                self.car_api_stale_percent_mode = True
             # Notify on stale transition (Feature A)
             self._schedule_notification(
                 f"Car {self.name} API stale",
@@ -729,7 +724,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def _exit_stale_mode(self) -> None:
         """Clear all stale flags and exit stale-percent mode."""
         self._car_api_stale = False
-        self._car_api_stale_percent_mode = False
+        self.car_api_stale_percent_mode = False
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
@@ -767,7 +762,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self._car_api_stale_since = time
             # Activate stale-percent mode if possible
             if self.can_use_charge_percent_constraints_static():
-                self._car_api_stale_percent_mode = True
+                self.car_api_stale_percent_mode = True
             self._was_car_api_stale = True
             # Notify on contradiction (Feature B)
             self._schedule_notification(
@@ -798,7 +793,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
           sensor must confirm physical state. If car was manually assigned
           (inferred_plugged), the plug sensor specifically must be fresh.
         """
-        if not self._car_api_stale_percent_mode:
+        if not self.car_api_stale_percent_mode:
             return False
         if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
             return False
@@ -1219,7 +1214,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self, time: datetime | None = None, tolerance_seconds: float | None = None
     ) -> float | None:
         """Get car SOC percent. Returns None when in stale-percent mode (SOC sensor is poisoned)."""
-        if self._car_api_stale_percent_mode:
+        if self.car_api_stale_percent_mode:
             return None
         ret = self.get_sensor_latest_possible_valid_value(
             entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds
@@ -1915,7 +1910,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     def can_use_charge_percent_constraints(self):
         # Stale-percent mode: keep percent mode active even with stale SOC
-        if self._car_api_stale_percent_mode:
+        if self.car_api_stale_percent_mode:
             return True
 
         r = self.can_use_charge_percent_constraints_static()

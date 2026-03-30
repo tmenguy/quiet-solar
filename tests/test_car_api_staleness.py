@@ -87,7 +87,7 @@ class TestSensorClassification:
         assert real_car._was_car_api_stale is False
         assert real_car._car_api_stale_since is None
         assert real_car._car_stale_mode_override == CAR_STALE_MODE_AUTO
-        assert real_car._car_api_stale_percent_mode is False
+        assert real_car.car_api_stale_percent_mode is False
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
 
@@ -227,7 +227,7 @@ class TestStalenessTransitions:
         assert real_car._car_api_stale is True
         assert real_car._was_car_api_stale is True
         assert real_car._car_api_stale_since == current_time
-        assert real_car._car_api_stale_percent_mode is True
+        assert real_car.car_api_stale_percent_mode is True
 
     def test_stale_to_fresh_transition(self, real_car, current_time):
         """Transition from stale to fresh clears all stale flags."""
@@ -235,7 +235,7 @@ class TestStalenessTransitions:
         real_car._car_api_stale = True
         real_car._was_car_api_stale = True
         real_car._car_api_stale_since = current_time - timedelta(hours=2)
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
 
         # Make sensors fresh
         fresh_time = current_time - timedelta(seconds=60)
@@ -246,7 +246,7 @@ class TestStalenessTransitions:
 
         assert real_car._car_api_stale is False
         assert real_car._was_car_api_stale is False
-        assert real_car._car_api_stale_percent_mode is False
+        assert real_car.car_api_stale_percent_mode is False
         assert real_car._car_api_stale_since is None
 
     def test_already_stale_no_repeated_transition(self, real_car, current_time):
@@ -264,11 +264,11 @@ class TestStalenessTransitions:
 
         assert real_car._car_api_stale_since == original_since
 
-    def test_is_in_stale_percent_mode_property(self, real_car):
-        """is_in_stale_percent_mode property reflects _car_api_stale_percent_mode."""
-        assert real_car.is_in_stale_percent_mode is False
-        real_car._car_api_stale_percent_mode = True
-        assert real_car.is_in_stale_percent_mode is True
+    def test_car_api_stale_percent_mode_is_public(self, real_car):
+        """car_api_stale_percent_mode is a public attribute."""
+        assert real_car.car_api_stale_percent_mode is False
+        real_car.car_api_stale_percent_mode = True
+        assert real_car.car_api_stale_percent_mode is True
 
     async def test_update_states_calls_staleness_check(self, real_car, current_time):
         """update_states drives _update_car_api_staleness each cycle."""
@@ -296,7 +296,7 @@ class TestStalenessTransitions:
         real_car._car_api_stale = True
         real_car._was_car_api_stale = True
         real_car._car_api_stale_since = current_time - timedelta(hours=2)
-        real_car._car_api_stale_percent_mode = False
+        real_car.car_api_stale_percent_mode = False
         real_car._car_api_inferred_home = True
         real_car._car_api_inferred_plugged = True
 
@@ -318,7 +318,7 @@ class TestStalenessTransitions:
         # Setup: stale with percent mode, then sensors recover
         real_car._car_api_stale = True
         real_car._was_car_api_stale = True
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         real_car._car_api_stale_since = current_time - timedelta(hours=2)
 
         fresh_time = current_time - timedelta(seconds=60)
@@ -356,7 +356,7 @@ class TestContradictionDetection:
         assert real_car._car_api_stale is True
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
-        assert real_car._car_api_stale_percent_mode is True
+        assert real_car.car_api_stale_percent_mode is True
         assert real_car._was_car_api_stale is True
 
     def test_contradiction_when_api_says_not_plugged(self, real_car, current_time):
@@ -460,36 +460,36 @@ class TestStalePercentMode:
         assert real_car.get_car_charge_percent(current_time) == 75.0
 
         # Enable stale-percent mode
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         assert real_car.get_car_charge_percent(current_time) is None
 
     def test_get_car_charge_percent_works_when_not_stale(self, real_car, current_time):
         """SOC sensor works normally when not in stale mode."""
         real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (current_time, 50.0, {})
-        real_car._car_api_stale_percent_mode = False
+        real_car.car_api_stale_percent_mode = False
         assert real_car.get_car_charge_percent(current_time) == 50.0
 
     def test_can_use_charge_percent_constraints_true_in_stale_mode(self, real_car):
         """can_use_charge_percent_constraints returns True in stale-percent mode."""
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         assert real_car.can_use_charge_percent_constraints() is True
 
     def test_can_use_charge_percent_constraints_respects_normal_logic(self, real_car):
         """Without stale mode, normal logic applies."""
-        real_car._car_api_stale_percent_mode = False
+        real_car.car_api_stale_percent_mode = False
         real_car._use_percent_mode = False
         assert real_car.can_use_charge_percent_constraints() is False
 
     def test_percent_mode_sensor_returns_on_when_stale(self, real_car, current_time):
         """car_use_percent_mode_sensor_state_getter returns 'on' in stale-percent mode."""
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         result = real_car.car_use_percent_mode_sensor_state_getter("test_entity", current_time)
         assert result[1] == "on"
         assert real_car._use_percent_mode is True
 
     def test_percent_mode_sensor_normal_when_not_stale(self, real_car, current_time):
         """car_use_percent_mode_sensor_state_getter follows normal logic when not stale."""
-        real_car._car_api_stale_percent_mode = False
+        real_car.car_api_stale_percent_mode = False
         # No sensor data — should return "off"
         real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = None
         result = real_car.car_use_percent_mode_sensor_state_getter("test_entity", current_time)
@@ -503,18 +503,18 @@ class TestStalePercentMode:
 
         real_car._update_car_api_staleness(current_time)
 
-        assert real_car._car_api_stale_percent_mode is True
+        assert real_car.car_api_stale_percent_mode is True
 
     def test_get_car_charge_energy_returns_none_in_stale_mode(self, real_car, current_time):
         """get_car_charge_energy also returns None since it calls get_car_charge_percent."""
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         assert real_car.get_car_charge_energy(current_time) is None
 
     def test_exit_stale_mode_clears_stale_percent_mode(self, real_car):
         """_exit_stale_mode clears the stale-percent mode flag."""
-        real_car._car_api_stale_percent_mode = True
+        real_car.car_api_stale_percent_mode = True
         real_car._exit_stale_mode()
-        assert real_car._car_api_stale_percent_mode is False
+        assert real_car.car_api_stale_percent_mode is False
 
 
 # ── Task 5: Recovery Logic ──────────────────────────────────────────────
@@ -527,7 +527,7 @@ class TestRecoveryLogic:
         """Helper to put car into stale-percent mode."""
         car._car_api_stale = True
         car._was_car_api_stale = True
-        car._car_api_stale_percent_mode = True
+        car.car_api_stale_percent_mode = True
         car._car_api_stale_since = current_time - timedelta(hours=2)
 
     def test_cannot_exit_if_not_in_stale_mode(self, real_car, current_time):
@@ -618,7 +618,7 @@ class TestRecoveryLogic:
         real_car._update_car_api_staleness(current_time)
 
         assert real_car._car_api_stale is False
-        assert real_car._car_api_stale_percent_mode is False
+        assert real_car.car_api_stale_percent_mode is False
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
         assert real_car._was_car_api_stale is False
