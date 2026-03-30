@@ -54,7 +54,7 @@ If the change is structural (e.g., new architecture pattern, new project rule), 
 After bmad-dev-story completes, run the full quality gate one more time:
 
 ```bash
-python scripts/qs/quality_gate.py --json
+python scripts/qs/quality_gate.py --json --cache
 ```
 
 ALL gates MUST pass. If any fail (especially coverage < 100%), fix before proceeding. Do NOT skip this step. bmad-dev-story may consider itself done, but the project requires 100% coverage and all gates green.

@@ -23,30 +23,30 @@ so that redundant gate runs are skipped when no code has changed between skills.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add content hashing to `quality_gate.py` (AC: 1, 2, 3)
-  - [ ] 1.1: Implement `_compute_content_hash()` that SHA-256 hashes all tracked files (`.py` in `custom_components/quiet_solar/` and `tests/`, plus `strings.json`, `pyproject.toml`)
-  - [ ] 1.2: Implement `_read_cache()` and `_write_cache()` for the `.quality_gate_cache` JSON file
-  - [ ] 1.3: Implement `_is_cache_valid()` that compares current hash to stored hash
-- [ ] Task 2: Add `--cache` and `--no-cache` CLI flags (AC: 1, 4, 5, 7)
-  - [ ] 2.1: Add argparse flags: `--cache` (opt-in), `--no-cache` (force fresh)
-  - [ ] 2.2: In `main()`, if `--cache` and not `--fix` and not `--no-cache`, check cache before running gates
-  - [ ] 2.3: On cache hit, output cached results (both human-readable and JSON modes) with `"cached": true`
-  - [ ] 2.4: On cache miss or fresh run, run all gates as before; if all pass, write cache
-- [ ] Task 3: Add `.quality_gate_cache` to `.gitignore` (AC: 6)
-- [ ] Task 4: Update `finish_story.py` to pass `--cache` (AC: 8)
-  - [ ] 4.1: In `run_quality_gate()`, add `--cache` to the subprocess command
-- [ ] Task 5: Update workflow skill docs (AC: 8)
-  - [ ] 5.1: Update `implement-story.md` final gate command to use `--cache`
-  - [ ] 5.2: Update `review-story.md` post-fix gate command to use `--cache`
-  - [ ] 5.3: Update `finish-story.md` to document the `--cache` behavior
-- [ ] Task 6: Tests (AC: 1-7)
-  - [ ] 6.1: Test `_compute_content_hash()` returns consistent hash for same files
-  - [ ] 6.2: Test cache write/read round-trip
-  - [ ] 6.3: Test cache hit skips gate execution
-  - [ ] 6.4: Test cache miss when files change
-  - [ ] 6.5: Test `--fix` bypasses cache
-  - [ ] 6.6: Test `--no-cache` bypasses cache
-  - [ ] 6.7: Test default (no `--cache` flag) never uses cache
+- [x] Task 1: Add git-based change detection to `quality_gate.py` (AC: 1, 2, 3)
+  - [x] 1.1: Implement `_get_git_state()` returning `(branch, commit, is_clean)` via `git rev-parse --abbrev-ref HEAD`, `git rev-parse HEAD`, `git status --porcelain -uno`
+  - [x] 1.2: Implement `_read_cache()` and `_write_cache()` for the `.quality_gate_cache` JSON file storing `{"branch", "commit", "all_passed", "results", "timestamp"}`
+  - [x] 1.3: Implement `_is_cache_valid()` that checks branch match + commit match + clean working tree
+- [x] Task 2: Add `--cache` and `--no-cache` CLI flags (AC: 1, 4, 5, 7)
+  - [x] 2.1: Add argparse flags: `--cache` (opt-in), `--no-cache` (force fresh)
+  - [x] 2.2: In `main()`, if `--cache` and not `--fix` and not `--no-cache`, check cache before running gates
+  - [x] 2.3: On cache hit, output cached results (both human-readable and JSON modes) with `"cached": true`
+  - [x] 2.4: On cache miss or fresh run, run all gates as before; if all pass, write cache
+- [x] Task 3: Add `.quality_gate_cache` to `.gitignore` (AC: 6)
+- [x] Task 4: Update `finish_story.py` to pass `--cache` (AC: 8)
+  - [x] 4.1: In `run_quality_gate()`, add `--cache` to the subprocess command
+- [x] Task 5: Update workflow skill docs (AC: 8)
+  - [x] 5.1: Update `implement-story.md` final gate command to use `--cache`
+  - [x] 5.2: Update `review-story.md` post-fix gate command to use `--cache`
+  - [x] 5.3: Update `finish-story.md` to document the `--cache` behavior
+- [x] Task 6: Tests (AC: 1-7)
+  - [x] 6.1: Test `_get_git_state()` returns branch, commit, and clean status
+  - [x] 6.2: Test cache write/read round-trip
+  - [x] 6.3: Test cache hit skips gate execution
+  - [x] 6.4: Test cache miss when git state changes (branch, commit, or dirty tree)
+  - [x] 6.5: Test `--fix` bypasses cache
+  - [x] 6.6: Test `--no-cache` bypasses cache
+  - [x] 6.7: Test default (no `--cache` flag) never uses cache
 
 ## Dev Notes
 
@@ -57,9 +57,8 @@ so that redundant gate runs are skipped when no code has changed between skills.
 ### Key design decisions
 
 - **Opt-in caching (`--cache`)**: Default behavior unchanged. Only callers that explicitly opt in get caching. This prevents surprises during manual development.
-- **Content hash, not timestamp**: SHA-256 of file contents is deterministic and works across worktrees/branches. Timestamps are fragile (git checkout changes mtime).
-- **Single cache file**: `.quality_gate_cache` is a small JSON file at repo root. Contains: `{"hash": "<sha256>", "results": [...], "timestamp": "<iso>"}`. The timestamp is informational only (not used for validation).
-- **Hash scope**: All `.py` files in `custom_components/quiet_solar/` and `tests/`, plus `strings.json` and `pyproject.toml`. These are the files that affect gate outcomes. Skill docs (`.md`) are NOT hashed — they don't affect gates.
+- **Git state, not content hash**: `branch/commit` is the cache key. Git already tracks file changes — no need to re-hash files. Dirty working tree = always cache miss; the calling skill should commit before running the gate.
+- **Single cache file**: `.quality_gate_cache` is a small JSON file at repo root. Contains: `{"branch": "<name>", "commit": "<sha>", "all_passed": true, "results": [...], "timestamp": "<iso>"}`. The timestamp is informational only (not used for validation).
 
 ### Files to modify
 

@@ -49,7 +49,7 @@ Process comments ONE AT A TIME. For each comment, present it to the user with fi
 
 After processing all comments, if any fixes were made, run:
 ```bash
-python scripts/qs/quality_gate.py
+python scripts/qs/quality_gate.py --cache
 ```
 
 ### 4.5. Compound doc-sync

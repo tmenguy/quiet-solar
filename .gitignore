@@ -140,6 +140,9 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Quality gate cache
+.quality_gate_cache
 .dmypy.json
 dmypy.json
 
