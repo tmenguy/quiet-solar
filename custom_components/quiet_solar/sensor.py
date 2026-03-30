@@ -2,7 +2,10 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .ha_model.home import QSforecastValueSensor
 
 from .ha_model.bistate_duration import QSBiStateDuration
 from .home_model.constraints import get_readable_date_string
@@ -510,7 +513,7 @@ class QSSensorEntityDescription(SensorEntityDescription):
     qs_is_none_unavailable: bool = False
     value_fn: Callable[[AbstractDevice, str], Any] | None = None
     value_fn_and_attr: Callable[[AbstractDevice, str], tuple[Any, Any]] | None = None
-    qs_prober: Any | None = None
+    qs_prober: QSforecastValueSensor | None = None
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
