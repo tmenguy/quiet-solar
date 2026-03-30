@@ -61,10 +61,10 @@ Add a virtual method `_is_calendar_based_mode(bistate_mode)` on `QSBiStateDurati
    - The "today" window is `(start_of_today_utc, start_of_tomorrow_utc)` derived from local midnight
    - This correctly handles timezone offsets and DST transitions
 
-5. **AC5: Sync warning for calendar modes**
+5. **AC5: Sync info log for calendar modes**
    - When in calendar modes and `_last_completed_constraint` exists for today
    - If its `current_value` significantly diverges from the inferred past schedule runtime
-   - Then emit a `_LOGGER.warning()` with the discrepancy details
+   - Then emit a `_LOGGER.info()` with the discrepancy details and multi-event explanation (downgraded from warning during review — divergence is expected with multiple daily events)
 
 6. **AC6: Controlled test migration**
    - `test_bug_74_exact_calendar_metrics.py`: `test_active_constraint_beyond_day_window_shows_target` updated — a tomorrow-only constraint now correctly shows 0h target
