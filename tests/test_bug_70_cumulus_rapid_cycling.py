@@ -261,7 +261,7 @@ class TestFillerConstraintSkippedWhenFullyCharged(unittest.IsolatedAsyncioTestCa
 # =============================================================================
 
 
-class TestBistateMetricsFallback(unittest.TestCase):
+class TestBistateMetricsFallback(unittest.IsolatedAsyncioTestCase):
     """Test that bistate update_current_metrics falls back to _last_completed_constraint."""
 
     def _create_bistate_device(self):
@@ -322,7 +322,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
         """Mock _get_today_boundaries to return explicit day boundaries."""
         device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
 
-    def test_metrics_show_completed_hours_after_constraint_removal(self):
+    async def test_metrics_show_completed_hours_after_constraint_removal(self):
         """After constraint removal, metrics should fall back to _last_completed_constraint.
 
         This is bug #70 task 2: when the active constraint is removed,
@@ -343,7 +343,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
         device._constraints = []
         device._last_completed_constraint = completed_ct
 
-        device.update_current_metrics(time)
+        await device.update_current_metrics(time)
 
         assert device.qs_bistate_current_on_h == pytest.approx(3.0), (
             f"Should show 3h from completed constraint, got {device.qs_bistate_current_on_h}"
@@ -352,7 +352,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
             f"Should show 3h duration from completed constraint, got {device.qs_bistate_current_duration_h}"
         )
 
-    def test_metrics_show_active_constraint_hours_when_live(self):
+    async def test_metrics_show_active_constraint_hours_when_live(self):
         """When an active constraint exists, metrics should show its current progress."""
         device = self._create_bistate_device()
         time = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
@@ -368,7 +368,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
         device._constraints = [active_ct]
         device._last_completed_constraint = None
 
-        device.update_current_metrics(time)
+        await device.update_current_metrics(time)
 
         assert device.qs_bistate_current_on_h == pytest.approx(1.5), (
             f"Should show 1.5h from active constraint, got {device.qs_bistate_current_on_h}"
@@ -377,7 +377,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
             f"Should show 3h target duration, got {device.qs_bistate_current_duration_h}"
         )
 
-    def test_metrics_zero_when_no_constraints_at_all(self):
+    async def test_metrics_zero_when_no_constraints_at_all(self):
         """When no constraints exist and no completed constraint, metrics should be zero."""
         device = self._create_bistate_device()
         time = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
@@ -388,7 +388,7 @@ class TestBistateMetricsFallback(unittest.TestCase):
         device._constraints = []
         device._last_completed_constraint = None
 
-        device.update_current_metrics(time)
+        await device.update_current_metrics(time)
 
         assert device.qs_bistate_current_on_h == 0.0
         assert device.qs_bistate_current_duration_h == 0.0

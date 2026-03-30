@@ -92,7 +92,7 @@ def _set_day_boundaries(device, today_utc, tomorrow_utc):
 # =============================================================================
 
 
-def test_active_constraint_beyond_day_window_shows_target():
+async def test_active_constraint_beyond_day_window_shows_target():
     """Tomorrow-only constraint is excluded from today's metrics (bug #78 fix).
 
     Scenario from bug #74 (updated by bug #78):
@@ -117,7 +117,7 @@ def test_active_constraint_beyond_day_window_shows_target():
     device._constraints = [ct]
     device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     # Bug #78: tomorrow constraint excluded from today's target
     assert device.qs_bistate_current_duration_h == pytest.approx(0.0), (
@@ -131,7 +131,7 @@ def test_active_constraint_beyond_day_window_shows_target():
 # =============================================================================
 
 
-def test_active_constraint_within_day_window_still_works():
+async def test_active_constraint_within_day_window_still_works():
     """Active constraint within the day window should still show in metrics."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 10, 0, 0, tzinfo=pytz.UTC)
@@ -149,7 +149,7 @@ def test_active_constraint_within_day_window_still_works():
     device._constraints = [ct]
     device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(3.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.5)
@@ -160,7 +160,7 @@ def test_active_constraint_within_day_window_still_works():
 # =============================================================================
 
 
-def test_last_completed_within_day_window_shows_completed():
+async def test_last_completed_within_day_window_shows_completed():
     """Completed constraint within day window should show as fallback."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
@@ -177,7 +177,7 @@ def test_last_completed_within_day_window_shows_completed():
     device._constraints = []
     device._last_completed_constraint = ct
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(3.0)
     assert device.qs_bistate_current_on_h == pytest.approx(3.0)
@@ -188,7 +188,7 @@ def test_last_completed_within_day_window_shows_completed():
 # =============================================================================
 
 
-def test_last_completed_outside_day_window_shows_zero():
+async def test_last_completed_outside_day_window_shows_zero():
     """Completed constraint outside day window should show 0 (stale data filtered)."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
@@ -205,7 +205,7 @@ def test_last_completed_outside_day_window_shows_zero():
     device._constraints = []
     device._last_completed_constraint = ct
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == 0.0
     assert device.qs_bistate_current_on_h == 0.0

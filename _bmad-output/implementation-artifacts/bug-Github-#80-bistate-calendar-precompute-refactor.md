@@ -1,6 +1,6 @@
 # Bug Fix: move calendar pre-compute into update_current_metrics and remove _is_current_calendar_mode
 
-Status: in-progress
+Status: review
 issue: 80
 branch: "QS_80"
 
@@ -25,7 +25,7 @@ Pool's `_build_mode_constraint_items` (pool.py:89-119) returns directly for `bis
 
 ## Fix Plan
 
-### Task 1: Make `update_current_metrics` async and self-contained
+### Task 1: Make `update_current_metrics` async and self-contained [x]
 
 **File:** `ha_model/bistate_duration.py`
 
@@ -38,14 +38,14 @@ Pool's `_build_mode_constraint_items` (pool.py:89-119) returns directly for `bis
 4. Move the AC5 sanity check (current lines 569-586) into `update_current_metrics` as well, inside the calendar branch
 5. Optional throttle: add a cache guard so the calendar fetch only runs if `time` has advanced by more than N seconds since last fetch (user suggests "every few seconds/minutes"). Use a `_last_calendar_fetch_time` + `_cached_calendar_events` pattern, or simply accept the cost since `check_load_activity_and_constraints` already runs on a ~7s cycle.
 
-### Task 2: Remove pre-compute section from `check_load_activity_and_constraints`
+### Task 2: Remove pre-compute section from `check_load_activity_and_constraints` [x]
 
 **File:** `ha_model/bistate_duration.py`
 
 1. Delete lines 551-588 (the entire "Pre-compute calendar metrics for today" block and the `else: self._is_current_calendar_mode = False` block)
 2. Change line 590 from `self.update_current_metrics(time)` to `await self.update_current_metrics(time)`
 
-### Task 3: Remove stale instance variables
+### Task 3: Remove stale instance variables [x]
 
 **File:** `ha_model/bistate_duration.py`
 
@@ -54,7 +54,7 @@ Pool's `_build_mode_constraint_items` (pool.py:89-119) returns directly for `bis
    - `self._today_calendar_target_s: float = 0.0`
    - `self._today_calendar_past_actual_s: float = 0.0`
 
-### Task 4: Update tests
+### Task 4: Update tests [x]
 
 Multiple test files call `device.update_current_metrics(now)` synchronously. After making it async:
 
