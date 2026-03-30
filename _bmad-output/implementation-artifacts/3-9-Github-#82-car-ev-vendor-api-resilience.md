@@ -18,28 +18,47 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 2. Charger detects power draw but can't match it to the Twingo (stale GPS/plug data) -> treated as guest car
 3. Magali manually assigns the charger to the Twingo via the car card
 4. **Problem**: SOC is stale/wrong, but the system doesn't know it — charges to wrong target
-5. **Need**: When Magali manually assigns charger to a stale car, the system should (a) infer the car IS home and plugged, (b) use "stale percent" constraint mode (percent constraints starting at 0%, bypassing stale SOC), (c) show a red border around the entire car card
+5. **Need**: When Magali manually assigns charger to a stale car, the system should (a) infer the car IS home and plugged, (b) enter "stale percent" mode (init at 0%, progress via charger energy only), (c) show a red border around the entire car card
+
+## Two Complementary Detection Features
+
+**Feature A — Automatic staleness detection**: Monitor all car API sensors (`car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`). When *none* of them have updated within the threshold (default ~4 hours), mark the car as stale.
+
+**Feature B — Manual assignment contradiction detection**: When a user manually assigns a car to a plugged charger, and the car's API reports `not_home` or `not_plugged`, the manual action itself is evidence the data is wrong. Flag the car as stale **immediately** — no need to wait for the 4-hour threshold.
+
+Both features converge on the same outcome: `binary_sensor.qs_<car>_api_ok` turns off, the car enters **stale-percent mode**, and the card gets a red border with `+XX%` display.
+
+## Key Design: Stale-Percent Mode
+
+Instead of falling back to energy-based constraints (kWh), the car **stays in percent mode** but with critical differences:
+
+- **Initial SOC forced to 0%** — the stale SOC sensor is bypassed entirely
+- **Progress tracked by charger energy only** — `_compute_added_charge_update()` converts energy delivered to %, never reads the SOC sensor
+- **Display shows `+XX%`** — the card converts `current_inputed_energy` to percent of battery capacity and prefixes with "+"
+- **Target means "add this much"** — if user picks 30%, it means "deliver 30% of battery capacity worth of energy"
+- **Target handler unchanged** — user can still set target SOC% normally via the card
+
+This is better than energy mode because users think in battery percentages, and the solver keeps using percent-based planning.
 
 ## Acceptance Criteria
 
-### AC1: Stale Car API Detection
+### AC1: Stale Car API Detection (Feature A)
 
-**Given** a car entity's API data stops updating (all tracked sensors — home, plug, odometer, position, SOC — haven't changed for longer than a configurable threshold, default ~4 hours)
+**Given** a car entity's API data stops updating (all tracked sensors haven't changed for longer than `CAR_API_STALE_THRESHOLD_S`, default 4 hours)
 **When** the system detects staleness
-**Then** the car is flagged as `_car_api_stale = True`
-**And** `binary_sensor.qs_<car>_api_ok` turns off
+**Then** the car is flagged as stale, `binary_sensor.qs_<car>_api_ok` turns off
 **And** the car card gets a red border around the entire card
 **And** the SOC widget in the dashboard header shows an error/warning state
-**And** the car auto-switches to "stale percent" constraint mode: percent constraints with initial SOC forced to 0% (bypassing stale SOC sensor), display shows `+XX%` (delta added by current constraint)
+**And** the car enters stale-percent mode: percent constraints with initial SOC = 0%, display shows `+XX%`
 
-### AC2: Manual Assignment Infers State for Stale Cars
+### AC2: Contradiction Detection on Manual Assignment (Feature B)
 
-**Given** Magali manually assigns a charger to a car whose API data is stale
-**When** the manual assignment is made (via `set_user_originated("car_name", ...)` on charger or `set_user_originated("charger_name", ...)` on car)
-**Then** the system infers: car IS home, car IS plugged (overriding stale sensor data)
-**And** the car uses "stale percent" constraint mode: `MultiStepsPowerLoadConstraintChargePercent` with `car_initial_value = 0` (bypass stale SOC)
-**And** the car card center display shows `+XX%` (percent added by current constraint) instead of absolute `XX%`
-**And** the car card has a red border indicating unreliable data
+**Given** Magali manually assigns a charger to a car, AND the car's API reports `not_home` or `not_plugged`
+**When** the manual assignment is made
+**Then** the system flags the car as stale **immediately** (contradiction = proof that API is wrong)
+**And** the system infers: car IS home, car IS plugged (overriding stale sensor data)
+**And** the car enters stale-percent mode with `+XX%` display and red card border
+**And** the assigned person is notified (CC-001): "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
 
 ### AC3: Manual Mode for Extended Staleness
 
@@ -54,164 +73,222 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 ### AC4: Auto-Recovery When API Resumes
 
 **Given** the car API was stale and recovers
-**When** the system detects recovery — defined as: at least one of the "critical" sensors (home tracker OR plug state) has a fresh timestamp, AND if the car was manually assigned to a charger during staleness, the plug sensor must be among the fresh ones
-**Then** `binary_sensor.qs_<car>_api_ok` turns on
-**And** the stale flag auto-clears, the car card removes the red border
-**And** if the car was in "stale percent" mode (manual override / inferred state), the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
-**And** constraints are reassessed: real SOC is re-read, stale percent constraints are replaced with normal percent constraints using actual SOC as initial value
-**And** if manual mode (switch) is on, TheAdmin is notified suggesting to exit manual mode
+**When** the system detects recovery — defined as: at least one "critical" sensor (home tracker OR plug state) has a fresh timestamp. If the car was manually assigned during staleness (`_car_api_inferred_plugged`), the plug sensor specifically must be fresh.
+**Then** `binary_sensor.qs_<car>_api_ok` turns on, red border removed
+**And** stale-percent mode is exited: real SOC is re-read, constraints reassessed with actual SOC as initial value
+**And** the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
+**And** if manual mode (switch) is on, TheAdmin is notified suggesting to exit manual mode (not auto-disabled)
 
-**Note on recovery sensors**: Not all sensors carry the same weight. An odometer or range update alone is not sufficient to exit stale mode — the home tracker and plug state are the "critical" sensors because they directly affect charger assignment and constraint behavior. Recovery requires at least one critical sensor to be fresh. If the car was manually forced onto a charger (inferred plugged), the plug sensor specifically must recover before we trust it again.
+**Recovery sensor tiers**: Not all sensors carry the same weight. An odometer update alone does NOT exit stale mode — home/plug are "critical" because they directly affect charger assignment and constraint behavior.
 
-### AC5: Notifications
+### AC5: Notifications (CC-001)
 
-**Given** a car becomes stale or recovers
-**When** the state transition happens
-**Then** TheAdmin is notified with specific stale data points (which sensors, how long stale)
-**And** Magali is notified if her car is affected, with plain-language explanation: "Your Twingo's data is stale — charging will use conservative estimates. You can enter the current battery level manually."
+Three notification events:
+1. **Car goes stale** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
+2. **Stale car manually assigned** (Feature B): Notify assigned person: "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
+3. **API recovers**: Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode." If manual mode is on, additionally notify TheAdmin: "Consider disabling manual mode."
 
 ## Tasks / Subtasks
 
-### Task 1: Add Stale Detection Infrastructure to QSCar (AC: #1)
+### Task 1: Constants and Sensor Classification (AC: #1, #2)
 
-- [ ] 1.1 Add constant `CAR_API_STALE_THRESHOLD_S = 14400` (4 hours) to `car.py` — code-level tunable, not user-configurable via config flow
-- [ ] 1.2 Classify sensors into "critical" (home tracker, plug state) and "supplementary" (odometer, range, SOC) for recovery logic
-- [ ] 1.3 Track list of "API sensors" on QSCar: `car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
-- [ ] 1.4 Implement `_check_car_api_staleness(self, time)` method:
-  - For each API sensor, get its `last_updated` timestamp via `get_sensor_latest_possible_valid_time_value_attr()`
-  - If ALL sensors have `last_updated` older than threshold -> `_car_api_stale = True`
-  - Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
-  - Track `_car_api_stale_since` timestamp for notification detail
-- [ ] 1.5 Call `_check_car_api_staleness()` from `update_current_metrics()` (called every state cycle)
-- [ ] 1.6 Add tests for stale detection: fresh data, all stale, partial stale (should NOT trigger), threshold boundary
+- [ ] 1.1 Add `CAR_API_STALE_THRESHOLD_S = 4 * 3600` to `car.py` — code-level tunable constant
+- [ ] 1.2 Add `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"` to `const.py`
+- [ ] 1.3 Classify sensors on QSCar into two tiers:
+  - **Critical** (required for recovery): `car_tracker`, `car_plugged`
+  - **Supplementary**: `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
+  - All are tracked for staleness entry (ALL must be stale). Only critical are checked for recovery exit.
 
-### Task 2: Implement "Stale Percent" Constraint Mode (AC: #1, #2)
+### Task 2: Staleness Detection — Feature A (AC: #1)
 
-**Key concept**: When the car API is stale, we do NOT switch to energy mode. Instead we use a "stale percent" mode — still uses `MultiStepsPowerLoadConstraintChargePercent` but forces `car_initial_value = 0` (bypass stale SOC sensor). The display shows `+XX%` (delta added) instead of absolute `XX%`. This is better than energy mode because percent is more meaningful to users. The target percent handler continues to work as before — user can still set a target SOC%.
+- [ ] 2.1 Implement `is_car_api_stale(self, time) -> bool`:
+  - For each API sensor (both tiers), get `last_updated` via `get_sensor_latest_possible_valid_time_value_attr()`
+  - If ALL sensors have `last_updated` older than `CAR_API_STALE_THRESHOLD_S` -> return True
+  - For invited/generic cars (no API) -> always return False
+- [ ] 2.2 Add `is_car_api_ok(self, time) -> bool` (inverse)
+- [ ] 2.3 Add `car_api_ok_sensor_state_getter()` following the pattern of `car_use_percent_mode_sensor_state_getter()` (car.py:536) — drives the binary sensor
+- [ ] 2.4 Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
+- [ ] 2.5 Track `_car_api_stale_since` timestamp for notification detail
+- [ ] 2.6 Call staleness check from `update_current_metrics()` (every state cycle)
+- [ ] 2.7 Tests: fresh data, all stale, partial stale (should NOT trigger), threshold boundary, invited cars
 
-**CRITICAL**: In stale mode the SOC sensor is poisoned. The ONLY source of charge progress is energy delivered by the charger (converted to % via battery capacity). This affects multiple call sites — see the full SOC bypass audit below.
-
-#### 2a: Constraint initialization (charger.py:3220-3239)
-
-- [ ] 2.1 Add `_car_api_stale_percent_mode` flag on QSCar (True when stale AND can_use_charge_percent_constraints_static)
-- [ ] 2.2 Keep `_use_percent_mode = True` when API is stale (do NOT fall back to energy mode for staleness). The existing `CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S` continues to handle SOC-sensor-only staleness as before — this story's stale detection is a separate, broader mechanism.
-- [ ] 2.3 Modify the constraint building in `charger.py:3220-3239`: when `car._car_api_stale_percent_mode` is True:
-  - Still use `MultiStepsPowerLoadConstraintChargePercent` (percent class)
-  - But set `car_initial_value = 0` instead of `self.car.get_car_charge_percent(time)`
-  - `car_current_charge_value = 0` as well
-  - Target charge: keep the user's target % as-is (target handler works normally)
-
-#### 2b: Constraint update callback — NEVER read SOC sensor in stale mode (charger.py:4521-4680)
-
-- [ ] 2.4 In `constraint_update_value_callback_soc()` (charger.py:4550): when `car._car_api_stale_percent_mode` is True:
-  - **Skip** `sensor_result = self.car.get_car_charge_percent(time, ...)` entirely — set `sensor_result = None`
-  - This forces the existing fallback to `result = result_calculus` (line 4575) which uses `_compute_added_charge_update()` — energy-based delta converted to % via battery capacity
-  - The `is_car_charge_growing()` check (line 4604) also uses SOC sensor — skip it in stale mode (the calculus path doesn't need it)
-  - The "expected charge state" power check (lines 4622-4656) remains valid — it checks charger power, not SOC
-
-#### 2c: SOC accessors that must be bypassed in stale mode
-
-Full audit of `get_car_charge_percent()` callers that need stale-aware behavior:
-
-| File:Line | Usage | Stale mode behavior |
-|-----------|-------|-------------------|
-| `car.py:576` | Odometer/range estimation | Return None or skip — range is unreliable when SOC is stale |
-| `car.py:595` | Person mileage/range forecast | Use conservative defaults (full charge needed) |
-| `car.py:1034` | Car state checks | Skip SOC-dependent checks |
-| `car.py:1073` | Charge type determination | Use stale-aware path |
-| `car.py:1129` | Autonomy to target SOC calc | Return None — autonomy is unknown when stale |
-| `car.py:1431` | Dynamic charging priority scoring | Use conservative score (treat as fully discharged) |
-| `charger.py:2573` | `get_stable_dynamic_charge_status()` priority | Use conservative score |
-| `charger.py:3226` | **Constraint init** | Force `car_initial_value = 0` (Task 2a) |
-| `charger.py:4550` | **Constraint update loop** | Skip sensor, use calculus only (Task 2b) |
-| `sensor.py:144-153` | HA `qs_car_soc_percent` sensor | Keep exposing last known value but add stale attribute |
-
-- [ ] 2.5 Implement stale-aware behavior for each caller above. The simplest approach: make `get_car_charge_percent()` return None when `_car_api_stale_percent_mode` is True, and ensure every caller already handles None gracefully (most already do — verify each one).
-- [ ] 2.6 Add a method or sensor attribute exposing the `+XX%` delta value (= `ct.current_value` since init was 0) for the UI
-- [ ] 2.7 Add tests: stale API uses percent constraints with initial=0 and calculus-only updates; SOC sensor is never read during stale; non-stale uses actual SOC; stale recovery re-reads real SOC and rebuilds constraint
-
-### Task 3: Infer State from Manual Charger Assignment (AC: #2)
+### Task 3: Contradiction Detection — Feature B (AC: #2)
 
 - [ ] 3.1 Add `_car_api_inferred_home` and `_car_api_inferred_plugged` flags on QSCar
-- [ ] 3.2 In charger's manual assignment path (when `set_user_originated("car_name", ...)` is called and the car has `_car_api_stale`):
-  - Set `car._car_api_inferred_home = True` and `car._car_api_inferred_plugged = True`
-  - Log info: "Car %s manually assigned to charger %s while API stale — inferring home and plugged"
-- [ ] 3.3 Modify `is_car_home()` to return True if `_car_api_inferred_home` is True (when stale)
-- [ ] 3.4 Modify `is_car_plugged()` to return True if `_car_api_inferred_plugged` is True (when stale)
+- [ ] 3.2 In the manual assignment path: when `set_user_originated("car_name", ...)` is called on a charger (or `set_user_originated("charger_name", ...)` on a car), AND the car's API reports `not_home` or `not_plugged`:
+  - Set `_car_api_stale = True` **immediately** (contradiction = proof API is wrong)
+  - Set `_car_api_inferred_home = True`, `_car_api_inferred_plugged = True`
+  - Log info: "Car %s manually assigned to charger %s while API reports not home/plugged — flagging as stale"
+- [ ] 3.3 Modify `is_car_home()` to return True when `_car_api_inferred_home` is True
+- [ ] 3.4 Modify `is_car_plugged()` to return True when `_car_api_inferred_plugged` is True
 - [ ] 3.5 Clear inferred flags when car is detached from charger or API recovers
-- [ ] 3.6 Add tests: manual assign while stale -> inferred home/plugged; detach -> flags cleared; recovery -> flags cleared
+- [ ] 3.6 Tests: manual assign with API contradicting → immediate stale + inferred flags; manual assign with API agreeing → no stale; detach → flags cleared
 
-### Task 4: Manual Mode Entities (AC: #3)
+### Task 4: Stale-Percent Mode — Constraint Behavior (AC: #1, #2)
 
-- [ ] 4.1 Add `CONF_CAR_MANUAL_MODE` and `CONF_CAR_MANUAL_SOC` constants to `const.py`
-- [ ] 4.2 Create `switch.qs_<car>_manual_mode` entity in `switch.py`
-  - When toggled on: bypass all API sensor readings, use manual SOC + charger inference
-  - When toggled off: resume normal API-based operation
-- [ ] 4.3 Create `number.qs_<car>_manual_soc` entity in `number.py`
-  - Range: 0-100, step: 1
-  - Only effective when manual mode is on
-- [ ] 4.4 Implement SOC tracking by energy accumulation in manual mode:
-  - When charger delivers energy, convert kWh to % using `car_battery_capacity`
-  - Formula: `delta_soc = (energy_kwh / battery_capacity_kwh) * 100`
-  - Update `manual_soc` accordingly
-- [ ] 4.5 In manual mode, `is_car_home()` and `is_car_plugged()` infer from charger state
-- [ ] 4.6 In manual mode, person forecast uses conservative defaults (full charge needed)
-- [ ] 4.7 Add tests for manual mode: enable/disable, SOC accumulation, charger-based inference
+**CRITICAL**: In stale mode the SOC sensor is poisoned. The ONLY source of charge progress is energy delivered by the charger (via `_compute_added_charge_update()`). The target percent handler is unchanged — user still sets target %.
 
-### Task 5: Binary Sensor for API Health (AC: #1, #4)
+#### 4a: Mode flag and percent mode override
 
-- [ ] 5.1 Add `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"` constant to `const.py`
-- [ ] 5.2 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py`
-  - State: `not self._car_api_stale`
-  - Device class: `connectivity`
-  - Attributes: `stale_since`, `stale_sensors` (list of which sensors are stale)
-- [ ] 5.3 Add tests for sensor state transitions
+- [ ] 4.1 Add `_stale_percent_mode: bool = False` flag on QSCar
+- [ ] 4.2 Set `_stale_percent_mode = True` when car enters stale AND `can_use_charge_percent_constraints_static()` is True
+- [ ] 4.3 Modify `can_use_charge_percent_constraints()` (car.py:1646) to return True when `_stale_percent_mode` is True — keeps percent mode active even with stale SOC:
+  ```python
+  if self._stale_percent_mode:
+      return True  # override: keep percent mode even with stale SOC
+  ```
+- [ ] 4.4 Modify `car_use_percent_mode_sensor_state_getter()` (car.py:536) to return `"on"` when `_stale_percent_mode` is True — ensures the card stays in percent mode
 
-### Task 6: Car Card UI Indicators (AC: #1, #2)
+#### 4b: Constraint initialization (charger.py:3220-3239)
 
-- [ ] 6.1 Add `api_ok` entity reference to car card JS entity discovery
-- [ ] 6.2 When `api_ok` is `off`:
-  - Add a red border (`border: 2px solid red` or similar) around the entire card container
-  - Center SOC display switches to `+XX%` format showing delta percent added (read from the stale percent delta sensor/attribute)
-  - Example: if constraint started at 0% and charger has delivered enough for 15%, display shows `+15%`
-- [ ] 6.3 When `api_ok` returns to `on`: remove red border, revert to normal absolute `XX%` display
-- [ ] 6.4 Dashboard header SOC widget: when `api_ok` is `off`, show the value with error styling (red text or warning icon)
+- [ ] 4.5 When `_stale_percent_mode` is True, `get_car_charge_percent()` returns None (stale tolerance expired). The existing fallback at charger.py:3227 already handles this: `if car_initial_value is None: car_initial_value = 0.0`. **No change needed here** — it happens naturally. Verify and add a log.
+- [ ] 4.6 Alternatively, if the car just became stale (Feature B, contradiction), explicitly set `car_initial_value = 0.0` and `car_current_charge_value = 0` for clarity.
 
-### Task 7: Notifications (AC: #5)
+#### 4c: Constraint update callback — NEVER read SOC sensor in stale mode (charger.py:4521-4680)
 
-- [ ] 7.1 On stale transition (`_was_car_api_stale` changed to True):
-  - Notify TheAdmin: "Car {name} API data is stale since {time}. Affected sensors: {list}. Charging will use conservative energy-based estimates."
-  - Notify Magali (if her car): "Your {car_name}'s data is stale — charging will use conservative estimates. You can enter the current battery level manually."
-- [ ] 7.2 On recovery transition:
-  - Notify TheAdmin: "Car {name} API data has recovered."
-  - If manual mode is on: "Car {name} API has recovered. Consider disabling manual mode."
-- [ ] 7.3 Use existing notification pattern from `async_notify_all_mobile_apps()` (see Story 3.3 patterns)
-- [ ] 7.4 Add tests for notification triggers
+- [ ] 4.7 In `constraint_update_value_callback_soc()` line 4550: when `self.car._stale_percent_mode` is True, skip the SOC sensor read:
+  ```python
+  if is_target_percent:
+      if self.car._stale_percent_mode:
+          sensor_result = None  # bypass stale SOC sensor entirely
+      else:
+          sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+  ```
+  This forces fallback to `result = result_calculus` (line 4575) which uses `_compute_added_charge_update()` — energy-based delta from charger power sensor.
+- [ ] 4.8 The `is_car_charge_growing()` check (line 4604) is inside the `else` branch of `if sensor_result is None`, so it's naturally skipped. **No change needed.**
+- [ ] 4.9 Guard the power-check block (lines 4622-4656): `is_car_charge_growing()` (line 4633) reads SOC history and may produce false warnings in stale mode. Add guard:
+  ```python
+  if (is_target_percent and result is not None
+      and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
+      and not self.car._stale_percent_mode):
+  ```
 
-### Task 8: Auto-Recovery (AC: #4)
+#### 4d: All other SOC accessors — full bypass audit
 
-- [ ] 8.1 In `_check_car_api_staleness()`, detect recovery using tiered sensor logic:
-  - **Entry to stale**: ALL tracked sensors stale > threshold (unchanged)
-  - **Exit from stale**: at least one "critical" sensor (home tracker OR plug state) has a fresh timestamp
-  - **Extra rule**: if `_car_api_inferred_plugged` is True (car was manually forced onto charger), the plug sensor specifically must be fresh before exiting stale
-  - This prevents: odometer updates alone clearing stale while home/plug are still wrong
-- [ ] 8.2 On recovery:
-  - Auto-clear `_car_api_stale`, `_car_api_inferred_home`, `_car_api_inferred_plugged`, `_car_api_stale_percent_mode`
-  - Re-read real SOC from API sensor, replace stale percent constraints (init=0) with normal percent constraints (init=real SOC)
-  - Notify assigned person (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
-  - If manual mode (switch) is on: notify TheAdmin suggesting to exit manual mode (don't auto-disable)
-- [ ] 8.3 Add tests for recovery scenarios:
+| Location | Method | Stale Behavior | Change Needed? |
+|----------|--------|----------------|----------------|
+| charger.py:3226 | Constraint init | Returns None → init at 0.0 (existing fallback) | No (verify) |
+| charger.py:4550 | Update callback SOC read | **Skip sensor, use calculus** | **YES** |
+| charger.py:4633 | `is_car_charge_growing()` power check | May cause false warnings | **YES — guard** |
+| charger.py:2573 | `get_stable_dynamic_charge_status` priority | Returns None → defaults to 0.0 (conservative) | No (add debug log) |
+| car.py:536 | `car_use_percent_mode_sensor_state_getter` | Override to return "on" | **YES** |
+| car.py:576 | Odometer/range estimation | Returns None → range learning suspended | No |
+| car.py:595 | Person mileage/range forecast | Returns None → conservative defaults | No |
+| car.py:568 | `car_efficiency_km_per_kwh_sensor_state_getter` | Returns None → efficiency learning suspended | No |
+| car.py:951 | `get_car_charge_percent()` core accessor | Returns None (stale tolerance expired) | No |
+| car.py:993 | `is_car_charge_growing()` | Returns False (flat probe history) | No (not called in stale paths) |
+| car.py:1034 | Car state checks | Returns None → handled | No |
+| car.py:1129 | Autonomy to target SOC | Returns None → autonomy unknown | No |
+| car.py:1431 | Dynamic charging priority | Returns None → 0.0 (conservative) | No |
+| sensor.py:144-153 | HA `qs_car_soc_percent` sensor | Expose last known value + stale attribute | No (add attribute) |
+
+- [ ] 4.10 Verify each "No change needed" row: confirm the caller handles None gracefully
+- [ ] 4.11 Tests: stale API → percent constraints with initial=0 and calculus-only updates; SOC sensor never read during stale; non-stale → actual SOC used; recovery → real SOC re-read
+
+### Task 5: Recovery Logic (AC: #4)
+
+- [ ] 5.1 Implement `can_exit_stale_percent_mode(self, time) -> bool` on QSCar:
+  ```python
+  def can_exit_stale_percent_mode(self, time):
+      if not self._stale_percent_mode:
+          return False
+      if self.is_car_api_stale(time):
+          return False  # sensors still stale
+      # At least one critical sensor must confirm physical state
+      home = self.is_car_home(time)  # uses raw sensor, not inferred
+      plugged = self.is_car_plugged(time)  # uses raw sensor, not inferred
+      if self._car_api_inferred_plugged:
+          return plugged is True  # plug sensor must specifically recover
+      return home is True or plugged is True
+  ```
+  **Important**: The `is_car_home()`/`is_car_plugged()` calls here must check the **raw sensor**, not the inferred overrides, to verify the API is actually reporting correctly.
+- [ ] 5.2 Call `can_exit_stale_percent_mode()` each cycle in `check_load_activity_and_constraints()`
+- [ ] 5.3 On recovery:
+  - Clear `_car_api_stale`, `_stale_percent_mode`, `_car_api_inferred_home`, `_car_api_inferred_plugged`
+  - Re-read real SOC via `get_car_charge_percent()` — constraint continues as `MultiStepsPowerLoadConstraintChargePercent` but update callback now reads real sensor
+  - Notify assigned person (CC-001)
+  - If manual mode switch is on: notify TheAdmin suggesting exit (don't auto-disable)
+- [ ] 5.4 Tests:
   - Odometer-only update does NOT clear stale
   - Home tracker update clears stale (when no inferred plug)
-  - Plug update clears stale when car was manually assigned (inferred plug)
-  - Constraint reassessment on recovery, person notification, manual mode persistence
+  - Plug update required when car was manually assigned (inferred plug)
+  - Constraint reassessment with real SOC on recovery
+  - Recovery call must use raw sensor values, not inferred overrides
+
+### Task 6: Manual Mode Entities (AC: #3)
+
+- [ ] 6.1 Add `CONF_CAR_MANUAL_MODE` and `CONF_CAR_MANUAL_SOC` constants to `const.py`
+- [ ] 6.2 Create `switch.qs_<car>_manual_mode` entity in `switch.py`
+  - When on: bypass all API sensor readings, use manual SOC + charger inference
+  - When off: resume normal API-based operation
+- [ ] 6.3 Create `number.qs_<car>_manual_soc` entity in `number.py` (range 0-100, step 1, only effective when manual mode on)
+- [ ] 6.4 SOC tracking by energy accumulation: `delta_soc = (energy_kwh / battery_capacity_kwh) * 100`
+- [ ] 6.5 In manual mode: `is_car_home()`/`is_car_plugged()` infer from charger state
+- [ ] 6.6 In manual mode: person forecast uses conservative defaults (full charge needed)
+- [ ] 6.7 Tests: enable/disable, SOC accumulation, charger-based inference
+
+### Task 7: Binary Sensor + Dashboard (AC: #1, #4)
+
+- [ ] 7.1 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py` following existing pattern (line 76-81):
+  - State driven by `car_api_ok_sensor_state_getter()`
+  - Device class: `connectivity`
+  - Attributes: `stale_since`, `stale_sensors`
+- [ ] 7.2 Wire `api_ok` entity in dashboard template (`ui/quiet_solar_dashboard_template.yaml.j2`, lines 43-83):
+  ```jinja2
+  {%- set e = ha.get("qs_car_api_ok") %}
+  {% if e %}api_ok: {{ e.entity_id }}{% endif %}
+  ```
+- [ ] 7.3 Dashboard SOC badge: simplest option — when stale, the existing SOC sensor can expose a `stale` attribute that HA can use for conditional styling, or return `unavailable` so HA renders the badge with warning style
+- [ ] 7.4 Tests: sensor state transitions, attribute values
+
+### Task 8: Car Card UI (AC: #1, #2)
+
+- [ ] 8.1 Read `api_ok` entity in JS entity discovery:
+  ```javascript
+  const sApiOk = this._entity(e.api_ok);
+  const isApiStale = sApiOk?.state === 'off';
+  ```
+- [ ] 8.2 Red border on entire card when stale — add CSS class `stale` to `<ha-card>`:
+  ```css
+  .card.stale { border: 3px solid var(--error-color); }
+  ```
+- [ ] 8.3 `+XX%` display: add a third branch in the percent/energy display logic (lines 143-188):
+  ```javascript
+  const isStalePercentMode = isApiStale && !useEnergyMode;
+  if (isStalePercentMode) {
+      const energyWh = Number(sCurrentInputedEnergy?.state || 0);
+      const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
+      const pctAdded = (energyWh / batteryWh) * 100;
+      soc = Math.max(0, Math.min(100, pctAdded));
+      displaySocValue = `+${this._fmt(pctAdded)}%`;
+  } else if (useEnergyMode) {
+      // ... existing energy mode ...
+  } else {
+      // ... existing percent mode ...
+  }
+  ```
+- [ ] 8.4 Distinct ring gradient for stale mode (amber/warning, different from fault-red and disconnected-grey)
+- [ ] 8.5 When `api_ok` returns to `on`: remove `stale` CSS class, revert to normal `XX%` display
+
+### Task 9: Notifications — CC-001 (AC: #5)
+
+- [ ] 9.1 On stale transition (Feature A): notify TheAdmin with stale sensor details; notify assigned person with plain-language message
+- [ ] 9.2 On contradiction detection (Feature B): notify assigned person that car is in stale +% mode
+- [ ] 9.3 On recovery: notify assigned person that data is fresh; if manual mode on, notify TheAdmin suggesting exit
+- [ ] 9.4 Use existing `async_notify_all_mobile_apps()` pattern (per-app failure isolation, catch specific exceptions)
+- [ ] 9.5 Tests: notification triggers for all three events
+
+### Task 10: Translations
+
+- [ ] 10.1 Add translation key for `BINARY_SENSOR_CAR_API_OK` in `strings.json` under binary_sensor section
+- [ ] 10.2 Run `bash scripts/generate-translations.sh` (never edit `translations/en.json` directly)
 
 ## Dev Notes
 
 ### Architecture Constraints
 
 - **Two-layer boundary**: All staleness logic lives in `ha_model/car.py` (HA layer). If any pure-logic helper is needed, place it in `home_model/` with zero HA imports.
-- **Async rules**: `_check_car_api_staleness()` is called from `update_current_metrics()` which runs in the state polling cycle (~4s). Keep it lightweight — no blocking calls.
+- **Async rules**: staleness check runs in the state polling cycle (~4s). Keep it lightweight — no blocking calls.
 - **Logging**: Lazy `%s` format, no f-strings, no trailing periods in log messages.
 - **Constants**: ALL new config keys go in `const.py`. Never hardcode strings.
 
@@ -220,43 +297,47 @@ Full audit of `get_car_charge_percent()` callers that need stale-aware behavior:
 | Pattern | Source | Reuse for |
 |---------|--------|-----------|
 | Solar stale detection | `solar.py:397-403` (`is_stale`, `_was_stale`) | Car API stale detection with transition tracking |
-| Percent mode sensor getter | `car.py:536-566` (`car_use_percent_mode_sensor_state_getter`) | Stale percent mode keeps percent ON but forces initial SOC to 0 |
+| Percent mode sensor getter | `car.py:536-566` (`car_use_percent_mode_sensor_state_getter`) | Follow pattern for `car_api_ok_sensor_state_getter()`; override to return "on" when stale |
+| `can_use_charge_percent_constraints()` | `car.py:1646-1664` | Override with `_stale_percent_mode` to keep percent active |
 | Sensor timestamp query | `device.py` (`get_sensor_latest_possible_valid_time_value_attr`) | Get last update time for each API sensor |
-| Manual charger assignment | `charger.py:2695-2709` (`get_user_originated("car_name")`) | Detection point for "manual assign while stale" |
-| Notification pattern | `home.py` (`async_notify_all_mobile_apps`) | Stale/recovery notifications |
+| Manual charger assignment | `charger.py:2695-2709` (`get_user_originated("car_name")`) | Detection point for contradiction (Feature B) |
+| Energy-based delta calc | `charger.py:4465+` (`_compute_added_charge_update`) | Sole source of charge progress in stale mode |
+| Notification pattern | `home.py` (`async_notify_all_mobile_apps`) | CC-001 notifications |
 | Binary sensor registration | `binary_sensor.py:76-81` (existing car binary sensors) | New `api_ok` binary sensor |
-| Constraint initial value | `charger.py:3220-3239` (constraint building) | Override `car_initial_value = 0` for stale percent mode |
 
 ### Key Code Locations
 
 | File | Lines | What |
 |------|-------|------|
 | `ha_model/car.py` | 62 | `CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S = 3600` |
-| `ha_model/car.py` | 536-566 | `car_use_percent_mode_sensor_state_getter()` — extend this |
+| `ha_model/car.py` | 536-566 | `car_use_percent_mode_sensor_state_getter()` — override when stale |
+| `ha_model/car.py` | 568+ | `car_efficiency_km_per_kwh_sensor_state_getter` — suspended when stale (SOC is None) |
 | `ha_model/car.py` | 876 | `is_car_plugged()` — add inferred flag check |
 | `ha_model/car.py` | 927 | `is_car_home()` — add inferred flag check |
-| `ha_model/car.py` | 951 | `get_car_charge_percent()` — manual SOC override |
-| `ha_model/car.py` | 1646-1664 | `can_use_charge_percent_constraints()` / `_static()` |
-| `ha_model/charger.py` | 2695-2709 | Manual car assignment scoring |
-| `ha_model/charger.py` | 3220-3239 | Constraint class selection (percent vs energy) |
+| `ha_model/car.py` | 951 | `get_car_charge_percent()` — returns None when stale (tolerance expired) |
+| `ha_model/car.py` | 1646-1664 | `can_use_charge_percent_constraints()` — override with `_stale_percent_mode` |
+| `ha_model/charger.py` | 2695-2709 | Manual car assignment scoring — contradiction detection point |
+| `ha_model/charger.py` | 3220-3239 | Constraint init — None→0.0 fallback already exists |
+| `ha_model/charger.py` | 4550 | **Update callback SOC read — MUST skip in stale mode** |
+| `ha_model/charger.py` | 4622-4656 | Power check block — **guard with `not _stale_percent_mode`** |
+| `ha_model/charger.py` | 4465+ | `_compute_added_charge_update()` — sole progress source in stale mode |
 | `ha_model/solar.py` | 397-403 | `is_stale` pattern to follow |
-| `ha_model/solar.py` | 469-491 | Stale transition detection pattern |
-| `ui/resources/qs-car-card.js` | 143-188 | Percent/energy mode display logic |
-| `ui/resources/qs-car-card.js` | 232-275 | Circular SVG gauge |
+| `ui/resources/qs-car-card.js` | 143-188 | Percent/energy display — add third branch for stale percent |
+| `ui/quiet_solar_dashboard_template.yaml.j2` | 43-83 | Car entity wiring — add `api_ok` |
 | `const.py` | 220 | `BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS` |
-| `const.py` | 321 | `CAR_USE_PERCENT_MODE_SENSOR` |
 | `binary_sensor.py` | 76-81 | Existing car binary sensor registration |
 
 ### Anti-Patterns to Avoid
 
-1. **Do NOT add staleness checks inside the solver** — the solver operates on constraints. Staleness changes the constraint initial value (SOC→0%) BEFORE the solver runs. Do NOT switch to energy mode for staleness — use "stale percent" (same percent constraint class, just init=0%).
-2. **Do NOT modify `home_model/` imports** — staleness detection uses HA entity timestamps, which is HA-layer concern.
-3. **Do NOT auto-disable manual mode on recovery** — the user explicitly enabled it, they should explicitly disable it. Only notify.
-4. **Do NOT treat "some sensors stale" as "API stale"** — ALL tracked API sensors must be stale to flag the API as stale. A single fresh sensor means the API is still working (partial data is better than no data).
-5. **Do NOT modify the charger scoring algorithm** — the manual assignment override already exists and works. This story adds inference ON TOP of existing assignment.
-6. **Do NOT create new JS card files** — modify the existing `qs-car-card.js`.
-7. **Do NOT read the car SOC sensor anywhere in stale mode** — the SOC sensor is poisoned when the API is stale. The ONLY source of charge progress is energy delivered by the charger (via `_compute_added_charge_update()`). Every call to `get_car_charge_percent()` must be stale-aware.
-8. **Do NOT change the target percent handler** — user can still set target SOC% normally even in stale mode. Only the initial value and progress tracking change.
+1. **Do NOT switch to energy mode for staleness** — use "stale percent" (same percent constraint class, init=0%). Do NOT add staleness checks inside the solver — staleness is resolved before the solver runs.
+2. **Do NOT read the car SOC sensor anywhere in stale mode** — the SOC sensor is poisoned. The ONLY source of charge progress is `_compute_added_charge_update()`. Every call to `get_car_charge_percent()` returns None when stale.
+3. **Do NOT change the target percent handler** — user sets target % normally, even in stale mode.
+4. **Do NOT modify `home_model/` imports** — staleness detection uses HA entity timestamps (HA-layer concern).
+5. **Do NOT auto-disable manual mode on recovery** — only notify. The user explicitly enabled it.
+6. **Do NOT treat "some sensors stale" as "API stale"** — ALL sensors must be stale for Feature A. Feature B (contradiction) is the immediate trigger.
+7. **Do NOT use inferred flags in recovery check** — `can_exit_stale_percent_mode()` must read raw sensor values (not the inferred overrides) to verify the API is actually reporting correctly.
+8. **Do NOT modify the charger scoring algorithm** — manual assignment override already works. This story adds inference on top.
+9. **Do NOT create new JS card files** — modify existing `qs-car-card.js`.
 
 ### Previous Story Intelligence
 
@@ -264,11 +345,6 @@ From **Story 3.7** (Solar Forecast API Resilience):
 - Stale detection pattern: track `_latest_successful_time`, `_was_stale` flag, transition detection
 - Binary sensor for health: `binary_sensor.qs_solar_forecast_ok` pattern
 - Notification on state transition (stale/recovery)
-- All followed lazy logging, 100% coverage
-
-From **Story 3.14** (Solar Scoring):
-- Time series utilities moved to `home_utils.py` — reuse if needed
-- Ring buffer pattern for historical data
 
 From **Story 3.3** (Grid Outage):
 - `async_notify_all_mobile_apps()` notification pattern with per-app failure isolation
@@ -277,20 +353,21 @@ From **Story 3.3** (Grid Outage):
 
 ### Testing Strategy
 
-- **Unit tests** (`@pytest.mark.unit`): stale detection logic, flag transitions, inferred state, manual mode SOC accumulation
-- **Integration tests** (`@pytest.mark.integration`): binary sensor state, switch/number entity behavior, notification triggers
-- **Scenario tests**: full flow — car goes stale → manual assign → stale percent mode (init=0%, +XX% display) → charger delivers energy → API recovers → normal percent mode resumes with real SOC
+- **Unit tests** (`@pytest.mark.unit`): stale detection logic (Feature A + B), flag transitions, inferred state, recovery tiering, `can_exit_stale_percent_mode()`
+- **Integration tests** (`@pytest.mark.integration`): binary sensor state, switch/number entities, notification triggers, dashboard template wiring
+- **Scenario tests**: full Magali flow — car goes stale → detected as guest → Magali manually assigns → contradiction triggers stale-percent mode (init=0%, +XX%) → charger delivers energy → API recovers (plug sensor fresh) → normal percent mode resumes with real SOC
 - Use `freezegun` for time-dependent staleness threshold tests
 - Use FakeHass for domain logic tests, real HA fixtures for entity integration tests
 - 100% coverage required — no exceptions
 
 ### Project Structure Notes
 
-- New constants in `const.py` — follow `CONF_CAR_*` naming pattern
+- New constants in `const.py` — follow `CONF_CAR_*` / `BINARY_SENSOR_*` naming pattern
 - New entities in `switch.py`, `number.py`, `binary_sensor.py` — follow existing car entity registration patterns
 - Car card changes in `ui/resources/qs-car-card.js` — no new JS files
-- Dashboard changes in `ui/dashboard.py` if the SOC widget error styling requires template changes
-- No config flow changes needed — stale threshold is a code-level constant (`CAR_API_STALE_THRESHOLD_S`)
+- Dashboard template changes in `ui/quiet_solar_dashboard_template.yaml.j2` — wire `api_ok`
+- Translations in `strings.json` — never edit `translations/en.json` directly
+- No config flow changes — stale threshold is code-level constant
 
 ### References
 
@@ -300,6 +377,7 @@ From **Story 3.3** (Grid Outage):
 - [Source: _bmad-output/implementation-artifacts/3-7-fm-001-solar-forecast-api-resilience.md] — Solar stale detection pattern
 - [Source: _bmad-output/implementation-artifacts/3-3-fm-005-grid-outage-verification.md] — Notification pattern
 - [Source: _bmad-output/project-context.md] — 42-rule code quality set
+- [Source: ~/.cursor/plans/fm-008_car_api_staleness_d22adccd.plan.md] — Cursor plan (merged insights)
 
 ## Dev Agent Record
 
