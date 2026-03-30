@@ -62,7 +62,13 @@ Also provide the user's story key or feature description so bmad-create-story kn
 
 #### When `--issue N` is provided
 
-Use the existing issue's `title` and `body` as the feature description for bmad-create-story. The issue body is the **primary source of requirements** — treat it like a feature description. If the issue has a `bug` label, frame the story as a bug fix.
+**CRITICAL**: The issue's `title`, `body`, and `labels` from step 1 are the **primary source of requirements**. You MUST:
+
+1. **Pass the full issue `body`** (not just the title) as the feature description to bmad-create-story. The body contains the user's actual requirements, reproduction steps, expected behavior, and context — do not paraphrase or replace it with your own analysis.
+2. **Use `labels`** to inform story framing: `bug` label → frame as bug fix; other labels (e.g., `area:car`, `area:ui`) indicate affected areas to investigate.
+3. **Use `story_type`** to set the story key prefix (step 3) and the story tone.
+
+Do NOT skip the issue body in favor of your own codebase exploration. The body is the user's intent — your analysis supplements it, not replaces it.
 
 #### When `--plan` is provided
 
