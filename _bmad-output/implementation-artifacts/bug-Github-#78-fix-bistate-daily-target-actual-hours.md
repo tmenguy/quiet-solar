@@ -20,7 +20,24 @@ so that I can accurately track my device's daily progress without confusion from
 - At 11:30, Target Hours shows 3H (today's 16:00-17:00 + tomorrow's two events)
 - Expected: Target Hours = 2H (today's 6:00-7:00 + 16:00-17:00 only)
 
-**Root cause:** The constraint list (`self._constraints`) naturally includes future events loaded by `_build_mode_constraint_items()` via `get_next_scheduled_events()`. The metrics method blindly sums all of them.
+**Root cause is twofold:**
+1. `_constraints` includes tomorrow's events (loaded via `get_next_scheduled_events()` with a 30h window) and they're all summed blindly.
+2. Past completed events from today (like 6:00-7:00) are gone from `_constraints` once completed, but `_last_completed_constraint` only stores the **last** completed one — earlier completions are lost. So for calendar modes, you cannot reconstruct today's actual from constraints alone.
+
+## Design: Two Paths by Mode Type
+
+The fix uses distinct logic depending on whether the mode is calendar-based or not.
+
+### Calendar-based modes (`bistate_mode_auto`, `bistate_mode_exact_calendar` with calendar attached)
+- **Target**: Query the calendar for ALL of today's events (local midnight to next midnight), sum durations. This captures both past and future events regardless of constraint state.
+- **Actual**: Past events (event_end <= now) = their full duration (constraint was met). Currently active constraint = its `current_value`. Use `_last_completed_constraint` only for a sanity-check warning log.
+
+### Default/pool modes (`bistate_mode_default`, pool `bistate_mode_auto`/`pool_winter_mode`)
+- **Target**: Filter `_constraints` to today only (end_of_constraint < next midnight) + `_last_completed_constraint` target if from today.
+- **Actual**: Filter `_constraints` current_values to today + `_last_completed_constraint` current_value if from today.
+
+### Mode detection
+Add a virtual method `_is_calendar_based_mode(bistate_mode)` on `QSBiStateDuration` that returns `True` for `bistate_mode_auto`/`bistate_mode_exact_calendar` when a calendar is attached. `QSPool` overrides this to return `False` for `bistate_mode_auto` and `pool_winter_mode` (since pool overrides those modes to not use calendar).
 
 ## Acceptance Criteria
 
@@ -55,32 +72,44 @@ so that I can accurately track my device's daily progress without confusion from
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add day-boundary helper method (AC: #4)
-  - [ ] Add `_get_today_boundaries(time: datetime) -> tuple[datetime, datetime]` to `QSBiStateDuration` that returns (start_of_today_utc, end_of_today_utc) using local midnight
-  - [ ] Reuse existing `get_proper_local_adapted_tomorrow()` pattern from `device.py:416-423` for the local-to-UTC conversion
+- [ ] Task 1: Add helper methods to `QSBiStateDuration` (AC: #4)
+  - [ ] Add `_get_today_boundaries(time) -> tuple[datetime, datetime]` returning `(start_of_today_utc, start_of_tomorrow_utc)` using the `get_proper_local_adapted_tomorrow` pattern
+  - [ ] Add `_is_calendar_based_mode(bistate_mode: str) -> bool` returning `True` for `bistate_mode_auto`/`bistate_mode_exact_calendar` when `self.calendar is not None`
 
-- [ ] Task 2: Refactor `update_current_metrics()` to filter by day (AC: #1, #2, #3)
-  - [ ] When `self._constraints` is non-empty, filter constraints: only include those whose `end_of_constraint` falls within today's boundaries
-  - [ ] Sum `target_value` and `current_value` only from today's filtered constraints
-  - [ ] For `_last_completed_constraint` fallback: check if it belongs to today using the same boundary logic
+- [ ] Task 2: Override `_is_calendar_based_mode` in `QSPool` (AC: #3)
+  - [ ] Return `False` for `bistate_mode_auto` and `pool_winter_mode` (pool overrides these modes to not use calendar)
+  - [ ] Delegate to `super()` for other modes
 
-- [ ] Task 3: Handle `_last_completed_constraint` for today's actual (AC: #2, #3)
-  - [ ] When active constraints exist for today AND `_last_completed_constraint` also belongs to today
-  - [ ] Add the completed constraint's `current_value` to the actual sum (it represents already-finished work from earlier today)
-  - [ ] Avoid double-counting: only add if the completed constraint is not already in `self._constraints`
+- [ ] Task 3: Pre-compute calendar metrics in `check_load_activity_and_constraints` (AC: #1, #2)
+  - [ ] Before the `self.update_current_metrics(time)` call, detect if current mode is calendar-based via `_is_calendar_based_mode(bistate_mode)`
+  - [ ] If calendar-based: call `get_next_scheduled_events(time=today_start_utc, give_currently_running_event=True)`, filter to events ending before tomorrow
+  - [ ] Compute `_today_calendar_target_s` = sum of all today's event durations
+  - [ ] Compute `_today_calendar_past_actual_s` = sum of durations of past events (event_end <= now)
+  - [ ] Store `_is_current_calendar_mode = True` flag; set `False` otherwise
+  - [ ] Sanity-check `_last_completed_constraint` against past events, emit warning log if divergent
 
-- [ ] Task 4: Add sync warning for calendar modes (AC: #5)
-  - [ ] After computing actual hours in calendar modes, compare with `_last_completed_constraint` if available
-  - [ ] Emit `_LOGGER.warning("Metrics sync discrepancy for %s: ...")` if values diverge significantly
+- [ ] Task 4: Rewrite `update_current_metrics()` with two branches (AC: #1, #2, #3)
+  - [ ] **Calendar path** (`_is_current_calendar_mode is True`):
+    - `duration_s = _today_calendar_target_s`
+    - `run_s = _today_calendar_past_actual_s`
+    - For each constraint in `_constraints` whose `end_of_constraint` is within today: `run_s += ct.current_value` (currently running events)
+  - [ ] **Default path** (non-calendar modes):
+    - Compute today boundaries via `_get_today_boundaries(time)`
+    - Filter `_constraints` to those ending within today, sum target/current
+    - If `_last_completed_constraint` is from today and not already in `_constraints`: add its target/current
+  - [ ] Preserve the existing no-constraint fallback to `_last_completed_constraint` with day-window filter
 
 - [ ] Task 5: Write tests (AC: #1-#6)
-  - [ ] Test calendar mode with multi-day events: only today's constraints counted
-  - [ ] Test default mode with single constraint per day cycle
-  - [ ] Test pool auto/winter mode day filtering
-  - [ ] Test day boundary at local midnight with timezone offset
-  - [ ] Test `_last_completed_constraint` inclusion for today
-  - [ ] Test `_last_completed_constraint` exclusion when from yesterday
-  - [ ] Verify all existing bug-74 and coverage tests still pass
+  - [ ] New file `tests/test_bug_78_daily_metrics.py`:
+    - Calendar mode with multi-day events: only today's counted for target
+    - Calendar mode actual from past events + active constraint current_value
+    - Default mode: filter to today + last-completed
+    - Pool auto/winter: not calendar-based, uses default path
+    - Day boundary at local midnight with timezone offset
+    - `_last_completed_constraint` sanity-check warning log
+    - Edge: no events today but active constraints from tomorrow = 0h target
+  - [ ] Update `tests/test_bug_74_exact_calendar_metrics.py`: `test_active_constraint_beyond_day_window_shows_target` — a tomorrow-only constraint should now show 0h target (correct per new design)
+  - [ ] Update `tests/test_ha_pool.py`: add `bistate_mode` to test setups if needed, update expectations for day filtering
 
 ## Dev Notes
 
@@ -88,17 +117,58 @@ so that I can accurately track my device's daily progress without confusion from
 
 | File | Method/Area | Lines | What to change |
 |------|-------------|-------|----------------|
-| `ha_model/bistate_duration.py` | `update_current_metrics()` | 56-94 | Add day filtering to constraint loop |
-| `ha_model/bistate_duration.py` | `_build_mode_constraint_items()` | 205-283 | No change needed — constraints are correct, just metrics filtering |
-| `ha_model/pool.py` | `_build_mode_constraint_items()` | 83-113 | No change needed — same reasoning |
-| `ha_model/device.py` | `get_proper_local_adapted_tomorrow()` | 416-423 | Reuse pattern for day boundaries |
-| `home_model/load.py` | `_last_completed_constraint` | 770, 1121 | Understand lifecycle, no changes |
+| `ha_model/bistate_duration.py` | `update_current_metrics()` | 56-94 | Rewrite with calendar/default two-path logic |
+| `ha_model/bistate_duration.py` | `check_load_activity_and_constraints()` | 285-536 | Add calendar metrics pre-computation before `update_current_metrics(time)` call at line 534 |
+| `ha_model/bistate_duration.py` | class body | new | Add `_get_today_boundaries()`, `_is_calendar_based_mode()` helpers |
+| `ha_model/pool.py` | class body | new | Override `_is_calendar_based_mode()` to return False for auto/winter |
+| `ha_model/device.py` | `get_proper_local_adapted_tomorrow()` | 416-423 | Reuse pattern for day boundaries (no changes) |
+| `ha_model/device.py` | `get_next_scheduled_events()` | 527+ | Reuse as-is, passing today's midnight as `time` for calendar pre-computation |
+| `home_model/load.py` | `_last_completed_constraint` | 770, 1121 | Understand lifecycle (no changes) |
 
 ### Architecture Constraints
 
 - **Two-layer boundary**: `update_current_metrics()` lives in `ha_model/` which is fine — it accesses `self._constraints` from the domain layer via inheritance.
 - **Logging**: Use lazy `%s` formatting, no f-strings. No periods at end of messages.
 - **Constraint fields**: `end_of_constraint` and `start_of_constraint` are UTC `datetime` objects. Use `DATETIME_MIN_UTC` / `DATETIME_MAX_UTC` sentinels for unset values.
+
+### Implementation Sketch
+
+**`_get_today_boundaries`** (new helper):
+```python
+def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
+    tomorrow_utc = self.get_proper_local_adapted_tomorrow(time)
+    local_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+    local_today = datetime(local_now.year, local_now.month, local_now.day)
+    today_utc = local_today.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+    return today_utc, tomorrow_utc
+```
+
+**`_is_calendar_based_mode`** (new virtual method):
+```python
+def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
+    return (
+        bistate_mode in ("bistate_mode_auto", "bistate_mode_exact_calendar")
+        and self.calendar is not None
+    )
+```
+
+**Pool override**:
+```python
+def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
+    if bistate_mode in ("bistate_mode_auto", "pool_winter_mode"):
+        return False
+    return super()._is_calendar_based_mode(bistate_mode)
+```
+
+**Calendar pre-computation** (in `check_load_activity_and_constraints`, before line 534):
+- Call `get_next_scheduled_events(time=today_start_utc, give_currently_running_event=True)`
+- Filter events to those ending before `tomorrow_utc`
+- Past events (event_end <= now): add full duration to `_today_calendar_past_actual_s`
+- All today events: add duration to `_today_calendar_target_s`
+
+**`update_current_metrics` two-branch rewrite:**
+- Calendar path: use pre-computed `_today_calendar_target_s`/`_today_calendar_past_actual_s` + active constraint `current_value` for in-progress events
+- Default path: day-filter `_constraints` + `_last_completed_constraint` if from today
 
 ### Existing Patterns to Follow
 
@@ -111,6 +181,12 @@ The test file `test_bug_74_exact_calendar_metrics.py` already has a `_create_bis
 - Do NOT modify `_build_mode_constraint_items()` — the constraint list is correct for the solver. Only the metrics display needs filtering.
 - Do NOT modify `get_for_solver_constraints()` — solver needs all future constraints for planning.
 - Do NOT change JS card code — the sensors will naturally reflect the corrected values.
+- Do NOT change `get_next_scheduled_events()` — reuse as-is by passing today's midnight as `time`.
+
+### Test Impact on Existing Tests
+
+- **`test_bug_74_exact_calendar_metrics.py`**: `test_active_constraint_beyond_day_window_shows_target` will need updated expectations — a tomorrow-only constraint should now show 0h target (correct per new design, since it's not today's constraint).
+- **`test_ha_pool.py`**: May need `bistate_mode` set on devices since `update_current_metrics` now branches on mode. Update expectations if constraints span days.
 
 ### Testing Patterns
 
@@ -122,11 +198,15 @@ The test file `test_bug_74_exact_calendar_metrics.py` already has a `_create_bis
 
 ### References
 
-- [Source: ha_model/bistate_duration.py#update_current_metrics] — main fix location
+- [Source: ha_model/bistate_duration.py#update_current_metrics] — main fix location, two-branch rewrite
+- [Source: ha_model/bistate_duration.py#check_load_activity_and_constraints:534] — insertion point for calendar pre-computation
 - [Source: ha_model/device.py#get_proper_local_adapted_tomorrow] — local time conversion pattern
-- [Source: tests/test_bug_74_exact_calendar_metrics.py] — test patterns and helpers
+- [Source: ha_model/device.py#get_next_scheduled_events] — calendar query for pre-computation
+- [Source: ha_model/pool.py#_build_mode_constraint_items] — pool overrides auto/winter to not use calendar
+- [Source: tests/test_bug_74_exact_calendar_metrics.py] — test patterns and helpers, expectations to update
 - [Source: home_model/load.py#ack_completed_constraint] — constraint lifecycle
 - [Source: home_model/constraints.py] — DATETIME_MIN_UTC, DATETIME_MAX_UTC sentinels
+- [Source: Cursor plan] — fix_daily_metrics_display_23c9a2dc.plan.md (synthesized into this story)
 
 ## Dev Agent Record
 
