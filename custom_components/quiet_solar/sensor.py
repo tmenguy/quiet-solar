@@ -350,8 +350,13 @@ def create_ha_sensor_for_QSHome(device: QSHome):
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key: device.home_non_controlled_power_forecast_sensor_values.get(key, None),
             qs_is_none_unavailable=True,
+            qs_prober=device.home_non_controlled_power_forecast_sensor_values_providers.get(name),
         )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+        entities.append(
+            QSBaseSensorForecastRestore(
+                data_handler=device.data_handler, device=device, description=home_forecast_power
+            )
+        )
 
     return entities
 
@@ -408,10 +413,16 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key: device.solar_forecast_sensor_values.get(key, None),
             qs_is_none_unavailable=True,
+            qs_prober=device.solar_forecast_sensor_values_probers.get(name),
         )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power))
+        entities.append(
+            QSBaseSensorForecastRestore(
+                data_handler=device.data_handler, device=device, description=home_forecast_power
+            )
+        )
 
     for provider_name in device.solar_forecast_providers:
+        provider_probers = device.solar_forecast_sensor_values_per_provider_probers.get(provider_name, {})
         for forecast_entity_name_base in QSForecastSolarSensors:
             name = f"{provider_name}_{forecast_entity_name_base}"
             home_forecast_power = QSSensorEntityDescription(
@@ -423,9 +434,12 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
                 entity_category=EntityCategory.DIAGNOSTIC,
                 value_fn=lambda device, key: device.solar_forecast_sensor_values_per_provider.get(key, None),
                 qs_is_none_unavailable=True,
+                qs_prober=provider_probers.get(forecast_entity_name_base),
             )
             entities.append(
-                QSBaseSensor(data_handler=device.data_handler, device=device, description=home_forecast_power)
+                QSBaseSensorForecastRestore(
+                    data_handler=device.data_handler, device=device, description=home_forecast_power
+                )
             )
 
     return entities
@@ -496,6 +510,7 @@ class QSSensorEntityDescription(SensorEntityDescription):
     qs_is_none_unavailable: bool = False
     value_fn: Callable[[AbstractDevice, str], Any] | None = None
     value_fn_and_attr: Callable[[AbstractDevice, str], tuple[Any, Any]] | None = None
+    qs_prober: Any | None = None
 
 
 class QSBaseSensor(QSDeviceEntity, SensorEntity):
@@ -598,6 +613,31 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
     # @property
     # def extra_state_attributes(self) -> dict[str, Any]:
     #    """Return the device specific state attributes."""
+
+
+class QSBaseSensorForecastRestore(QSBaseSensorRestore):
+    """Sensor that also restores forecast prober stored values on startup."""
+
+    PROBER_ATTR_KEY = "_qs_prober_data"
+
+    @property
+    def extra_restore_state_data(self) -> QSExtraStoredData:
+        """Return sensor state data including prober serialization."""
+        attrs = dict(self._attr_extra_state_attributes or {})
+        prober = self.entity_description.qs_prober
+        if prober is not None:
+            attrs[self.PROBER_ATTR_KEY] = prober.serialize_stored_values()
+        return QSExtraStoredData(self._attr_native_value, attrs)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore sensor state and prober stored values on startup."""
+        await super().async_added_to_hass()
+
+        prober = self.entity_description.qs_prober
+        if prober is not None and self._attr_extra_state_attributes:
+            prober_data = self._attr_extra_state_attributes.pop(self.PROBER_ATTR_KEY, None)
+            if prober_data is not None:
+                prober.restore_stored_values(prober_data)
 
 
 class QSDeviceSensorData(QSBaseSensorRestore):

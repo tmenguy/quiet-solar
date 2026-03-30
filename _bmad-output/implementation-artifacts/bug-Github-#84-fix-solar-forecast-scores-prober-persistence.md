@@ -1,6 +1,6 @@
 # Bug Fix: Fix solar forecast scores, prober persistence, and entity lookup
 
-Status: ready-for-dev
+Status: done
 issue: 84
 branch: "QS_84"
 
@@ -58,25 +58,25 @@ Forecast sensor entities are registered on the **Solar** device (via `entity.py:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add serialize/restore to QSforecastValueSensor (AC: 1, 4, 5)
-  - [ ] 1.1 Add `serialize_stored_values() -> list[list]` method returning `[[iso_str, float], ...]`
-  - [ ] 1.2 Add `restore_stored_values(data: list[list])` class method rebuilding `_stored_values`
-  - [ ] 1.3 Add `qs_prober` optional field to `QSSensorEntityDescription` dataclass
-  - [ ] 1.4 Wire prober references into forecast sensor entity descriptions (solar + home)
-  - [ ] 1.5 Create `QSBaseSensorForecastRestore` extending `QSBaseSensorRestore` for forecast sensors
-  - [ ] 1.6 Use `QSBaseSensorForecastRestore` for forecast sensor entities in `_get_forecast_sensors_*` functions
-- [ ] Task 2: Fix forecast entity lookup for scoring (AC: 2, 3, 6, 7)
-  - [ ] 2.1 At line 3105: change `self.home.ha_entities` → `self.home.solar_plant.ha_entities`
-  - [ ] 2.2 At line 3105: change `entity_id=ha_entity` → `entity_id=ha_entity.entity_id`
-  - [ ] 2.3 At line 3126: same two changes for per-provider lookup
-  - [ ] 2.4 Add null guard for `self.home.solar_plant` (property can return None based on home_mode)
-- [ ] Task 3: Add tests (AC: 5, 6, 7)
-  - [ ] 3.1 Test prober serialization round-trip
-  - [ ] 3.2 Test prober restore from serialized data
-  - [ ] 3.3 Test entity lookup uses solar_plant.ha_entities
-  - [ ] 3.4 Test entity_id passed as string to QSSolarHistoryVals
-- [ ] Task 4: Document deferred entity naming issue
-  - [ ] 4.1 Add entry to `_bmad-output/implementation-artifacts/deferred-work.md`
+- [x] Task 1: Add serialize/restore to QSforecastValueSensor (AC: 1, 4, 5)
+  - [x] 1.1 Add `serialize_stored_values() -> list[list]` method returning `[[iso_str, float], ...]`
+  - [x] 1.2 Add `restore_stored_values(data: list[list])` class method rebuilding `_stored_values`
+  - [x] 1.3 Add `qs_prober` optional field to `QSSensorEntityDescription` dataclass
+  - [x] 1.4 Wire prober references into forecast sensor entity descriptions (solar + home)
+  - [x] 1.5 Create `QSBaseSensorForecastRestore` extending `QSBaseSensorRestore` for forecast sensors
+  - [x] 1.6 Use `QSBaseSensorForecastRestore` for forecast sensor entities in `_get_forecast_sensors_*` functions
+- [x] Task 2: Fix forecast entity lookup for scoring (AC: 2, 3, 6, 7)
+  - [x] 2.1 At line 3105: change `self.home.ha_entities` → `self.home.solar_plant.ha_entities`
+  - [x] 2.2 At line 3105: change `entity_id=ha_entity` → `entity_id=ha_entity.entity_id`
+  - [x] 2.3 At line 3126: same two changes for per-provider lookup
+  - [x] 2.4 Add null guard for `self.home.solar_plant` (property can return None based on home_mode)
+- [x] Task 3: Add tests (AC: 5, 6, 7)
+  - [x] 3.1 Test prober serialization round-trip
+  - [x] 3.2 Test prober restore from serialized data
+  - [x] 3.3 Test entity lookup uses solar_plant.ha_entities
+  - [x] 3.4 Test entity_id passed as string to QSSolarHistoryVals
+- [x] Task 4: Document deferred entity naming issue
+  - [x] 4.1 Add entry to `_bmad-output/implementation-artifacts/deferred-work.md`
 
 ## Dev Notes
 

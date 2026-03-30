@@ -380,8 +380,8 @@ class TestSolarForecastSetAndReset:
                 solar_inverter_active_power=None,
                 solar_inverter_input_active_power="sensor.solar_input",
                 solar_forecast_providers={},
+                ha_entities={},
             ),
-            ha_entities={},
         )
         forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
         forecast._in_reset = False
@@ -410,8 +410,8 @@ class TestSolarForecastSetAndReset:
                 solar_inverter_active_power=None,
                 solar_inverter_input_active_power="sensor.solar_input",
                 solar_forecast_providers={},
+                ha_entities={},
             ),
-            ha_entities={},
         )
         forecast = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
         forecast.solar_production_history = MagicMock()
@@ -813,7 +813,7 @@ class TestSolarForecastSetWithHaEntities:
 
         ha_entities = {}
         for name in QSForecastSolarSensors:
-            ha_entities[name] = f"sensor.{name}"
+            ha_entities[name] = SimpleNamespace(entity_id=f"sensor.{name}")
 
         home = SimpleNamespace(
             hass=None,
@@ -821,8 +821,8 @@ class TestSolarForecastSetWithHaEntities:
                 solar_inverter_active_power=None,
                 solar_inverter_input_active_power=None,
                 solar_forecast_providers={},
+                ha_entities=ha_entities,
             ),
-            ha_entities=ha_entities,
         )
         handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
         handler._in_reset = False
@@ -847,7 +847,7 @@ class TestSolarForecastSetWithHaEntities:
 
         ha_entities = {}
         for name in QSForecastSolarSensors:
-            ha_entities[f"Solcast_{name}"] = f"sensor.solcast_{name}"
+            ha_entities[f"Solcast_{name}"] = SimpleNamespace(entity_id=f"sensor.solcast_{name}")
 
         home = SimpleNamespace(
             hass=None,
@@ -855,8 +855,8 @@ class TestSolarForecastSetWithHaEntities:
                 solar_inverter_active_power=None,
                 solar_inverter_input_active_power=None,
                 solar_forecast_providers={"Solcast": MagicMock()},
+                ha_entities=ha_entities,
             ),
-            ha_entities=ha_entities,
         )
         handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
         handler._in_reset = False
@@ -882,8 +882,8 @@ class TestSolarForecastSetWithHaEntities:
 
         ha_entities = {}
         for name in QSForecastSolarSensors:
-            ha_entities[name] = f"sensor.{name}"
-            ha_entities[f"Solcast_{name}"] = f"sensor.solcast_{name}"
+            ha_entities[name] = SimpleNamespace(entity_id=f"sensor.{name}")
+            ha_entities[f"Solcast_{name}"] = SimpleNamespace(entity_id=f"sensor.solcast_{name}")
 
         home = SimpleNamespace(
             hass=None,
@@ -891,8 +891,8 @@ class TestSolarForecastSetWithHaEntities:
                 solar_inverter_active_power=None,
                 solar_inverter_input_active_power="sensor.solar_input",
                 solar_forecast_providers={"Solcast": MagicMock()},
+                ha_entities=ha_entities,
             ),
-            ha_entities=ha_entities,
         )
         handler = QSHomeSolarAndConsumptionHistoryAndForecast(home=home, storage_path=str(tmp_path))
 

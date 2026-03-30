@@ -290,6 +290,7 @@ async def test_forecast_reset_full_path(hass: HomeAssistant, home_config_entry, 
         solar_inverter_active_power="sensor.solar_power",
         solar_inverter_input_active_power=None,
         solar_forecast_providers={},
+        ha_entities={},
     )
     home.grid_active_power_sensor = "sensor.grid_power"
     home.grid_active_power_sensor_inverted = False
@@ -361,6 +362,7 @@ async def test_forecast_reset_with_input_active_power(hass: HomeAssistant, home_
         solar_inverter_input_active_power="sensor.solar_input_power",
         solar_max_output_power_value=1000.0,
         solar_forecast_providers={},
+        ha_entities={},
     )
     home.grid_active_power_sensor = "sensor.grid_power"
     home.grid_active_power_sensor_inverted = False
