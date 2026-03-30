@@ -173,6 +173,26 @@ class QSforecastValueSensor:
         self._delta = timedelta(seconds=duration_s)
         self.name = name
 
+    def serialize_stored_values(self) -> list[list]:
+        """Serialize stored values for persistence across restarts."""
+        return [[t.isoformat(), v] for t, v in self._stored_values]
+
+    def restore_stored_values(self, data: list[list] | None) -> None:
+        """Restore stored values from serialized data."""
+        if data is None:
+            return
+        restored = []
+        for entry in data:
+            try:
+                if len(entry) < 2:
+                    continue
+                t = datetime.fromisoformat(entry[0])
+                v = float(entry[1])
+                restored.append((t, v))
+            except ValueError, TypeError, IndexError:
+                continue
+        self._stored_values = restored
+
     def push_and_get(self, time: datetime) -> float | None:
 
         if self._delta == timedelta(seconds=0) and self._current_getter is not None:
@@ -3101,10 +3121,11 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
 
         if do_solar_forecast:
             ret = {}
+            solar = self.home.solar_plant
             for forecast_entity_name in QSForecastSolarSensors:
-                ha_entity = self.home.ha_entities.get(forecast_entity_name, None)
+                ha_entity = solar.ha_entities.get(forecast_entity_name, None)
                 if ha_entity is not None:
-                    forecast_history = QSSolarHistoryVals(entity_id=ha_entity, forecast=self)
+                    forecast_history = QSSolarHistoryVals(entity_id=ha_entity.entity_id, forecast=self)
                     await forecast_history.init(time, for_reset=for_reset)
                     if for_reset:
                         await forecast_history.save_values(for_reset=True)
@@ -3117,15 +3138,16 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
 
         if do_solar_forecast_per_provider:
             ret = {}
+            solar = self.home.solar_plant
 
-            for provider_name in self.home.solar_plant.solar_forecast_providers:
+            for provider_name in solar.solar_forecast_providers:
                 ret_provider = {}
 
                 for forecast_entity_name_base in QSForecastSolarSensors:
                     forecast_entity_name = f"{provider_name}_{forecast_entity_name_base}"
-                    ha_entity = self.home.ha_entities.get(forecast_entity_name, None)
+                    ha_entity = solar.ha_entities.get(forecast_entity_name, None)
                     if ha_entity is not None:
-                        forecast_history = QSSolarHistoryVals(entity_id=ha_entity, forecast=self)
+                        forecast_history = QSSolarHistoryVals(entity_id=ha_entity.entity_id, forecast=self)
                         await forecast_history.init(time, for_reset=for_reset)
                         if for_reset:
                             await forecast_history.save_values(for_reset=True)
