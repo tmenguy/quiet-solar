@@ -1,6 +1,6 @@
 # Cache Quality Gate Results to Avoid Redundant Runs
 
-Status: ready-for-dev
+Status: done
 issue: 76
 branch: "QS_76"
 
