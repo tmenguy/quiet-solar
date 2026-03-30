@@ -1,6 +1,6 @@
 # Story 3.9: FM-008 — Car/EV Vendor API Resilience
 
-Status: implemented
+Status: done
 issue: 82
 branch: "QS_82"
 

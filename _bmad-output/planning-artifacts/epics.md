@@ -837,8 +837,7 @@ So that the system charges more conservatively when it's uncertain rather than r
 **Then** `sensor.qs_<person>_prediction_confidence` shows current confidence percentage
 **And** low confidence is visually distinguishable (sensor attributes include data quality indicators)
 
-### Story 3.9: FM-008 — Car/EV Vendor API Resilience
-
+### Story 3.9: FM-008 — Car/EV Vendor API Resilience [DONE]
 As TheAdmin,
 I want the system to detect stale car API data, offer a manual car mode when the API is unreliable for days, and handle the cascading impact across charging, prediction, and person tracking,
 So that an unreliable car vendor API doesn't silently degrade the entire household optimization.
