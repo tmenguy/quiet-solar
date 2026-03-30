@@ -94,7 +94,7 @@ flowchart TD
 ### AC3: Stale Mode Select + Status Binary Sensor
 
 **Given** TheAdmin wants to control how the system handles car API staleness
-**When** TheAdmin uses `select.qs_<car>_is_stale_mode` (restore select, persists across restarts)
+**When** TheAdmin uses `select.qs_<car>_stale_mode` (restore select, persists across restarts)
 **Then** the select has three options:
   - **Auto** (default): staleness is detected automatically (Feature A + B). Auto-recovery when API resumes.
   - **Force Stale**: car is immediately forced into stale-percent mode regardless of API sensor freshness. Blocks auto-recovery. Useful when TheAdmin knows the API is unreliable (e.g., Renault servers down).
@@ -284,7 +284,7 @@ Four notification events:
   - `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"`
   - `BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"`
   - `CAR_STALE_MODE_AUTO = "auto"`, `CAR_STALE_MODE_FORCE_STALE = "force_stale"`, `CAR_STALE_MODE_FORCE_NOT_STALE = "force_not_stale"`
-- [ ] 6.2 Create `select.qs_<car>_is_stale_mode` as a **restore select** in `select.py`:
+- [ ] 6.2 Create `select.qs_<car>_stale_mode` as a **restore select** in `select.py`:
   - Options: `["auto", "force_stale", "force_not_stale"]`
   - Default: `"auto"`
   - Restore select: persists across HA restarts
