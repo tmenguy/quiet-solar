@@ -3123,7 +3123,7 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
             ret = {}
             solar = self.home.solar_plant
             for forecast_entity_name in QSForecastSolarSensors:
-                ha_entity = solar.ha_entities.get(forecast_entity_name, None) if solar is not None else None
+                ha_entity = solar.ha_entities.get(forecast_entity_name, None)
                 if ha_entity is not None:
                     forecast_history = QSSolarHistoryVals(entity_id=ha_entity.entity_id, forecast=self)
                     await forecast_history.init(time, for_reset=for_reset)
@@ -3145,7 +3145,7 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
 
                 for forecast_entity_name_base in QSForecastSolarSensors:
                     forecast_entity_name = f"{provider_name}_{forecast_entity_name_base}"
-                    ha_entity = solar.ha_entities.get(forecast_entity_name, None) if solar is not None else None
+                    ha_entity = solar.ha_entities.get(forecast_entity_name, None)
                     if ha_entity is not None:
                         forecast_history = QSSolarHistoryVals(entity_id=ha_entity.entity_id, forecast=self)
                         await forecast_history.init(time, for_reset=for_reset)
