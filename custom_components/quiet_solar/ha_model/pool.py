@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import time as dt_time
 
 from ..const import (
@@ -13,7 +13,6 @@ from ..const import (
 )
 from ..ha_model.bistate_duration import ConstraintItemType
 from ..ha_model.on_off_duration import QSOnOffDuration
-from ..home_model.constraints import DATETIME_MIN_UTC
 
 
 class QSPool(QSOnOffDuration):
@@ -51,43 +50,6 @@ class QSPool(QSOnOffDuration):
         if temp is None:
             return None
         return temp
-
-    def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
-
-        if end_range is None:
-            end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
-
-        end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time, output_in_utc=True)
-        duration_s = 0.0
-        run_s = 0.0
-
-        if end_day is not None:
-            # DST-safe: compute previous day boundary via local time, not raw 24h offset
-            start_day = self.get_next_time_from_hours(
-                local_hours=end_range,
-                time_utc_now=end_day - timedelta(hours=26),
-                output_in_utc=True,
-            )
-
-            ct_to_probe = []
-            if self._constraints:
-                ct_to_probe.extend(self._constraints)
-            elif self._last_completed_constraint is not None:
-                ct_to_probe.append(self._last_completed_constraint)
-
-            # keep only the one for the current day
-            for ct in ct_to_probe:
-                if ct.end_of_constraint <= end_day or (
-                    ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
-                ):
-                    if ct.end_of_constraint > start_day or (
-                        ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint > start_day
-                    ):
-                        duration_s += ct.target_value
-                        run_s += ct.current_value
-
-        self.qs_bistate_current_on_h = run_s / 3600.0
-        self.qs_bistate_current_duration_h = duration_s / 3600.0
 
     def support_green_only_switch(self) -> bool:
         return True
