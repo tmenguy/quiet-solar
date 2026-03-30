@@ -58,7 +58,17 @@ The script handles everything automatically:
 The script outputs structured JSON. Present to the user:
 - Success/failure status
 - Any recovery instructions (if failed)
-- Release: if `release.suggestion` is `"release"`, show the user the `release.instructions` and `release.command` from the JSON output — this gives them a copy-paste command to run from the main repo. If `"no-release"`, tell the user no release is needed.
+- Release: if `release.suggestion` is `"release"`, present both options from the release field:
+
+```
+**Option A — New context:**
+  {{release.new_context}}
+
+**Option B — Same context:**
+  {{release.same_context}}
+```
+
+If `"no-release"`, tell the user no release is needed.
 
 ### 4. Commit epics update (if applicable)
 

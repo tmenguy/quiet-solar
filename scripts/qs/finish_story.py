@@ -19,6 +19,7 @@ from pathlib import Path
 
 from utils import (
     auto_commit_and_push,
+    build_next_step,
     check_ci_status,
     close_issue_if_open,
     ensure_issue_link,
@@ -316,6 +317,7 @@ def phase_merge(
 def phase_report(
     steps: dict,
     *,
+    main_dir: str,
     changed_files: list[str] | None = None,
     failed_phase: str | None = None,
 ) -> dict:
@@ -323,20 +325,22 @@ def phase_report(
 
     Returns the full report with success status, all step results,
     release suggestion, and recovery instructions on failure.
+
+    ``main_dir`` must be resolved by the caller before the worktree is
+    cleaned up — after cleanup the CWD may no longer exist.
     """
     release = suggest_release(changed_files or [])
-    main_dir = str(get_main_worktree())
 
     release_info: dict = {"suggestion": release}
     if release == "release":
-        release_info["command"] = (
-            f"cd {main_dir} && claude --dangerously-skip-permissions"
-            f" --model opus --effort max '/release'"
+        next_step = build_next_step(
+            main_dir, "release", "Release",
+            skill_prompt="/release",
+            tab_title="Quiet Solar Release",
         )
-        release_info["instructions"] = (
-            f"Run from the main repo ({main_dir}):"
-            f"\n  cd {main_dir} && claude '/release'"
-        )
+        release_info["same_context"] = next_step["same_context"]
+        release_info["new_context"] = next_step["new_context"]
+        release_info["tool"] = next_step["tool"]
 
     if failed_phase:
         recovery_map = {
@@ -375,12 +379,15 @@ def run_finish_story(
     """
     steps: dict = {}
 
+    # Capture main_dir early — after worktree cleanup CWD may not exist
+    main_dir = str(get_main_worktree())
+
     # Auto-detect from branch
     branch = get_current_branch()
     if issue_number is None:
         issue_number = get_issue_from_branch(branch)
     if issue_number is None:
-        return phase_report(steps, failed_phase="prepare")
+        return phase_report(steps, main_dir=main_dir, failed_phase="prepare")
 
     # Auto-discover story file by issue number (unless overridden)
     if story_file is None:
@@ -408,7 +415,7 @@ def run_finish_story(
     if pr_number is None:
         pr_number = pr.get("pr_number")
     if pr_number is None:
-        return phase_report(steps, failed_phase="prepare")
+        return phase_report(steps, main_dir=main_dir, failed_phase="prepare")
 
     # Phase 2: Validate
     validate_result = phase_validate(
@@ -420,7 +427,7 @@ def run_finish_story(
 
     # Block on quality gate failure
     if not validate_result["quality_gate"]["passed"]:
-        return phase_report(steps, failed_phase="validate")
+        return phase_report(steps, main_dir=main_dir, failed_phase="validate")
 
     # Capture changed files BEFORE merge (branch gets deleted during merge)
     changed = get_changed_files()
@@ -435,10 +442,10 @@ def run_finish_story(
     steps["merge"] = merge_result
 
     if not merge_result["merge"].get("merged"):
-        return phase_report(steps, changed_files=changed, failed_phase="merge")
+        return phase_report(steps, main_dir=main_dir, changed_files=changed, failed_phase="merge")
 
     # Phase 4: Report
-    return phase_report(steps, changed_files=changed)
+    return phase_report(steps, main_dir=main_dir, changed_files=changed)
 
 
 def main() -> None:

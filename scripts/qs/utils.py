@@ -148,14 +148,23 @@ def detect_tool() -> str:
     return "claude"
 
 
-def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str | None = None) -> str:
+def claude_launch_command(
+    work_dir: str,
+    issue: int | str,
+    title: str,
+    *,
+    prompt: str | None = None,
+    tab_title: str | None = None,
+) -> str:
     """Build a short launch command that delegates to a temp script.
 
     The full command is written to a temp .sh file so that the returned
     string is always a short ``sh /tmp/...`` one-liner safe for
     copy-paste across terminals (no line-wrap issues).
+
+    Returns ``sh /path/to/qs_launch_<issue>.sh`` — ready to copy-paste.
     """
-    tab_title = f"QS_{issue}: {title}"
+    tab_title = tab_title or f"QS_{issue}: {title}"
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
     full_cmd = (
@@ -170,21 +179,22 @@ def claude_launch_command(work_dir: str, issue: int, title: str, *, prompt: str 
     script_path.write_text(f"#!/bin/sh\n{full_cmd}\n")
     script_path.chmod(0o755)
 
-    return str(script_path)
+    return f"sh {script_path}"
 
 
 def build_next_step(
     work_dir: str,
-    issue: int,
+    issue: int | str,
     title: str,
     *,
     skill_prompt: str,
     tool: str | None = None,
+    tab_title: str | None = None,
 ) -> dict:
     """Build tool-appropriate next-step instructions.
 
     Returns a dict with keys: same_context, new_context, tool.
-    - For Claude Code: new_context is a sh launch script path.
+    - For Claude Code: new_context is a ready-to-paste ``sh /tmp/...`` command.
     - For Cursor: new_context is human-readable instructions to open a
       new Cursor workspace at the worktree and run the skill.
     """
@@ -198,6 +208,7 @@ def build_next_step(
     else:
         new_context = claude_launch_command(
             work_dir, issue, title, prompt=skill_prompt,
+            tab_title=tab_title,
         )
 
     return {

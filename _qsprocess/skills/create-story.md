@@ -77,9 +77,20 @@ git push -u origin QS_{{issue_number}}
 
 ### 7. Output setup command
 
-Tell the user:
+Run `next_step.py` to generate both command options:
+
+```bash
+python scripts/qs/next_step.py --skill setup-story --issue {{issue_number}} --work-dir "$(pwd)" --title "{{title}}"
+```
+
+Parse the JSON output and tell the user:
+
 ```
 Story created on branch QS_{{issue_number}}.
-To set up for implementation, run:
-  /setup-story {{issue_number}}
+
+**Option A — New context:**
+  {{new_context}}
+
+**Option B — Same context:**
+  {{same_context}}
 ```
