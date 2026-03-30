@@ -467,6 +467,27 @@ def test_get_proper_local_adapted_tomorrow(device_mixin_device):
     assert result.tzinfo == pytz.UTC
 
 
+def test_get_proper_local_adapted_today(device_mixin_device):
+    """Test get_proper_local_adapted_today returns start of current local day in UTC."""
+    now = datetime.datetime(2026, 3, 30, 14, 30, 0, tzinfo=pytz.UTC)
+
+    result = device_mixin_device.get_proper_local_adapted_today(now)
+
+    assert result <= now
+    assert result.tzinfo == pytz.UTC
+    # Today must be exactly one day before tomorrow
+    tomorrow = device_mixin_device.get_proper_local_adapted_tomorrow(now)
+    assert (tomorrow - result).total_seconds() == pytest.approx(86400.0)
+
+
+def test_get_proper_local_adapted_today_none_defaults_to_now(device_mixin_device):
+    """Test get_proper_local_adapted_today with None uses current time."""
+    result = device_mixin_device.get_proper_local_adapted_today(None)
+
+    assert result is not None
+    assert result.tzinfo == pytz.UTC
+
+
 @pytest.fixture
 def device_mixin_device_power(hass: HomeAssistant, device_mixin_config_entry, device_mixin_home):
     """ConcreteHADevice instance with power sensor for probe tests."""

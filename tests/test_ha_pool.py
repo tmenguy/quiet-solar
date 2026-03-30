@@ -29,10 +29,7 @@ class FakeQSPool:
         self.default_on_finish_time = kwargs.get("default_on_finish_time", dt_time(hour=0, minute=0, second=0))
         self.is_load_time_sensitive = False
 
-        # Calendar metrics (bug #78)
-        self._is_current_calendar_mode = False
-        self._today_calendar_target_s = 0.0
-        self._today_calendar_past_actual_s = 0.0
+        self.calendar = None
 
         # Pool steps configuration
         self.pool_steps = []
@@ -51,6 +48,10 @@ class FakeQSPool:
     def get_state_history_data(self, entity_id, num_seconds_before, to_ts, keep_invalid_states):
         """Mock temperature history."""
         return self._temp_history
+
+    def _is_calendar_based_mode(self, bistate_mode):
+        """Pool never uses calendar-based mode for auto/winter."""
+        return False
 
     def is_best_effort_only_load(self):
         return False
@@ -194,7 +195,7 @@ def _make_pool_with_day_bounds(now, today_utc=None, tomorrow_utc=None):
     return pool, today_utc, tomorrow_utc
 
 
-def test_pool_update_current_metrics_completed_and_active_sums_both():
+async def test_pool_update_current_metrics_completed_and_active_sums_both():
     """Test that active + completed constraints from today are both counted."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -218,14 +219,14 @@ def test_pool_update_current_metrics_completed_and_active_sums_both():
     pool._last_completed_constraint = completed_ct
     pool._constraints = [active_ct]
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     # Both constraints from today are summed
     assert pool.qs_bistate_current_on_h == (3600.0 + 1800.0) / 3600.0
     assert pool.qs_bistate_current_duration_h == (7200.0 + 3600.0) / 3600.0
 
 
-def test_pool_update_current_metrics_completed_only_shows_completed():
+async def test_pool_update_current_metrics_completed_only_shows_completed():
     """Test that completed constraint values display when no active constraints."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -243,13 +244,13 @@ def test_pool_update_current_metrics_completed_only_shows_completed():
     pool._last_completed_constraint = completed_ct
     pool._constraints = []
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 3600.0 / 3600.0
     assert pool.qs_bistate_current_duration_h == 3600.0 / 3600.0
 
 
-def test_pool_update_current_metrics_after_reset_shows_zero():
+async def test_pool_update_current_metrics_after_reset_shows_zero():
     """Test that metrics are zero when no constraints and no completed constraint."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -261,13 +262,13 @@ def test_pool_update_current_metrics_after_reset_shows_zero():
     pool.qs_bistate_current_on_h = 99.0
     pool.qs_bistate_current_duration_h = 99.0
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 0.0
     assert pool.qs_bistate_current_duration_h == 0.0
 
 
-def test_pool_update_current_metrics_partial_completion():
+async def test_pool_update_current_metrics_partial_completion():
     """Test metrics with partial completion (target_value != current_value)."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -285,13 +286,13 @@ def test_pool_update_current_metrics_partial_completion():
     pool._last_completed_constraint = None
     pool._constraints = [ct]
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 2700.0 / 3600.0
     assert pool.qs_bistate_current_duration_h == 7200.0 / 3600.0
 
 
-def test_pool_update_current_metrics_day_boundary_excludes_old():
+async def test_pool_update_current_metrics_day_boundary_excludes_old():
     """Test that constraints outside the current day window are excluded."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
     from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
@@ -309,13 +310,13 @@ def test_pool_update_current_metrics_day_boundary_excludes_old():
     pool._last_completed_constraint = old_ct
     pool._constraints = []
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 0.0
     assert pool.qs_bistate_current_duration_h == 0.0
 
 
-def test_pool_update_current_metrics_multiple_active_constraints_sum():
+async def test_pool_update_current_metrics_multiple_active_constraints_sum():
     """Test that multiple active constraints within today are all summed."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -339,13 +340,13 @@ def test_pool_update_current_metrics_multiple_active_constraints_sum():
     pool._last_completed_constraint = None
     pool._constraints = [ct1, ct2]
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == (1800.0 + 0.0) / 3600.0
     assert pool.qs_bistate_current_duration_h == (3600.0 + 7200.0) / 3600.0
 
 
-def test_pool_update_current_metrics_tomorrow_constraint_excluded():
+async def test_pool_update_current_metrics_tomorrow_constraint_excluded():
     """Test that constraints ending tomorrow are excluded from today's metrics."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -363,13 +364,13 @@ def test_pool_update_current_metrics_tomorrow_constraint_excluded():
     pool._last_completed_constraint = None
     pool._constraints = [ct]
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 0.0
     assert pool.qs_bistate_current_duration_h == 0.0
 
 
-def test_pool_update_current_metrics_completed_from_today_included():
+async def test_pool_update_current_metrics_completed_from_today_included():
     """Test that completed constraint from today is counted in metrics."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
@@ -387,7 +388,7 @@ def test_pool_update_current_metrics_completed_from_today_included():
     pool._last_completed_constraint = ct
     pool._constraints = []
 
-    QSBiStateDuration.update_current_metrics(pool, now)
+    await QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 1800.0 / 3600.0
     assert pool.qs_bistate_current_duration_h == 5400.0 / 3600.0

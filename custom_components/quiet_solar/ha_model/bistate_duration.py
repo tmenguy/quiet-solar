@@ -53,41 +53,66 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
 
-        # Calendar metrics pre-computed by check_load_activity_and_constraints
-        self._is_current_calendar_mode: bool = False
-        self._today_calendar_target_s: float = 0.0
-        self._today_calendar_past_actual_s: float = 0.0
-
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
         tomorrow_utc = self.get_proper_local_adapted_tomorrow(time)
-        local_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        local_today = datetime(local_now.year, local_now.month, local_now.day)
-        today_utc = local_today.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        today_utc = self.get_proper_local_adapted_today(time)
         return today_utc, tomorrow_utc
 
     def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
         """Return True if the current mode uses calendar events for daily metrics."""
         return bistate_mode in ("bistate_mode_auto", "bistate_mode_exact_calendar") and self.calendar is not None
 
-    def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
+    async def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
         """Update bistate UI metrics with today-only values.
 
         Two distinct paths depending on mode:
-        - Calendar path: uses pre-computed calendar metrics for today only
+        - Calendar path: fetches calendar events and computes today metrics inline
         - Default path: day-filters _constraints and _last_completed_constraint
         """
         duration_s = 0.0
         run_s = 0.0
 
-        if self._is_current_calendar_mode:
-            # Calendar path: pre-computed target + past actuals + active constraint
-            duration_s = self._today_calendar_target_s
-            run_s = self._today_calendar_past_actual_s
+        if self._is_calendar_based_mode(self.bistate_mode):
+            # Calendar path: fetch events and compute today target + past actuals
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
+            events = await self.get_next_scheduled_events(time=today_utc, give_currently_running_event=True)
+            target_s = 0.0
+            past_actual_s = 0.0
+            for ev_start, ev_end in events:
+                if ev_end > tomorrow_utc:
+                    continue
+                ev_duration = (ev_end - ev_start).total_seconds()
+                target_s += ev_duration
+                if ev_end <= time:
+                    past_actual_s += ev_duration
+
+            duration_s = target_s
+            run_s = past_actual_s
+
+            # Add active constraint current_value for today
             for ct in self._constraints:
                 if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     run_s += ct.current_value
+
+            # AC5: Sanity-check _last_completed_constraint against calendar
+            if self._last_completed_constraint is not None:
+                lcc = self._last_completed_constraint
+                if (
+                    lcc.end_of_constraint != DATETIME_MAX_UTC
+                    and lcc.end_of_constraint > today_utc
+                    and lcc.end_of_constraint <= tomorrow_utc
+                    and abs(lcc.current_value - past_actual_s) > 300
+                ):
+                    _LOGGER.info(
+                        "Calendar metrics sync-check: last completed constraint "
+                        "current_value=%s differs from inferred past actual=%s "
+                        "for %s (expected when multiple calendar events complete "
+                        "in one day since only the last constraint is retained)",
+                        lcc.current_value,
+                        past_actual_s,
+                        self.name,
+                    )
         else:
             # Default/pool path: day-filter constraints + last-completed
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
@@ -548,45 +573,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
 
-        # Pre-compute calendar metrics for today if in calendar-based mode
-        if self._is_calendar_based_mode(bistate_mode):
-            today_start_utc, tomorrow_utc = self._get_today_boundaries(time)
-            events = await self.get_next_scheduled_events(time=today_start_utc, give_currently_running_event=True)
-            target_s = 0.0
-            past_actual_s = 0.0
-            for ev_start, ev_end in events:
-                if ev_end > tomorrow_utc:
-                    continue
-                duration = (ev_end - ev_start).total_seconds()
-                target_s += duration
-                if ev_end <= time:
-                    past_actual_s += duration
-
-            self._today_calendar_target_s = target_s
-            self._today_calendar_past_actual_s = past_actual_s
-            self._is_current_calendar_mode = True
-
-            # AC5: Sanity-check _last_completed_constraint against calendar
-            if self._last_completed_constraint is not None:
-                lcc = self._last_completed_constraint
-                if (
-                    lcc.end_of_constraint != DATETIME_MAX_UTC
-                    and lcc.end_of_constraint > today_start_utc
-                    and lcc.end_of_constraint <= tomorrow_utc
-                    and abs(lcc.current_value - past_actual_s) > 300
-                ):
-                    _LOGGER.info(
-                        "Calendar metrics sync-check: last completed constraint "
-                        "current_value=%s differs from inferred past actual=%s "
-                        "for %s (expected when multiple calendar events complete "
-                        "in one day since only the last constraint is retained)",
-                        lcc.current_value,
-                        past_actual_s,
-                        self.name,
-                    )
-        else:
-            self._is_current_calendar_mode = False
-
-        self.update_current_metrics(time)
+        await self.update_current_metrics(time)
 
         return do_force_next_solve

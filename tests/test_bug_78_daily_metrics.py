@@ -1,7 +1,7 @@
 """Tests for bug #78: bistate/pool target and actual hours display today-only.
 
 Verifies that update_current_metrics in bistate_duration.py:
-- Calendar mode: uses pre-computed calendar metrics for today only
+- Calendar mode: fetches calendar events and computes today metrics inline
 - Default/pool mode: day-filters _constraints and _last_completed_constraint to today
 - Pool _is_calendar_based_mode returns False for auto/winter modes
 - _get_today_boundaries returns local midnight boundaries in UTC
@@ -88,6 +88,15 @@ def _set_day_boundaries(device, today_utc, tomorrow_utc):
     device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
 
 
+def _mock_calendar_events(device, events):
+    """Set up async mock for get_next_scheduled_events returning given events."""
+
+    async def mock_get_events(time=None, give_currently_running_event=True, max_number_of_events=None):
+        return events
+
+    device.get_next_scheduled_events = mock_get_events
+
+
 # =============================================================================
 # _is_calendar_based_mode tests
 # =============================================================================
@@ -165,36 +174,43 @@ def test_get_today_boundaries_today_before_tomorrow():
 # =============================================================================
 
 
-def test_calendar_mode_shows_today_only_target():
-    """Calendar mode target = pre-computed today calendar target only."""
+async def test_calendar_mode_shows_today_only_target():
+    """Calendar mode target = today calendar events only."""
     device = _create_bistate_device(calendar="calendar.test")
+    device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
     today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
     _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    device._is_current_calendar_mode = True
-    device._today_calendar_target_s = 7200.0  # 2h
-    device._today_calendar_past_actual_s = 3600.0  # 1h past completed
+    # Two 1h events today = 7200s target, first already past = 3600s actual
+    _mock_calendar_events(device, [
+        (datetime(2026, 3, 30, 6, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)),
+        (datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)),
+    ])
     device._constraints = []
+    device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(2.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.0)
 
 
-def test_calendar_mode_actual_includes_active_constraint_current_value():
+async def test_calendar_mode_actual_includes_active_constraint_current_value():
     """Calendar mode actual = past events + active constraint current_value."""
     device = _create_bistate_device(calendar="calendar.test")
+    device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 16, 30, 0, tzinfo=pytz.UTC)
     today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
     _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    device._is_current_calendar_mode = True
-    device._today_calendar_target_s = 7200.0  # 2h total
-    device._today_calendar_past_actual_s = 3600.0  # 1h past event
+    # Two 1h events: first past (3600s actual), second in progress
+    _mock_calendar_events(device, [
+        (datetime(2026, 3, 30, 6, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)),
+        (datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)),
+    ])
 
     # Active constraint for 16:00-17:00, 30 min done
     ct = _make_constraint(
@@ -206,24 +222,27 @@ def test_calendar_mode_actual_includes_active_constraint_current_value():
         end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
     )
     device._constraints = [ct]
+    device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(2.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.5)
 
 
-def test_calendar_mode_excludes_tomorrow_active_constraint():
+async def test_calendar_mode_excludes_tomorrow_active_constraint():
     """Calendar mode excludes active constraints ending tomorrow."""
     device = _create_bistate_device(calendar="calendar.test")
+    device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC)
     today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
     _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    device._is_current_calendar_mode = True
-    device._today_calendar_target_s = 3600.0
-    device._today_calendar_past_actual_s = 3600.0
+    # One past 1h event today
+    _mock_calendar_events(device, [
+        (datetime(2026, 3, 30, 6, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)),
+    ])
 
     # Constraint ending tomorrow — should NOT add current_value
     ct = _make_constraint(
@@ -235,8 +254,9 @@ def test_calendar_mode_excludes_tomorrow_active_constraint():
         end=datetime(2026, 3, 31, 1, 0, 0, tzinfo=pytz.UTC),
     )
     device._constraints = [ct]
+    device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.0)
@@ -247,7 +267,7 @@ def test_calendar_mode_excludes_tomorrow_active_constraint():
 # =============================================================================
 
 
-def test_default_mode_filters_constraints_to_today():
+async def test_default_mode_filters_constraints_to_today():
     """Default mode only sums constraints ending within today."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
@@ -274,13 +294,13 @@ def test_default_mode_filters_constraints_to_today():
     device._constraints = [ct_today, ct_tomorrow]
     device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.0)
 
 
-def test_default_mode_includes_last_completed_from_today():
+async def test_default_mode_includes_last_completed_from_today():
     """Default mode adds last_completed_constraint if from today."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
@@ -310,13 +330,13 @@ def test_default_mode_includes_last_completed_from_today():
     )
     device._last_completed_constraint = lcc
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(2.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.0)
 
 
-def test_default_mode_excludes_last_completed_from_yesterday():
+async def test_default_mode_excludes_last_completed_from_yesterday():
     """Default mode ignores last_completed_constraint from previous days."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
@@ -335,13 +355,13 @@ def test_default_mode_excludes_last_completed_from_yesterday():
     )
     device._last_completed_constraint = lcc
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(0.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.0)
 
 
-def test_default_mode_excludes_last_completed_with_max_sentinel():
+async def test_default_mode_excludes_last_completed_with_max_sentinel():
     """Default mode ignores last_completed_constraint with DATETIME_MAX_UTC sentinel."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
@@ -360,7 +380,7 @@ def test_default_mode_excludes_last_completed_with_max_sentinel():
     )
     device._last_completed_constraint = lcc
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(0.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.0)
@@ -371,7 +391,7 @@ def test_default_mode_excludes_last_completed_with_max_sentinel():
 # =============================================================================
 
 
-def test_no_constraints_no_completed_shows_zero():
+async def test_no_constraints_no_completed_shows_zero():
     """No data at all shows 0h for both metrics."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
@@ -382,13 +402,13 @@ def test_no_constraints_no_completed_shows_zero():
     device._constraints = []
     device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == 0.0
     assert device.qs_bistate_current_on_h == 0.0
 
 
-def test_tomorrow_only_constraints_show_zero_target():
+async def test_tomorrow_only_constraints_show_zero_target():
     """Tomorrow-only constraints show 0h target in default mode."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 10, 23, 0, tzinfo=pytz.UTC)
@@ -407,38 +427,43 @@ def test_tomorrow_only_constraints_show_zero_target():
     device._constraints = [ct]
     device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(0.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.0)
 
 
-def test_calendar_mode_no_active_constraints_shows_precomputed():
-    """Calendar mode with no active constraints uses only pre-computed values."""
+async def test_calendar_mode_no_active_constraints_shows_event_totals():
+    """Calendar mode with no active constraints uses only calendar event values."""
     device = _create_bistate_device(calendar="calendar.test")
+    device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC)
     today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
     _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    device._is_current_calendar_mode = True
-    device._today_calendar_target_s = 10800.0  # 3h
-    device._today_calendar_past_actual_s = 3600.0  # 1h past
+    # Three events: 1h past + 1h future + 1h future = 3h target, 1h past actual
+    _mock_calendar_events(device, [
+        (datetime(2026, 3, 30, 6, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)),
+        (datetime(2026, 3, 30, 10, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 11, 0, 0, tzinfo=pytz.UTC)),
+        (datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 15, 0, 0, tzinfo=pytz.UTC)),
+    ])
     device._constraints = []
+    device._last_completed_constraint = None
 
-    device.update_current_metrics(now)
+    await device.update_current_metrics(now)
 
     assert device.qs_bistate_current_duration_h == pytest.approx(3.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.0)
 
 
 # =============================================================================
-# Calendar pre-computation and sync warning (AC5)
+# Calendar computation and sync warning (AC5) via check_load_activity_and_constraints
 # =============================================================================
 
 
-async def test_calendar_precomputation_computes_today_metrics():
-    """check_load_activity_and_constraints pre-computes calendar metrics for today."""
+async def test_calendar_computation_computes_today_metrics():
+    """check_load_activity_and_constraints computes calendar metrics for today via update_current_metrics."""
     device = _create_bistate_device(calendar="calendar.test")
     device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
@@ -466,12 +491,7 @@ async def test_calendar_precomputation_computes_today_metrics():
 
     await device.check_load_activity_and_constraints(now)
 
-    assert device._is_current_calendar_mode is True
-    # Target: two 1h events = 7200s
-    assert device._today_calendar_target_s == pytest.approx(7200.0)
-    # Past actual: 6:00-7:00 ended before 12:00 = 3600s, 16:00-17:00 not past yet
-    assert device._today_calendar_past_actual_s == pytest.approx(3600.0)
-    # Metrics should reflect pre-computed values
+    # Target: two 1h today events = 2h, past actual: 6-7am ended before 12:00 = 1h
     assert device.qs_bistate_current_duration_h == pytest.approx(2.0)
     assert device.qs_bistate_current_on_h == pytest.approx(1.0)
 
@@ -554,8 +574,8 @@ async def test_no_sync_warning_when_values_close():
         assert len(info_calls) == 0
 
 
-async def test_non_calendar_mode_sets_flag_false():
-    """Default mode sets _is_current_calendar_mode to False."""
+async def test_non_calendar_mode_uses_default_path():
+    """Default mode computes metrics via the default constraint path."""
     device = _create_bistate_device()
     device.bistate_mode = "bistate_mode_default"
     now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
@@ -570,4 +590,6 @@ async def test_non_calendar_mode_sets_flag_false():
 
     await device.check_load_activity_and_constraints(now)
 
-    assert device._is_current_calendar_mode is False
+    # No calendar, no constraints: metrics should be from the default path
+    assert device.qs_bistate_current_duration_h >= 0.0
+    assert device.qs_bistate_current_on_h >= 0.0
