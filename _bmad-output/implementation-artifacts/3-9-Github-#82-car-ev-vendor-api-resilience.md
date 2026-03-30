@@ -84,17 +84,48 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 
 ### Task 2: Implement "Stale Percent" Constraint Mode (AC: #1, #2)
 
-**Key concept**: When the car API is stale, we do NOT switch to energy mode. Instead we use a "stale percent" mode — still uses `MultiStepsPowerLoadConstraintChargePercent` but forces `car_initial_value = 0` (bypass stale SOC sensor). The display shows `+XX%` (delta added) instead of absolute `XX%`. This is better than energy mode because percent is more meaningful to users.
+**Key concept**: When the car API is stale, we do NOT switch to energy mode. Instead we use a "stale percent" mode — still uses `MultiStepsPowerLoadConstraintChargePercent` but forces `car_initial_value = 0` (bypass stale SOC sensor). The display shows `+XX%` (delta added) instead of absolute `XX%`. This is better than energy mode because percent is more meaningful to users. The target percent handler continues to work as before — user can still set a target SOC%.
+
+**CRITICAL**: In stale mode the SOC sensor is poisoned. The ONLY source of charge progress is energy delivered by the charger (converted to % via battery capacity). This affects multiple call sites — see the full SOC bypass audit below.
+
+#### 2a: Constraint initialization (charger.py:3220-3239)
 
 - [ ] 2.1 Add `_car_api_stale_percent_mode` flag on QSCar (True when stale AND can_use_charge_percent_constraints_static)
 - [ ] 2.2 Keep `_use_percent_mode = True` when API is stale (do NOT fall back to energy mode for staleness). The existing `CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S` continues to handle SOC-sensor-only staleness as before — this story's stale detection is a separate, broader mechanism.
 - [ ] 2.3 Modify the constraint building in `charger.py:3220-3239`: when `car._car_api_stale_percent_mode` is True:
   - Still use `MultiStepsPowerLoadConstraintChargePercent` (percent class)
   - But set `car_initial_value = 0` instead of `self.car.get_car_charge_percent(time)`
-  - This means the constraint starts from 0% and targets the configured target — effectively "we don't know current SOC, we'll track what we add"
-- [ ] 2.4 Add a `get_car_charge_percent_delta(time)` or similar method that returns the percent added since the stale constraint started (for UI display)
-- [ ] 2.5 Expose a sensor or attribute for the card to read `+XX%` delta value
-- [ ] 2.6 Add tests: stale API uses percent constraints with initial=0; non-stale uses actual SOC; stale recovery re-reads real SOC
+  - `car_current_charge_value = 0` as well
+  - Target charge: keep the user's target % as-is (target handler works normally)
+
+#### 2b: Constraint update callback — NEVER read SOC sensor in stale mode (charger.py:4521-4680)
+
+- [ ] 2.4 In `constraint_update_value_callback_soc()` (charger.py:4550): when `car._car_api_stale_percent_mode` is True:
+  - **Skip** `sensor_result = self.car.get_car_charge_percent(time, ...)` entirely — set `sensor_result = None`
+  - This forces the existing fallback to `result = result_calculus` (line 4575) which uses `_compute_added_charge_update()` — energy-based delta converted to % via battery capacity
+  - The `is_car_charge_growing()` check (line 4604) also uses SOC sensor — skip it in stale mode (the calculus path doesn't need it)
+  - The "expected charge state" power check (lines 4622-4656) remains valid — it checks charger power, not SOC
+
+#### 2c: SOC accessors that must be bypassed in stale mode
+
+Full audit of `get_car_charge_percent()` callers that need stale-aware behavior:
+
+| File:Line | Usage | Stale mode behavior |
+|-----------|-------|-------------------|
+| `car.py:576` | Odometer/range estimation | Return None or skip — range is unreliable when SOC is stale |
+| `car.py:595` | Person mileage/range forecast | Use conservative defaults (full charge needed) |
+| `car.py:1034` | Car state checks | Skip SOC-dependent checks |
+| `car.py:1073` | Charge type determination | Use stale-aware path |
+| `car.py:1129` | Autonomy to target SOC calc | Return None — autonomy is unknown when stale |
+| `car.py:1431` | Dynamic charging priority scoring | Use conservative score (treat as fully discharged) |
+| `charger.py:2573` | `get_stable_dynamic_charge_status()` priority | Use conservative score |
+| `charger.py:3226` | **Constraint init** | Force `car_initial_value = 0` (Task 2a) |
+| `charger.py:4550` | **Constraint update loop** | Skip sensor, use calculus only (Task 2b) |
+| `sensor.py:144-153` | HA `qs_car_soc_percent` sensor | Keep exposing last known value but add stale attribute |
+
+- [ ] 2.5 Implement stale-aware behavior for each caller above. The simplest approach: make `get_car_charge_percent()` return None when `_car_api_stale_percent_mode` is True, and ensure every caller already handles None gracefully (most already do — verify each one).
+- [ ] 2.6 Add a method or sensor attribute exposing the `+XX%` delta value (= `ct.current_value` since init was 0) for the UI
+- [ ] 2.7 Add tests: stale API uses percent constraints with initial=0 and calculus-only updates; SOC sensor is never read during stale; non-stale uses actual SOC; stale recovery re-reads real SOC and rebuilds constraint
 
 ### Task 3: Infer State from Manual Charger Assignment (AC: #2)
 
@@ -213,6 +244,8 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 4. **Do NOT treat "some sensors stale" as "API stale"** — ALL tracked API sensors must be stale to flag the API as stale. A single fresh sensor means the API is still working (partial data is better than no data).
 5. **Do NOT modify the charger scoring algorithm** — the manual assignment override already exists and works. This story adds inference ON TOP of existing assignment.
 6. **Do NOT create new JS card files** — modify the existing `qs-car-card.js`.
+7. **Do NOT read the car SOC sensor anywhere in stale mode** — the SOC sensor is poisoned when the API is stale. The ONLY source of charge progress is energy delivered by the charger (via `_compute_added_charge_update()`). Every call to `get_car_charge_percent()` must be stale-aware.
+8. **Do NOT change the target percent handler** — user can still set target SOC% normally even in stale mode. Only the initial value and progress tracking change.
 
 ### Previous Story Intelligence
 
