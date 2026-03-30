@@ -56,9 +56,10 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 **Given** the car API was stale and recovers (fresh sensor timestamps detected — any tracked sensor updates with a new value)
 **When** the system detects recovery
 **Then** `binary_sensor.qs_<car>_api_ok` turns on
-**And** the car card removes the stale indicator
-**And** if manual mode is off, normal API-based percent mode resumes automatically
-**And** if manual mode is on, TheAdmin is notified suggesting to exit manual mode
+**And** the stale flag auto-clears, the car card removes the red border
+**And** if the car was in "stale percent" mode (manual override / inferred state), the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
+**And** constraints are reassessed: real SOC is re-read, stale percent constraints are replaced with normal percent constraints using actual SOC as initial value
+**And** if manual mode (switch) is on, TheAdmin is notified suggesting to exit manual mode
 
 ### AC5: Notifications
 
@@ -71,8 +72,7 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 
 ### Task 1: Add Stale Detection Infrastructure to QSCar (AC: #1)
 
-- [ ] 1.1 Add constant `CAR_API_STALE_THRESHOLD_S` to `const.py` (default 14400 = 4 hours)
-- [ ] 1.2 Add constant `CONF_CAR_API_STALE_THRESHOLD` to `const.py` for user-configurable threshold
+- [ ] 1.1 Add constant `CAR_API_STALE_THRESHOLD_S = 14400` (4 hours) to `car.py` — code-level tunable, not user-configurable via config flow
 - [ ] 1.3 Track list of "API sensors" on QSCar: `car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
 - [ ] 1.4 Implement `_check_car_api_staleness(self, time)` method:
   - For each API sensor, get its `last_updated` timestamp via `get_sensor_latest_possible_valid_time_value_attr()`
@@ -158,10 +158,11 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 
 - [ ] 8.1 In `_check_car_api_staleness()`, detect recovery (was stale, now fresh)
 - [ ] 8.2 On recovery:
-  - Clear `_car_api_stale`, `_car_api_inferred_home`, `_car_api_inferred_plugged`
-  - If manual mode is off: `_use_percent_mode` re-evaluates normally on next cycle
-  - If manual mode is on: send notification suggesting exit (don't auto-disable)
-- [ ] 8.3 Add tests for recovery scenarios: auto-resume, manual mode persistence
+  - Auto-clear `_car_api_stale`, `_car_api_inferred_home`, `_car_api_inferred_plugged`, `_car_api_stale_percent_mode`
+  - Re-read real SOC from API sensor, replace stale percent constraints (init=0) with normal percent constraints (init=real SOC)
+  - Notify assigned person (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
+  - If manual mode (switch) is on: notify TheAdmin suggesting to exit manual mode (don't auto-disable)
+- [ ] 8.3 Add tests for recovery scenarios: auto-clear + constraint reassessment, person notification, manual mode persistence
 
 ## Dev Notes
 
@@ -245,7 +246,7 @@ From **Story 3.3** (Grid Outage):
 - New entities in `switch.py`, `number.py`, `binary_sensor.py` — follow existing car entity registration patterns
 - Car card changes in `ui/resources/qs-car-card.js` — no new JS files
 - Dashboard changes in `ui/dashboard.py` if the SOC widget error styling requires template changes
-- Config flow changes in `config_flow.py` if stale threshold is user-configurable
+- No config flow changes needed — stale threshold is a code-level constant (`CAR_API_STALE_THRESHOLD_S`)
 
 ### References
 
