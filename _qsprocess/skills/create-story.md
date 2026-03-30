@@ -8,10 +8,21 @@ The user provides ONE of:
 - A story key (e.g., "3.2") referencing an epic in `_bmad-output/planning-artifacts/epics.md`
 - A feature description (free text)
 - A path to an external plan `.md` file (e.g., from Cursor) via `--plan /path/to/plan.md`
+- An existing GitHub issue number via `--issue N` (e.g., `--issue 42`)
 
 ## Steps
 
-### 1. Create GitHub issue
+### 1. Obtain GitHub issue
+
+**If `--issue N` was provided** (existing issue):
+
+```bash
+python scripts/qs/fetch_issue.py --issue {{N}}
+```
+
+Capture `issue_number`, `title`, `body`, `labels`, and `story_type` (`"bug"` or `"feature"`) from the JSON output. Do NOT create a new issue — use this one. The `story_type` drives the story key prefix in step 3 (`bug-` for bugs, epic-style or generic for features).
+
+**Otherwise** (new issue — the default):
 
 ```bash
 python scripts/qs/create_issue.py --title "Story {{story_key}}: {{title}}"
@@ -35,6 +46,10 @@ Construct the story key that bmad-create-story will use as the output filename. 
 - Bug fixes: `bug-Github-#{{issue_number}}-{{slug}}`
 - Other: `{{prefix}}-Github-#{{issue_number}}-{{slug}}`
 
+When using `--issue N`, the `story_type` from `fetch_issue.py` determines the prefix:
+- `"bug"` → use `bug-Github-#{{issue_number}}-{{slug}}`
+- `"feature"` → use `feature-Github-#{{issue_number}}-{{slug}}` (or epic-style if a story key is also provided)
+
 This key becomes the filename: `_bmad-output/implementation-artifacts/{{story_key}}.md`
 
 ### 4. Write the story file using BMad
@@ -44,6 +59,10 @@ Follow the **bmad-create-story** skill to generate the story file.
 When bmad-create-story asks which story, provide the **full story key from step 3** (e.g., `1-14-Github-#60-robust-story-naming-retrieval`). This ensures the output file already has `Github-#N` in its name — no rename needed.
 
 Also provide the user's story key or feature description so bmad-create-story knows what to write about.
+
+#### When `--issue N` is provided
+
+Use the existing issue's `title` and `body` as the feature description for bmad-create-story. The issue body is the **primary source of requirements** — treat it like a feature description. If the issue has a `bug` label, frame the story as a bug fix.
 
 #### When `--plan` is provided
 

@@ -56,30 +56,31 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
     def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
         """Update bistate UI metrics from active or last-completed constraint.
 
-        Follows pool.py pattern: falls back to _last_completed_constraint when
-        the active constraint has been removed, filtered by current day window.
+        Active constraints are always included — they are current by definition.
+        Day-window filtering only applies to _last_completed_constraint fallback,
+        preventing stale metrics from a previous day cycle.
         """
-        if end_range is None:
-            end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
-
-        end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time, output_in_utc=True)
         duration_s = 0.0
         run_s = 0.0
 
-        if end_day is not None:
-            start_day = self.get_next_time_from_hours(
-                local_hours=end_range,
-                time_utc_now=end_day - timedelta(hours=26),
-                output_in_utc=True,
-            )
+        if self._constraints:
+            for ct in self._constraints:
+                duration_s += ct.target_value
+                run_s += ct.current_value
+        elif self._last_completed_constraint is not None:
+            if end_range is None:
+                end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
 
-            ct_to_probe = []
-            if self._constraints:
-                ct_to_probe.extend(self._constraints)
-            elif self._last_completed_constraint is not None:
-                ct_to_probe.append(self._last_completed_constraint)
+            end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time, output_in_utc=True)
 
-            for ct in ct_to_probe:
+            if end_day is not None:
+                start_day = self.get_next_time_from_hours(
+                    local_hours=end_range,
+                    time_utc_now=end_day - timedelta(hours=26),
+                    output_in_utc=True,
+                )
+
+                ct = self._last_completed_constraint
                 if ct.end_of_constraint <= end_day or (
                     ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
                 ):
