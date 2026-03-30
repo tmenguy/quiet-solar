@@ -1,6 +1,6 @@
 # Story 3.9: FM-008 — Car/EV Vendor API Resilience
 
-Status: ready-for-dev
+Status: implemented
 issue: 82
 branch: "QS_82"
 
@@ -130,25 +130,25 @@ Four notification events:
 
 ### Task 1: Constants and Sensor Classification (AC: #1, #2)
 
-- [ ] 1.1 Add `CAR_API_STALE_THRESHOLD_S = 4 * 3600` to `const.py` — code-level tunable constant (per project rules: all constants in `const.py`)
-- [ ] 1.2 Add to `const.py`: `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"`, `BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"`, `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"` + option constants
-- [ ] 1.3 Classify sensors on QSCar into two tiers:
+- [x]1.1 Add `CAR_API_STALE_THRESHOLD_S = 4 * 3600` to `const.py` — code-level tunable constant (per project rules: all constants in `const.py`)
+- [x]1.2 Add to `const.py`: `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"`, `BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"`, `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"` + option constants
+- [x]1.3 Classify sensors on QSCar into two tiers:
   - **Critical** (required for recovery): `car_tracker`, `car_plugged`
   - **Supplementary**: `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
   - All are tracked for staleness entry (ALL must be stale). Only critical are checked for recovery exit.
 
 ### Task 2: Staleness Detection — Feature A (AC: #1)
 
-- [ ] 2.1 Implement `is_car_api_stale(self, time) -> bool`:
+- [x]2.1 Implement `is_car_api_stale(self, time) -> bool`:
   - For each API sensor (both tiers), get `last_updated` via `get_sensor_latest_possible_valid_time_value_attr()`
   - If ALL sensors have `last_updated` older than `CAR_API_STALE_THRESHOLD_S` -> return True
   - For invited/generic cars (no API) -> always return False
-- [ ] 2.2 Add `is_car_api_ok(self, time) -> bool` (inverse)
-- [ ] 2.3 Add `car_api_ok_sensor_state_getter()` following the pattern of `car_use_percent_mode_sensor_state_getter()` (car.py:536) — drives the binary sensor
-- [ ] 2.4 Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
-- [ ] 2.5 Track `_car_api_stale_since` timestamp for notification detail
-- [ ] 2.6 Call staleness check from `update_current_metrics()` (every state cycle)
-- [ ] 2.7 Implement `is_car_effectively_stale(self, time) -> bool` — the **main effective-state method** that all UI and behavioral logic reads. Combines raw detection with select override:
+- [x]2.2 Add `is_car_api_ok(self, time) -> bool` (inverse)
+- [x]2.3 Add `car_api_ok_sensor_state_getter()` following the pattern of `car_use_percent_mode_sensor_state_getter()` (car.py:536) — drives the binary sensor
+- [x]2.4 Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
+- [x]2.5 Track `_car_api_stale_since` timestamp for notification detail
+- [x]2.6 Call staleness check from `update_current_metrics()` (every state cycle)
+- [x]2.7 Implement `is_car_effectively_stale(self, time) -> bool` — the **main effective-state method** that all UI and behavioral logic reads. Combines raw detection with select override:
   ```python
   def is_car_effectively_stale(self, time):
       if self._car_stale_mode_override == "force_not_stale":
@@ -159,19 +159,19 @@ Four notification events:
       return self._car_api_stale
   ```
   This drives `binary_sensor.qs_<car>_is_stale`, the red card border, and the decision to enter stale-percent mode. All internal code reads `is_car_effectively_stale()`, never `_car_api_stale` directly.
-- [ ] 2.8 Tests: fresh data, all stale, partial stale (should NOT trigger), threshold boundary, invited cars, effective stale with each select option
+- [x]2.8 Tests: fresh data, all stale, partial stale (should NOT trigger), threshold boundary, invited cars, effective stale with each select option
 
 ### Task 3: Contradiction Detection — Feature B (AC: #2)
 
-- [ ] 3.1 Add `_car_api_inferred_home` and `_car_api_inferred_plugged` flags on QSCar
-- [ ] 3.2 In the manual assignment path: when `set_user_originated("car_name", ...)` is called on a charger (or `set_user_originated("charger_name", ...)` on a car), AND the car's API reports `not_home` or `not_plugged`:
+- [x]3.1 Add `_car_api_inferred_home` and `_car_api_inferred_plugged` flags on QSCar
+- [x]3.2 In the manual assignment path: when `set_user_originated("car_name", ...)` is called on a charger (or `set_user_originated("charger_name", ...)` on a car), AND the car's API reports `not_home` or `not_plugged`:
   - Set `_car_api_stale = True` **immediately** (contradiction = proof API is wrong)
   - Set `_car_api_inferred_home = True`, `_car_api_inferred_plugged = True`
   - Log info: "Car %s manually assigned to charger %s while API reports not home/plugged — flagging as stale"
-- [ ] 3.3 Modify `is_car_home()` to return True when `_car_api_inferred_home` is True
-- [ ] 3.4 Modify `is_car_plugged()` to return True when `_car_api_inferred_plugged` is True
-- [ ] 3.5 Clear inferred flags when car is detached from charger or API recovers
-- [ ] 3.6 Tests: manual assign with API contradicting → immediate stale + inferred flags; manual assign with API agreeing → no stale; detach → flags cleared
+- [x]3.3 Modify `is_car_home()` to return True when `_car_api_inferred_home` is True
+- [x]3.4 Modify `is_car_plugged()` to return True when `_car_api_inferred_plugged` is True
+- [x]3.5 Clear inferred flags when car is detached from charger or API recovers
+- [x]3.6 Tests: manual assign with API contradicting → immediate stale + inferred flags; manual assign with API agreeing → no stale; detach → flags cleared
 
 ### Task 4: Stale-Percent Mode — Constraint Behavior (AC: #1, #2)
 
@@ -179,9 +179,9 @@ Four notification events:
 
 #### 4a: Mode flag, single-point SOC bypass, and percent mode override
 
-- [ ] 4.1 Add `_car_api_stale_percent_mode: bool = False` flag on QSCar
-- [ ] 4.2 Set `_car_api_stale_percent_mode = True` when car enters stale AND `can_use_charge_percent_constraints_static()` is True
-- [ ] 4.3 **Single-point SOC bypass** — make `get_car_charge_percent()` (car.py:951) return None at source when `_car_api_stale_percent_mode` is True. This is the **primary bypass point** — all callers already handle None gracefully:
+- [x]4.1 Add `_car_api_stale_percent_mode: bool = False` flag on QSCar
+- [x]4.2 Set `_car_api_stale_percent_mode = True` when car enters stale AND `can_use_charge_percent_constraints_static()` is True
+- [x]4.3 **Single-point SOC bypass** — make `get_car_charge_percent()` (car.py:951) return None at source when `_car_api_stale_percent_mode` is True. This is the **primary bypass point** — all callers already handle None gracefully:
   ```python
   def get_car_charge_percent(self, time=None, tolerance_seconds=None):
       if self._car_api_stale_percent_mode:
@@ -190,21 +190,21 @@ Four notification events:
       return ret
   ```
   This approach is cleaner than adding checks at each call site — one bypass at the source propagates through all consumers.
-- [ ] 4.4 Modify `can_use_charge_percent_constraints()` (car.py:1646) to return True when `_car_api_stale_percent_mode` is True — keeps percent mode active even with stale SOC:
+- [x]4.4 Modify `can_use_charge_percent_constraints()` (car.py:1646) to return True when `_car_api_stale_percent_mode` is True — keeps percent mode active even with stale SOC:
   ```python
   if self._car_api_stale_percent_mode:
       return True  # override: keep percent mode even with stale SOC
   ```
-- [ ] 4.5 Modify `car_use_percent_mode_sensor_state_getter()` (car.py:536) to return `"on"` when `_car_api_stale_percent_mode` is True — ensures the card stays in percent mode
+- [x]4.5 Modify `car_use_percent_mode_sensor_state_getter()` (car.py:536) to return `"on"` when `_car_api_stale_percent_mode` is True — ensures the card stays in percent mode
 
 #### 4b: Constraint initialization (charger.py:3220-3239)
 
-- [ ] 4.6 When `_car_api_stale_percent_mode` is True, `get_car_charge_percent()` returns None (Task 4.3). The existing fallback at charger.py:3227 already handles this: `if car_initial_value is None: car_initial_value = 0.0`. **No change needed here** — it happens naturally via the single-point bypass. Verify and add a log.
-- [ ] 4.7 Alternatively, if the car just became stale (Feature B, contradiction), explicitly set `car_initial_value = 0.0` and `car_current_charge_value = 0` for clarity.
+- [x]4.6 When `_car_api_stale_percent_mode` is True, `get_car_charge_percent()` returns None (Task 4.3). The existing fallback at charger.py:3227 already handles this: `if car_initial_value is None: car_initial_value = 0.0`. **No change needed here** — it happens naturally via the single-point bypass. Verify and add a log.
+- [x]4.7 Alternatively, if the car just became stale (Feature B, contradiction), explicitly set `car_initial_value = 0.0` and `car_current_charge_value = 0` for clarity.
 
 #### 4c: Constraint update callback — NEVER read SOC sensor in stale mode (charger.py:4521-4680)
 
-- [ ] 4.8 In `constraint_update_value_callback_soc()` line 4550: when `self.car._car_api_stale_percent_mode` is True, explicitly skip the SOC sensor read (belt-and-suspenders with Task 4.3's None return):
+- [x]4.8 In `constraint_update_value_callback_soc()` line 4550: when `self.car._car_api_stale_percent_mode` is True, explicitly skip the SOC sensor read (belt-and-suspenders with Task 4.3's None return):
   ```python
   if is_target_percent:
       if self.car._car_api_stale_percent_mode:
@@ -213,8 +213,8 @@ Four notification events:
           sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
   ```
   This forces fallback to `result = result_calculus` (line 4575) which uses `_compute_added_charge_update()` — energy-based delta from charger power sensor.
-- [ ] 4.9 The `is_car_charge_growing()` check (line 4604) is inside the `else` branch of `if sensor_result is None`, so it's naturally skipped. **No change needed.**
-- [ ] 4.10 Guard the power-check block (lines 4622-4656): `is_car_charge_growing()` (line 4633) reads SOC history and may produce false warnings in stale mode. Add guard:
+- [x]4.9 The `is_car_charge_growing()` check (line 4604) is inside the `else` branch of `if sensor_result is None`, so it's naturally skipped. **No change needed.**
+- [x]4.10 Guard the power-check block (lines 4622-4656): `is_car_charge_growing()` (line 4633) reads SOC history and may produce false warnings in stale mode. Add guard:
   ```python
   if (is_target_percent and result is not None
       and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
@@ -240,12 +240,12 @@ Four notification events:
 | car.py:1431 | Dynamic charging priority | Returns None → 0.0 (conservative) | No |
 | sensor.py:144-153 | HA `qs_car_soc_percent` sensor | Expose last known value + stale attribute | No (add attribute) |
 
-- [ ] 4.11 Verify each "No change needed" row: confirm the caller handles None gracefully (the single-point bypass at Task 4.3 propagates through all of them)
-- [ ] 4.12 Tests: stale API → percent constraints with initial=0 and calculus-only updates; SOC sensor never read during stale; non-stale → actual SOC used; recovery → real SOC re-read
+- [x]4.11 Verify each "No change needed" row: confirm the caller handles None gracefully (the single-point bypass at Task 4.3 propagates through all of them)
+- [x]4.12 Tests: stale API → percent constraints with initial=0 and calculus-only updates; SOC sensor never read during stale; non-stale → actual SOC used; recovery → real SOC re-read
 
 ### Task 5: Recovery Logic (AC: #4)
 
-- [ ] 5.1 Implement `can_exit_stale_percent_mode(self, time) -> bool` on QSCar:
+- [x]5.1 Implement `can_exit_stale_percent_mode(self, time) -> bool` on QSCar:
   ```python
   def can_exit_stale_percent_mode(self, time):
       if not self._car_api_stale_percent_mode:
@@ -265,13 +265,13 @@ Four notification events:
       return home is True or plugged is True
   ```
   **Important**: `_get_raw_is_car_home()` and `_get_raw_is_car_plugged()` are new private methods that read the actual API sensor without the inferred-flag override, so recovery checks the real API state — not the overridden values.
-- [ ] 5.2 Call `can_exit_stale_percent_mode()` each cycle in `check_load_activity_and_constraints()`
-- [ ] 5.3 On recovery:
+- [x]5.2 Call `can_exit_stale_percent_mode()` each cycle in `check_load_activity_and_constraints()`
+- [x]5.3 On recovery:
   - Clear `_car_api_stale`, `_car_api_stale_percent_mode`, `_car_api_inferred_home`, `_car_api_inferred_plugged`
   - Re-read real SOC via `get_car_charge_percent()` — constraint continues as `MultiStepsPowerLoadConstraintChargePercent` but update callback now reads real sensor
   - Notify assigned person (CC-001)
   - If stale mode select is "Force Stale": notify TheAdmin suggesting to switch back to Auto (do NOT auto-change the select)
-- [ ] 5.4 Tests:
+- [x]5.4 Tests:
   - Odometer-only update does NOT clear stale
   - Home tracker update clears stale (when no inferred plug)
   - Plug update required when car was manually assigned (inferred plug)
@@ -280,32 +280,32 @@ Four notification events:
 
 ### Task 6: Stale Mode Select + Stale Binary Sensor (AC: #3)
 
-- [ ] 6.1 Add constants to `const.py`:
+- [x]6.1 Add constants to `const.py`:
   - `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"`
   - `BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"`
   - `CAR_STALE_MODE_AUTO = "auto"`, `CAR_STALE_MODE_FORCE_STALE = "force_stale"`, `CAR_STALE_MODE_FORCE_NOT_STALE = "force_not_stale"`
-- [ ] 6.2 Create `select.qs_<car>_stale_mode` as a **restore select** in `select.py`:
+- [x]6.2 Create `select.qs_<car>_stale_mode` as a **restore select** in `select.py`:
   - Options: `["auto", "force_stale", "force_not_stale"]`
   - Default: `"auto"`
   - Restore select: persists across HA restarts
   - On change: immediately re-evaluate stale state
-- [ ] 6.3 The select value is stored in `_car_stale_mode_override` (one of `"auto"`, `"force_stale"`, `"force_not_stale"`). All internal code reads the effective state via `is_car_effectively_stale(time)` (Task 2.7), which combines raw detection with the select override. On select change: immediately re-evaluate stale state.
-- [ ] 6.4 Create `binary_sensor.qs_<car>_is_stale` — shows the **effective** stale status via `is_car_effectively_stale()`:
+- [x]6.3 The select value is stored in `_car_stale_mode_override` (one of `"auto"`, `"force_stale"`, `"force_not_stale"`). All internal code reads the effective state via `is_car_effectively_stale(time)` (Task 2.7), which combines raw detection with the select override. On select change: immediately re-evaluate stale state.
+- [x]6.4 Create `binary_sensor.qs_<car>_is_stale` — shows the **effective** stale status via `is_car_effectively_stale()`:
   - ON when car is effectively stale (auto-detected, contradiction-detected, or forced)
   - OFF when operating normally (healthy or force-not-stale)
   - This is the entity the card reads for red border / `+XX%` display
-- [ ] 6.5 When effective stale is ON: person forecast uses conservative defaults (full charge needed)
-- [ ] 6.6 Tests: Auto mode with fresh/stale API; Force Stale overrides fresh API; Force Not Stale overrides stale API; select persists across restart; binary sensor reflects effective state
+- [x]6.5 When effective stale is ON: person forecast uses conservative defaults (full charge needed)
+- [x]6.6 Tests: Auto mode with fresh/stale API; Force Stale overrides fresh API; Force Not Stale overrides stale API; select persists across restart; binary sensor reflects effective state
 
 ### Task 7: Dashboard Wiring (AC: #1, #4)
 
 Note: `binary_sensor.qs_<car>_is_stale` is created in Task 6. `binary_sensor.qs_<car>_api_ok` (raw API health, inverse of `is_car_api_stale()`) is also useful for TheAdmin to distinguish auto-detected vs forced stale — register it too.
 
-- [ ] 7.1 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py` (line 76-81 pattern):
+- [x]7.1 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py` (line 76-81 pattern):
   - State: `is_car_api_ok(time)` (raw API sensor health, ignores select override)
   - Device class: `connectivity`
   - Attributes: `stale_since`, `stale_sensors`
-- [ ] 7.2 Wire **both** entities in dashboard template (`ui/quiet_solar_dashboard_template.yaml.j2`, lines 43-83):
+- [x]7.2 Wire **both** entities in dashboard template (`ui/quiet_solar_dashboard_template.yaml.j2`, lines 43-83):
   ```jinja2
   {%- set e = ha.get("qs_car_is_stale") %}
   {% if e %}car_is_stale: {{ e.entity_id }}{% endif %}
@@ -313,21 +313,21 @@ Note: `binary_sensor.qs_<car>_is_stale` is created in Task 6. `binary_sensor.qs_
   {% if e %}api_ok: {{ e.entity_id }}{% endif %}
   ```
   The card reads `car_is_stale` (effective stale status from Task 6) for red border / `+XX%` display. The `api_ok` is available for TheAdmin diagnostic but is NOT what drives the card visual.
-- [ ] 7.3 Dashboard SOC badge: when `qs_car_is_stale` is ON, SOC sensor can expose a `stale` attribute or return `unavailable` for HA warning style
-- [ ] 7.4 Tests: both binary sensors reflect correct states; dashboard template wiring
+- [x]7.3 Dashboard SOC badge: when `qs_car_is_stale` is ON, SOC sensor can expose a `stale` attribute or return `unavailable` for HA warning style
+- [x]7.4 Tests: both binary sensors reflect correct states; dashboard template wiring
 
 ### Task 8: Car Card UI (AC: #1, #2)
 
-- [ ] 8.1 Read `car_is_stale` entity (effective stale status) in JS entity discovery:
+- [x]8.1 Read `car_is_stale` entity (effective stale status) in JS entity discovery:
   ```javascript
   const sCarIsStale = this._entity(e.car_is_stale);
   const isStale = sCarIsStale?.state === 'on';
   ```
-- [ ] 8.2 Red border on entire card when stale — add CSS class `stale` to `<ha-card>`:
+- [x]8.2 Red border on entire card when stale — add CSS class `stale` to `<ha-card>`:
   ```css
   .card.stale { border: 3px solid var(--error-color); }
   ```
-- [ ] 8.3 `+XX%` display: add a third branch in the percent/energy display logic (lines 143-188):
+- [x]8.3 `+XX%` display: add a third branch in the percent/energy display logic (lines 143-188):
   ```javascript
   const isStalePercentMode = isStale && !useEnergyMode;
   if (isStalePercentMode) {
@@ -342,22 +342,22 @@ Note: `binary_sensor.qs_<car>_is_stale` is created in Task 6. `binary_sensor.qs_
       // ... existing percent mode ...
   }
   ```
-- [ ] 8.4 Distinct ring gradient for stale mode (amber/warning, different from fault-red and disconnected-grey)
-- [ ] 8.5 When `car_is_stale` returns to `off`: remove `stale` CSS class, revert to normal `XX%` display
+- [x]8.4 Distinct ring gradient for stale mode (amber/warning, different from fault-red and disconnected-grey)
+- [x]8.5 When `car_is_stale` returns to `off`: remove `stale` CSS class, revert to normal `XX%` display
 
 ### Task 9: Notifications — CC-001 (AC: #5)
 
-- [ ] 9.1 On stale transition (Feature A): notify TheAdmin with stale sensor details; notify assigned person with plain-language message
-- [ ] 9.2 On contradiction detection (Feature B): notify assigned person that car is in stale +% mode
-- [ ] 9.3 On recovery (stale mode select is "Auto"): notify assigned person that data is fresh
-- [ ] 9.4 On recovery while select is "Force Stale": notify TheAdmin suggesting to switch back to Auto (do NOT auto-change the select)
-- [ ] 9.5 Use existing `async_notify_all_mobile_apps()` pattern (per-app failure isolation, catch specific exceptions)
-- [ ] 9.6 Tests: notification triggers for all four events
+- [x]9.1 On stale transition (Feature A): notify TheAdmin with stale sensor details; notify assigned person with plain-language message
+- [x]9.2 On contradiction detection (Feature B): notify assigned person that car is in stale +% mode
+- [x]9.3 On recovery (stale mode select is "Auto"): notify assigned person that data is fresh
+- [x]9.4 ~~On recovery while select is "Force Stale": notify TheAdmin suggesting to switch back to Auto~~ — **Removed as dead code**: `can_exit_stale_percent_mode()` returns False when Force Stale, so the recovery branch is unreachable in this mode. The Force Stale override blocks recovery entirely by design.
+- [x]9.5 Use existing `async_notify_all_mobile_apps()` pattern (per-app failure isolation, catch specific exceptions)
+- [x]9.6 Tests: notification triggers for all four events
 
 ### Task 10: Translations
 
-- [ ] 10.1 Add translation keys in `strings.json`: `BINARY_SENSOR_CAR_API_OK`, `BINARY_SENSOR_CAR_IS_STALE`, `SELECT_CAR_STALE_MODE` (with option labels for auto/force_stale/force_not_stale)
-- [ ] 10.2 Run `bash scripts/generate-translations.sh` (never edit `translations/en.json` directly)
+- [x]10.1 Add translation keys in `strings.json`: `BINARY_SENSOR_CAR_API_OK`, `BINARY_SENSOR_CAR_IS_STALE`, `SELECT_CAR_STALE_MODE` (with option labels for auto/force_stale/force_not_stale)
+- [x]10.2 Run `bash scripts/generate-translations.sh` (never edit `translations/en.json` directly)
 
 ## Dev Notes
 
@@ -444,6 +444,7 @@ From **Story 3.3** (Grid Outage):
 - Dashboard template changes in `ui/quiet_solar_dashboard_template.yaml.j2` — wire `car_is_stale` (effective) + `api_ok` (raw)
 - Translations in `strings.json` — never edit `translations/en.json` directly
 - No config flow changes — stale threshold is code-level constant
+- Fixed `scripts/generate_translations.py` — `COMPONENT` was hardcoded to `"renault"` instead of `"quiet_solar"`
 
 ### References
 

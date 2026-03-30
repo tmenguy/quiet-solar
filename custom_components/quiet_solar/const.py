@@ -100,6 +100,8 @@ CONF_SOLAR_PROVIDER_NAME = "provider_name"
 CONF_SOLAR_PROVIDER_MODE_KEY = "solar_provider_mode"
 SOLAR_PROVIDER_MODE_AUTO = "auto"
 SOLAR_FORECAST_STALE_THRESHOLD_S = 6 * 3600
+
+CAR_API_STALE_THRESHOLD_S = 4 * 3600
 SOLAR_ORCHESTRATOR_REPROBE_CYCLES = 5
 CONF_SOLAR_MAX_OUTPUT_POWER_VALUE = "solar_max_output_power_value"
 CONF_SOLAR_MAX_PHASE_AMPS = "solar_max_phase_amps"
@@ -222,12 +224,18 @@ BINARY_SENSOR_HOME_IS_OFF_GRID = "qs_home_is_off_grid"
 BINARY_SENSOR_HOME_REAL_OFF_GRID = "qs_home_real_off_grid"
 BINARY_SENSOR_HOME_PERSISTENCE_HEALTH = "qs_home_persistence_health"
 BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
+BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"
+BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
 SENSOR_SOLAR_ACTIVE_PROVIDER = "qs_solar_active_provider"
 
 SELECT_SOLAR_PROVIDER_MODE = "qs_solar_provider_mode"
+SELECT_CAR_STALE_MODE = "qs_car_stale_mode"
+CAR_STALE_MODE_AUTO = "auto"
+CAR_STALE_MODE_FORCE_STALE = "force_stale"
+CAR_STALE_MODE_FORCE_NOT_STALE = "force_not_stale"
 
 QSForecastHomeNonControlledSensors = {
     "qs_no_control_forecast_now": 0,

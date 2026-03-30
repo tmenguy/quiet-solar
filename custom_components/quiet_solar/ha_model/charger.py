@@ -4547,7 +4547,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             probe_charge_window = 30 * 60
             if is_target_percent:
-                sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+                if self.car._car_api_stale_percent_mode:
+                    sensor_result = None  # explicit bypass — SOC sensor is poisoned
+                else:
+                    sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
             else:
                 sensor_result = self.car.get_car_charge_energy(time, tolerance_seconds=probe_charge_window)
 
@@ -4623,6 +4626,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_target_percent
             and result is not None
             and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
+            and not self.car._car_api_stale_percent_mode
         ):
             if (
                 self._expected_charge_state.value is True

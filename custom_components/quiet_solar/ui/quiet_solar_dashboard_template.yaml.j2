@@ -51,6 +51,12 @@ views:
               {%- set ha = device.ha_entities %}
               {%- set e = ha.get("qs_car_use_charge_percent_constraints") %}
               {% if e %}use_percent_mode: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_is_stale") %}
+              {% if e %}car_is_stale: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_api_ok") %}
+              {% if e %}api_ok: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_stale_mode") %}
+              {% if e %}stale_mode: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("selected_charger_for_car") %}
               {% if e %}charger_select: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_bump_solar_charge_priority") %}

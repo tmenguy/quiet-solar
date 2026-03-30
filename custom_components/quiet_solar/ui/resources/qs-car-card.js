@@ -94,11 +94,14 @@ class QsCarCard extends HTMLElement {
       const sPersonForecast = this._entity(e.person_forecast);
       const sUsePercentMode = this._entity(e.use_percent_mode);
       const sIsOffGrid = this._entity(e.is_off_grid);
+      const sCarIsStale = this._entity(e.car_is_stale);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
-      
+
       // Check if system is off-grid
       const isOffGrid = sIsOffGrid?.state === 'on';
+      // Check if car API data is stale
+      const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
       const power = sPower?.state || "0";
       const target = selLimit?.state || "";
@@ -149,8 +152,19 @@ class QsCarCard extends HTMLElement {
       const energyUnitFontSize = 0.4; // 40% of the number size
 
       // Get target value based on mode
+      const isStalePercentMode = isStale && !useEnergyMode;
       let targetPct, displayTargetValue, maxCircleValue, displaySocValue;
-      if (useEnergyMode) {
+      if (isStalePercentMode) {
+          // Stale-percent mode: show +XX% based on energy delivered
+          const energyWh = Number(sCurrentInputedEnergy?.state || 0);
+          const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
+          const pctAdded = (energyWh / batteryWh) * 100;
+          soc = Math.max(0, Math.min(100, pctAdded));
+          targetPct = parseTargetPercent(target);
+          maxCircleValue = 100;
+          displaySocValue = `+${this._fmt(pctAdded)}%`;
+          displayTargetValue = `${this._fmt(targetPct ?? 0)}%`;
+      } else if (useEnergyMode) {
           const targetEnergy = parseTargetEnergy(target);
           // Use car battery capacity from config as max circle value (in kWh)
           // Fall back to parsing from last option if not provided
@@ -206,6 +220,7 @@ class QsCarCard extends HTMLElement {
       const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); }
+      .card.stale { border: 3px solid var(--error-color, #db4437); }
       .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
@@ -409,6 +424,7 @@ class QsCarCard extends HTMLElement {
       const gradChargeId = `gradC-${Math.floor(Math.random() * 1e6)}`;
       const gradDisabledId = `gradD-${Math.floor(Math.random() * 1e6)}`;
       const gradFaultId = `gradF-${Math.floor(Math.random() * 1e6)}`;
+      const gradStaleId = `gradS-${Math.floor(Math.random() * 1e6)}`;
       const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
       const chargeTypeState = (sChargeType?.state || '').toLowerCase();
       const isFaulted = chargeTypeState === 'faulted' || chargeTypeState === 'unknown' || chargeTypeState === 'no power to car';
@@ -437,7 +453,7 @@ class QsCarCard extends HTMLElement {
       const validPersonForecast = personForecastStr && personForecastStr.toLowerCase() !== 'none' && personForecastStr.toLowerCase() !== 'unknown' && personForecastStr.toLowerCase() !== 'unavailable' && personForecastStr.trim() !== '';
       const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
 
-      const activeGradId = isFaulted ? gradFaultId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId));
+      const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
       const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
 
       //const forecastedPersonStr = sForecastedPerson?.state;
@@ -446,7 +462,7 @@ class QsCarCard extends HTMLElement {
       const displayTitle = title;
 
       this._root.innerHTML = `
-      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''}">
+      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
         <style>${css}</style>
         <div class="card-title">${displayTitle}</div>
         <div class="top"></div>
@@ -470,6 +486,10 @@ class QsCarCard extends HTMLElement {
                 <linearGradient id="${gradFaultId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="#ff8a80"/>
                   <stop offset="100%" stop-color="#ff1744"/>
+                </linearGradient>
+                <linearGradient id="${gradStaleId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#ffa726"/>
+                  <stop offset="100%" stop-color="#ff8f00"/>
                 </linearGradient>
                 <filter id="chargeGlow" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="2" result="blur" />

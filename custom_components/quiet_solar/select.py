@@ -11,10 +11,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .const import (
+    CAR_STALE_MODE_AUTO,
+    CAR_STALE_MODE_FORCE_NOT_STALE,
+    CAR_STALE_MODE_FORCE_STALE,
     DOMAIN,
     OFF_GRID_MODE_AUTO,
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
+    SELECT_CAR_STALE_MODE,
     SELECT_OFF_GRID_MODE,
     SELECT_SOLAR_PROVIDER_MODE,
     SOLAR_PROVIDER_MODE_AUTO,
@@ -91,6 +95,21 @@ def create_ha_select_for_QSCar(device: QSCar):
     )
     # use QSBaseSelect as it needs to be recomputed every time, the information is stored on the car device infos
     entities.append(QSBaseSelect(data_handler=device.data_handler, device=device, description=selected_car_description))
+
+    # Car API stale mode select (Story 3.9)
+    stale_mode_description = QSSelectEntityDescription(
+        key=SELECT_CAR_STALE_MODE,
+        translation_key=SELECT_CAR_STALE_MODE,
+        options=[CAR_STALE_MODE_AUTO, CAR_STALE_MODE_FORCE_STALE, CAR_STALE_MODE_FORCE_NOT_STALE],
+        qs_default_option=CAR_STALE_MODE_AUTO,
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_stale_mode(
+            option, for_init=for_init
+        ),
+        get_current_option_fn=lambda device, key: device._car_stale_mode_override,
+    )
+    entities.append(
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=stale_mode_description)
+    )
 
     return entities
 

@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-COMPONENT = "renault"
+COMPONENT = "quiet_solar"
 COMPONENT_DIR = Path("custom_components") / COMPONENT
 STRINGS_PATH = COMPONENT_DIR / "strings.json"
 EN_JSON_PATH = COMPONENT_DIR / "translations" / "en.json"
