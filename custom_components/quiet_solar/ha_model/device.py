@@ -422,6 +422,13 @@ class HADeviceMixin:
         local_tomorrow = local_constraint_day + timedelta(days=1)
         return local_tomorrow.replace(tzinfo=None).astimezone(tz=pytz.UTC)
 
+    def get_proper_local_adapted_today(self, time: datetime | None) -> datetime:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        local_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_today = datetime(local_now.year, local_now.month, local_now.day)
+        return local_today.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+
     def get_next_time_from_hours(
         self, local_hours: dt_time, time_utc_now: datetime | None = None, output_in_utc=True
     ) -> datetime | None:

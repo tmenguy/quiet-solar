@@ -56,9 +56,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
         tomorrow_utc = self.get_proper_local_adapted_tomorrow(time)
-        local_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
-        local_today = datetime(local_now.year, local_now.month, local_now.day)
-        today_utc = local_today.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        today_utc = self.get_proper_local_adapted_today(time)
         return today_utc, tomorrow_utc
 
     def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
