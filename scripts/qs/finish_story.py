@@ -41,7 +41,7 @@ from utils import (
 def run_quality_gate() -> bool:
     """Run quality gates, return True if all pass."""
     result = subprocess.run(
-        [sys.executable, str(Path(__file__).parent / "quality_gate.py"), "--json"],
+        [sys.executable, str(Path(__file__).parent / "quality_gate.py"), "--json", "--cache"],
         capture_output=True, text=True,
     )
     return result.returncode == 0

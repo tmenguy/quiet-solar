@@ -2,11 +2,13 @@
 """Run all quality gates and report results.
 
 Usage:
-    python scripts/qs/quality_gate.py [--fix] [--json]
+    python scripts/qs/quality_gate.py [--fix] [--json] [--cache] [--no-cache]
 
 Options:
-    --fix   Auto-fix what can be fixed (ruff format, ruff check --fix)
-    --json  Output JSON instead of human-readable text
+    --fix       Auto-fix what can be fixed (ruff format, ruff check --fix)
+    --json      Output JSON instead of human-readable text
+    --cache     Enable caching — skip gates if git state matches a previous pass
+    --no-cache  Force fresh run even when --cache is present
 
 Exit codes:
     0 = all gates pass
@@ -19,6 +21,7 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Resolve paths relative to repo root
@@ -41,6 +44,52 @@ def _venv_tool(name: str) -> str:
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT))
+
+
+CACHE_FILE = REPO_ROOT / ".quality_gate_cache"
+
+
+def _get_git_state() -> tuple[str, str, bool]:
+    """Return (branch_name, commit_hash, is_clean) from git."""
+    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+    commit = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    status = _run(["git", "status", "--porcelain", "-uno"]).stdout.strip()
+    is_clean = len(status) == 0
+    return branch, commit, is_clean
+
+
+def _read_cache() -> dict | None:
+    """Read and validate the cache file. Return None if missing or invalid."""
+    if not CACHE_FILE.exists():
+        return None
+    try:
+        data = json.loads(CACHE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict) or "branch" not in data or "commit" not in data:
+        return None
+    return data
+
+
+def _write_cache(branch: str, commit: str, results: list[dict]) -> None:
+    """Write cache file with current git state and gate results."""
+    data = {
+        "branch": branch,
+        "commit": commit,
+        "all_passed": True,
+        "results": results,
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    CACHE_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _is_cache_valid(cache: dict | None, branch: str, commit: str, is_clean: bool) -> bool:
+    """Check if cached results match the current git state."""
+    if cache is None:
+        return False
+    if not is_clean:
+        return False
+    return cache.get("branch") == branch and cache.get("commit") == commit
 
 
 def check_pytest() -> dict:
@@ -142,15 +191,63 @@ def check_translations() -> dict:
     return {"name": "translations", "passed": True, "detail": ""}
 
 
+def _output_results(
+    results: list[dict],
+    *,
+    all_passed: bool,
+    cached: bool,
+    json_mode: bool,
+) -> None:
+    """Print gate results in human-readable or JSON format."""
+    if json_mode:
+        print(json.dumps({
+            "all_passed": all_passed,
+            "cached": cached,
+            "gates": results,
+        }, indent=2))
+    else:
+        if cached:
+            print("  [CACHED] All gates passed (cached result)\n")
+        else:
+            for r in results:
+                status = "PASS" if r["passed"] else "FAIL"
+                print(f"  [{status}] {r['name']}")
+                if not r["passed"] and r.get("detail"):
+                    for line in r["detail"].split("\n")[:5]:
+                        print(f"         {line}")
+            print()
+            if all_passed:
+                print("All quality gates passed.")
+            else:
+                failed = [r["name"] for r in results if not r["passed"]]
+                print(f"FAILED gates: {', '.join(failed)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run quality gates")
     parser.add_argument("--fix", action="store_true", help="Auto-fix formatting/lint issues")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--cache", action="store_true", help="Enable result caching based on git state")
+    parser.add_argument("--no-cache", action="store_true", help="Force fresh run (overrides --cache)")
     args = parser.parse_args()
 
-    results = []
+    use_cache = args.cache and not args.fix and not args.no_cache
 
-    # Run format first if --fix (changes might affect lint)
+    # Check cache before running gates
+    if use_cache:
+        branch, commit, is_clean = _get_git_state()
+        cache = _read_cache()
+        if cache is not None and _is_cache_valid(cache, branch, commit, is_clean):
+            _output_results(
+                cache["results"],
+                all_passed=True,
+                cached=True,
+                json_mode=args.json,
+            )
+            sys.exit(0)
+
+    # Run all gates fresh
+    results = []
     results.append(check_ruff_format(fix=args.fix))
     results.append(check_ruff_lint(fix=args.fix))
     results.append(check_mypy())
@@ -159,25 +256,13 @@ def main() -> None:
 
     all_passed = all(r["passed"] for r in results)
 
-    if args.json:
-        print(json.dumps({
-            "all_passed": all_passed,
-            "gates": results,
-        }, indent=2))
-    else:
-        for r in results:
-            status = "PASS" if r["passed"] else "FAIL"
-            print(f"  [{status}] {r['name']}")
-            if not r["passed"] and r.get("detail"):
-                for line in r["detail"].split("\n")[:5]:
-                    print(f"         {line}")
-        print()
-        if all_passed:
-            print("All quality gates passed.")
-        else:
-            failed = [r["name"] for r in results if not r["passed"]]
-            print(f"FAILED gates: {', '.join(failed)}")
+    # Write cache on pass (only when caching is enabled)
+    if use_cache and all_passed:
+        branch, commit, is_clean = _get_git_state()
+        if is_clean:
+            _write_cache(branch, commit, results)
 
+    _output_results(results, all_passed=all_passed, cached=False, json_mode=args.json)
     sys.exit(0 if all_passed else 1)
 
 
