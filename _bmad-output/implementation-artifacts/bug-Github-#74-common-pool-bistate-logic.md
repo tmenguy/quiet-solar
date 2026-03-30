@@ -46,22 +46,22 @@ This distinction is safe because:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `update_current_metrics` in `bistate_duration.py` (AC: #1, #2, #3)
-  - [ ] 1.1 Restructure the method: if `_constraints` exist, sum ALL of them (no day-window filter). Only apply day-window filter in the `elif _last_completed_constraint` branch.
-  - [ ] 1.2 The method signature and output attributes (`qs_bistate_current_on_h`, `qs_bistate_current_duration_h`) stay the same.
+- [x] Task 1: Fix `update_current_metrics` in `bistate_duration.py` (AC: #1, #2, #3)
+  - [x] 1.1 Restructure the method: if `_constraints` exist, sum ALL of them (no day-window filter). Only apply day-window filter in the `elif _last_completed_constraint` branch.
+  - [x] 1.2 The method signature and output attributes (`qs_bistate_current_on_h`, `qs_bistate_current_duration_h`) stay the same.
 
-- [ ] Task 2: Remove duplicate `update_current_metrics` from `pool.py` (AC: #4)
-  - [ ] 2.1 Delete the `update_current_metrics` override in `ha_model/pool.py` (lines 55-90)
-  - [ ] 2.2 Remove now-unused imports: `DATETIME_MIN_UTC`, `timedelta`
+- [x] Task 2: Remove duplicate `update_current_metrics` from `pool.py` (AC: #4)
+  - [x] 2.1 Delete the `update_current_metrics` override in `ha_model/pool.py` (lines 55-90)
+  - [x] 2.2 Remove now-unused imports: `DATETIME_MIN_UTC`, `timedelta`
 
-- [ ] Task 3: Add tests for the exact-calendar bug (AC: #5)
-  - [ ] 3.1 Test: active constraint beyond day-window boundary → metrics show its target/current values
-  - [ ] 3.2 Test: active constraint within day-window → metrics still work (regression guard)
-  - [ ] 3.3 Test: no active constraints, last_completed within window → shows completed (existing behavior)
-  - [ ] 3.4 Test: no active constraints, last_completed outside window → shows 0 (existing behavior)
+- [x] Task 3: Add tests for the exact-calendar bug (AC: #5)
+  - [x] 3.1 Test: active constraint beyond day-window boundary → metrics show its target/current values
+  - [x] 3.2 Test: active constraint within day-window → metrics still work (regression guard)
+  - [x] 3.3 Test: no active constraints, last_completed within window → shows completed (existing behavior)
+  - [x] 3.4 Test: no active constraints, last_completed outside window → shows 0 (existing behavior)
 
-- [ ] Task 4: Run quality gate (AC: #6)
-  - [ ] `python scripts/qs/quality_gate.py` — all checks pass
+- [x] Task 4: Run quality gate (AC: #6)
+  - [x] `python scripts/qs/quality_gate.py` — all checks pass
 
 ## Dev Notes
 
@@ -126,9 +126,20 @@ After removing the method, `DATETIME_MIN_UTC` and `timedelta` are no longer used
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None needed — straightforward logic fix.
 
 ### Completion Notes List
+- Active constraints now always included in metrics (no day-window filter)
+- Day-window filter preserved for `_last_completed_constraint` fallback only
+- Pool `update_current_metrics` override deleted — inherits from `QSBiStateDuration`
+- Pool tests updated: references changed from `QSPool` to `QSBiStateDuration`, two tests updated to test the completed-constraint path (where day-window logic still applies)
+- All quality gates pass: 100% coverage, ruff, mypy, translations
 
 ### File List
+- `custom_components/quiet_solar/ha_model/bistate_duration.py` — restructured `update_current_metrics`
+- `custom_components/quiet_solar/ha_model/pool.py` — removed duplicate method + unused imports
+- `tests/test_bug_74_exact_calendar_metrics.py` — new test file (4 tests)
+- `tests/test_ha_pool.py` — updated to use parent class + adjusted 2 tests for new logic
