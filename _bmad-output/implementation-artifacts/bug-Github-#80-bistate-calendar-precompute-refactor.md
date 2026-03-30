@@ -1,6 +1,6 @@
 # Bug Fix: move calendar pre-compute into update_current_metrics and remove _is_current_calendar_mode
 
-Status: review
+Status: done
 issue: 80
 branch: "QS_80"
 
