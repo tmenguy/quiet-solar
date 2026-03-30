@@ -42,23 +42,23 @@ Add a virtual method `_is_calendar_based_mode(bistate_mode)` on `QSBiStateDurati
 ## Acceptance Criteria
 
 1. **AC1: Calendar modes show today-only target**
-   - Given a bistate device in `bistate_mode_auto` or `bistate_mode_exact_calendar` mode
+   - Given a bistate device in `bistate_mode_auto` or `bistate_mode_exact_calendar` mode with a calendar attached
    - When the calendar has events spanning multiple days
-   - Then Target Hours = sum of constraint durations whose `end_of_constraint` falls within today (local midnight to local midnight)
-   - And constraints ending after local midnight are excluded from the target sum
+   - Then Target Hours = sum of **calendar event durations** for today (local midnight to next midnight), capturing both past and future events regardless of constraint state
+   - And events ending after local next-midnight are excluded
 
 2. **AC2: Calendar modes show today-only actual**
-   - Given a bistate device in calendar mode with constraints that have accumulated `current_value`
-   - Then Actual Hours = sum of `current_value` for today's constraints only (same day filter as AC1)
-   - And if `_last_completed_constraint` exists for today, its `current_value` is included
+   - Given a bistate device in calendar mode
+   - Then Actual Hours = sum of full durations of **past calendar events** (event_end <= now) + `current_value` of any **currently active** constraint whose `end_of_constraint` is within today
+   - `_last_completed_constraint` is NOT used for the actual sum — only for the sanity-check warning (AC5)
 
 3. **AC3: Default/pool modes show today-only metrics**
    - Given a bistate device in `bistate_mode_default` or a pool in `bistate_mode_auto`/`pool_winter_mode`
-   - Then Target Hours = constraint target for the current day cycle only
-   - And Actual Hours = `_last_completed_constraint.current_value` if it belongs to today's cycle, otherwise the active constraint's `current_value`
+   - Then Target Hours = sum of `target_value` from `_constraints` ending within today + `_last_completed_constraint.target_value` if from today
+   - And Actual Hours = sum of `current_value` from `_constraints` ending within today + `_last_completed_constraint.current_value` if from today and not already in `_constraints`
 
 4. **AC4: Day boundary uses local midnight**
-   - The "today" window is defined as local time 00:00:00 to 23:59:59 (converted to UTC for comparison)
+   - The "today" window is `(start_of_today_utc, start_of_tomorrow_utc)` derived from local midnight
    - This correctly handles timezone offsets and DST transitions
 
 5. **AC5: Sync warning for calendar modes**
@@ -66,9 +66,10 @@ Add a virtual method `_is_calendar_based_mode(bistate_mode)` on `QSBiStateDurati
    - If its `current_value` significantly diverges from the inferred past schedule runtime
    - Then emit a `_LOGGER.warning()` with the discrepancy details
 
-6. **AC6: No regression on existing behavior**
-   - The existing `_last_completed_constraint` day-window fallback (lines 70-92) continues to work correctly when no active constraints exist
-   - All existing tests in `test_bug_74_exact_calendar_metrics.py`, `test_coverage_bistate_duration.py`, and `test_ha_pool.py` continue to pass
+6. **AC6: Controlled test migration**
+   - `test_bug_74_exact_calendar_metrics.py`: `test_active_constraint_beyond_day_window_shows_target` updated — a tomorrow-only constraint now correctly shows 0h target
+   - `test_ha_pool.py`: test setups updated with `bistate_mode` where needed
+   - All other existing tests in `test_coverage_bistate_duration.py` continue to pass
 
 ## Tasks / Subtasks
 
