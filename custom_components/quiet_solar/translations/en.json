@@ -372,11 +372,20 @@
     },
     "entity": {
         "binary_sensor": {
+            "qs_car_api_ok": {
+                "name": "Car API OK"
+            },
+            "qs_car_is_stale": {
+                "name": "Car API Stale"
+            },
             "qs_car_use_charge_percent_constraints": {
                 "name": "Use Charge Percent Constraints"
             },
             "qs_home_is_off_grid": {
                 "name": "Is Off-Grid"
+            },
+            "qs_home_persistence_health": {
+                "name": "Persistence Health"
             },
             "qs_home_real_off_grid": {
                 "name": "Real off-grid state"
@@ -386,9 +395,6 @@
             },
             "qs_solar_forecast_ok": {
                 "name": "Solar Forecast OK"
-            },
-            "qs_home_persistence_health": {
-                "name": "Persistence Health"
             }
         },
         "button": {
@@ -515,6 +521,14 @@
                     "pool_winter_mode": "Winter Mode"
                 }
             },
+            "qs_car_stale_mode": {
+                "name": "Car API stale mode",
+                "state": {
+                    "auto": "Auto",
+                    "force_not_stale": "Force not stale",
+                    "force_stale": "Force stale"
+                }
+            },
             "qs_solar_provider_mode": {
                 "name": "Solar Provider Mode"
             },
@@ -610,11 +624,11 @@
             "qs_person_mileage_prediction_km": {
                 "name": "Predicted Next Day Mileage (km)"
             },
-            "qs_solar_forecast_age": {
-                "name": "Solar Forecast Age"
-            },
             "qs_solar_active_provider": {
                 "name": "Active Solar Provider"
+            },
+            "qs_solar_forecast_age": {
+                "name": "Solar Forecast Age"
             }
         },
         "switch": {

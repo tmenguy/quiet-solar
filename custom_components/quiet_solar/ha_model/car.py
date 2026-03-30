@@ -14,11 +14,15 @@ from homeassistant.components.recorder.models import LazyState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 
 from ..const import (
+    CAR_API_STALE_THRESHOLD_S,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_EFFICIENCY_KM_PER_KWH,
     CAR_HARD_WIRED_CHARGER,
-    CAR_USE_PERCENT_MODE_SENSOR,
+    CAR_SOC_STALE_THRESHOLD_S,
+    CAR_STALE_MODE_AUTO,
+    CAR_STALE_MODE_FORCE_NOT_STALE,
+    CAR_STALE_MODE_FORCE_STALE,
     CHARGE_TIME_CONSTRAINTS_CLEARED,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -35,6 +39,8 @@ from ..const import (
     CONF_CAR_TRACKER,
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
+    DEVICE_STATUS_CHANGE_ERROR,
+    DEVICE_STATUS_CHANGE_NOTIFY,
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
@@ -59,8 +65,6 @@ CAR_DEFAULT_CAPACITY = 100000  # 100 kWh
 
 CAR_MINIMUM_LEFT_RANGE_KM = 40.0
 
-CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S = 3600
-
 
 class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
@@ -83,7 +87,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 30.0)
 
         self.car_efficiency_km_per_kwh_sensor: str = CAR_EFFICIENCY_KM_PER_KWH
-        self.car_use_percent_mode_sensor: str = CAR_USE_PERCENT_MODE_SENSOR
 
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
@@ -206,8 +209,28 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.reset()
 
-        self._use_percent_mode = True  # to have a default value, overriden by the call below if necessary
-        self._use_percent_mode = self.can_use_charge_percent_constraints()
+        # Car API staleness detection (Story 3.9)
+        # Critical sensors: must recover for stale exit
+        # Supplementary sensors: tracked for entry, not required for exit
+        self._car_api_critical_sensors: list[str | None] = [
+            self.car_tracker,
+            self.car_plugged,
+        ]
+        self._car_api_supplementary_sensors: list[str | None] = [
+            self.car_charge_percent_sensor,
+            self.car_odometer_sensor,
+            self.car_estimated_range_sensor,
+        ]
+        self._car_api_all_sensors: list[str] = [
+            s for s in self._car_api_critical_sensors + self._car_api_supplementary_sensors if s is not None
+        ]
+        self._car_api_stale: bool = False
+        self._was_car_api_stale: bool = False
+        self._car_api_stale_since: datetime | None = None
+        self.car_stale_mode_override: str = CAR_STALE_MODE_AUTO
+        self.car_api_stale_percent_mode: bool = False
+        self._car_api_inferred_home: bool = False
+        self._car_api_inferred_plugged: bool = False
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True, reload_from_history=True)
 
@@ -228,12 +251,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.car_efficiency_km_per_kwh_sensor,
             is_numerical=True,
             non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter,
-        )
-
-        self.attach_ha_state_to_probe(
-            self.car_use_percent_mode_sensor,
-            is_numerical=True,
-            non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter,
         )
 
     def _car_person_option(self, person_name: str):
@@ -533,37 +550,292 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return (None, None, None, None)
 
-    def car_use_percent_mode_sensor_state_getter(
-        self, entity_id: str, time: datetime | None
-    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
+    def _is_soc_sensor_stale(self, time: datetime) -> bool:
+        """Return True if the SOC percent sensor is stale beyond the SOC threshold."""
+        if self.car_is_invited or self.car_charge_percent_sensor is None:
+            return False
+        last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+            self.car_charge_percent_sensor, tolerance_seconds=None, time=time
+        )
+        if last_time is None or last_value is None:
+            return True
+        return (time - last_time).total_seconds() > CAR_SOC_STALE_THRESHOLD_S
 
-        if time is None:
-            time = datetime.now(tz=pytz.UTC)
+    def _have_all_api_sensors_reported(self, time: datetime) -> bool:
+        """Return True if every tracked API sensor has ever reported a valid value."""
+        for sensor_id in self._car_api_all_sensors:
+            last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+                sensor_id, tolerance_seconds=None, time=time
+            )
+            if last_time is None or last_value is None:
+                return False
+        return True
 
-        res = "on"
+    def _get_time_for_sensor(self) -> datetime:
+        """Return current UTC time for sensor state getters."""
+        return datetime.now(tz=pytz.UTC)
 
-        if self.can_use_charge_percent_constraints_static() is False:
-            res = "off"
+    async def update_states(self, time: datetime):
+        """Update states and check car API staleness each cycle."""
+        await super().update_states(time)
+        self._update_car_api_staleness(time)
 
-        if res == "on":
-            # now we have to check that the sensor is either invalid for a long time
-            last_valid_time, last_valid_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
-                self.car_charge_percent_sensor, tolerance_seconds=None, time=time
+    # ── Car API staleness detection (Story 3.9) ──────────────────────────
+
+    def is_car_api_stale(self, time: datetime) -> bool:
+        """Return True if ALL tracked API sensors are stale beyond threshold.
+
+        For invited/generic cars (no API sensors configured), always returns False.
+        """
+        if self.car_is_invited:
+            return False
+
+        if not self._car_api_all_sensors:
+            return False
+
+        for sensor_id in self._car_api_all_sensors:
+            last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+                sensor_id, tolerance_seconds=None, time=time
+            )
+            if last_time is not None and (time - last_time).total_seconds() <= CAR_API_STALE_THRESHOLD_S:
+                return False
+
+        return True
+
+    def is_car_api_ok(self, time: datetime) -> bool:
+        """Return True if car API data is fresh (inverse of is_car_api_stale)."""
+        return not self.is_car_api_stale(time)
+
+    def is_car_effectively_stale(self, time: datetime) -> bool:
+        """Return the effective stale status, combining raw detection with select override.
+
+        This is the main method all UI and behavioral logic reads.
+        """
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+            return False
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
+            return True
+        # auto mode: raw stale detection or stale-percent mode (includes SOC-only)
+        return self._car_api_stale or self.car_api_stale_percent_mode
+
+    def _update_car_api_staleness(self, time: datetime) -> None:
+        """Check and update car API staleness state. Called each state cycle."""
+        raw_stale = self.is_car_api_stale(time)
+
+        # In auto mode, update the raw stale flag
+        if self.car_stale_mode_override == CAR_STALE_MODE_AUTO:
+            self._car_api_stale = raw_stale
+
+        # Check if recovery from stale-percent mode is possible
+        if self.car_api_stale_percent_mode and self.can_exit_stale_percent_mode(time):
+            _LOGGER.info(
+                "Car %s API data recovered (was stale since %s)",
+                self.name,
+                self._car_api_stale_since,
+            )
+            self._schedule_person_notification(
+                f"Car {self.name} recovered",
+                f"Your {self.name}'s data is available again",
+            )
+            self._exit_stale_mode()
+            self._was_car_api_stale = False
+
+        # SOC-only stale entry: SOC sensor stale but not full API stale
+        if (
+            not self._car_api_stale
+            and not self.car_api_stale_percent_mode
+            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
+            and self.can_use_charge_percent_constraints()
+            and self._is_soc_sensor_stale(time)
+        ):
+            self.car_api_stale_percent_mode = True
+
+        # Periodic contradiction check for attached cars
+        if (
+            self.charger is not None
+            and not self._car_api_stale
+            and not self.car_api_stale_percent_mode
+            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
+        ):
+            self.check_manual_assignment_contradiction(self.charger.name, time)
+
+        effectively_stale = self.is_car_effectively_stale(time)
+
+        # Transition: not stale -> stale
+        if effectively_stale and not self._was_car_api_stale:
+            self._car_api_stale_since = time
+            if self._car_api_stale:
+                # Full API stale — all sensors older than threshold
+                stale_sensors = self._get_stale_sensor_details(time)
+                _LOGGER.warning(
+                    "Car %s API data is stale (all sensors older than %s hours): %s",
+                    self.name,
+                    CAR_API_STALE_THRESHOLD_S / 3600,
+                    stale_sensors,
+                )
+            else:
+                # SOC-only stale — SOC sensor specifically is stale
+                _LOGGER.warning(
+                    "Car %s SOC sensor is stale (older than %s hours) — entering stale-percent mode",
+                    self.name,
+                    CAR_SOC_STALE_THRESHOLD_S / 3600,
+                )
+            # Notify only for automatic stale detection, not user-initiated Force Stale
+            if self.car_stale_mode_override != CAR_STALE_MODE_FORCE_STALE:
+                self._schedule_person_notification(
+                    f"Warning: {self.name}",
+                    f"Warning: {self.name} data is not available, check the car card",
+                    error=True,
+                )
+            # Activate stale-percent mode if car can use percent constraints
+            if self.can_use_charge_percent_constraints():
+                self.car_api_stale_percent_mode = True
+
+        # Transition: stale -> not stale (from select change or non-percent recovery)
+        elif not effectively_stale and self._was_car_api_stale:
+            _LOGGER.info(
+                "Car %s exiting stale mode (was stale since %s)",
+                self.name,
+                self._car_api_stale_since,
+            )
+            self._exit_stale_mode()
+
+        self._was_car_api_stale = effectively_stale
+
+    def _schedule_person_notification(self, title: str, message: str, error: bool = False) -> None:
+        """Notify the person attached to this car. Non-blocking."""
+        person = self.current_forecasted_person
+        if person is None or self.hass is None:
+            return
+        change_type = DEVICE_STATUS_CHANGE_ERROR if error else DEVICE_STATUS_CHANGE_NOTIFY
+        time = datetime.now(tz=pytz.UTC)
+        self.hass.async_create_task(
+            person.on_device_state_change(time, device_change_type=change_type, title=title, message=message),
+            f"qs_stale_notify_{self.name}",
+        )
+
+    def _get_stale_sensor_details(self, time: datetime) -> str:
+        """Return a string listing each sensor and how long since its last update."""
+        parts = []
+        for sensor_id in self._car_api_all_sensors:
+            last_time, _, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+                sensor_id, tolerance_seconds=None, time=time
+            )
+            if last_time is not None:
+                age_h = (time - last_time).total_seconds() / 3600
+                parts.append(f"{sensor_id}: {age_h:.1f}h ago")
+            else:
+                parts.append(f"{sensor_id}: never updated")
+        return ", ".join(parts)
+
+    def _exit_stale_mode(self) -> None:
+        """Clear all stale flags and exit stale-percent mode."""
+        self._car_api_stale = False
+        self.car_api_stale_percent_mode = False
+        self._car_api_inferred_home = False
+        self._car_api_inferred_plugged = False
+        self._car_api_stale_since = None
+
+    def check_manual_assignment_contradiction(self, charger_name: str, time: datetime) -> None:
+        """Check if manual charger assignment contradicts API data (Feature B).
+
+        When a user manually assigns this car to a charger and the API reports
+        not_home or not_plugged, the manual action proves the API is wrong.
+        Flag the car as stale immediately.
+        """
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+            return
+        # Already stale — don't re-notify
+        if self._car_api_stale or self.car_api_stale_percent_mode:
+            return
+
+        raw_home = self._get_raw_is_car_home(time)
+        raw_plugged = self._get_raw_is_car_plugged(time)
+
+        # Contradiction: API says not home or not plugged, but user says car is on charger
+        has_contradiction = (raw_home is not None and raw_home is False) or (
+            raw_plugged is not None and raw_plugged is False
+        )
+
+        if has_contradiction:
+            _LOGGER.info(
+                "Car %s manually assigned to charger %s while API reports home=%s, plugged=%s — flagging as stale",
+                self.name,
+                charger_name,
+                raw_home,
+                raw_plugged,
+            )
+            self._car_api_stale = True
+            self._car_api_inferred_home = True
+            self._car_api_inferred_plugged = True
+            if self._car_api_stale_since is None:
+                self._car_api_stale_since = time
+            # Activate stale-percent mode if possible
+            if self.can_use_charge_percent_constraints():
+                self.car_api_stale_percent_mode = True
+            self._was_car_api_stale = True
+            # Notify on contradiction (Feature B)
+            self._schedule_person_notification(
+                f"Warning: {self.name}",
+                f"Warning: {self.name} data is not available, check the car card",
+                error=True,
             )
 
-            if last_valid_value is None or last_valid_time is None:
-                res = "off"
-            elif (
-                last_valid_time is None
-                or (time - last_valid_time).total_seconds() > CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S
-            ):
-                res = "off"
-            else:
-                res = "on"
+    def clear_inferred_flags(self) -> None:
+        """Clear inferred flags when car is detached from charger."""
+        self._car_api_inferred_home = False
+        self._car_api_inferred_plugged = False
 
-        self._use_percent_mode = res == "on"
+    async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
+        """Handle stale mode select change. Immediately re-evaluate stale state."""
+        self.car_stale_mode_override = option
+        if for_init and option == CAR_STALE_MODE_FORCE_STALE:
+            # Restore stale-percent mode immediately so get_car_charge_percent()
+            # returns None before the first update_states cycle runs
+            if self.can_use_charge_percent_constraints():
+                self.car_api_stale_percent_mode = True
+        if not for_init:
+            time = datetime.now(tz=pytz.UTC)
+            self._update_car_api_staleness(time)
 
-        return (time, res, {})
+    def can_exit_stale_percent_mode(self, time: datetime) -> bool:
+        """Context-aware exit from stale-percent mode.
+
+        Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S, all sensors
+        available, SOC fresh.
+        Connected path: plug=plugged + home=home.
+        Not-connected path: plug=unplugged.
+        """
+        if not self.car_api_stale_percent_mode:
+            return False
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
+            return False
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+            return True
+        # Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S
+        if self.is_car_api_stale(time):
+            return False
+        # Common: all sensors must have valid readings
+        if not self._have_all_api_sensors_reported(time):
+            return False
+        # Common: SOC must be fresh (prevents re-entry flip-flop with 1h threshold)
+        if self._is_soc_sensor_stale(time):
+            return False
+
+        # Branch on charger connection state
+        if self.charger is not None:
+            # Connected: plug=plugged AND home=home
+            raw_plugged = self._get_raw_is_car_plugged(time)
+            raw_home = self._get_raw_is_car_home(time)
+            plugged_ok = raw_plugged is True if self.car_plugged is not None else True
+            home_ok = raw_home is True if self.car_tracker is not None else True
+            return plugged_ok and home_ok
+        else:
+            # Not connected: plug=unplugged
+            raw_plugged = self._get_raw_is_car_plugged(time)
+            if self.car_plugged is None:
+                return True  # No plug sensor — other checks sufficient
+            return raw_plugged is False
 
     def car_efficiency_km_per_kwh_sensor_state_getter(
         self, entity_id: str, time: datetime | None
@@ -874,7 +1146,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )[0]
 
     def is_car_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        """Check if car is currently plugged. Returns inferred True if stale-inferred."""
+        # Inferred plugged overrides API when stale
+        if self._car_api_inferred_plugged:
+            return True
 
+        return self._get_raw_is_car_plugged(time, for_duration=for_duration)
+
+    def _get_raw_is_car_plugged(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        """Read the actual API plug sensor without inferred overrides."""
         if self.car_plugged is None:
             return None
 
@@ -925,7 +1205,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return None, None
 
     def is_car_home(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        """Check if car is currently home. Returns inferred True if stale-inferred."""
+        # Inferred home overrides API when stale
+        if self._car_api_inferred_home:
+            return True
 
+        return self._get_raw_is_car_home(time, for_duration=for_duration)
+
+    def _get_raw_is_car_home(self, time: datetime, for_duration: float | None = None) -> bool | None:
+        """Read the actual API home tracker without inferred overrides."""
         if self.car_tracker is None:
             return None
 
@@ -951,6 +1239,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_car_charge_percent(
         self, time: datetime | None = None, tolerance_seconds: float | None = None
     ) -> float | None:
+        """Get car SOC percent. Returns None when in stale-percent mode (SOC sensor is poisoned)."""
+        if self.car_api_stale_percent_mode:
+            return None
         ret = self.get_sensor_latest_possible_valid_value(
             entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds
         )
@@ -991,7 +1282,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )
 
     def is_car_charge_growing(self, num_seconds: float, time: datetime) -> bool | None:
-
+        if self.car_api_stale_percent_mode:
+            return None
         return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor, num_seconds=num_seconds, time=time)
 
     def _get_delta_from_graph(self, deltas, deltas_graph, from_v, to_v):
@@ -1644,23 +1936,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 await self.charger.update_charger_for_user_change()
 
     def can_use_charge_percent_constraints(self):
-
-        r = self.can_use_charge_percent_constraints_static()
-
-        if r is False:
-            return False
-
-        return self._use_percent_mode
-
-    def can_use_charge_percent_constraints_static(self):
-
         if self.car_is_invited:
             return False
         if self.car_battery_capacity is None:
             return False
         if self.car_charge_percent_sensor is None:
             return False
-
         return True
 
     def _reset_charge_targets(self):
@@ -1904,6 +2185,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
             self.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+            self.clear_inferred_flags()
         elif charger_name is not None:
             charger = None
             for c in self.home._chargers:
@@ -1912,11 +2194,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     break
             if charger is not None:
                 self.set_user_originated("charger_name", charger_name)
+                # Feature B: check for contradiction on manual assignment
+                self.check_manual_assignment_contradiction(charger_name, datetime.now(tz=pytz.UTC))
                 await charger.user_set_selected_car_by_name(car_name=self.name)
             else:
                 self.clear_user_originated("charger_name")
         else:
             self.clear_user_originated("charger_name")
+            self.clear_inferred_flags()
 
         if orig_charger is not None:
             await orig_charger.update_charger_for_user_change()

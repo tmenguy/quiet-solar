@@ -253,7 +253,6 @@ async def test_user_set_next_charge_target_percent_mode(
     """In percent mode, delegates to set_next_charge_target_percent."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="usr_pct")
     car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
-    car._use_percent_mode = True
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
     car.set_next_charge_target_percent = AsyncMock(return_value=True)
 
@@ -269,7 +268,6 @@ async def test_user_set_next_charge_target_energy_mode(
     """In energy mode, delegates to set_next_charge_target_energy."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="usr_nrg")
     car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
-    car._use_percent_mode = False
     car.car_is_invited = True  # force energy mode
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
 
@@ -1383,7 +1381,6 @@ async def test_get_car_target_charge_option_percent_mode(
 ) -> None:
     """In percent mode, returns percent option."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="tgt_opt_pct")
-    car._use_percent_mode = True
     result = car.get_car_target_charge_option()
     assert "%" in result
 
@@ -1395,45 +1392,8 @@ async def test_get_car_target_charge_option_energy_mode(
     """In energy mode, returns energy option."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="tgt_opt_nrg")
     car.car_is_invited = True  # forces energy mode
-    car._use_percent_mode = False
     result = car.get_car_target_charge_option()
     assert "kWh" in result
-
-
-# ===========================================================================
-# car_use_percent_mode_sensor_state_getter – with None time
-# ===========================================================================
-
-
-async def test_percent_mode_sensor_getter_none_time(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """Should use datetime.now when time is None."""
-    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_mode_nt")
-
-    # Mock get_sensor_latest_possible_valid_time_value_attr
-    now = datetime.now(tz=pytz.UTC)
-    soc_entity = car.car_charge_percent_sensor
-    car._entity_probed_last_valid_state[soc_entity] = (now, 50.0, {})
-
-    result = car.car_use_percent_mode_sensor_state_getter("sensor.mode", None)
-    assert result is not None
-    assert result[1] in ("on", "off")
-
-
-async def test_percent_mode_sensor_getter_invited_car(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """Invited car should always return 'off'."""
-    car, _ = await _create_car(
-        hass, home_config_entry, extra_config={CONF_CAR_IS_INVITED: True}, entry_id_suffix="pct_mode_inv"
-    )
-    time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
-    result = car.car_use_percent_mode_sensor_state_getter("sensor.mode", time)
-    assert result[1] == "off"
-    assert car._use_percent_mode is False
 
 
 # ===========================================================================
@@ -1583,7 +1543,6 @@ async def test_get_car_next_charge_values_options_energy_mode(
     """In energy mode, get_car_next_charge_values_options returns energy options."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="opts_nrg")
     car.car_is_invited = True  # forces energy mode
-    car._use_percent_mode = False
 
     options = car.get_car_next_charge_values_options()
     assert all("kWh" in opt for opt in options)

@@ -13,6 +13,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    BINARY_SENSOR_CAR_API_OK,
+    BINARY_SENSOR_CAR_IS_STALE,
     BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
     BINARY_SENSOR_HOME_IS_OFF_GRID,
     BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
@@ -70,7 +72,7 @@ def create_ha_binary_sensor_for_QSHome(device: QSHome):
 
 
 def create_ha_binary_sensor_for_QSCar(device: QSCar):
-    """Create binary sensors for a PilotedDevice."""
+    """Create binary sensors for a QSCar."""
     entities = []
 
     piloted_activated = QSBinarySensorEntityDescription(
@@ -79,6 +81,23 @@ def create_ha_binary_sensor_for_QSCar(device: QSCar):
         value_fn=lambda d, key: d.can_use_charge_percent_constraints(),
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
+
+    # Raw API health (ignores select override)
+    api_ok = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_CAR_API_OK,
+        translation_key=BINARY_SENSOR_CAR_API_OK,
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        value_fn=lambda d, key: d.is_car_api_ok(d._get_time_for_sensor()),
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=api_ok))
+
+    # Effective stale status (combines detection + select override)
+    is_stale = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_CAR_IS_STALE,
+        translation_key=BINARY_SENSOR_CAR_IS_STALE,
+        value_fn=lambda d, key: d.is_car_effectively_stale(d._get_time_for_sensor()),
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=is_stale))
 
     return entities
 

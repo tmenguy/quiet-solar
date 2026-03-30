@@ -733,6 +733,12 @@
       },
       "qs_home_persistence_health": {
         "name": "Persistence Health"
+      },
+      "qs_car_api_ok": {
+        "name": "Car API OK"
+      },
+      "qs_car_is_stale": {
+        "name": "Car API Stale"
       }
     },
 
@@ -874,6 +880,14 @@
     "select": {
       "qs_solar_provider_mode": {
         "name": "Solar Provider Mode"
+      },
+      "qs_car_stale_mode": {
+        "name": "Car API stale mode",
+        "state": {
+          "auto": "Auto",
+          "force_stale": "Force stale",
+          "force_not_stale": "Force not stale"
+        }
       },
       "off_grid_mode": {
         "name": "Off-grid mode",
