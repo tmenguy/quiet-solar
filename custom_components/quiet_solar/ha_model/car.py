@@ -790,7 +790,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def can_exit_stale_percent_mode(self, time: datetime) -> bool:
         """Context-aware exit from stale-percent mode.
 
-        Common: at least one sensor moved in 4h, all sensors available, SOC fresh.
+        Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S, all sensors
+        available, SOC fresh.
         Connected path: plug=plugged + home=home.
         Not-connected path: plug=unplugged.
         """
@@ -800,7 +801,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return True
-        # Common: at least one sensor moved in 4h
+        # Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S
         if self.is_car_api_stale(time):
             return False
         # Common: all sensors must have valid readings

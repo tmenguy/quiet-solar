@@ -37,7 +37,7 @@ class TestConstants:
     """Verify all staleness constants exist with correct values."""
 
     def test_car_api_stale_threshold(self):
-        assert CAR_API_STALE_THRESHOLD_S == 4 * 3600
+        assert CAR_API_STALE_THRESHOLD_S == 6 * 3600
 
     def test_binary_sensor_car_api_ok(self):
         assert BINARY_SENSOR_CAR_API_OK == "qs_car_api_ok"
@@ -907,7 +907,7 @@ class TestContextAwareExit:
         assert real_car.can_exit_stale_percent_mode(current_time) is False
 
     def test_exit_all_sensors_stale_blocks(self, real_car, current_time):
-        """No sensor moved in 4h → blocked."""
+        """No sensor moved in CAR_API_STALE_THRESHOLD_S → blocked."""
         self._setup_stale_car(real_car, current_time)
         stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
         for sensor_id in real_car._car_api_all_sensors:

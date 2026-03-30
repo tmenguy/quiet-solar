@@ -22,9 +22,9 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 
 ## Two Complementary Detection Features
 
-**Feature A — Automatic staleness detection**: Monitor all car API sensors (`car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`). When *none* of them have updated within the threshold (default ~4 hours), mark the car as stale.
+**Feature A — Automatic staleness detection**: Monitor all car API sensors (`car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`). When *none* of them have updated within `CAR_API_STALE_THRESHOLD_S` (default 6 hours), mark the car as stale.
 
-**Feature B — Manual assignment contradiction detection**: When a user manually assigns a car to a plugged charger, and the car's API reports `not_home` or `not_plugged`, the manual action itself is evidence the data is wrong. Flag the car as stale **immediately** — no need to wait for the 4-hour threshold.
+**Feature B — Manual assignment contradiction detection**: When a user manually assigns a car to a plugged charger, and the car's API reports `not_home` or `not_plugged`, the manual action itself is evidence the data is wrong. Flag the car as stale **immediately** — no need to wait for `CAR_API_STALE_THRESHOLD_S`.
 
 Both features converge on the same outcome: `binary_sensor.qs_<car>_api_ok` turns off, the car enters **stale-percent mode**, and the card gets a red border with `+XX%` display.
 
@@ -62,7 +62,7 @@ flowchart TD
         Activate --> PlusDisplay["Card: +XX% display"]
     end
     subgraph recovery [Recovery -- context-aware exit]
-        CommonChecks["Common checks:\n≥1 sensor moved in 4h\nall sensors available\nSOC fresh (<1h)"] --> Branch{"Connected\nto charger?"}
+        CommonChecks["Common checks:\n≥1 sensor moved in threshold\nall sensors available\nSOC fresh (<1h)"] --> Branch{"Connected\nto charger?"}
         Branch -->|Yes| Connected["plug=plugged\nAND home=home"]
         Branch -->|No| NotConnected["plug=unplugged"]
         Connected --> ExitStale["Clear stale flags\nRe-read real SOC\nReassess constraints"]
@@ -79,7 +79,7 @@ flowchart TD
 
 ### AC1: Stale Car API Detection (Feature A)
 
-**Given** a car entity's API data stops updating (all tracked sensors haven't changed for longer than `CAR_API_STALE_THRESHOLD_S`, default 4 hours)
+**Given** a car entity's API data stops updating (all tracked sensors haven't changed for longer than `CAR_API_STALE_THRESHOLD_S`, default 6 hours)
 **When** the system detects staleness
 **Then** the car is flagged as stale, `binary_sensor.qs_<car>_api_ok` turns off
 **And** the car card gets a red border around the entire card
@@ -123,9 +123,9 @@ flowchart TD
 **Recovery rules** — exit branches on charger connection state (`self.charger is not None`):
 
 Common conditions (both paths):
-1. At least one API sensor moved in last 4h (`not is_car_api_stale(time)`)
+1. At least one API sensor moved within `CAR_API_STALE_THRESHOLD_S` (`not is_car_api_stale(time)`)
 2. All API sensors have valid readings (`_are_all_api_sensors_available(time)`)
-3. SOC sensor is fresh — not unavailable >1h (`not _is_soc_sensor_stale(time)`) — prevents enter/exit flip-flop since SOC stale threshold (1h) < API threshold (4h)
+3. SOC sensor is fresh — not unavailable >1h (`not _is_soc_sensor_stale(time)`) — prevents enter/exit flip-flop since `CAR_SOC_STALE_THRESHOLD_S` (1h) < `CAR_API_STALE_THRESHOLD_S` (6h)
 
 Connected to charger path: common + plug=plugged AND home=home
 Not connected path: common + plug=unplugged
@@ -144,7 +144,7 @@ Four notification events:
 
 ### Task 1: Constants and Sensor Classification (AC: #1, #2)
 
-- [x]1.1 Add `CAR_API_STALE_THRESHOLD_S = 4 * 3600` to `const.py` — code-level tunable constant (per project rules: all constants in `const.py`)
+- [x]1.1 Add `CAR_API_STALE_THRESHOLD_S = 6 * 3600` to `const.py` — code-level tunable constant (per project rules: all constants in `const.py`)
 - [x]1.2 Add to `const.py`: `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"`, `BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"`, `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"` + option constants
 - [x]1.3 Classify sensors on QSCar into two tiers:
   - **Critical**: `car_tracker`, `car_plugged` — directly affect charger assignment
@@ -264,7 +264,7 @@ Four notification events:
           return False
       if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
           return True
-      # Common: at least one sensor moved in 4h
+      # Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S
       if self.is_car_api_stale(time):
           return False
       # Common: all sensors must have valid readings
@@ -291,7 +291,7 @@ Four notification events:
   **Key design decisions**:
   - Branches on `self.charger is not None` (system state), NOT `_car_api_inferred_plugged` (old approach)
   - Both paths require ALL sensors available + at least one fresh + SOC fresh
-  - SOC freshness check prevents enter/exit flip-flop: SOC stale threshold (1h) < API threshold (4h)
+  - SOC freshness check prevents enter/exit flip-flop: `CAR_SOC_STALE_THRESHOLD_S` (1h) < `CAR_API_STALE_THRESHOLD_S` (6h)
   - Missing sensors (`car_plugged=None`, `car_tracker=None`) gracefully skipped
   - Uses `_get_raw_is_car_plugged()` / `_get_raw_is_car_home()` to read API directly, not inferred overrides
 - [x]5.1b Implement `_are_all_api_sensors_available(self, time) -> bool` — checks every sensor in `_car_api_all_sensors` has a valid reading (not None/never reported)
@@ -448,7 +448,7 @@ Note: `binary_sensor.qs_<car>_is_stale` is created in Task 6. `binary_sensor.qs_
 9. **Do NOT create new JS card files** — modify existing `qs-car-card.js`.
 10. **Do NOT branch recovery on `_car_api_inferred_plugged`** — exit logic branches on `self.charger is not None` (system state). The old `_car_api_inferred_plugged`-based branching was replaced.
 11. **Do NOT bypass static checks in `can_use_charge_percent_constraints()`** — this method checks only static conditions (not invited, has battery, has SOC sensor). Stale-percent mode is activated separately via `_car_api_stale_percent_mode` flag. The stale bypass was removed because it could force percent mode on invalid cars.
-12. **Do NOT allow SOC-only recovery to exit stale** — SOC stale threshold (1h) < API threshold (4h). Without `_is_soc_sensor_stale()` in exit conditions, the car would exit then immediately re-enter stale mode every cycle (flip-flop).
+12. **Do NOT allow SOC-only recovery to exit stale** — `CAR_SOC_STALE_THRESHOLD_S` (1h) < `CAR_API_STALE_THRESHOLD_S` (6h). Without `_is_soc_sensor_stale()` in exit conditions, the car would exit then immediately re-enter stale mode every cycle (flip-flop).
 
 ### Previous Story Intelligence
 
