@@ -4626,7 +4626,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_target_percent
             and result is not None
             and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
-            and not self.car._car_api_stale_percent_mode
+            and not self.car.is_in_stale_percent_mode
         ):
             if (
                 self._expected_charge_state.value is True

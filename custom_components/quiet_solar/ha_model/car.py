@@ -601,6 +601,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """Return current UTC time for sensor state getters."""
         return datetime.now(tz=pytz.UTC)
 
+    async def update_states(self, time: datetime):
+        """Update states and check car API staleness each cycle."""
+        await super().update_states(time)
+        self._update_car_api_staleness(time)
+
     # ── Car API staleness detection (Story 3.9) ──────────────────────────
 
     def is_car_api_stale(self, time: datetime) -> bool:
@@ -639,25 +644,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # auto mode: raw stale detection
         return self._car_api_stale
 
-    def car_api_ok_sensor_state_getter(
-        self, entity_id: str, time: datetime | None
-    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
-        """State getter for binary_sensor.qs_<car>_api_ok."""
-        if time is None:
-            time = datetime.now(tz=pytz.UTC)
-
-        is_ok = self.is_car_api_ok(time)
-        return (time, "on" if is_ok else "off", {})
-
-    def car_is_stale_sensor_state_getter(
-        self, entity_id: str, time: datetime | None
-    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
-        """State getter for binary_sensor.qs_<car>_is_stale (effective stale status)."""
-        if time is None:
-            time = datetime.now(tz=pytz.UTC)
-
-        is_stale = self.is_car_effectively_stale(time)
-        return (time, "on" if is_stale else "off", {})
+    @property
+    def is_in_stale_percent_mode(self) -> bool:
+        """Return True if the car is in stale-percent charging mode."""
+        return self._car_api_stale_percent_mode
 
     def _update_car_api_staleness(self, time: datetime) -> None:
         """Check and update car API staleness state. Called each state cycle."""
@@ -667,7 +657,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self._car_stale_mode_override == CAR_STALE_MODE_AUTO:
             self._car_api_stale = raw_stale
 
-        # Check if recovery is possible
+        # Check if recovery from stale-percent mode is possible
         if self._car_api_stale_percent_mode and self.can_exit_stale_percent_mode(time):
             _LOGGER.info(
                 "Car %s API data recovered (was stale since %s)",
@@ -679,6 +669,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 f"Your {self.name}'s API has recovered. Switching back to normal charging mode",
             )
             self._exit_stale_mode()
+            self._was_car_api_stale = False
 
         effectively_stale = self.is_car_effectively_stale(time)
 
@@ -701,15 +692,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 f"Your {self.name}'s data is stale — charging will use conservative estimates",
             )
 
-        # Transition: stale -> not stale (from select change or recovery)
-        if not effectively_stale and self._was_car_api_stale:
-            if self._car_api_stale_percent_mode:
-                _LOGGER.info(
-                    "Car %s exiting stale mode (was stale since %s)",
-                    self.name,
-                    self._car_api_stale_since,
-                )
-                self._exit_stale_mode()
+        # Transition: stale -> not stale (from select change or non-percent recovery)
+        elif not effectively_stale and self._was_car_api_stale:
+            _LOGGER.info(
+                "Car %s exiting stale mode (was stale since %s)",
+                self.name,
+                self._car_api_stale_since,
+            )
+            self._exit_stale_mode()
 
         self._was_car_api_stale = effectively_stale
 
@@ -717,7 +707,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """Schedule an async notification via home. Non-blocking."""
         if self.home is not None and hasattr(self.home, "async_notify_all_mobile_apps"):
             if self.hass is not None:
-                self.hass.async_create_task(self.home.async_notify_all_mobile_apps(title, message))
+                self.hass.async_create_task(
+                    self.home.async_notify_all_mobile_apps(title, message),
+                    f"qs_stale_notify_{self.name}",
+                )
 
     def _get_stale_sensor_details(self, time: datetime) -> str:
         """Return a string listing each sensor and how long since its last update."""

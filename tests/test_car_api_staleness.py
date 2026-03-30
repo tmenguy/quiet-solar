@@ -264,53 +264,79 @@ class TestStalenessTransitions:
 
         assert real_car._car_api_stale_since == original_since
 
-    def test_state_getter_api_ok(self, real_car, current_time):
-        """car_api_ok_sensor_state_getter returns correct on/off state."""
-        fresh_time = current_time - timedelta(seconds=60)
-        for sensor_id in real_car._car_api_all_sensors:
-            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+    def test_is_in_stale_percent_mode_property(self, real_car):
+        """is_in_stale_percent_mode property reflects _car_api_stale_percent_mode."""
+        assert real_car.is_in_stale_percent_mode is False
+        real_car._car_api_stale_percent_mode = True
+        assert real_car.is_in_stale_percent_mode is True
 
-        result = real_car.car_api_ok_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "on"
-
-    def test_state_getter_api_stale(self, real_car, current_time):
-        """car_api_ok_sensor_state_getter returns 'off' when stale."""
+    async def test_update_states_calls_staleness_check(self, real_car, current_time):
+        """update_states drives _update_car_api_staleness each cycle."""
         stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
 
-        result = real_car.car_api_ok_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "off"
+        # Before update_states, car is not stale
+        assert real_car._car_api_stale is False
 
-    def test_state_getter_is_stale(self, real_car, current_time):
-        """car_is_stale_sensor_state_getter reflects effective stale status."""
+        # Mock super().update_states to avoid full device cycle in test
+        with patch(
+            "custom_components.quiet_solar.ha_model.device.HADeviceMixin.update_states",
+            return_value=None,
+        ):
+            await real_car.update_states(current_time)
+
+        # After update_states, staleness was detected
+        assert real_car._car_api_stale is True
+        assert real_car._was_car_api_stale is True
+
+    def test_stale_to_fresh_clears_inferred_flags_without_percent_mode(self, real_car, current_time):
+        """Stale->fresh transition clears inferred flags even when not in stale-percent mode (F2)."""
+        # Setup: stale but NOT in stale-percent mode
         real_car._car_api_stale = True
-        real_car._car_stale_mode_override = CAR_STALE_MODE_AUTO
-        result = real_car.car_is_stale_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "on"
+        real_car._was_car_api_stale = True
+        real_car._car_api_stale_since = current_time - timedelta(hours=2)
+        real_car._car_api_stale_percent_mode = False
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
 
-    def test_state_getter_is_stale_with_force_not_stale(self, real_car, current_time):
-        """car_is_stale_sensor_state_getter reflects force-not-stale override."""
-        real_car._car_api_stale = True
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
-        result = real_car.car_is_stale_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "off"
-
-    def test_state_getter_api_ok_none_time(self, real_car):
-        """car_api_ok_sensor_state_getter handles time=None by using now()."""
-        fresh_time = datetime.now(tz=pytz.UTC) - timedelta(seconds=60)
+        # Make sensors fresh
+        fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
-        result = real_car.car_api_ok_sensor_state_getter("test_entity", None)
-        assert result[1] == "on"
+        real_car._update_car_api_staleness(current_time)
 
-    def test_state_getter_is_stale_none_time(self, real_car):
-        """car_is_stale_sensor_state_getter handles time=None by using now()."""
+        # All flags should be cleared
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car._car_api_stale is False
+        assert real_car._car_api_stale_since is None
+
+    def test_no_double_exit_on_percent_recovery(self, real_car, current_time):
+        """Recovery via can_exit_stale_percent_mode doesn't trigger duplicate transition (F3)."""
+        # Setup: stale with percent mode, then sensors recover
         real_car._car_api_stale = True
-        real_car._car_stale_mode_override = CAR_STALE_MODE_AUTO
-        result = real_car.car_is_stale_sensor_state_getter("test_entity", None)
-        assert result[1] == "on"
+        real_car._was_car_api_stale = True
+        real_car._car_api_stale_percent_mode = True
+        real_car._car_api_stale_since = current_time - timedelta(hours=2)
+
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+
+        # Track notification count
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+
+        real_car._update_car_api_staleness(current_time)
+
+        # Only one notification (recovery), not two
+        assert real_car.hass.async_create_task.call_count == 1
+        assert real_car._car_api_stale is False
+        assert real_car._was_car_api_stale is False
 
 
 # ── Task 3: Contradiction Detection — Feature B ─────────────────────────
