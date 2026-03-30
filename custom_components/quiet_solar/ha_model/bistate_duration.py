@@ -575,10 +575,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     and lcc.end_of_constraint <= tomorrow_utc
                     and abs(lcc.current_value - past_actual_s) > 300
                 ):
-                    _LOGGER.warning(
+                    _LOGGER.info(
                         "Calendar metrics sync-check: last completed constraint "
                         "current_value=%s differs from inferred past actual=%s "
-                        "for %s",
+                        "for %s (expected when multiple calendar events complete "
+                        "in one day since only the last constraint is retained)",
                         lcc.current_value,
                         past_actual_s,
                         self.name,

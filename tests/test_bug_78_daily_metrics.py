@@ -511,9 +511,9 @@ async def test_calendar_sync_warning_on_divergent_last_completed():
 
     with patch("custom_components.quiet_solar.ha_model.bistate_duration._LOGGER") as mock_logger:
         await device.check_load_activity_and_constraints(now)
-        mock_logger.warning.assert_called_once()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "sync-check" in warning_msg
+        mock_logger.info.assert_called()
+        info_calls = [c for c in mock_logger.info.call_args_list if "sync-check" in str(c)]
+        assert len(info_calls) == 1
 
 
 async def test_no_sync_warning_when_values_close():
@@ -550,7 +550,8 @@ async def test_no_sync_warning_when_values_close():
 
     with patch("custom_components.quiet_solar.ha_model.bistate_duration._LOGGER") as mock_logger:
         await device.check_load_activity_and_constraints(now)
-        mock_logger.warning.assert_not_called()
+        info_calls = [c for c in mock_logger.info.call_args_list if "sync-check" in str(c)]
+        assert len(info_calls) == 0
 
 
 async def test_non_calendar_mode_sets_flag_false():
